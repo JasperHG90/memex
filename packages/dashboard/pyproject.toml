@@ -1,0 +1,24 @@
+[project]
+name = "memex_dashboard"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jasper Ginn", email = "jasperginn@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "markdown>=3.10.2",
+    "memex-common",
+    "networkx>=3.6.1",
+    "plotly>=6.5.2",
+    "reflex>=0.8.26",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+memex-common = { workspace = true }

@@ -1,0 +1,16 @@
+upload_cross_encoder:
+    uv run distribute.py \
+        /home/vscode/workspace/scripts/cross_encoder/ms-marco-minilm-l12-hindsight-reranker \
+        JasperHG90/ms-marco-minilm-l12-hindsight-reranker
+
+upload_embedder:
+    uv run distribute.py \
+        /home/vscode/workspace/scripts/embeddings/minilm-l12-v2-hindsight-embeddings \
+        JasperHG90/minilm-l12-v2-hindsight-embeddings
+
+upload_ner:
+    uv run distribute.py \
+        /home/vscode/workspace/scripts/ner/distilbert-hindsight-ner \
+        JasperHG90/distilbert-hindsight-ner
+
+upload_all: upload_cross_encoder upload_embedder upload_ner

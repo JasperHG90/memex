@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      # GitHub Actions and pre-commit configuration files
+      - '.github/workflows/CI.yaml'
+
+      # Project files
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.pre-commit-config.yaml'
+
+      # Source code and tests
+      - 'src/**'
+      - 'tests/**'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  UV_VERSION: '0.9.x'
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run pre-commit checks
+        uses: JasperHG90/toiminnot/actions/prek@main
+        with:
+          python_version: ${{ env.PYTHON_VERSION }}
+          prek_version: '0.2.25'
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Run unit tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not integration"
+      - name: Run integration tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "integration and not llm"
+
+  build:
+    name: Build package
+    runs-on: ubuntu-latest
+    needs: [pre-commit, unit-tests]
+    steps:
+      - name: Build package
+        uses: JasperHG90/toiminnot/actions/uv_build@main
+        with:
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ env.PYTHON_VERSION }}

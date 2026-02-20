@@ -1,0 +1,57 @@
+{
+    "build": {
+      "dockerfile": "Dockerfile",
+      "context": "."
+    },
+    "containerEnv": {
+      "HOME": "/home/vscode",
+      // NB: python .venv is cached in a docker volume at /home/vscode/.cache/.venv
+      // Keeping it in the container home directory yields abysmal performance
+      // We also want to keep .venv close to UV cache because otherwise we are storing
+      // cache and venv in different containers
+      "UV_PROJECT_ENVIRONMENT": "/home/vscode/.cache/.venv",
+      "VIRTUAL_ENV": "/home/vscode/.cache/.venv"
+    },
+    "customizations": {
+      "vscode": {
+        "extensions": [
+          "ms-python.python",
+          "ms-toolsai.jupyter",
+          "ms-pyright.pyright",
+          "redhat.vscode-yaml",
+          "ms-azuretools.vscode-docker",
+          "njpwerner.autodocstring",
+          "pomdtr.excalidraw-editor",
+          "tamasfe.even-better-toml",
+          "kokakiwi.vscode-just",
+          "bierner.markdown-mermaid",
+          "TendouAlice.markdown-obsidian-callout",
+          "MrtCtl.smartnotebook"
+        ],
+        "settings": {
+          "python.pythonPath": "/home/vscode/.venv/bin/python"
+        }
+      }
+    },
+    "postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && git config --global --add credential.useHttpPath true",
+    // Symlink the cached .venv into the workspace folder so that Ty can find it there
+    "postCreateCommand": "rm -rf ${containerWorkspaceFolder}/.venv && ln -s /home/vscode/.cache/.venv ${containerWorkspaceFolder}/.venv",
+    "runArgs": [
+      "--env-file",
+      ".devcontainer/.env"
+    ],
+    "workspaceFolder": "/home/vscode/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/home/vscode/workspace,type=bind",
+    "features": {
+      "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    },
+    "containerUser": "vscode",
+    "mounts": [
+      "type=bind,source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,consistency=delegated",
+      "type=bind,source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,consistency=delegated",
+      "type=bind,source=${localEnv:HOME}/.persona,target=/home/vscode/.persona,consistency=delegated",
+      "type=bind,source=${localEnv:HOME}/.persona.config.yaml,target=/home/vscode/.persona.config.yaml,consistency=delegated",
+      // Cache (see dockerfile for UV/prek cache usage and pyproject for pytest cache)
+      "source=memex-cache,target=/home/vscode/.cache,type=volume"
+    ]
+}

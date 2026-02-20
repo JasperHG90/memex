@@ -1,0 +1,10 @@
+baseline:
+    uv run baseline.py
+    uv run eval_baseline.py
+
+train:
+    uv run train_qat.py
+
+eval:
+    uv run eval_baseline.py
+    uv run eval_qat.py

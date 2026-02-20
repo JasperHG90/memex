@@ -1,0 +1,34 @@
+# ADR-[000]: [Action-Oriented Title]
+
+**Status:** Accepted
+**Date:** {YYYY-MM-DD}
+
+## 1. The Context
+*Current constraints necessitating this decision.*
+*   **Problem:** {1 sentence on the technical bottleneck or business need.}
+*   **Constraint:** {e.g., "Must handle 10k ops/sec" or "Must be zero-cost."}
+
+## 2. The Decision
+We will **{Action verb: use / implement / deprecate}** {Technology/Pattern}.
+
+### Technical Details
+*   {Specific detail 1, e.g., "Use library X version Y."}
+*   {Specific detail 2, e.g., "Data will be stored in JSONB format."}
+
+```python
+# {Optional: Small code snippet or schema illustrating the decision}
+```
+
+## 3. Alternatives & Rationale
+*Why we chose this over others.*
+
+| Option | Verdict | Reason |
+| :--- | :--- | :--- |
+| **{Chosen Option}** | **Winner** | {The primary reason it won.} |
+| **{Alternative A}** | Rejected | {The fatal flaw (e.g., "Too expensive").} |
+| **{Alternative B}** | Rejected | {The fatal flaw (e.g., "High latency").} |
+
+## 4. Consequences
+*   **✅ Benefit:** {Primary gain.}
+*   **⚠️ Trade-off:** {The "bad" thing we accept (e.g., "Complexity increases").}
+*   **🛡️ Mitigation:** {How we handle the trade-off.}

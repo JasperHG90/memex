@@ -1,0 +1,112 @@
+import pytest
+from unittest.mock import MagicMock, patch
+from memex_core.processing.files import FileContentProcessor, _file_mtime_utc
+
+
+@pytest.fixture
+def file_processor():
+    return FileContentProcessor()
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_mock(file_processor):
+    # Setup mock for pymupdf4llm
+    mock_stat = MagicMock()
+    mock_stat.st_mtime = 1672531200.0  # 2023-01-01 00:00:00 UTC
+    with patch(
+        'memex_core.processing.files.pymupdf4llm.to_markdown',
+        return_value='Extracted PDF Content',
+    ) as mock_to_markdown:
+        with patch('memex_core.processing.files.Path.exists', return_value=True):
+            with patch('memex_core.processing.files.Path.stat', return_value=mock_stat):
+                # We will mock Path.glob to return our mock images
+                with patch('pathlib.Path.glob') as mock_glob:
+                    mock_img = MagicMock()
+                    mock_img.is_file.return_value = True
+                    mock_img.name = 'image1.png'
+                    mock_img.read_bytes.return_value = b'fake_image_data'
+                    mock_glob.return_value = [mock_img]
+
+                    result = await file_processor.extract('test.pdf')
+
+                    assert result.content == 'Extracted PDF Content'
+                    assert result.source == 'test.pdf'
+                    assert result.content_type == 'pdf'
+                    # We expect image1.png to be in result.images
+                    assert result.images['image1.png'] == b'fake_image_data'
+                    # document_date should be set from file mtime
+                    assert result.document_date is not None
+                    assert result.document_date.tzinfo is not None
+
+                    # Verify pymupdf call
+                    mock_to_markdown.assert_called_once()
+                    args, kwargs = mock_to_markdown.call_args
+                    assert args[0] == 'test.pdf'
+                    assert kwargs['force_text'] is True
+                    assert kwargs['write_images'] is True
+
+
+@pytest.mark.asyncio
+async def test_extract_pdf_failure(file_processor):
+    with patch('memex_core.processing.files.Path.exists', return_value=True):
+        with patch(
+            'memex_core.processing.files.pymupdf4llm.to_markdown',
+            side_effect=Exception('PDF error'),
+        ):
+            with pytest.raises(ValueError, match='PDF extraction failed'):
+                await file_processor.extract('bad.pdf')
+
+
+@pytest.mark.asyncio
+async def test_extract_file_not_found(file_processor):
+    with pytest.raises(FileNotFoundError):
+        await file_processor.extract('non_existent.docx')
+
+
+@pytest.mark.asyncio
+async def test_extract_markitdown_failure(file_processor):
+    # Test failure for non-PDF file
+    with patch('memex_core.processing.files.Path.exists', return_value=True):
+        with patch(
+            'memex_core.processing.files.MarkItDown.convert',
+            side_effect=Exception('Conversion error'),
+        ):
+            with pytest.raises(ValueError, match='Extraction failed'):
+                await file_processor.extract('corrupt.pptx')
+
+
+@pytest.mark.asyncio
+async def test_extract_json(file_processor):
+    # MarkItDown handles JSON too
+    mock_doc = MagicMock()
+    mock_doc.text_content = '{"key": "value"}'
+
+    mock_stat = MagicMock()
+    mock_stat.st_mtime = 1700000000.0  # 2023-11-14
+
+    with patch('memex_core.processing.files.MarkItDown.convert', return_value=mock_doc):
+        with patch('memex_core.processing.files.Path.exists', return_value=True):
+            with patch('memex_core.processing.files.Path.stat', return_value=mock_stat):
+                result = await file_processor.extract('data.json')
+                assert result.content == '{"key": "value"}'
+                assert result.content_type == 'json'
+                # document_date should be set from file mtime
+                assert result.document_date is not None
+                assert result.document_date.tzinfo is not None
+
+
+def test_file_mtime_utc_valid(tmp_path):
+    """_file_mtime_utc returns a timezone-aware datetime for real files."""
+    test_file = tmp_path / 'test.txt'
+    test_file.write_text('hello')
+    result = _file_mtime_utc(test_file)
+    assert result is not None
+    assert result.tzinfo is not None
+
+
+def test_file_mtime_utc_nonexistent():
+    """_file_mtime_utc returns None for non-existent files."""
+    from pathlib import Path
+
+    result = _file_mtime_utc(Path('/nonexistent/path/file.txt'))
+    assert result is None

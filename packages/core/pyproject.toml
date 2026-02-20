@@ -1,0 +1,54 @@
+[project]
+name = "memex-core"
+version = "0.0.0"
+description = "Memex core provides hindsight-style memory management and an API interface."
+authors = [
+  {name="Jasper Ginn", email="jasperginn@gmail.com"}
+]
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    ## Workspace member
+    "memex-common",
+    ## Third-party
+    "aiofiles>=25.1.0",
+    "asyncpg>=0.31.0",
+    "asyncstdlib>=3.13.1",
+    "cachetools>=6.2.4",
+    "dspy>=3.1.0",
+    "fsspec>=2026.1.0",
+    "httpx>=0.28.1",
+    "langchain-text-splitters>=1.1.0",
+    "onnxruntime>=1.23.2",
+    "pgvector>=0.4.2",
+    "python-dateutil>=2.9.0.post0",
+    "python-frontmatter>=1.1.0",
+    "pytz>=2025.2",
+    "pyyaml>=6.0.3",
+    "sqlmodel>=0.0.31",
+    "tiktoken>=0.12.0",
+    "tokenizers>=0.22.2",
+    "trafilatura>=2.0.0",
+    "fastapi>=0.128.0",
+    "uvicorn>=0.40.0",
+    "gunicorn>=21.2.0",
+    "pydantic-settings>=2.12.0",
+    "markitdown[docx,pdf,pptx,xlsx,outlook]>=0.1.2",
+    "cachetools-async>=0.0.5",
+    "aioclock>=0.3.0",
+    "prometheus-fastapi-instrumentator>=7.1.0",
+    "duckdb>=1.4.4",
+    "metaphone>=0.6",
+    "greenlet>=3.3.0",
+    "async-lru>=2.1.0",
+    "regex>=2025.11.3",
+    "pymupdf4llm>=0.3.4",
+    "cloudscraper>=1.2.71",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+memex-common = { workspace = true }

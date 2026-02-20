@@ -1,0 +1,24 @@
+# 📝 [Title: 5-7 words max, descriptive]
+
+**Tags:** #[Category], #[Topic], #[Status]
+**Source:** [URL or Context provided]
+
+## ⚡ Executive Summary
+> [Limit to 50 words. What is the single most important takeaway?]
+
+## 🗝️ Key Concepts
+*   **[Concept 1 Name]**
+    *   *Definition:* [1 sentence explanation]
+    *   *Detail:* [Specific data point, quote, or nuance]
+*   **[Concept 2 Name]**
+    *   *Definition:* [1 sentence explanation]
+    *   *Detail:* [Specific data point, quote, or nuance]
+
+## 🧠 Insights & Connections
+*   **Pattern:** [Identify a recurring theme or pattern in the text]
+*   **Contradiction:** [Did the source contradict itself or common wisdom? If not, write "None"]
+*   **Analogy:** [Generate a simple analogy to explain the main concept]
+
+## ❓ Unanswered Questions / Gaps
+*   [What information was missing or unclear?]
+*   [What should be researched next?]

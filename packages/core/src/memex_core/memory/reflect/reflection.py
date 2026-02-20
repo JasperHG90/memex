@@ -1,0 +1,830 @@
+"""
+The Hindsight "Reflect" Engine.
+
+This module orchestrates the 5-phase reflection loop to update Mental Models
+based on new evidence and memories.
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timezone
+from uuid import UUID
+from collections import defaultdict
+
+import dspy
+from sqlmodel import select, col
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy import func
+from sqlalchemy.orm import defer
+from sqlalchemy.orm.attributes import flag_modified
+
+from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
+from memex_core.llm import run_dspy_operation
+from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
+from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
+from memex_core.memory.reflect.models import ReflectionRequest
+from memex_core.memory.reflect.prompts import (
+    SeedPhaseSignature,
+    ValidatePhaseSignature,
+    ValidatedObservation,
+    ComparePhaseSignature,
+    CandidateObservation,
+    UnvalidatedCandidateObservation,
+    ReflectMemoryContext,
+    ReflectObservationContext,
+    UpdateExistingSignature,
+    ReflectEvidenceContext,
+    ReflectComparisonObservation,
+)
+from memex_core.memory.reflect.utils import create_citation_map, parse_timestamp
+from memex_core.memory.reflect.trends import compute_trend
+from memex_core.memory.models.embedding import FastEmbedder
+from memex_core.memory.formatting import format_for_embedding
+
+logger = logging.getLogger('memex.core.memory.reflect.reflection')
+
+
+def get_reflection_engine(
+    session: AsyncSession,
+    config: MemexConfig,
+    embedder: FastEmbedder,
+) -> 'ReflectionEngine':
+    """
+    Factory method to create a ReflectionEngine with dependencies.
+    """
+    return ReflectionEngine(
+        session=session,
+        config=config,
+        embedder=embedder,
+    )
+
+
+class ReflectionEngine:
+    """
+    The ReflectionEngine (formerly ReflectAgent) orchestrates the periodic "Reflection" phase
+    of the Hindsight architecture.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        config: MemexConfig,
+        embedder: FastEmbedder,
+    ):
+        self.session = session
+        self.config = config or MemexConfig()
+        self.embedder = embedder
+
+        # Ideally, we should receive the LM here, but we'll try to use dspy.settings.lm if not provided
+        self.lm: dspy.LM | None
+        try:
+            if self.config.server.memory.reflection.model:
+                model_config = self.config.server.memory.reflection.model
+                self.lm = dspy.LM(
+                    model=model_config.model,
+                    api_base=str(model_config.base_url) if model_config.base_url else None,
+                    api_key=model_config.api_key.get_secret_value()
+                    if model_config.api_key
+                    else None,
+                )
+            else:
+                self.lm = dspy.settings.lm
+                if not self.lm and self.config.server.memory.extraction.model:
+                    model_config = self.config.server.memory.extraction.model
+                    self.lm = dspy.LM(
+                        model=model_config.model,
+                        api_base=str(model_config.base_url) if model_config.base_url else None,
+                        api_key=model_config.api_key.get_secret_value()
+                        if model_config.api_key
+                        else None,
+                    )
+        except Exception:
+            logger.warning('Could not initialize LM. Reflection might fail if LM is not set.')
+            self.lm = None
+
+    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
+        """
+        Run reflection for multiple entities in parallel.
+        Groups requests by vault_id to ensure correct scoping.
+        """
+        if not requests:
+            return []
+
+        from collections import defaultdict
+
+        # 1. Group by Vault ID to optimize DB fetching
+        vault_groups = defaultdict(list)
+        for r in requests:
+            vault_groups[r.vault_id].append(r)
+
+        logger.info(
+            f'Starting batch reflection for {len(requests)} entities across {len(vault_groups)} vaults'
+        )
+
+        all_success_models = []
+        db_lock = asyncio.Lock()
+        concurrency = self.config.server.memory.reflection.max_concurrency
+        sem = asyncio.Semaphore(concurrency)
+
+        for vault_id, v_requests in vault_groups.items():
+            entity_ids = [r.entity_id for r in v_requests]
+
+            # 1.1 Batch Load Data for this Vault (Serial DB Access)
+            models_map = await self._batch_get_or_create_models(entity_ids, vault_id=vault_id)
+            entities_map = await self._batch_get_entities(entity_ids)
+            memories_map = await self._batch_fetch_recent_memories(entity_ids, vault_id=vault_id)
+
+            # 1.2 Concurrent Processing for this Vault
+            results = await asyncio.gather(
+                *[
+                    self._process_entity_reflection(
+                        req,
+                        models_map,
+                        entities_map,
+                        memories_map,
+                        sem,
+                        db_lock,
+                    )
+                    for req in v_requests
+                ]
+            )
+            all_success_models.extend([m for m in results if m is not None])
+
+        if not all_success_models:
+            return []
+
+        # 2. Optimistic Batch Persistence
+        try:
+            await self.session.commit()
+            logger.info(f'Successfully committed batch of {len(all_success_models)} mental models.')
+        except Exception as e:
+            logger.error(f'Batch commit failed: {e}. Attempting rescue mode...')
+            await self._batch_save_rescue(all_success_models)
+
+        return all_success_models
+
+    async def _process_entity_reflection(
+        self,
+        req: ReflectionRequest,
+        models_map: dict[UUID, MentalModel],
+        entities_map: dict[UUID, str],
+        memories_map: dict[UUID, list[MemoryUnit]],
+        sem: asyncio.Semaphore,
+        db_lock: asyncio.Lock,
+    ) -> MentalModel | None:
+        """Process a single entity reflection with semaphore control."""
+        eid = req.entity_id
+        async with sem:
+            try:
+                return await self._reflect_entity_internal(
+                    entity_id=eid,
+                    mental_model=models_map[eid],
+                    entity_name=entities_map.get(eid, 'Unknown'),
+                    recent_memories=memories_map.get(eid, []),
+                    db_lock=db_lock,
+                    vault_id=req.vault_id,
+                )
+            except Exception as e:
+                logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
+                return None
+
+    async def _batch_save_rescue(self, models: list[MentalModel]) -> None:
+        """Attempt to save models one by one if batch commit fails."""
+        await self.session.rollback()
+
+        saved_count = 0
+        for model in models:
+            try:
+                self.session.add(model)
+                flag_modified(model, 'observations')
+                await self.session.commit()
+                saved_count += 1
+            except Exception as inner_e:
+                logger.error(f'Rescue save failed for model {model.id}: {inner_e}')
+                await self.session.rollback()
+        logger.info(f'Rescue mode saved {saved_count}/{len(models)} models.')
+
+    async def _reflect_entity_internal(
+        self,
+        entity_id: UUID,
+        mental_model: MentalModel,
+        entity_name: str,
+        recent_memories: list[MemoryUnit],
+        db_lock: asyncio.Lock,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> MentalModel:
+        """Internal logic for single entity reflection, decoupled from DB fetching logic."""
+
+        # 0. Acquire Advisory Lock for this Entity to prevent concurrent reflection
+        # Use transaction-level lock (automatically released at end of transaction/session)
+        # Using hashtext for consistent 64-bit int generation from UUID string
+        # Note: We rely on the caller's session transaction context.
+        lock_query = select(func.pg_try_advisory_xact_lock(func.hashtext(f'reflect:{entity_id}')))
+        is_locked = (await self.session.exec(lock_query)).one()
+
+        if not is_locked:
+            logger.warning(
+                f'Skipping reflection for entity {entity_id}: Could not acquire advisory lock (already running).'
+            )
+            return mental_model
+
+        # Phase 0: Update Existing
+        updated_observations = await self._phase_0_update(
+            mental_model, entity_name, recent_memories, vault_id=vault_id
+        )
+
+        if not recent_memories:
+            mental_model.observations = [
+                obs.model_dump(mode='json') for obs in updated_observations
+            ]
+            return mental_model
+
+        # Phase 1: Seed (LLM)
+        candidates = await self._phase_1_seed(
+            recent_memories, entity_name, updated_observations, vault_id=vault_id
+        )
+
+        # Phase 2: Hunt (Vector Search)
+        candidates_with_evidence = await self._phase_2_hunt(candidates, db_lock, vault_id=vault_id)
+
+        # Phase 3: Validate (LLM)
+        validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
+
+        # Phase 4: Compare (LLM)
+        final_obs = await self._phase_4_compare(updated_observations, validated, vault_id=vault_id)
+
+        # Phase 5: Finalize Model
+        await self._phase_5_finalize(mental_model, final_obs, db_lock)
+
+        return mental_model
+
+    async def _phase_5_finalize(
+        self,
+        mental_model: MentalModel,
+        final_obs: list[Observation],
+        db_lock: asyncio.Lock,
+    ) -> None:
+        """
+        Phase 5: Prepare Model (CPU/GPU).
+        Updates observations, version, and embedding.
+        """
+        mental_model.observations = [obs.model_dump(mode='json') for obs in final_obs]
+        mental_model.version += 1
+        mental_model.last_refreshed = datetime.now(timezone.utc)
+
+        obs_text = ' '.join([f'{o.title} - {o.content}' for o in final_obs])
+        full_text = format_for_embedding(
+            text=obs_text,
+            fact_type='observation',
+            context=mental_model.name,
+        )
+        embedding_list = await self._async_encode([full_text])
+        mental_model.embedding = embedding_list[0]
+
+        async with db_lock:
+            self.session.add(mental_model)
+            flag_modified(mental_model, 'observations')
+
+    async def _batch_get_or_create_models(
+        self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID
+    ) -> dict[UUID, MentalModel]:
+        """Batch fetch or create mental models."""
+        query = (
+            select(MentalModel)
+            .where(col(MentalModel.entity_id).in_(entity_ids))
+            .where(col(MentalModel.vault_id) == vault_id)
+        )
+
+        results = (await self.session.exec(query)).all()
+        models_map = {m.entity_id: m for m in results}
+
+        missing_ids = set(entity_ids) - set(models_map.keys())
+        if missing_ids:
+            entities = await self._batch_get_entities(list(missing_ids))
+            for eid in missing_ids:
+                name = entities.get(eid, 'Unknown')
+                new_model = MentalModel(
+                    entity_id=eid, name=name, observations=[], vault_id=vault_id
+                )
+                self.session.add(new_model)
+                models_map[eid] = new_model
+
+        return models_map
+
+    async def _batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, str]:
+        query = select(Entity).where(col(Entity.id).in_(entity_ids))
+        results = (await self.session.exec(query)).all()
+        return {e.id: e.canonical_name for e in results}
+
+    async def _batch_fetch_recent_memories(
+        self,
+        entity_ids: list[UUID],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+        limit_per_entity: int = 20,
+    ) -> dict[UUID, list[MemoryUnit]]:
+        """
+        Fetch recent memories for multiple entities in one go using Window Function.
+        Vault scoping follows "Fall-through" logic: (vault_id == active OR vault_id == Global).
+        """
+
+        # 1. Base query for units associated with these entities
+        subq_base = (
+            select(
+                UnitEntity.entity_id,
+                UnitEntity.unit_id,
+                func.row_number()
+                .over(
+                    partition_by=col(UnitEntity.entity_id),
+                    order_by=col(MemoryUnit.event_date).desc(),
+                )
+                .label('rn'),
+            )
+            .join(MemoryUnit, col(UnitEntity.unit_id) == col(MemoryUnit.id))
+            .where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
+            .where(col(UnitEntity.entity_id).in_(entity_ids))
+        )
+
+        # 2. Apply Vault Filter (Fall-through)
+        subq_base = subq_base.where(
+            (col(MemoryUnit.vault_id) == vault_id) | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID)
+        )
+
+        subq = subq_base.subquery()
+
+        query = (
+            select(MemoryUnit, subq.c.entity_id)
+            .join(subq, col(subq.c.unit_id) == col(MemoryUnit.id))
+            .where(subq.c.rn <= limit_per_entity)
+            .options(defer(MemoryUnit.embedding))  # type: ignore
+        )
+
+        results = (await self.session.exec(query)).all()
+
+        memories_map = defaultdict(list)
+        for unit, eid in results:
+            memories_map[eid].append(unit)
+
+        return memories_map
+
+    async def reflect_on_entity(self, request: ReflectionRequest) -> MentalModel:
+        """Legacy wrapper for single entity reflection."""
+        results = await self.reflect_batch([request])
+        if not results:
+            raise RuntimeError(f'Reflection failed for {request.entity_id}')
+        return results[0]
+
+    async def _get_or_create_mental_model(
+        self, entity_id: UUID, vault_id: UUID = GLOBAL_VAULT_ID
+    ) -> MentalModel:
+        query = (
+            select(MentalModel)
+            .where(col(MentalModel.entity_id) == entity_id)
+            .where(col(MentalModel.vault_id) == vault_id)
+        )
+
+        result = await self.session.exec(query)
+        model = result.first()
+
+        if not model:
+            entity = await self.session.get(Entity, entity_id)
+            name = entity.canonical_name if entity else 'Unknown'
+
+            model = MentalModel(entity_id=entity_id, name=name, observations=[], vault_id=vault_id)
+            self.session.add(model)
+            await self.session.commit()
+            await self.session.refresh(model)
+
+        return model
+
+    async def _phase_0_update(
+        self,
+        model: MentalModel,
+        entity_name: str,
+        memories: list[MemoryUnit],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> list[Observation]:
+        """
+        Phase 0: Check if existing observations have new supporting/contradicting evidence.
+        """
+        current_observations = [Observation(**obs) for obs in model.observations]
+        if not current_observations or not memories:
+            return current_observations
+
+        memory_map = {i: m for i, m in enumerate(memories)}
+
+        memory_context = [
+            ReflectMemoryContext(
+                index_id=i,
+                content=m.formatted_fact_text,
+                occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
+            )
+            for i, m in enumerate(memories)
+        ]
+
+        obs_context = [
+            ReflectObservationContext(index_id=i, title=o.title, content=o.content)
+            for i, o in enumerate(current_observations)
+        ]
+
+        update_predictor = dspy.Predict(UpdateExistingSignature)
+
+        assert self.lm is not None, 'LM must be initialized'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=update_predictor,
+            input_kwargs={'recent_memories': memory_context, 'existing_observations': obs_context},
+            session=self.session,
+            context_metadata={'phase': 'update', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if not result or not result.updates:
+            return current_observations
+
+        for update in result.updates:
+            if 0 <= update.observation_index < len(current_observations):
+                obs = current_observations[update.observation_index]
+
+                for new_ev in update.new_evidence:
+                    mem_idx = new_ev.memory_id
+                    if mem_idx is not None and mem_idx in memory_map:
+                        mem = memory_map[mem_idx]
+                        obs.evidence.append(
+                            EvidenceItem(
+                                memory_id=mem.id,
+                                quote=new_ev.quote,
+                                relevance=1.0,
+                                explanation=new_ev.relevance_explanation,
+                                timestamp=parse_timestamp(new_ev.timestamp),
+                            )
+                        )
+
+                if update.has_contradiction:
+                    note = update.contradiction_note or 'New evidence contradicts this observation.'
+                    obs.content += f' [CONTRADICTION: {note}]'
+
+        return current_observations
+
+    async def _phase_1_seed(
+        self,
+        memories: list[MemoryUnit],
+        topic: str,
+        existing_obs: list[Observation],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> list[CandidateObservation]:
+        """
+        Phase 1: Generate candidates from recent memories.
+        """
+        if not memories:
+            return []
+
+        memory_context = [
+            ReflectMemoryContext(
+                index_id=i,
+                content=m.formatted_fact_text,
+                occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
+            )
+            for i, m in enumerate(memories)
+        ]
+
+        obs_context = [
+            ReflectObservationContext(index_id=i, title=o.title, content=o.content)
+            for i, o in enumerate(existing_obs)
+        ]
+
+        seed_predictor = dspy.Predict(SeedPhaseSignature)
+
+        assert self.lm is not None, 'LM must be initialized'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=seed_predictor,
+            input_kwargs={
+                'memories_context': memory_context,
+                'topic': topic,
+                'existing_observations': obs_context,
+            },
+            session=self.session,
+            context_metadata={'phase': 'seed', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if result is None:
+            raise RuntimeError('Phase 1 Seed failed (LLM returned None).')
+
+        if not result.candidates:
+            logger.warning('Phase 1 Seed returned no candidates.')
+            return []
+
+        return result.candidates
+
+    async def _async_encode(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        loop = asyncio.get_running_loop()
+        embeddings_np = await loop.run_in_executor(None, self.embedder.encode, texts)
+        return [e.tolist() for e in embeddings_np]
+
+    async def _phase_2_hunt(
+        self,
+        candidates: list[CandidateObservation],
+        db_lock: asyncio.Lock,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> list[tuple[CandidateObservation, list[MemoryUnit]]]:
+        """
+        Phase 2: Retrieve evidence for candidates.
+        """
+        from memex_core.memory.extraction import storage
+
+        if not candidates:
+            return []
+
+        texts = [c.content for c in candidates]
+        embeddings = await self._async_encode(texts)
+        results: list[tuple[CandidateObservation, list[MemoryUnit]]] = []
+
+        # 2b. Tail Sampling: Sample random memories from the vault
+        tail_memories = await self._sample_tail_memories(vault_id=vault_id)
+
+        for i, cand in enumerate(candidates):
+            embedding = embeddings[i]
+
+            async with db_lock:
+                similar_items = await storage.find_similar_facts(
+                    self.session,
+                    embedding,
+                    limit=self.config.server.memory.reflection.search_limit,
+                    threshold=self.config.server.memory.reflection.similarity_threshold,
+                    vault_ids=[vault_id],
+                )
+
+                if not similar_items:
+                    # Even if no similar items, we still provide tail memories
+                    results.append((cand, tail_memories))
+                    continue
+
+                unit_ids = [item[0] for item in similar_items]
+                unit_stmt = (
+                    select(MemoryUnit)
+                    .where(col(MemoryUnit.id).in_(unit_ids))
+                    .options(defer(MemoryUnit.embedding))  # type: ignore
+                )
+                units_result = await self.session.exec(unit_stmt)
+                found_memories = list(units_result.all())
+
+            # Merge similar and tail memories (deduplicate by ID)
+            all_mems = {m.id: m for m in found_memories}
+            for tm in tail_memories:
+                if tm.id not in all_mems:
+                    all_mems[tm.id] = tm
+
+            results.append((cand, list(all_mems.values())))
+        return results
+
+    async def _sample_tail_memories(self, vault_id: UUID) -> list[MemoryUnit]:
+        """
+        Sample random memories from the vault (Tail Sampling).
+        Provides a small percentage of 'non-similar' memories to avoid echo chambers.
+        """
+        rate = self.config.server.memory.reflection.tail_sampling_rate
+        if rate <= 0:
+            return []
+
+        # Calculate sample size. We want a small bonus proportional to the search limit.
+        # e.g. if rate=0.05 and search_limit=10, we sample at least 1 memory.
+        # Here we use a heuristic: sample_size = max(1, round(search_limit * rate * 5))
+        # This yields ~2-3 memories for default settings (10 * 0.05 * 5 = 2.5).
+        sample_size = max(1, int(self.config.server.memory.reflection.search_limit * rate * 10))
+
+        # Use random() for sampling. For larger tables, TABLESAMPLE would be better,
+        # but for typical user vaults, random() is sufficient and more portable.
+        query = (
+            select(MemoryUnit)
+            .where(
+                (col(MemoryUnit.vault_id) == vault_id)
+                | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID)
+            )
+            .order_by(func.random())
+            .limit(sample_size)
+            .options(defer(MemoryUnit.embedding))  # type: ignore
+        )
+
+        result = await self.session.exec(query)
+        return list(result.all())
+
+    async def _phase_3_validate(
+        self,
+        candidates_with_evidence: list[tuple[CandidateObservation, list[MemoryUnit]]],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> list[ValidatedObservation]:
+        """
+        Phase 3: Validate candidates against evidence.
+        """
+        if not candidates_with_evidence:
+            return []
+
+        all_memory_ids = []
+        for _, mems in candidates_with_evidence:
+            for m in mems:
+                all_memory_ids.append(m.id)
+
+        uuid_to_int, int_to_uuid = create_citation_map(all_memory_ids)
+
+        candidate_observations = []
+        for cand, mems in candidates_with_evidence:
+            context_objs = []
+            for m in mems:
+                u_str = str(m.id)
+                global_idx = uuid_to_int.get(u_str, -1)
+                context_objs.append(
+                    ReflectMemoryContext(
+                        index_id=global_idx,
+                        content=m.formatted_fact_text,
+                        occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
+                    )
+                )
+
+            candidate_observations.append(
+                UnvalidatedCandidateObservation(content=cand.content, context=context_objs)
+            )
+
+        validate_predictor = dspy.Predict(ValidatePhaseSignature)
+
+        assert self.lm is not None, 'LM must be initialized'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=validate_predictor,
+            input_kwargs={'candidates': candidate_observations},
+            session=self.session,
+            context_metadata={'phase': 'validate', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if result is None:
+            raise RuntimeError('Phase 3 Validate failed (LLM returned None).')
+
+        if not result.validated_observations:
+            logger.warning('Phase 3 Validate returned no observations.')
+            return []
+
+        for val_obs in result.validated_observations:
+            for ev in val_obs.evidence:
+                try:
+                    int_id = int(ev.memory_id)
+                    if int_id in int_to_uuid:
+                        ev.memory_id = int_to_uuid[int_id]
+                    else:
+                        logger.warning(f'Phase 3: No UUID mapping for evidence ID: {int_id}')
+                except (ValueError, TypeError):
+                    logger.warning(f'Phase 3: Invalid evidence memory_id format: {ev.memory_id}')
+
+        return result.validated_observations
+
+    async def _phase_4_compare(
+        self,
+        existing: list[Observation],
+        new_obs: list[ValidatedObservation],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> list[Observation]:
+        """
+        Phase 4: Merge new validated observations with existing ones.
+        """
+        if not new_obs:
+            return existing
+
+        # 1. Collect all unique evidence to build a shared context
+        all_uuids = set()
+
+        # From existing
+        for o in existing:
+            if o.evidence:
+                for ev in o.evidence:
+                    all_uuids.add(str(ev.memory_id))
+
+        # From new
+        for o in new_obs:
+            if o.evidence:
+                for ev in o.evidence:
+                    # These might be UUID strings (restored in Phase 3) or ints if resolution failed
+                    all_uuids.add(str(ev.memory_id))
+
+        # Filter invalid UUIDs
+        valid_uuids = []
+        evidence_data_map = {}  # uuid -> {quote, timestamp}
+
+        # Helper to hydrate evidence map
+        def hydrate(obs_list):
+            for o in obs_list:
+                if o.evidence:
+                    for ev in o.evidence:
+                        # memory_id can be an int (index) or a UUID string
+                        uid = str(ev.memory_id)
+                        try:
+                            # If it's a UUID string, track it
+                            UUID(uid)
+                            if uid not in evidence_data_map:
+                                evidence_data_map[uid] = {
+                                    'quote': ev.quote or 'Content unavailable',
+                                    'timestamp': ev.timestamp,
+                                }
+                        except ValueError:
+                            # If it's an int/index, it should already be in existing or new_obs.
+                            # However, for new_obs specifically, we might have indices from Phase 3.
+                            # BUT Phase 4 expects to build a GLOBAL index map.
+                            # So we actually need the original UUIDs for all evidence.
+                            pass
+
+        hydrate(existing)
+        hydrate(new_obs)
+
+        # Create map
+        valid_uuids = sorted(evidence_data_map.keys())
+        uuid_to_int, int_to_uuid = create_citation_map(valid_uuids)
+
+        # 2. Build Structured Contexts
+        evidence_context = []
+        for idx in range(len(valid_uuids)):
+            uid = int_to_uuid[idx]
+            data = evidence_data_map[uid]
+            evidence_context.append(
+                ReflectEvidenceContext(
+                    index_id=idx, quote=data['quote'], occurred=str(data['timestamp'])
+                )
+            )
+
+        def map_indices(obs_list) -> list[ReflectComparisonObservation]:
+            result_list = []
+            for i, o in enumerate(obs_list):
+                indices = []
+                if o.evidence:
+                    for ev in o.evidence:
+                        idx = uuid_to_int.get(str(ev.memory_id))
+                        if idx is not None:
+                            indices.append(idx)
+
+                result_list.append(
+                    ReflectComparisonObservation(
+                        index_id=i, title=o.title, content=o.content, evidence_indices=indices
+                    )
+                )
+            return result_list
+
+        existing_ctx = map_indices(existing)
+        new_ctx = map_indices(new_obs)
+
+        # 3. Call LLM
+        compare_predictor = dspy.Predict(ComparePhaseSignature)
+
+        assert self.lm is not None, 'LM must be initialized'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=compare_predictor,
+            input_kwargs={
+                'evidence_context': evidence_context,
+                'existing_context': existing_ctx,
+                'new_context': new_ctx,
+            },
+            session=self.session,
+            context_metadata={'phase': 'compare', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if not result or not result.result or not result.result.observations:
+            raise RuntimeError('Phase 4 Compare failed (LLM output error).')
+
+        # 4. Reconstruct Observations
+        final_list = []
+        for val_obs in result.result.observations:
+            evidence_models = []
+            for ev in val_obs.evidence:
+                try:
+                    # NewEvidenceItem from LLM likely has index in memory_id
+                    idx_val = int(ev.memory_id)
+                    if idx_val in int_to_uuid:
+                        original_uuid = UUID(int_to_uuid[idx_val])
+                        evidence_models.append(
+                            EvidenceItem(
+                                memory_id=original_uuid,
+                                quote=ev.quote,
+                                relevance=1.0,
+                                explanation=ev.relevance_explanation,
+                                timestamp=parse_timestamp(ev.timestamp),
+                            )
+                        )
+                    else:
+                        logger.warning(f'Phase 4: Evidence index out of bounds: {idx_val}')
+                except (ValueError, TypeError):
+                    logger.warning(f'Phase 4: Invalid evidence index format: {ev.memory_id}')
+
+            # Compute Trend based on evidence timestamps
+            trend = compute_trend(evidence_models)
+
+            final_list.append(
+                Observation(
+                    title=val_obs.title,
+                    content=val_obs.content,
+                    evidence=evidence_models,
+                    trend=trend,
+                )
+            )
+
+        return final_list

@@ -1,0 +1,96 @@
+[project]
+name = "memex"
+version = "0.0.0"
+description = "Take notes and long-term memory for LLMs"
+authors = [
+  {name="Jasper Ginn", email="jasperginn@gmail.com"}
+]
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "memex_core",
+    "memex_cli",
+    "memex_mcp",
+    "memex_common",
+    "memex_dashboard",
+]
+
+[tool.uv.sources]
+memex_core = { workspace = true }
+memex_cli = { workspace = true }
+memex_mcp = { workspace = true }
+memex_common = { workspace = true }
+memex_dashboard = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "packages/cli",
+    "packages/common",
+    "packages/core",
+    "packages/mcp",
+    "packages/dashboard",
+]
+
+[tool.uv]
+package = false
+required-version = "~=0.10.0"
+keyring-provider = "subprocess"
+index-strategy = "first-index"
+
+[tool.ruff]
+lint.ignore = ["E501"]
+lint.extend-ignore = ["E402"]
+extend-exclude = [
+  "__pycache__",
+  ".eggs",
+  ".git",
+  ".venv",
+  "build",
+  "dist",
+  "notebooks",
+  ".cache"
+]
+line-length = 100
+indent-width = 4
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+
+[tool.mypy]
+plugins = ['pydantic.mypy']
+follow_imports = "silent"
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: marks integration tests",
+  "llm: marks tests that require LLM calls",
+]
+cache_dir = "/home/vscode/.cache/pytest"
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+include = ["packages*"]
+
+[dependency-groups]
+dev = [
+    "nest-asyncio>=1.6.0",
+    "prek>=0.2.25",
+    "ipykernel>=6.29.5",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-httpx>=0.27.0",
+    "pytest-async>=0.1.1",
+    "testcontainers>=4.14.0",
+    "pytest-rerunfailures>=16.1",
+    "pyinstrument>=5.1.2",
+    "ruff>=0.14.14",
+    "pytest-cov>=7.0.0",
+    "metaphone>=0.6",
+    "pyright>=1.1.408",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
