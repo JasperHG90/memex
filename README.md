@@ -2,6 +2,11 @@
 
 Memex is a long-term memory system designed to give LLMs persistent, evolving knowledge. It captures unstructured data (notes, docs, chats), extracts structured facts, and synthesizes high-level mental models over time.
 
+## Requirements
+
+1. UV
+2. Postgres with pgvector
+
 ## 🚀 Quick Start
 
 ### 1. Install
@@ -54,6 +59,24 @@ Ask questions.
 ```bash
 uv run memex memory search "How does Python handle memory management?"
 ```
+
+## See it in action
+
+### Searching documents
+
+![](assets/memex_cli_docs.gif)
+
+### Searching memory
+
+![](assets/memex_cli_memory.gif)
+
+### Entity management
+
+![](assets/memex_cli_entities.gif)
+
+### Dashboard
+
+![](assets/memex_dashboard.gif)
 
 ## 📚 Documentation
 

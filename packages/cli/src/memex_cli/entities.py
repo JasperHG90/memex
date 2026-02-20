@@ -287,7 +287,7 @@ async def list_related(
         try:
             entity = await _resolve_entity(api, identifier)
             edges = await api.get_entity_cooccurrences(entity.id)
-
+            edges = sorted(edges, key=lambda x: -x["cooccurrence_count"])[:20]
             # Fetch names for related entities to be user-friendly
             # Collect IDs
             related_ids = []
@@ -299,18 +299,13 @@ async def list_related(
                 )
                 related_ids.append(other_id)
 
-            # TODO: Add get_bulk_entities(ids) to API for efficiency.
-            # For now, we will just display IDs or fetch one by one (slow but safe for now)
-            # OR we rely on the user to use `view` on interesting IDs.
-            # Let's try to resolve top 10 if list is small.
-
             resolved_names = {}
-            if len(related_ids) <= 10:
+            if len(related_ids):
                 for rid in related_ids:
                     try:
                         r_ent = await api.get_entity(rid)
                         resolved_names[str(rid)] = r_ent.name
-                    except Exception:
+                    except Exception as e:
                         resolved_names[str(rid)] = 'Unknown'
 
         except Exception as e:

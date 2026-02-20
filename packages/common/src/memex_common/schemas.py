@@ -370,7 +370,7 @@ class EntityDTO(BaseModel):
 
     name: str = Field(
         description='The canonical name of the entity.',
-        examples=['Python', 'Jasper Ginn'],
+        examples=['Python'],
     )
 
     mention_count: int = Field(
