@@ -53,7 +53,7 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         )
 
         resp = client.post(
-            '/api/v1/ingest',
+            '/api/v1/ingestions',
             json={
                 'name': 'Note 1',
                 'description': 'Description 1',
@@ -86,7 +86,7 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         )
 
         resp = client.post(
-            '/api/v1/ingest',
+            '/api/v1/ingestions',
             json={
                 'name': 'Note 2',
                 'description': 'Description 2',

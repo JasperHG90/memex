@@ -127,7 +127,7 @@ async def test_get_bulk_cooccurrences(api, metastore, init_global_vault):
         await session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
-        response = await ac.get(f'/api/v1/entities/cooccurrences?ids={e1.id},{e2.id}')
+        response = await ac.get(f'/api/v1/cooccurrences?ids={e1.id},{e2.id}')
         assert response.status_code == 200
         data = [json.loads(line) for line in response.text.splitlines() if line.strip()]
         assert len(data) == 1

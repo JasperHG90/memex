@@ -29,7 +29,7 @@ from memex_core.server.common import _handle_error, get_api
 router = APIRouter(prefix='/api/v1')
 
 
-@router.post('/ingest', response_model=IngestResponse)
+@router.post('/ingestions', response_model=IngestResponse)
 async def ingest_note(
     request: Annotated[NoteDTO, Body()], api: Annotated[MemexAPI, Depends(get_api)]
 ):
@@ -57,7 +57,7 @@ async def ingest_note(
         raise _handle_error(e, 'Note ingestion failed')
 
 
-@router.post('/ingest/url', response_model=IngestResponse)
+@router.post('/ingestions/url', response_model=IngestResponse)
 async def ingest_url(
     request: Annotated[IngestURLRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
 ):
@@ -82,7 +82,7 @@ async def ingest_url(
         raise _handle_error(e, 'URL ingestion failed')
 
 
-@router.post('/ingest/file', response_model=IngestResponse)
+@router.post('/ingestions/file', response_model=IngestResponse)
 async def ingest_file(
     request: Annotated[IngestFileRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
 ):
@@ -98,7 +98,7 @@ async def ingest_file(
         raise _handle_error(e, 'File ingestion failed')
 
 
-@router.post('/ingest/upload', response_model=IngestResponse)
+@router.post('/ingestions/upload', response_model=IngestResponse)
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
     files: list[UploadFile] = File(...),
@@ -178,7 +178,7 @@ async def ingest_upload(
         raise _handle_error(e, 'File upload failed')
 
 
-@router.post('/ingest/batch', response_model=BatchJobStatus, status_code=202)
+@router.post('/ingestions/batch', response_model=BatchJobStatus, status_code=202)
 async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -196,7 +196,7 @@ async def ingest_batch(
         raise _handle_error(e, 'Batch ingestion job creation failed')
 
 
-@router.get('/ingest/batch/{job_id}', response_model=BatchJobStatus)
+@router.get('/ingestions/{job_id}', response_model=BatchJobStatus)
 async def get_batch_job_status(job_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Retrieve the current status and results of a batch ingestion job."""
     try:

@@ -1,13 +1,12 @@
-"""Reflection and belief adjustment endpoints."""
+"""Reflection endpoints."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.schemas import (
-    AdjustBeliefRequest,
     ReflectionQueueDTO,
     ReflectionRequest as ReflectionDTO,
     ReflectionResultDTO,
@@ -25,12 +24,13 @@ from memex_core.server.common import (
 router = APIRouter(prefix='/api/v1')
 
 
-@router.post('/reflect', response_model=ReflectionResultDTO)
+@router.post('/reflections', response_model=ReflectionResultDTO)
 async def reflect(
     request: Annotated[ReflectionDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
 ):
+    """Trigger reflection on an entity."""
     try:
         internal_req = CoreReflectionRequest(
             entity_id=request.entity_id,
@@ -50,7 +50,7 @@ async def reflect(
 
 
 @router.post(
-    '/reflect/batch',
+    '/reflections/batch',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionResultDTO, 'Stream of reflection results.'),
 )
@@ -59,6 +59,7 @@ async def reflect_batch(
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
 ):
+    """Trigger reflection on a batch of entities."""
     try:
         internal_reqs = [
             CoreReflectionRequest(
@@ -86,33 +87,48 @@ async def reflect_batch(
 
 
 @router.get(
-    '/reflect/queue',
+    '/reflections',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionQueueDTO, 'Stream of reflection queue items.'),
 )
-async def get_reflection_queue(api: Annotated[MemexAPI, Depends(get_api)], limit: int = 10):
+async def list_reflections(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    limit: int = 10,
+    status: Literal['queued'] | None = Query(None, description='Filter by status'),
+):
+    """
+    List reflections.
+
+    Query params:
+    - limit: Maximum number of items to return
+    - status: Optional filter by status. Use 'queued' for queue items.
+    """
     try:
-        items = await api.get_reflection_queue_batch(limit=limit)
-        return ndjson_response(
-            [
-                ReflectionQueueDTO(
-                    entity_id=item.entity_id,
-                    vault_id=item.vault_id,
-                    priority_score=item.priority_score,
-                )
-                for item in items
-            ]
-        )
+        if status == 'queued':
+            items = await api.get_reflection_queue_batch(limit=limit)
+            return ndjson_response(
+                [
+                    ReflectionQueueDTO(
+                        entity_id=item.entity_id,
+                        vault_id=item.vault_id,
+                        priority_score=item.priority_score,
+                    )
+                    for item in items
+                ]
+            )
+        # Add other status filters if needed in the future
+        return ndjson_response([])
     except Exception as e:
-        raise _handle_error(e, 'Failed to fetch reflection queue')
+        raise _handle_error(e, 'Failed to list reflections')
 
 
 @router.post(
-    '/reflect/queue/claim',
+    '/reflections/claim',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionQueueDTO, 'Stream of claimed reflection queue items.'),
 )
-async def claim_reflection_queue(api: Annotated[MemexAPI, Depends(get_api)], limit: int = 10):
+async def claim_reflections(api: Annotated[MemexAPI, Depends(get_api)], limit: int = 10):
+    """Claim reflection queue items for processing."""
     try:
         items = await api.claim_reflection_queue_batch(limit=limit)
         return ndjson_response(
@@ -127,18 +143,3 @@ async def claim_reflection_queue(api: Annotated[MemexAPI, Depends(get_api)], lim
         )
     except Exception as e:
         raise _handle_error(e, 'Failed to claim reflection tasks')
-
-
-@router.post('/belief/adjust')
-async def adjust_belief(
-    request: Annotated[AdjustBeliefRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
-):
-    try:
-        await api.adjust_belief(
-            unit_uuid=request.unit_uuid,
-            evidence_type_key=request.evidence_type_key,
-            description=request.description,
-        )
-        return {'status': 'success'}
-    except Exception as e:
-        raise _handle_error(e, 'Belief adjustment failed')

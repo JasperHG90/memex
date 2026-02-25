@@ -31,7 +31,7 @@ def test_e2e_doc_search_chunks_sync(client: TestClient):
         'tags': ['test'],
     }
 
-    response = client.post('/api/v1/ingest', json=note_payload)
+    response = client.post('/api/v1/ingestions', json=note_payload)
     assert response.status_code == 200
     ingest_res = response.json()
     document_id = ingest_res['document_id']
@@ -39,7 +39,7 @@ def test_e2e_doc_search_chunks_sync(client: TestClient):
     # 2. Search for unique text in doc search
     search_payload = {'query': 'quantum flabbergasted ducks', 'limit': 5}
 
-    search_resp = client.post('/api/v1/documents/search', json=search_payload)
+    search_resp = client.post('/api/v1/notes/search', json=search_payload)
     assert search_resp.status_code == 200
     results = parse_ndjson(search_resp.text)
 

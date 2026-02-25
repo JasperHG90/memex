@@ -87,7 +87,7 @@ def test_workflow_ingest_retrieve(client: TestClient):
                 'tags': ['person', 'bio'],
             }
 
-            ingest_resp = client.post('/api/v1/ingest', json=payload)
+            ingest_resp = client.post('/api/v1/ingestions', json=payload)
             assert ingest_resp.status_code == 200, f'Ingest failed: {ingest_resp.text}'
             ingest_data = ingest_resp.json()
             assert ingest_data['status'] == 'success'
@@ -109,7 +109,7 @@ def test_workflow_ingest_retrieve(client: TestClient):
                 'skip_opinion_formation': True,
             }
 
-            retrieve_resp = client.post('/api/v1/retrieve', json=retrieve_payload)
+            retrieve_resp = client.post('/api/v1/memories/search', json=retrieve_payload)
             assert retrieve_resp.status_code == 200, f'Retrieve failed: {retrieve_resp.text}'
 
             results = parse_ndjson(retrieve_resp.text)

@@ -27,7 +27,7 @@ async def test_batch_ingest_progress_polling(client: TestClient):
 
     # 2. Trigger batch ingestion with batch_size=2
     # This should result in 3 chunks (2, 2, 1)
-    response = client.post('/api/v1/ingest/batch', json={'notes': notes, 'batch_size': 2})
+    response = client.post('/api/v1/ingestions/batch', json={'notes': notes, 'batch_size': 2})
     assert response.status_code == 202
     job_id = response.json()['job_id']
     assert job_id
@@ -39,7 +39,7 @@ async def test_batch_ingest_progress_polling(client: TestClient):
     completed = False
 
     for _ in range(max_retries):
-        status_resp = client.get(f'/api/v1/ingest/batch/{job_id}')
+        status_resp = client.get(f'/api/v1/ingestions/{job_id}')
         assert status_resp.status_code == 200
         data = status_resp.json()
 

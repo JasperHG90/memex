@@ -35,12 +35,12 @@ def test_vault_lifecycle(client: TestClient):
 
     # 3. Resolve Vault
     # By ID
-    response = client.get(f'/api/v1/vaults/resolve/{vault_id}')
+    response = client.get(f'/api/v1/vaults/{vault_id}')
     assert response.status_code == 200, f'Resolve by ID failed: {response.text}'
     assert response.json()['id'] == vault_id
 
     # By Name
-    response = client.get(f'/api/v1/vaults/resolve/{vault_name}')
+    response = client.get(f'/api/v1/vaults/{vault_name}')
     assert response.status_code == 200, f'Resolve by Name failed: {response.text}'
     assert response.json()['id'] == vault_id
 
@@ -55,5 +55,5 @@ def test_vault_lifecycle(client: TestClient):
     assert not any(v['id'] == vault_id for v in vaults), 'Deleted vault still present in list'
 
     # Verify Resolution Fails
-    response = client.get(f'/api/v1/vaults/resolve/{vault_id}')
+    response = client.get(f'/api/v1/vaults/{vault_id}')
     assert response.status_code == 404

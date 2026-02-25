@@ -55,14 +55,14 @@ def mock_api():
 
 @pytest.fixture
 def client(mock_api):
-    """Overrides the API dependency and returns a TestClient."""
+    """Overrides API dependency and returns a TestClient."""
     app.dependency_overrides[get_api] = lambda: mock_api
     yield TestClient(app)
     app.dependency_overrides = {}
 
 
 def test_ingest_note_validation(client, mock_api):
-    """Verify /ingest accepts JSON body and calls API."""
+    """Verify /ingestions accepts JSON body and calls API."""
     import base64
 
     content = base64.b64encode(b'Test content').decode('utf-8')
@@ -75,7 +75,7 @@ def test_ingest_note_validation(client, mock_api):
         'tags': ['test'],
     }
 
-    response = client.post('/api/v1/ingest', json=payload)
+    response = client.post('/api/v1/ingestions', json=payload)
 
     assert response.status_code == 200, f'Response: {response.text}'
 
@@ -108,10 +108,10 @@ def test_create_vault_validation(client, mock_api):
 
 
 def test_retrieve_validation(client, mock_api):
-    """Verify /retrieve accepts JSON body."""
+    """Verify /memories/search accepts JSON body."""
     payload = {'query': 'something', 'limit': 5}
 
-    response = client.post('/api/v1/retrieve', json=payload)
+    response = client.post('/api/v1/memories/search', json=payload)
 
     assert response.status_code == 200, f'Response: {response.text}'
 
@@ -121,7 +121,7 @@ def test_retrieve_validation(client, mock_api):
     assert call_kwargs.get('skip_opinion_formation') is True
 
     # By default, request.skip_opinion_formation is False, so background task should run.
-    # TestClient runs background tasks after the response is returned.
+    # TestClient runs background tasks after response is returned.
     mock_api.resolve_vault_identifier.assert_called_with('default-vault')
     mock_api.process_opinion_formation_minimal.assert_called_once()
 
@@ -133,12 +133,12 @@ def test_retrieve_validation(client, mock_api):
 
 
 def test_claim_reflection_queue(client, mock_api):
-    """Verify /reflect/queue/claim calls API and returns DTOs."""
+    """Verify /reflections/claim calls API and returns DTOs."""
     mock_api.claim_reflection_queue_batch.return_value = [
         SimpleNamespace(entity_id=MOCK_UNIT_ID, vault_id=MOCK_VAULT_ID, priority_score=0.88)
     ]
 
-    response = client.post('/api/v1/reflect/queue/claim?limit=5')
+    response = client.post('/api/v1/reflections/claim?limit=5')
 
     assert response.status_code == 200
     mock_api.claim_reflection_queue_batch.assert_called_once_with(limit=5)
@@ -165,7 +165,7 @@ def test_vault_not_found_error_handling(client, mock_api):
         'tags': [],
     }
 
-    response = client.post('/api/v1/ingest', json=payload)
+    response = client.post('/api/v1/ingestions', json=payload)
 
     assert response.status_code == 404
     assert "Vault 'missing' not found" in response.json()['detail']
@@ -175,7 +175,7 @@ def test_retrieve_skip_opinion_explicit(client, mock_api):
     """Verify background task is NOT scheduled if skip_opinion_formation=True in request."""
     payload = {'query': 'something', 'limit': 5, 'skip_opinion_formation': True}
 
-    response = client.post('/api/v1/retrieve', json=payload)
+    response = client.post('/api/v1/memories/search', json=payload)
 
     assert response.status_code == 200
     mock_api.search.assert_called_once()
@@ -185,7 +185,7 @@ def test_retrieve_skip_opinion_explicit(client, mock_api):
 
 
 def test_metrics_endpoint(client):
-    """Verify that the /metrics endpoint is exposed and returns 200."""
+    """Verify that /metrics endpoint is exposed and returns 200."""
     response = client.get('/api/v1/metrics')
     assert response.status_code == 200
     # Check for standard Prometheus output
@@ -193,13 +193,13 @@ def test_metrics_endpoint(client):
     assert '# TYPE' in response.text
 
 
-def test_get_document_page_index_with_data(client, mock_api):
-    """GET /documents/{doc_id}/page_index returns page_index when present."""
+def test_get_note_page_index_with_data(client, mock_api):
+    """GET /notes/{document_id}/page-index returns page_index when present."""
     doc_id = UUID('00000000-0000-0000-0000-000000000099')
     page_index = {'toc': [{'level': 1, 'title': 'Intro', 'children': []}]}
     mock_api.get_document_page_index.return_value = page_index
 
-    response = client.get(f'/api/v1/documents/{doc_id}/page_index')
+    response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
     assert response.status_code == 200
     data = response.json()
@@ -208,12 +208,12 @@ def test_get_document_page_index_with_data(client, mock_api):
     mock_api.get_document_page_index.assert_called_once_with(doc_id)
 
 
-def test_get_document_page_index_none(client, mock_api):
-    """GET /documents/{doc_id}/page_index returns null page_index when document has none."""
+def test_get_note_page_index_none(client, mock_api):
+    """GET /notes/{document_id}/page-index returns null page_index when note has none."""
     doc_id = UUID('00000000-0000-0000-0000-000000000098')
     mock_api.get_document_page_index.return_value = None
 
-    response = client.get(f'/api/v1/documents/{doc_id}/page_index')
+    response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
     assert response.status_code == 200
     data = response.json()
@@ -221,13 +221,13 @@ def test_get_document_page_index_none(client, mock_api):
     assert data['page_index'] is None
 
 
-def test_get_document_page_index_not_found(client, mock_api):
-    """GET /documents/{doc_id}/page_index returns 404 for missing documents."""
+def test_get_note_page_index_not_found(client, mock_api):
+    """GET /notes/{document_id}/page-index returns 404 for missing notes."""
     from memex_common.exceptions import ResourceNotFoundError
 
     doc_id = UUID('00000000-0000-0000-0000-000000000097')
     mock_api.get_document_page_index.side_effect = ResourceNotFoundError('Not found')
 
-    response = client.get(f'/api/v1/documents/{doc_id}/page_index')
+    response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
     assert response.status_code == 404

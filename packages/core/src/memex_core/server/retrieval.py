@@ -87,11 +87,11 @@ def _build_retrieval_dtos(
 
 
 @router.post(
-    '/retrieve',
+    '/memories/search',
     response_class=StreamingResponse,
     responses=ndjson_openapi(MemoryUnitDTO, 'Stream of memory units with resolved lineage.'),
 )
-async def retrieve(
+async def search_memories(
     request: Annotated[RetrievalRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,

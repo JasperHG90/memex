@@ -66,13 +66,13 @@ def test_retrieve_lineage_resolution(client, mock_api):
 
     mock_api.search.return_value = [fact_unit, opinion_unit]
 
-    # Mock the resolution method we are about to add
+    # Mocks resolution method we are about to add
     # It should map Unit ID -> Document ID
     mock_api.resolve_source_documents.return_value = {evidence_unit_id: doc_2}
 
     # Execute
     payload = {'query': 'test', 'limit': 10}
-    response = client.post('/api/v1/retrieve', json=payload)
+    response = client.post('/api/v1/memories/search', json=payload)
 
     assert response.status_code == 200
     import json
@@ -89,7 +89,7 @@ def test_retrieve_lineage_resolution(client, mock_api):
     assert 'source_document_ids' in data[1]
     assert data[1]['source_document_ids'] == [str(doc_2)]
 
-    # Verify we called the resolution with the correct evidence ID
+    # Verify we called resolution with the correct evidence ID
     mock_api.resolve_source_documents.assert_called_once()
     called_ids = mock_api.resolve_source_documents.call_args[0][0]
     assert evidence_unit_id in called_ids

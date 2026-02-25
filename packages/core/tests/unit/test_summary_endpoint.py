@@ -1,4 +1,4 @@
-"""Tests for the /recall/summary endpoint."""
+"""Tests for /memories/summary endpoint."""
 
 import pytest
 from unittest.mock import AsyncMock
@@ -19,20 +19,20 @@ def mock_api():
 
 @pytest.fixture
 def client(mock_api):
-    """Overrides the API dependency and returns a TestClient."""
+    """Overrides API dependency and returns a TestClient."""
     app.dependency_overrides[get_api] = lambda: mock_api
     yield TestClient(app)
     app.dependency_overrides = {}
 
 
 def test_summary_endpoint_success(client, mock_api):
-    """Verify /recall/summary returns 200 with valid payload."""
+    """Verify /memories/summary returns 200 with valid payload."""
     payload = {
         'query': 'What is memex?',
         'texts': ['Memex is a memory system.', 'It stores notes.'],
     }
 
-    response = client.post('/api/v1/recall/summary', json=payload)
+    response = client.post('/api/v1/memories/summary', json=payload)
 
     assert response.status_code == 200, f'Response: {response.text}'
     data = response.json()
@@ -45,22 +45,22 @@ def test_summary_endpoint_success(client, mock_api):
 
 
 def test_summary_endpoint_validation_error(client):
-    """Verify /recall/summary returns 422 for missing required fields."""
+    """Verify /memories/summary returns 422 for missing required fields."""
     # Missing 'texts' field
-    response = client.post('/api/v1/recall/summary', json={'query': 'test'})
+    response = client.post('/api/v1/memories/summary', json={'query': 'test'})
     assert response.status_code == 422
 
     # Missing 'query' field
-    response = client.post('/api/v1/recall/summary', json={'texts': ['a']})
+    response = client.post('/api/v1/memories/summary', json={'texts': ['a']})
     assert response.status_code == 422
 
     # Empty body
-    response = client.post('/api/v1/recall/summary', json={})
+    response = client.post('/api/v1/memories/summary', json={})
     assert response.status_code == 422
 
 
 def test_summary_endpoint_server_error(client, mock_api):
-    """Verify /recall/summary returns 500 when API raises an exception."""
+    """Verify /memories/summary returns 500 when API raises an exception."""
     mock_api.summarize_search_results.side_effect = RuntimeError('LLM unavailable')
 
     payload = {
@@ -68,5 +68,5 @@ def test_summary_endpoint_server_error(client, mock_api):
         'texts': ['text'],
     }
 
-    response = client.post('/api/v1/recall/summary', json=payload)
+    response = client.post('/api/v1/memories/summary', json=payload)
     assert response.status_code == 500

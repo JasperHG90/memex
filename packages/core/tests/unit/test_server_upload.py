@@ -19,7 +19,7 @@ def test_ingest_upload_single_md(client):
 
     files = [('files', ('test.md', b'# Test Content', 'text/markdown'))]
 
-    response = client.post('/api/v1/ingest/upload', files=files)
+    response = client.post('/api/v1/ingestions/upload', files=files)
 
     assert response.status_code == 200
     assert response.json()['status'] == 'success'
@@ -31,7 +31,7 @@ def test_ingest_upload_single_non_md(client):
 
     files = [('files', ('test.pdf', b'pdf data', 'application/pdf'))]
 
-    response = client.post('/api/v1/ingest/upload', files=files)
+    response = client.post('/api/v1/ingestions/upload', files=files)
 
     assert response.status_code == 200
     assert response.json()['status'] == 'success'
@@ -46,7 +46,7 @@ def test_ingest_upload_directory_style(client):
         ('files', ('image.png', b'png data', 'image/png')),
     ]
 
-    response = client.post('/api/v1/ingest/upload', files=files)
+    response = client.post('/api/v1/ingestions/upload', files=files)
 
     assert response.status_code == 200
     assert response.json()['status'] == 'success'

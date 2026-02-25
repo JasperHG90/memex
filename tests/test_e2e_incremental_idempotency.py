@@ -38,7 +38,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
 
     # Ingest V1
     print('\n--- Ingesting V1 ---')
-    resp1 = client.post('/api/v1/ingest', json=payload_v1)
+    resp1 = client.post('/api/v1/ingestions', json=payload_v1)
     assert resp1.status_code == 200, f'V1 Ingest failed: {resp1.text}'
     doc_id = resp1.json()['document_id']
     unit_ids_v1 = resp1.json()['unit_ids']
@@ -48,7 +48,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
 
     # 2. Idempotency Check: Ingest V1 again
     print('\n--- Re-ingesting V1 (Idempotency) ---')
-    resp2 = client.post('/api/v1/ingest', json=payload_v1)
+    resp2 = client.post('/api/v1/ingestions', json=payload_v1)
     assert resp2.status_code == 200, f'V1 Re-ingest failed: {resp2.text}'
     unit_ids_v2 = resp2.json()['unit_ids']
     print(f'V1 Re-ingest Unit IDs count: {len(unit_ids_v2)}')
@@ -68,7 +68,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
         'document_key': note_key,
     }
 
-    resp3 = client.post('/api/v1/ingest', json=payload_v2)
+    resp3 = client.post('/api/v1/ingestions', json=payload_v2)
     assert resp3.status_code == 200, f'V2 Ingest failed: {resp3.text}'
     unit_ids_v3 = resp3.json()['unit_ids']
     print(f'V2 Unit IDs count (added): {len(unit_ids_v3)}')
@@ -78,7 +78,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
     print('\n--- Verifying Stale Propagation ---')
     # Search for the old content (wizard)
     search_wizard = client.post(
-        '/api/v1/retrieve',
+        '/api/v1/memories/search',
         json={
             'query': 'quickly-moving jab excited a phantom',
             'limit': 10,
@@ -99,7 +99,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
     # 4b. Verify we CAN retrieve stale units if explicitly requested
     print('\\n--- Verifying Explicit Stale Retrieval ---')
     search_stale_explicit = client.post(
-        '/api/v1/retrieve',
+        '/api/v1/memories/search',
         json={
             'query': 'quickly-moving jab excited a phantom',
             'limit': 10,
@@ -122,7 +122,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
 
     # Search for new content (hamster)
     search_hamster = client.post(
-        '/api/v1/retrieve',
+        '/api/v1/memories/search',
         json={
             'query': 'giant robotic hamster',
             'limit': 10,
@@ -139,7 +139,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
     # 5. Verify SECTION ONE units are still active
     print('\n--- Verifying Retained Content Persistence ---')
     search_fox = client.post(
-        '/api/v1/retrieve',
+        '/api/v1/memories/search',
         json={
             'query': 'quick brown fox jumps over the lazy dog',
             'limit': 10,

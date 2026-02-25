@@ -15,12 +15,12 @@ router = APIRouter(prefix='/api/v1')
 
 
 @router.post(
-    '/recall/summary',
+    '/memories/summary',
     response_model=SummaryResponse,
     summary='Summarize search results',
     description='Generate an AI summary with citations from search result texts.',
 )
-async def summarize(
+async def summarize_memories(
     request: Annotated[SummaryRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ) -> SummaryResponse:

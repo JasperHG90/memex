@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 async def test_e2e_batch_ingestion(client: TestClient):
     """
     Test full batch ingestion flow:
-    1. POST /api/v1/ingest/batch
-    2. Polling GET /api/v1/ingest/batch/{job_id}
+    1. POST /api/v1/ingestions/batch
+    2. Polling GET /api/v1/ingestions/{job_id}
     3. Verify completion and document creation
     """
     # 1. Prepare Batch Request
@@ -31,7 +31,7 @@ async def test_e2e_batch_ingestion(client: TestClient):
     payload = {'notes': [note1, note2], 'batch_size': 1}
 
     # 2. Submit Job
-    response = client.post('/api/v1/ingest/batch', json=payload)
+    response = client.post('/api/v1/ingestions/batch', json=payload)
     assert response.status_code == 202
     job_data = response.json()
     job_id = job_data['job_id']
@@ -43,7 +43,7 @@ async def test_e2e_batch_ingestion(client: TestClient):
     completed_job = None
 
     for _ in range(max_retries):
-        status_resp = client.get(f'/api/v1/ingest/batch/{job_id}')
+        status_resp = client.get(f'/api/v1/ingestions/{job_id}')
         assert status_resp.status_code == 200
         status_data = status_resp.json()
 
@@ -63,14 +63,14 @@ async def test_e2e_batch_ingestion(client: TestClient):
     assert len(result['document_ids']) == 2
 
     # 4. Verify Idempotency (Submit same batch again)
-    response_dup = client.post('/api/v1/ingest/batch', json=payload)
+    response_dup = client.post('/api/v1/ingestions/batch', json=payload)
     assert response_dup.status_code == 202
     job_id_dup = response_dup.json()['job_id']
 
     # Poll again
     completed_job_dup = None
     for _ in range(max_retries):
-        status_resp = client.get(f'/api/v1/ingest/batch/{job_id_dup}')
+        status_resp = client.get(f'/api/v1/ingestions/{job_id_dup}')
         status_data = status_resp.json()
         if status_data['status'] == 'completed':
             completed_job_dup = status_data
@@ -87,5 +87,5 @@ async def test_e2e_batch_ingestion(client: TestClient):
 async def test_e2e_batch_job_not_found(client: TestClient):
     """Verify 404 for non-existent job ID."""
     fake_id = '00000000-0000-0000-0000-000000000000'
-    response = client.get(f'/api/v1/ingest/batch/{fake_id}')
+    response = client.get(f'/api/v1/ingestions/{fake_id}')
     assert response.status_code == 404

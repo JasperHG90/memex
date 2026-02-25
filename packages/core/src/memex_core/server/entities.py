@@ -1,13 +1,13 @@
 """Entity endpoints."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from memex_common.schemas import EntityDTO, MemoryUnitDTO
+from memex_common.schemas import EntityDTO, LineageResponse, MemoryUnitDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -24,19 +24,6 @@ router = APIRouter(prefix='/api/v1')
 
 
 @router.get(
-    '/entities/top',
-    response_class=StreamingResponse,
-    responses=ndjson_openapi(EntityDTO, 'Stream of top entities by mention count.'),
-)
-async def get_top_entities(api: Annotated[MemexAPI, Depends(get_api)], limit: int = 5):
-    try:
-        entities = await api.get_top_entities(limit=limit)
-        return ndjson_response([build_entity_dto(e) for e in entities])
-    except Exception as e:
-        raise _handle_error(e, 'Failed to get top entities')
-
-
-@router.get(
     '/entities',
     response_class=StreamingResponse,
     responses=ndjson_openapi(EntityDTO, 'Stream of entities.'),
@@ -45,11 +32,17 @@ async def list_entities(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: int = 100,
     q: str | None = None,
+    sort: Literal['-mentions'] | None = Query(
+        None, description='Sort option: -mentions for top by mention count'
+    ),
 ):
     """
     List entities.
-    If 'q' is provided, performs a name-based search.
-    Otherwise, streams entities ranked by hybrid score.
+
+    Query params:
+    - limit: Maximum number of entities to return
+    - q: Optional search query for name-based search
+    - sort: Optional sort option. Use '-mentions' for top entities by mention count.
     """
     if q:
         try:
@@ -57,6 +50,10 @@ async def list_entities(
             return ndjson_response([build_entity_dto(e) for e in entities])
         except Exception as e:
             raise _handle_error(e, 'Entity search failed')
+
+    if sort == '-mentions':
+        entities = await api.get_top_entities(limit=limit)
+        return ndjson_response([build_entity_dto(e) for e in entities])
 
     async def ranked_stream():
         async for entity in api.list_entities_ranked(limit=limit):
@@ -66,7 +63,7 @@ async def list_entities(
 
 
 @router.get(
-    '/entities/cooccurrences',
+    '/cooccurrences',
     response_class=StreamingResponse,
     responses=ndjson_openapi(BaseModel, 'Stream of co-occurrence records.'),
 )
@@ -155,6 +152,29 @@ async def get_entity_cooccurrences(id: UUID, api: Annotated[MemexAPI, Depends(ge
         return ndjson_response(items)
     except Exception as e:
         raise _handle_error(e, f'Failed to fetch co-occurrences for entity {id}')
+
+
+@router.get('/entities/{id}/lineage', response_model=LineageResponse)
+async def get_entity_lineage(
+    id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    direction: str = 'upstream',
+    depth: int = 3,
+    limit: int = 10,
+):
+    """Get the lineage of an entity."""
+    try:
+        from memex_common.schemas import LineageDirection
+
+        return await api.get_lineage(
+            entity_type='entity',
+            entity_id=id,
+            direction=LineageDirection(direction),
+            depth=depth,
+            limit=limit,
+        )
+    except Exception as e:
+        raise _handle_error(e, f'Failed to retrieve lineage for entity {id}')
 
 
 @router.delete('/entities/{entity_id}')

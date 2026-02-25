@@ -103,7 +103,7 @@ Content of section 1."""
                 'tags': ['test'],
             }
 
-            response = client.post('/api/v1/ingest', json=payload)
+            response = client.post('/api/v1/ingestions', json=payload)
             assert response.status_code == 200
             data = response.json()
             doc_id = data['document_id']

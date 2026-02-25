@@ -9,7 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from memex_core.api import MemexAPI
 from memex_core.config import parse_memex_config
 from memex_core.context import set_session_id
-from memex_core.server.documents import router as documents_router
+from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
 from memex_core.server.memories import router as memories_router
@@ -100,7 +100,7 @@ app.include_router(ingestion_router)
 app.include_router(retrieval_router)
 app.include_router(reflection_router)
 app.include_router(vaults_router)
-app.include_router(documents_router)
+app.include_router(notes_router)
 app.include_router(stats_router)
 app.include_router(entities_router)
 app.include_router(memories_router)

@@ -30,23 +30,22 @@ async def get_resource(path: str, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, 'Failed to retrieve resource')
 
 
-@router.get('/lineage/{entity_type}/{entity_id}', response_model=LineageResponse)
-async def get_lineage(
-    entity_type: str,
-    entity_id: UUID,
+@router.get('/notes/{id}/lineage', response_model=LineageResponse)
+async def get_note_lineage(
+    id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: LineageDirection = LineageDirection.UPSTREAM,
     depth: int = 3,
     limit: int = 10,
 ):
-    """Retrieve the lineage of an entity."""
+    """Get the lineage of a note."""
     try:
         return await api.get_lineage(
-            entity_type=entity_type,
-            entity_id=entity_id,
+            entity_type='note',
+            entity_id=id,
             direction=direction,
             depth=depth,
             limit=limit,
         )
     except Exception as e:
-        raise _handle_error(e, 'Failed to retrieve lineage')
+        raise _handle_error(e, f'Failed to retrieve lineage for note {id}')

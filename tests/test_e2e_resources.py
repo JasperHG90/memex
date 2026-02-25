@@ -25,7 +25,7 @@ def test_resource_retrieval_workflow(client: TestClient):
     client.post('/api/v1/vaults', json={'name': 'memex'})
 
     # Ingest
-    resp = client.post('/api/v1/ingest', json=payload)
+    resp = client.post('/api/v1/ingestions', json=payload)
     assert resp.status_code == 200
     doc_id = resp.json()['document_id']
 
@@ -61,7 +61,7 @@ def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
     # Ensure vault exists
     client.post('/api/v1/vaults', json={'name': 'memex'})
 
-    resp = client.post('/api/v1/ingest', json=payload)
+    resp = client.post('/api/v1/ingestions', json=payload)
     assert resp.status_code == 200
     doc_id = resp.json()['document_id']
 
@@ -80,7 +80,7 @@ def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
     assert len(found_note_files) == 0, f'Found unexpected note files on disk: {found_note_files}'
 
     # Verify DB persistence (via API)
-    get_resp = client.get(f'/api/v1/documents/{doc_id}')
+    get_resp = client.get(f'/api/v1/notes/{doc_id}')
     assert get_resp.status_code == 200
 
     # Normalize UUIDs for comparison (ingest returns hex, get returns UUID string)
