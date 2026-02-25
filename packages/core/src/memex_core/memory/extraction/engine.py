@@ -1,6 +1,7 @@
 import math
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import timedelta, datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -163,6 +164,17 @@ class ExtractionEngine:
         if document_id and is_first_batch:
             existing_blocks = await storage.get_document_blocks(session, document_id)
             if existing_blocks:
+                if self.config.active_strategy == 'page_index' and self.page_index_lm is not None:
+                    return await self._extract_page_index_incremental(
+                        session=session,
+                        contents=contents,
+                        agent_name=agent_name,
+                        document_id=document_id,
+                        existing_blocks=existing_blocks,
+                        vault_id=vault_id,
+                        extract_opinions=extract_opinions,
+                        content_fingerprint=content_fingerprint,
+                    )
                 return await self._extract_incremental(
                     session=session,
                     contents=contents,
@@ -520,6 +532,347 @@ class ExtractionEngine:
 
         return unit_ids, usage, touched_entity_ids
 
+    async def _extract_page_index_incremental(
+        self,
+        session: AsyncSession,
+        contents: list[RetainContent],
+        agent_name: str,
+        document_id: str,
+        existing_blocks: list[dict[str, object]],
+        vault_id: UUID,
+        extract_opinions: bool = False,
+        content_fingerprint: str | None = None,
+    ) -> tuple[list[str], TokenUsage, set[UUID]]:
+        """Incremental page-index extraction with node-level change detection.
+
+        Diffs new PageIndex blocks against existing blocks:
+        - RETAINED: hash match -> skip entirely (reindex only)
+        - BOUNDARY_SHIFT: new hash but all constituent nodes existed before ->
+          re-embed but skip HindSight (facts migrated from old chunks)
+        - CONTENT_CHANGED: new hash with new/changed nodes -> full extraction
+        - REMOVED: old hash absent from new tree -> stale
+
+        Args:
+            session: Active DB session.
+            contents: Content items to extract from.
+            agent_name: Agent performing extraction.
+            document_id: Stable document identifier.
+            existing_blocks: Current blocks from DB (via get_document_blocks).
+            vault_id: Vault scope.
+            extract_opinions: Whether to extract opinions.
+            content_fingerprint: Content fingerprint for document tracking.
+
+        Returns:
+            Tuple of (unit_ids, usage, touched_entity_ids).
+        """
+        combined_text = '\n'.join(c.content for c in contents)
+        event_date = contents[0].event_date if contents else None
+
+        ts = self.config.text_splitting
+        assert isinstance(ts, PageIndexTextSplitting)
+        assert self.page_index_lm is not None
+
+        # 1. Run PageIndex
+        page_index_output, pi_usage = await index_document(
+            full_text=combined_text,
+            lm=self.page_index_lm,
+            scan_chunk_size=ts.scan_chunk_size_tokens * CHARS_PER_TOKEN,
+            max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
+            block_token_target=ts.block_token_target,
+            short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
+        )
+
+        logger.info(
+            f'PageIndex incremental: path={page_index_output.path_used}, '
+            f'blocks={len(page_index_output.blocks)}, '
+            f'coverage={page_index_output.coverage_ratio:.1%}'
+        )
+
+        # 2. Block-level diff
+        existing_hash_map: dict[str, dict[str, object]] = {
+            str(b['content_hash']): b for b in existing_blocks
+        }
+        existing_hash_set = set(existing_hash_map.keys())
+        new_hash_set = {b.id for b in page_index_output.blocks}
+
+        retained_hashes = new_hash_set & existing_hash_set
+        new_block_hashes = new_hash_set - existing_hash_set
+        removed_hashes = existing_hash_set - new_hash_set
+
+        # 3. Node-level change detection for new blocks
+        prev_nodes = await storage.get_document_nodes(session, document_id)
+        prev_node_hash_set = {str(n['node_hash']) for n in prev_nodes}
+
+        # Build block_hash -> constituent node hashes from new PageIndexOutput
+        block_node_hashes: dict[str, set[str]] = defaultdict(set)
+
+        def _walk_nodes(nodes: list[TOCNode]) -> None:
+            for n in nodes:
+                if n.content_hash:
+                    block_hash = page_index_output.node_to_block_map.get(n.id)
+                    if block_hash:
+                        block_node_hashes[block_hash].add(n.content_hash)
+                _walk_nodes(n.children)
+
+        _walk_nodes(page_index_output.toc)
+
+        # Classify new blocks
+        boundary_shift_hashes: set[str] = set()
+        content_changed_hashes: set[str] = set()
+        for block in page_index_output.blocks:
+            if block.id not in new_block_hashes:
+                continue  # retained
+            node_hashes = block_node_hashes.get(block.id, set())
+            if node_hashes and node_hashes.issubset(prev_node_hash_set):
+                boundary_shift_hashes.add(block.id)
+            else:
+                content_changed_hashes.add(block.id)
+
+        logger.info(
+            f'PageIndex incremental diff for {document_id}: '
+            f'retained={len(retained_hashes)} boundary_shift={len(boundary_shift_hashes)} '
+            f'content_changed={len(content_changed_hashes)} removed={len(removed_hashes)}'
+        )
+
+        # 4. Persist nodes (all) + blocks (non-retained only)
+        min_tokens = ts.min_node_tokens
+        node_ids, block_chunk_map = await self._persist_page_index_nodes_and_blocks(
+            session=session,
+            page_index_output=page_index_output,
+            document_id=document_id,
+            vault_id=vault_id,
+            min_node_tokens=min_tokens,
+            skip_block_hashes=retained_hashes,
+        )
+
+        # 5. Fact migration for boundary-shift blocks
+        # Get old block -> node_hashes mapping from DB
+        old_node_map = await storage.get_node_hashes_by_block(session, document_id)
+
+        chunk_migration: dict[UUID, UUID] = {}  # old_chunk_id -> new_chunk_id
+        for removed_hash in removed_hashes:
+            old_chunk_id = UUID(str(existing_hash_map[removed_hash]['id']))
+            old_nodes = old_node_map.get(old_chunk_id, set())
+            if not old_nodes:
+                continue
+            # Find the new boundary-shift block with the most node overlap
+            best_new_chunk_id: UUID | None = None
+            best_overlap = 0
+            for bs_hash in boundary_shift_hashes:
+                new_nodes = block_node_hashes.get(bs_hash, set())
+                overlap = len(old_nodes & new_nodes)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    block_seq = next(b.seq for b in page_index_output.blocks if b.id == bs_hash)
+                    chunk_uuid_str = block_chunk_map.get(block_seq)
+                    if chunk_uuid_str:
+                        best_new_chunk_id = UUID(chunk_uuid_str)
+            if best_new_chunk_id:
+                chunk_migration[old_chunk_id] = best_new_chunk_id
+
+        await storage.migrate_facts_to_chunks(session, chunk_migration)
+
+        # 6. Stale removed blocks
+        removed_block_ids = [UUID(str(existing_hash_map[h]['id'])) for h in removed_hashes]
+        await storage.mark_blocks_stale(session, removed_block_ids)
+        # Only stale facts for blocks whose facts were NOT migrated
+        unmigrated_ids = [bid for bid in removed_block_ids if bid not in chunk_migration]
+        await storage.mark_memory_units_stale(session, unmigrated_ids)
+
+        # 7. Mark truly-removed nodes stale
+        new_all_node_hashes: set[str] = set()
+        for hashes in block_node_hashes.values():
+            new_all_node_hashes |= hashes
+        # Also include retained blocks' nodes
+        for block in page_index_output.blocks:
+            if block.id in retained_hashes:
+                node_hashes_for_block = block_node_hashes.get(block.id, set())
+                new_all_node_hashes |= node_hashes_for_block
+
+        stale_node_ids = [
+            n['id'] for n in prev_nodes if str(n['node_hash']) not in new_all_node_hashes
+        ]
+        await storage.mark_nodes_stale(session, stale_node_ids)
+
+        # 8. Reindex retained blocks
+        retained_updates: list[tuple[UUID, int]] = []
+        for block in page_index_output.blocks:
+            if block.id in retained_hashes:
+                existing = existing_hash_map[block.id]
+                retained_updates.append(
+                    (
+                        existing['id'],  # type: ignore[arg-type]
+                        block.seq,
+                    )
+                )
+        await storage.reindex_blocks(session, retained_updates)
+
+        # 9. Extract facts ONLY for CONTENT_CHANGED blocks
+        usage = pi_usage
+        unit_ids: list[str] = []
+        touched_entity_ids: set[UUID] = set()
+
+        changed_blocks = [b for b in page_index_output.blocks if b.id in content_changed_hashes]
+        if changed_blocks:
+            block_texts = [b.content for b in changed_blocks]
+            raw_facts, chunk_meta, extract_usage = await extract_facts_from_chunks(
+                chunks=block_texts,
+                event_date=event_date or contents[0].event_date,
+                lm=self.lm,
+                predictor=self.predictor,
+                agent_name=agent_name,
+                context='',
+                extract_opinions=extract_opinions,
+                semaphore=self.semaphore,
+                vault_id=vault_id,
+            )
+            usage += extract_usage
+
+            if raw_facts:
+                # Convert to ExtractedFacts
+                extracted_facts: list[ExtractedFact] = []
+                global_fact_idx = 0
+                facts_start_idx = 0
+
+                for chunk_idx, (chunk_text_val, fact_count) in enumerate(chunk_meta):
+                    chunk_facts = raw_facts[facts_start_idx : facts_start_idx + fact_count]
+                    facts_start_idx += fact_count
+                    # Map chunk_idx back to the block's seq for chunk linking
+                    block_seq = changed_blocks[chunk_idx].seq
+
+                    for f in chunk_facts:
+                        ef = ExtractedFact(
+                            fact_text=f.formatted_text,
+                            fact_type=f.fact_type,
+                            entities=f.entities,
+                            occurred_start=parse_datetime(f.occurred_start)
+                            if f.occurred_start
+                            else None,
+                            occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                            causal_relations=_convert_causal_relations(
+                                relations_from_llm=f.causal_relations,
+                                fact_start_idx=global_fact_idx,
+                            ),
+                            content_index=0,
+                            chunk_index=block_seq,
+                            context='',
+                            mentioned_at=event_date or contents[0].event_date,
+                            payload=contents[0].payload or {},
+                            where=f.where,
+                            vault_id=vault_id,
+                        )
+                        extracted_facts.append(ef)
+                        global_fact_idx += 1
+
+                if extracted_facts:
+                    self._add_temporal_offsets(extracted_facts)
+                    processed_facts = await self._process_embeddings(extracted_facts)
+
+                    for fact in processed_facts:
+                        if fact.fact_type == 'opinion':
+                            alpha, beta = await self.confidence_engine.calculate_informative_prior(
+                                session, fact.embedding
+                            )
+                            fact.confidence_alpha = alpha
+                            fact.confidence_beta = beta
+
+                    # Deduplication
+                    is_duplicate = await deduplication.check_duplicates_batch(
+                        session,
+                        processed_facts,
+                        storage.check_duplicates_in_window,
+                        vault_id=vault_id,
+                    )
+
+                    final_processed = [
+                        pf for pf, is_dup in zip(processed_facts, is_duplicate) if not is_dup
+                    ]
+                    final_extracted = [
+                        ef for ef, is_dup in zip(extracted_facts, is_duplicate) if not is_dup
+                    ]
+
+                    if final_processed:
+                        for ef, pf in zip(final_extracted, final_processed):
+                            pf.document_id = document_id
+                            if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
+                                pf.chunk_id = block_chunk_map[ef.chunk_index]
+
+                        unit_ids = await storage.insert_facts_batch(
+                            session, final_processed, document_id=document_id
+                        )
+
+                        touched_entity_ids = await self._resolve_entities(
+                            session, unit_ids, final_processed, vault_id=vault_id
+                        )
+                        await self._create_links(
+                            session, unit_ids, final_processed, vault_id=vault_id
+                        )
+
+        # 10. Update thin tree + document tracking
+        await self._track_document(
+            session, document_id, contents, is_first_batch=False, vault_id=vault_id
+        )
+
+        toc_id_to_hash: dict[str, str] = {}
+
+        def _collect_hashes(node: TOCNode) -> None:
+            h = node.content_hash or content_hash_md5(node.content or node.title)
+            toc_id_to_hash[node.id] = h
+            for child in node.children:
+                _collect_hashes(child)
+
+        for toc_node in page_index_output.toc:
+            _collect_hashes(toc_node)
+
+        def _replace_ids(tree_dict: dict[str, Any]) -> dict[str, Any]:
+            old_id = tree_dict.get('id', '')
+            tree_dict['id'] = toc_id_to_hash.get(old_id, old_id)
+            tree_dict['children'] = [_replace_ids(c) for c in tree_dict.get('children', [])]
+            return tree_dict
+
+        thin_tree = [
+            _replace_ids(n.tree_without_text(min_node_tokens=min_tokens))
+            for n in page_index_output.toc
+            if min_tokens <= 0 or (n.token_estimate or 0) > min_tokens
+        ]
+        await storage.update_document_page_index(session, document_id, thin_tree)
+
+        provided_name: str | None = contents[0].payload.get('note_name') if contents else None
+        resolved_title = await resolve_title_from_page_index(
+            page_index_toc=thin_tree,
+            provided_name=provided_name,
+            lm=self.page_index_lm,
+            session=session,
+            vault_id=vault_id,
+        )
+        await storage.update_document_title(session, document_id, resolved_title)
+
+        # Update Reflection Queue
+        if self.queue_service and touched_entity_ids:
+            await self.queue_service.handle_extraction_event(
+                session, touched_entity_ids, vault_id=vault_id
+            )
+
+        # Log usage with incremental page_index metadata
+        usage.session_id = get_session_id()
+        usage.vault_id = vault_id
+        usage.context_metadata = {
+            'operation': 'extract',
+            'mode': 'page_index_incremental',
+            'document_id': document_id,
+            'blocks_total': len(page_index_output.blocks),
+            'blocks_retained': len(retained_hashes),
+            'blocks_boundary_shift': len(boundary_shift_hashes),
+            'blocks_content_changed': len(content_changed_hashes),
+            'blocks_removed': len(removed_hashes),
+            'facts_migrated': len(chunk_migration),
+            'unit_count': len(unit_ids),
+            'vault_id': str(vault_id),
+        }
+        session.add(usage)
+
+        return unit_ids, usage, touched_entity_ids
+
     async def _extract_page_index(
         self,
         session: AsyncSession,
@@ -740,8 +1093,19 @@ class ExtractionEngine:
         document_id: str,
         vault_id: UUID,
         min_node_tokens: int = 0,
+        skip_block_hashes: set[str] | None = None,
     ) -> tuple[list[str], dict[int, str]]:
         """Create DB nodes and blocks from PageIndex output.
+
+        Args:
+            session: Active DB session.
+            page_index_output: PageIndex result with TOC and blocks.
+            document_id: Stable document identifier.
+            vault_id: Vault scope.
+            min_node_tokens: Skip nodes with fewer tokens than this threshold.
+            skip_block_hashes: Block content hashes to skip (retained blocks).
+                When provided, blocks whose ``id`` is in this set are not
+                embedded or stored as chunks.
 
         Returns:
             Tuple of (node_ids, block_chunk_map) where block_chunk_map maps
@@ -804,12 +1168,16 @@ class ExtractionEngine:
                 deduped.append(row)
         node_rows = deduped
 
-        # Insert nodes (block_id will be set after blocks are created)
+        # Insert nodes (block_id will be backfilled after blocks are created)
         node_ids = await storage.insert_nodes_batch(session, node_rows)
 
-        # Create blocks: compute embeddings on block content, store as chunks
+        # Create blocks: compute embeddings on block content, store as chunks.
+        # When skip_block_hashes is given, only embed+store non-retained blocks.
+        effective_skip = skip_block_hashes or set()
         block_chunk_metadata: list[ChunkMetadata] = []
         for block in page_index_output.blocks:
+            if block.id in effective_skip:
+                continue
             block_chunk_metadata.append(
                 ChunkMetadata(
                     chunk_text=block.content,
@@ -832,7 +1200,40 @@ class ExtractionEngine:
             session, document_id, block_chunk_metadata, vault_id=vault_id
         )
 
+        # Backfill Node.block_id using the node_to_block_map and block_chunk_map.
+        # Build node_hash -> chunk UUID mapping by cross-referencing:
+        #   node.id -> block_hash (node_to_block_map)
+        #   block_hash -> block.seq (from blocks list)
+        #   block.seq -> chunk UUID (block_chunk_map)
+        block_hash_to_seq = {b.id: b.seq for b in page_index_output.blocks}
+        node_hash_to_block_id: dict[str, UUID] = {}
+
+        for node_id, block_hash in page_index_output.node_to_block_map.items():
+            block_seq = block_hash_to_seq.get(block_hash)
+            if block_seq is None:
+                continue
+            chunk_uuid_str = block_chunk_map.get(block_seq)
+            if chunk_uuid_str is None:
+                continue
+            # Find the TOC node to get its content_hash (used as DB node_hash)
+            node_hash = self._find_node_hash(page_index_output.toc, node_id)
+            if node_hash:
+                node_hash_to_block_id[node_hash] = UUID(chunk_uuid_str)
+
+        await storage.backfill_node_block_ids(session, document_id, node_hash_to_block_id)
+
         return node_ids, block_chunk_map
+
+    @staticmethod
+    def _find_node_hash(toc: list[TOCNode], target_id: str) -> str | None:
+        """Recursively find a TOC node by ID and return its content hash."""
+        for node in toc:
+            if node.id == target_id:
+                return node.content_hash or content_hash_md5(node.content or node.title)
+            result = ExtractionEngine._find_node_hash(node.children, target_id)
+            if result is not None:
+                return result
+        return None
 
     def _assemble_llm_chunks(
         self,

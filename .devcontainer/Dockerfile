@@ -8,7 +8,7 @@ ENV RUFF_CACHE_DIR=$HOME/.cache/ruff
 ENV PREK_HOME=$HOME/.cache/prek
 ENV UV_CACHE_DIR="$HOME/.cache/uv"
 ENV NVM_DIR="$HOME/.nvm"
-ARG NODE_VERSION="20"
+ARG NODE_VERSION="22"
 ENV PATH="${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${PATH}"
 
 RUN pipx install --force uv==0.10.1
@@ -44,8 +44,11 @@ RUN curl -fsSL https://opencode.ai/install | bash
 
 # Install bun
 RUN curl -fsSL https://bun.sh/install | bash
-
 ENV PATH="$HOME/.bun/bin:$PATH"
 
 # Install qmd https://github.com/tobi/qmd
-RUN bun install -g https://github.com/tobi/qmd
+RUN bun install -g @tobilu/qmd
+
+# Install rtk
+RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+ENV PATH="$HOME/.local/bin:$PATH"

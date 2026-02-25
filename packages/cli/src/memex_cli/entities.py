@@ -287,7 +287,7 @@ async def list_related(
         try:
             entity = await _resolve_entity(api, identifier)
             edges = await api.get_entity_cooccurrences(entity.id)
-            edges = sorted(edges, key=lambda x: -x["cooccurrence_count"])[:20]
+            edges = sorted(edges, key=lambda x: -x['cooccurrence_count'])[:20]
             # Fetch names for related entities to be user-friendly
             # Collect IDs
             related_ids = []
@@ -305,7 +305,7 @@ async def list_related(
                     try:
                         r_ent = await api.get_entity(rid)
                         resolved_names[str(rid)] = r_ent.name
-                    except Exception as e:
+                    except Exception:
                         resolved_names[str(rid)] = 'Unknown'
 
         except Exception as e:

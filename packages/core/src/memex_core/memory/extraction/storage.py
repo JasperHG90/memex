@@ -9,8 +9,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import case, type_coerce, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert, UUID as SA_UUID
 from sqlmodel import col, delete, func, select, and_
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -634,6 +634,95 @@ async def get_document_nodes(
         {'id': row[0], 'node_hash': row[1], 'block_id': row[2], 'seq': row[3]}
         for row in results.all()
     ]
+
+
+async def backfill_node_block_ids(
+    session: AsyncSession,
+    document_id: str,
+    node_hash_to_block_id: dict[str, UUID],
+) -> None:
+    """Set Node.block_id for nodes matching the given node_hash -> chunk UUID mapping.
+
+    Uses a bulk CASE/WHEN UPDATE for efficiency.
+
+    Args:
+        session: Active database session.
+        document_id: Document identifier.
+        node_hash_to_block_id: Mapping of node_hash string to chunk UUID.
+    """
+    if not node_hash_to_block_id:
+        return
+
+    doc_uuid = UUID(document_id)
+    whens = [
+        (Node.node_hash == nh, type_coerce(bid, SA_UUID()))
+        for nh, bid in node_hash_to_block_id.items()
+    ]
+    stmt = (
+        update(Node)
+        .where(
+            and_(
+                col(Node.document_id) == doc_uuid,
+                col(Node.node_hash).in_(list(node_hash_to_block_id.keys())),
+                col(Node.status) == ContentStatus.ACTIVE,
+            )
+        )
+        .values(block_id=case(*whens))
+    )
+    await session.exec(stmt)
+
+
+async def migrate_facts_to_chunks(
+    session: AsyncSession,
+    chunk_id_mapping: dict[UUID, UUID],
+) -> None:
+    """Reassign MemoryUnits from old chunks to new chunks (boundary shift migration).
+
+    Args:
+        session: Active database session.
+        chunk_id_mapping: Mapping of old_chunk_id -> new_chunk_id.
+    """
+    if not chunk_id_mapping:
+        return
+
+    whens = [
+        (MemoryUnit.chunk_id == old_id, type_coerce(new_id, SA_UUID()))
+        for old_id, new_id in chunk_id_mapping.items()
+    ]
+    stmt = (
+        update(MemoryUnit)
+        .where(col(MemoryUnit.chunk_id).in_(list(chunk_id_mapping.keys())))
+        .values(chunk_id=case(*whens))
+    )
+    await session.exec(stmt)
+
+
+async def get_node_hashes_by_block(
+    session: AsyncSession,
+    document_id: str,
+) -> dict[UUID, set[str]]:
+    """Return {chunk_id -> set of node_hashes} for all active nodes with a block_id.
+
+    Args:
+        session: Active database session.
+        document_id: Document identifier.
+
+    Returns:
+        Mapping of chunk UUID to the set of node_hash strings belonging to it.
+    """
+    doc_uuid = UUID(document_id)
+    stmt = select(Node.block_id, Node.node_hash).where(
+        and_(
+            col(Node.document_id) == doc_uuid,
+            col(Node.status) == ContentStatus.ACTIVE,
+            col(Node.block_id).is_not(None),
+        )
+    )
+    results = await session.exec(stmt)
+    mapping: dict[UUID, set[str]] = {}
+    for block_id, node_hash in results.all():
+        mapping.setdefault(block_id, set()).add(str(node_hash))
+    return mapping
 
 
 async def mark_nodes_stale(

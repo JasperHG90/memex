@@ -11,8 +11,12 @@ install:
 prek_setup:
   uv run prek install
 
+# Set up rtk
+rtk_setup:
+  rtk init --global -u
+
 # Install python dependencies and pre-commit hooks
-setup: install prek_setup
+setup: install prek_setup rtk_setup
 
 # Run pre-commit
 prek:
