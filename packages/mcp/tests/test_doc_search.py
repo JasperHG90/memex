@@ -3,16 +3,16 @@
 from uuid import uuid4
 
 import pytest
-from memex_common.schemas import DocumentSearchResult, DocumentSnippet
+from memex_common.schemas import NoteSearchResult, NoteSnippet
 
 
 def _make_result(
     title: str | None = 'Test Document',
     score: float = 0.85,
     source_uri: str | None = None,
-    snippets: list[DocumentSnippet] | None = None,
+    snippets: list[NoteSnippet] | None = None,
     answer: str | None = None,
-) -> DocumentSearchResult:
+) -> NoteSearchResult:
     metadata: dict = {}
     if title:
         metadata['title'] = title
@@ -20,8 +20,8 @@ def _make_result(
     if source_uri:
         metadata['source_uri'] = source_uri
 
-    return DocumentSearchResult(
-        document_id=uuid4(),
+    return NoteSearchResult(
+        note_id=uuid4(),
         metadata=metadata,
         snippets=snippets or [],
         score=score,
@@ -99,10 +99,10 @@ async def test_memex_doc_search_includes_source_uri(mock_api, mcp_client):
 async def test_memex_doc_search_includes_snippets(mock_api, mcp_client):
     """Up to 3 text snippets should appear in the output."""
     snippets = [
-        DocumentSnippet(text='First relevant passage.', score=0.9),
-        DocumentSnippet(text='Second relevant passage.', score=0.8),
-        DocumentSnippet(text='Third relevant passage.', score=0.7),
-        DocumentSnippet(text='Fourth passage should be omitted.', score=0.6),
+        NoteSnippet(text='First relevant passage.', score=0.9),
+        NoteSnippet(text='Second relevant passage.', score=0.8),
+        NoteSnippet(text='Third relevant passage.', score=0.7),
+        NoteSnippet(text='Fourth passage should be omitted.', score=0.6),
     ]
     doc = _make_result(title='Rich Document', snippets=snippets)
     mock_api.search_documents.return_value = [doc]
@@ -119,7 +119,7 @@ async def test_memex_doc_search_includes_snippets(mock_api, mcp_client):
 @pytest.mark.asyncio
 async def test_memex_doc_search_snippet_node_title_prefix(mock_api, mcp_client):
     """Snippets with a node_title should display the title as a prefix."""
-    snippets = [DocumentSnippet(text='Section content.', score=0.9, node_title='Introduction')]
+    snippets = [NoteSnippet(text='Section content.', score=0.9, node_title='Introduction')]
     doc = _make_result(title='Structured Doc', snippets=snippets)
     mock_api.search_documents.return_value = [doc]
 
@@ -133,8 +133,8 @@ async def test_memex_doc_search_snippet_node_title_prefix(mock_api, mcp_client):
 @pytest.mark.asyncio
 async def test_memex_doc_search_falls_back_to_name_key(mock_api, mcp_client):
     """When 'title' key is absent, fall back to 'name' key for document title."""
-    doc = DocumentSearchResult(
-        document_id=uuid4(),
+    doc = NoteSearchResult(
+        note_id=uuid4(),
         metadata={'name': 'Named Document'},
         snippets=[],
         score=0.75,

@@ -44,6 +44,6 @@ async def test_uuid_idempotency_same_file(
         # UUID is the same across ingestions
         assert note1.uuid == note2.uuid
 
-        # Verify the UUID format is what we expect (MD5 of source_uri = document_key)
+        # Verify the UUID format is what we expect (MD5 of source_uri = note_key)
         expected_uuid = hashlib.md5(str(pdf_file.absolute()).encode('utf-8')).hexdigest()
         assert note1.uuid == expected_uuid

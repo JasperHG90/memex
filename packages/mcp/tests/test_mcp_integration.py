@@ -113,7 +113,7 @@ async def test_integration_search_assets_resource(mock_api):
         assert str(doc_id) in search_text
 
         # Step 2: List Assets using Document ID from search
-        assets_result = await client.call_tool('memex_list_assets', {'document_id': str(doc_id)})
+        assets_result = await client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
         assets_text = assets_result.content[0].text
 
         assert 'arch.png' in assets_text

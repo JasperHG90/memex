@@ -153,7 +153,7 @@ class JobManager:
                 job.processed_count = final_results.get('processed_count', 0)
                 job.skipped_count = final_results.get('skipped_count', 0)
                 job.failed_count = final_results.get('failed_count', 0)
-                job.document_ids = final_results.get('document_ids', [])
+                job.note_ids = final_results.get('note_ids', [])
                 job.error_info = final_results.get('errors')
                 job.progress = f'Completed: {total_notes}/{total_notes} processed'
 

@@ -54,7 +54,7 @@ _DOC_SUMMARY_CSS = (
 
 
 def _extract_title(metadata: dict[str, Any]) -> str:
-    """Extract document title from metadata dict."""
+    """Extract note title from metadata dict."""
     return str(metadata.get('title') or metadata.get('name') or 'Untitled')
 
 
@@ -293,7 +293,7 @@ class DocSearchState(rx.State):
                 self.active_strategies if len(self.active_strategies) < 4 else None
             )
 
-            doc_results = await api_client.api.search_documents(
+            doc_results = await api_client.api.search_notes(
                 query=self.query,
                 limit=self.limit,
                 vault_ids=vault_ids,
@@ -350,15 +350,15 @@ class DocSearchState(rx.State):
 
         async def _get_content() -> str:
             try:
-                doc = await api_client.api.get_document(UUID(result.document_id))
-                return doc.original_text or ''
+                note = await api_client.api.get_note(UUID(result.document_id))
+                return note.original_text or ''
             except Exception as e:
-                logger.warning(f'Failed to load document content for {result.document_id}: {e}')
+                logger.warning(f'Failed to load note content for {result.document_id}: {e}')
                 return ''
 
         async def _get_page_index() -> list[PageIndexNode]:
             try:
-                raw = await api_client.api.get_document_page_index(UUID(result.document_id))
+                raw = await api_client.api.get_note_page_index(UUID(result.document_id))
                 return _flatten_page_index(raw) if raw is not None else []
             except Exception as e:
                 logger.warning(f'Failed to load page index for {result.document_id}: {e}')
@@ -391,7 +391,7 @@ def _doc_strategy_switch(strategy: str) -> rx.Component:
 
 
 def doc_filter_panel() -> rx.Component:
-    """Collapsible panel for selecting document retrieval strategies."""
+    """Collapsible panel for selecting note retrieval strategies."""
     return rx.box(
         rx.vstack(
             rx.hstack(
@@ -495,20 +495,20 @@ def render_page_index_node(node: PageIndexNode) -> rx.Component:
 
 
 def doc_detail_modal() -> rx.Component:
-    """Modal showing full document content, page index tree, and metadata."""
+    """Modal showing full note content, page index tree, and metadata."""
     return rx.dialog.root(
         rx.dialog.content(
             rx.dialog.title(
                 rx.cond(
                     DocSearchState.selected_result,
                     DocSearchState.selected_result.title,  # type: ignore[union-attr]
-                    'Document Details',
+                    'Note Details',
                 )
             ),
             rx.cond(
                 DocSearchState.selected_result,
                 rx.flex(
-                    # ── Left column: full document content ──────────────────
+                    # ── Left column: full note content ──────────────────
                     rx.vstack(
                         rx.text(
                             'Content',
@@ -768,12 +768,12 @@ def doc_summary_card() -> rx.Component:
 
 
 def doc_search_page() -> rx.Component:
-    """Document search page component."""
+    """Note search page component."""
     return rx.vstack(
-        rx.heading('Document Search', size='8'),
+        rx.heading('Note Search', size='8'),
         rx.hstack(
             rx.input(
-                placeholder='Search documents...',
+                placeholder='Search notes...',
                 value=DocSearchState.query,
                 on_change=DocSearchState.set_query,
                 on_key_down=DocSearchState.handle_key_down,
@@ -816,7 +816,7 @@ def doc_search_page() -> rx.Component:
                 rx.center(
                     rx.vstack(
                         rx.spinner(size='3', color=style.ACCENT_COLOR),
-                        rx.heading('Searching documents...', size='5'),
+                        rx.heading('Searching notes...', size='5'),
                         align='center',
                         spacing='4',
                     ),
@@ -833,7 +833,7 @@ def doc_search_page() -> rx.Component:
                 ),
             ),
             rx.box(
-                rx.text('Enter a query to start searching documents.', color=style.SECONDARY_TEXT),
+                rx.text('Enter a query to start searching notes.', color=style.SECONDARY_TEXT),
                 width='100%',
                 padding='40px',
                 bg=style.SIDEBAR_BG,

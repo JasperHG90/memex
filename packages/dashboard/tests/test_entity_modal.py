@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from uuid import uuid4
 from memex_dashboard.pages.entity import EntityState
-from memex_common.schemas import DocumentDTO
+from memex_common.schemas import NoteDTO
 
 
 @pytest.mark.asyncio
@@ -23,7 +23,7 @@ async def test_open_mention():
     }
 
     # Mock get_document returning DTO
-    doc_dto = MagicMock(spec=DocumentDTO)
+    doc_dto = MagicMock(spec=NoteDTO)
     doc_dto.name = 'My Document'
     mock_api.get_document.return_value = doc_dto
 

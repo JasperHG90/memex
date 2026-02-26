@@ -48,7 +48,7 @@ async def ingest_note(
             content=decoded_content,
             files=decoded_files,
             tags=request.tags,
-            document_key=request.document_key,
+            note_key=request.note_key,
         )
         result = await api.ingest(note, vault_id=request.vault_id)
         return IngestResponse(**result)
@@ -210,7 +210,7 @@ async def get_batch_job_status(job_id: UUID, api: Annotated[MemexAPI, Depends(ge
                 processed_count=job.processed_count,
                 skipped_count=job.skipped_count,
                 failed_count=job.failed_count,
-                document_ids=job.document_ids,
+                note_ids=job.note_ids,
                 errors=job.error_info or [],
             )
 

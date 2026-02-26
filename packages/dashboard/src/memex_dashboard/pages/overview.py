@@ -49,15 +49,15 @@ class OverviewState(rx.State):
                 'pending_reflections': counts.reflection_queue,
             }
 
-            # 2. Recent Documents
-            recent_docs = await api.get_recent_documents(limit=5)
+            # 2. Recent Notes
+            recent_notes = await api.get_recent_notes(limit=5)
 
             parsed_memories = []
-            for d in recent_docs:
+            for d in recent_notes:
                 meta = d.doc_metadata or {}
                 title = meta.get('title') or meta.get('name') or meta.get('source')
                 if not title:
-                    title = f'Document {str(d.id)[:8]}'
+                    title = f'Note {str(d.id)[:8]}'
 
                 preview_text = meta.get('description') or meta.get('summary')
                 if not preview_text:
@@ -120,11 +120,11 @@ class OverviewState(rx.State):
             from uuid import UUID
 
             api = api_client.api
-            doc = await api.get_document(UUID(memory_id))
-            if doc:
-                meta = doc.doc_metadata
-                self.selected_memory_title = doc.name or 'Untitled'
-                self.selected_memory_content = doc.original_text or ''
+            note = await api.get_note(UUID(memory_id))
+            if note:
+                meta = note.doc_metadata
+                self.selected_memory_title = note.name or 'Untitled'
+                self.selected_memory_content = note.original_text or ''
                 self.selected_memory_metadata = [[str(k), str(v)] for k, v in meta.items()]
                 self.is_modal_open = True
         except Exception as e:
@@ -319,11 +319,11 @@ def render_kv_row(k: str, v: str) -> rx.Component:
 def memory_detail_modal() -> rx.Component:
     return rx.dialog.root(
         rx.dialog.content(
-            rx.dialog.title('Document Details'),
+            rx.dialog.title('Note Details'),
             rx.cond(
                 OverviewState.selected_memory_title != '',
                 rx.vstack(
-                    rx.badge('Document', variant='soft', color_scheme='blue'),
+                    rx.badge('Note', variant='soft', color_scheme='blue'),
                     rx.text.strong(OverviewState.selected_memory_title),
                     rx.divider(),
                     rx.text.strong('Content:'),
@@ -380,7 +380,7 @@ def overview_page() -> rx.Component:
         rx.heading('Overview', size='8'),
         rx.grid(
             metric_card(
-                'Ingested Documents',
+                'Ingested Notes',
                 OverviewState.metrics['total_memories'].to_string(),
                 'file-text',
             ),

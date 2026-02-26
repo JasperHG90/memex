@@ -3,13 +3,13 @@ from memex_common.schemas import (
     BatchIngestRequest,
     BatchIngestResponse,
     BatchJobStatus,
-    NoteDTO,
+    NoteCreateDTO,
 )
 
 
 def test_batch_ingest_request_schema():
     """Test the BatchIngestRequest schema validation."""
-    note = NoteDTO(
+    note = NoteCreateDTO(
         name='Test Note',
         description='A test note',
         content='SGVsbG8gd29ybGQ=',  # "Hello world"
@@ -35,13 +35,13 @@ def test_batch_ingest_response_schema():
         processed_count=5,
         skipped_count=2,
         failed_count=1,
-        document_ids=[doc_id],
+        note_ids=[doc_id],
         errors=[{'index': 7, 'message': 'Failed to process'}],
     )
     assert response.processed_count == 5
     assert response.skipped_count == 2
     assert response.failed_count == 1
-    assert response.document_ids == [doc_id]
+    assert response.note_ids == [doc_id]
     assert response.errors[0]['index'] == 7
 
 
@@ -56,7 +56,7 @@ def test_batch_job_status_schema():
 
     # Completed status with result
     result = BatchIngestResponse(
-        processed_count=1, skipped_count=0, failed_count=0, document_ids=[str(uuid4())]
+        processed_count=1, skipped_count=0, failed_count=0, note_ids=[str(uuid4())]
     )
     status_completed = BatchJobStatus(job_id=job_id, status='completed', result=result)
     assert status_completed.status == 'completed'

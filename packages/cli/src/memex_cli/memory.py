@@ -30,7 +30,7 @@ from memex_common.config import MemexConfig
 from memex_common.schemas import (
     ReflectionRequest,
     MemoryUnitDTO,
-    NoteDTO,
+    NoteCreateDTO,
     IngestURLRequest,
     LineageDirection,
 )
@@ -133,7 +133,7 @@ async def add_memory(
         str | None, typer.Option('--vault', '-v', help='Target vault (write).')
     ] = None,
     key: Annotated[
-        str | None, typer.Option('--key', '-k', help='Unique stable key for the document.')
+        str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
     ] = None,
 ):
     """
@@ -261,13 +261,13 @@ async def add_memory(
 
                         assets_dict[asset_path.name] = base64.b64encode(asset_data)
 
-                note = NoteDTO(
+                note = NoteCreateDTO(
                     name=note_name,
                     description=note_description,
                     content=base64.b64encode(note_content.encode('utf-8')),
                     files=assets_dict,
                     tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
-                    document_key=key,
+                    note_key=key,
                     vault_id=config.server.active_vault,
                 )
 
@@ -279,7 +279,7 @@ async def add_memory(
         if result.status == 'skipped':
             console.print(f'[yellow]Memory skipped: {result.reason}[/yellow]')
         else:
-            console.print(f'[green]Memory added successfully![/green] UUID: {result.document_id}')
+            console.print(f'[green]Memory added successfully![/green] UUID: {result.note_id}')
             if result.unit_ids:
                 console.print(f'Extracted {len(result.unit_ids)} memory units.')
 
@@ -517,7 +517,7 @@ async def reflect(
 async def get_lineage(
     ctx: typer.Context,
     entity_type: Annotated[
-        str, typer.Argument(help='Type: mental_model, observation, memory_unit, document')
+        str, typer.Argument(help='Type: mental_model, observation, memory_unit, note')
     ],
     entity_id: Annotated[str, typer.Argument(help='UUID of the entity.')],
     direction: Annotated[
@@ -569,9 +569,9 @@ async def get_lineage(
             if len(name) > 50:
                 name = name[:47] + '...'
 
-            # Check for assets (Documents only)
+            # Check for assets (Notes only)
             assets_info = ''
-            if node.entity_type == 'document':
+            if node.entity_type == 'note':
                 assets = node.entity.get('assets') or []
                 if assets:
                     assets_info = f' ({len(assets)} assets)'

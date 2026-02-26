@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, UUID
 from memex_core.api import Note
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 
 
 @pytest.mark.asyncio
@@ -12,7 +12,7 @@ async def test_ingest_batch_internal_success(api, mock_metastore, mock_filestore
     vault_id = uuid4()
     api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
 
-    note_dto = NoteDTO(
+    note_dto = NoteCreateDTO(
         name='Test Note',
         description='Desc',
         content='Y29udGVudA==',  # "content"
@@ -60,10 +60,10 @@ async def test_ingest_batch_internal_skips_duplicates(api, mock_metastore, mock_
     vault_id = uuid4()
     api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
 
-    note_dto = NoteDTO(name='Dup', description='Dup', content='ZHVw', vault_id=vault_id)
+    note_dto = NoteCreateDTO(name='Dup', description='Dup', content='ZHVw', vault_id=vault_id)
 
-    # Calculate what the UUID (document_key) and fingerprint would be
-    # NoteDTO content is already bytes
+    # Calculate what the UUID (note_key) and fingerprint would be
+    # NoteCreateDTO content is already bytes
     temp_note = Note(name=note_dto.name, description=note_dto.description, content=note_dto.content)
     expected_uuid = UUID(temp_note.uuid)
     expected_fingerprint = temp_note.content_fingerprint

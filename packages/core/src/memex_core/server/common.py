@@ -15,7 +15,7 @@ from memex_common.exceptions import (
     ResourceNotFoundError,
     VaultNotFoundError,
 )
-from memex_common.schemas import DocumentDTO, EntityDTO
+from memex_common.schemas import NoteDTO, EntityDTO
 
 from memex_core.api import MemexAPI
 
@@ -55,12 +55,12 @@ def _resolve_doc_name(metadata: dict[str, Any]) -> str | None:
     )
 
 
-def build_document_dto(doc: Any) -> DocumentDTO:
-    """Build a DocumentDTO from an ORM object or a dict."""
+def build_document_dto(doc: Any) -> NoteDTO:
+    """Build a NoteDTO from an ORM object or a dict."""
     if isinstance(doc, dict):
         metadata = doc.get('doc_metadata') or {}
         doc_title = doc.get('title')
-        return DocumentDTO(
+        return NoteDTO(
             id=doc['id'],
             title=doc_title,
             name=doc_title or _resolve_doc_name(metadata),
@@ -72,7 +72,7 @@ def build_document_dto(doc: Any) -> DocumentDTO:
 
     metadata = doc.doc_metadata or {}
     doc_title = getattr(doc, 'title', None)
-    return DocumentDTO(
+    return NoteDTO(
         id=doc.id,
         title=doc_title,
         name=doc_title or _resolve_doc_name(metadata),

@@ -26,21 +26,21 @@ def test_e2e_incremental_idempotency(client: TestClient):
 
     content_v1 = block1 + '\n\n' + block2
 
-    # We use document_key for stable document identification across calls
+    # We use note_key for stable document identification across calls
     note_key = f'incremental-test-{uuid4()}'
 
     payload_v1 = {
         'name': 'Incremental Test Doc',
         'description': 'Initial version',
         'content': base64.b64encode(content_v1.encode()).decode(),
-        'document_key': note_key,
+        'note_key': note_key,
     }
 
     # Ingest V1
     print('\n--- Ingesting V1 ---')
     resp1 = client.post('/api/v1/ingestions', json=payload_v1)
     assert resp1.status_code == 200, f'V1 Ingest failed: {resp1.text}'
-    doc_id = resp1.json()['document_id']
+    doc_id = resp1.json()['note_id']
     unit_ids_v1 = resp1.json()['unit_ids']
     print(f'V1 Document ID: {doc_id}')
     print(f'V1 Unit IDs count: {len(unit_ids_v1)}')
@@ -65,7 +65,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
         'name': 'Incremental Test Doc',
         'description': 'Updated version',
         'content': base64.b64encode(content_v2.encode()).decode(),
-        'document_key': note_key,
+        'note_key': note_key,
     }
 
     resp3 = client.post('/api/v1/ingestions', json=payload_v2)

@@ -20,7 +20,7 @@ class SearchResult(BaseModel):
     fact_type: str = 'unknown'
     score: float = 0.0
     metadata: dict[str, Any] = {}
-    source_document_ids: list[str] = []
+    source_note_ids: list[str] = []
 
 
 _ALL_STRATEGIES: list[str] = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model']
@@ -216,9 +216,7 @@ class SearchState(rx.State):
                         fact_type=clean_type,
                         score=float(getattr(unit, 'score') or 0.0),
                         metadata=getattr(unit, 'metadata', {}) or {},
-                        source_document_ids=[
-                            str(uid) for uid in getattr(unit, 'source_document_ids', [])
-                        ],
+                        source_note_ids=[str(uid) for uid in getattr(unit, 'source_note_ids', [])],
                     )
                 )
 
@@ -281,9 +279,7 @@ class SearchState(rx.State):
                         fact_type=clean_type,
                         score=float(getattr(unit, 'score') or 0.0),
                         metadata=getattr(unit, 'metadata', {}) or {},
-                        source_document_ids=[
-                            str(uid) for uid in getattr(unit, 'source_document_ids', [])
-                        ],
+                        source_note_ids=[str(uid) for uid in getattr(unit, 'source_note_ids', [])],
                     )
                 )
 

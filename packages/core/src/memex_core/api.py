@@ -28,8 +28,8 @@ from memex_common.exceptions import (
 from memex_common.schemas import (
     LineageResponse,
     LineageDirection,
-    DocumentSearchRequest,
-    DocumentSearchResult,
+    NoteSearchRequest,
+    NoteSearchResult,
     NodeDTO,
 )
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
@@ -100,14 +100,14 @@ class Note:
         tags: list[str] | None = None,
         source_uri: str | None = None,
         original_content_hash: str | None = None,
-        document_key: str | None = None,
+        note_key: str | None = None,
     ):
         self._metadata = NoteMetadata(name=name, description=description)
         self._content = content
         self._files = files or {}
         self.source_uri = source_uri
         self.original_content_hash = original_content_hash
-        self._explicit_key = document_key
+        self._explicit_key = note_key
         # Update metadata fields
         self._metadata.update('files', list(self._files.keys()))
         self._metadata.update('tags', tags or [])
@@ -124,11 +124,11 @@ class Note:
         return self._metadata.model_dump_json()
 
     @cached_property
-    def document_key(self) -> str:
+    def note_key(self) -> str:
         """Stable identity derived from origin, not content.
 
         Used for incremental ingestion: the same logical document across edits
-        should produce the same document_key.
+        should produce the same note_key.
         """
         if self._explicit_key:
             try:
@@ -150,7 +150,7 @@ class Note:
         """Version fingerprint for idempotency.
 
         Changes when content changes. Used as Gate 2 in the two-gate check:
-        same document_key + same fingerprint = skip (already processed).
+        same note_key + same fingerprint = skip (already processed).
         """
         if self.source_uri and self.original_content_hash:
             return hashlib.md5(
@@ -165,40 +165,40 @@ class Note:
 
     @cached_property
     def uuid(self) -> str:
-        """Backward-compatible alias for document_key."""
-        return self.document_key
+        """Backward-compatible alias for note_key."""
+        return self.note_key
 
     @classmethod
     def calculate_uuid_from_dto(cls, dto: Any) -> str:
-        """Calculate the UUID (document_key) for a NoteDTO without full instantiation."""
+        """Calculate the UUID (note_key) for a NoteCreateDTO without full instantiation."""
         content = dto.content
         files = dto.files
-        # DTO might have document_key
-        doc_key = getattr(dto, 'document_key', None)
+        # DTO might have note_key
+        doc_key = getattr(dto, 'note_key', None)
         temp_note = cls(
             name=dto.name,
             description=dto.description,
             content=content,
             files=files,
             tags=dto.tags,
-            document_key=doc_key,
+            note_key=doc_key,
         )
         return temp_note.uuid
 
     @classmethod
     def calculate_fingerprint_from_dto(cls, dto: Any) -> str:
-        """Calculate the content_fingerprint for a NoteDTO without full instantiation."""
+        """Calculate the content_fingerprint for a NoteCreateDTO without full instantiation."""
         content = dto.content
         files = dto.files
-        # DTO might have document_key
-        doc_key = getattr(dto, 'document_key', None)
+        # DTO might have note_key
+        doc_key = getattr(dto, 'note_key', None)
         temp_note = cls(
             name=dto.name,
             description=dto.description,
             content=content,
             files=files,
             tags=dto.tags,
-            document_key=doc_key,
+            note_key=doc_key,
         )
         return temp_note.content_fingerprint
 
@@ -688,7 +688,7 @@ ingested_at: {now}
             vault = await session.get(Vault, target_vault_id)
             vault_name = vault.name if vault else str(target_vault_id)
 
-            # Gate 1: Does document_key exist?
+            # Gate 1: Does note_key exist?
             from sqlmodel import select
 
             stmt = select(Document.content_hash).where(col(Document.id) == note_uuid)
@@ -791,7 +791,7 @@ ingested_at: {now}
             vault_name = vault.name if vault else str(target_vault_id)
 
         # 2. Two-Gate Idempotency Check
-        # Gate 1: Does document_key exist? Gate 2: Has content_fingerprint changed?
+        # Gate 1: Does note_key exist? Gate 2: Has content_fingerprint changed?
         note_uuids = [UUID(Note.calculate_uuid_from_dto(n)) for n in notes]
         note_fingerprints = [Note.calculate_fingerprint_from_dto(n) for n in notes]
         async with self.metastore.session() as session:
@@ -799,18 +799,18 @@ ingested_at: {now}
                 col(Document.id).in_(note_uuids)
             )
             db_result = await session.exec(stmt)
-            # Map document_key -> stored content_hash
+            # Map note_key -> stored content_hash
             existing_docs: dict[UUID, str | None] = {row[0]: row[1] for row in db_result.all()}
 
         results: dict[str, Any] = {
             'processed_count': 0,
             'skipped_count': 0,
             'failed_count': 0,
-            'document_ids': [],
+            'note_ids': [],
             'errors': [],
         }
 
-        # Filter: skip only if document_key exists AND content_fingerprint matches
+        # Filter: skip only if note_key exists AND content_fingerprint matches
         to_process = []
         for i, (note_dto, note_uuid, fingerprint) in enumerate(
             zip(notes, note_uuids, note_fingerprints)
@@ -890,7 +890,7 @@ ingested_at: {now}
 
                     # Update aggregate results
                     results['processed_count'] += len(chunk)
-                    results['document_ids'].extend([str(uid) for uid in chunk_doc_ids])
+                    results['note_ids'].extend([str(uid) for uid in chunk_doc_ids])
 
             except Exception as e:
                 logger.error(f'Failed to process ingestion chunk: {e}', exc_info=True)
@@ -975,9 +975,9 @@ ingested_at: {now}
                 'reflection_queue': queue_count,
             }
 
-    async def get_recent_documents(self, limit: int = 5) -> list[Any]:
+    async def get_recent_notes(self, limit: int = 5) -> list[Any]:
         """
-        Get the most recent documents.
+        Get the most recent notes.
         """
         from memex_core.memory.sql_models import Document
         from sqlmodel import select, desc
@@ -1227,7 +1227,7 @@ ingested_at: {now}
         strategy_weights: dict[str, float] | None = None,
         reason: bool = False,
         summarize: bool = False,
-    ) -> list[DocumentSearchResult]:
+    ) -> list[NoteSearchResult]:
         """
         Search for documents containing relevant information using raw chunks.
         """
@@ -1244,7 +1244,7 @@ ingested_at: {now}
         if strategy_weights is not None:
             kwargs['strategy_weights'] = strategy_weights
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query=query,
             limit=limit,
             vault_ids=vaults,

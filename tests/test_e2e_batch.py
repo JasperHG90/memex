@@ -60,7 +60,7 @@ async def test_e2e_batch_ingestion(client: TestClient):
     assert result['processed_count'] == 2
     assert result['skipped_count'] == 0
     assert result['failed_count'] == 0
-    assert len(result['document_ids']) == 2
+    assert len(result['note_ids']) == 2
 
     # 4. Verify Idempotency (Submit same batch again)
     response_dup = client.post('/api/v1/ingestions/batch', json=payload)

@@ -8,8 +8,8 @@ from memex_core.memory.sql_models import Document
 @pytest.mark.asyncio
 async def test_ingest_with_explicit_key(api, metastore):
     """
-    Verify ingestion with explicit document_key.
-    1. Ingest a note with document_key="my-key-1".
+    Verify ingestion with explicit note_key.
+    1. Ingest a note with note_key="my-key-1".
     2. Verify Document ID is hash("my-key-1").
     3. Ingest SAME note again with SAME key.
     4. Verify skipped (idempotency).
@@ -27,7 +27,7 @@ async def test_ingest_with_explicit_key(api, metastore):
 
         # Workaround: Reconstruct Note to get expected fingerprint so idempotency check passes
         # The real system has a mismatch (SHA256 vs MD5) which causes false negatives in idempotency
-        # But here we want to test that document_key logic flows through
+        # But here we want to test that note_key logic flows through
 
         # We need to match the Note creation in the test
         # name="Keyed Note", description="v1"
@@ -40,7 +40,7 @@ async def test_ingest_with_explicit_key(api, metastore):
             name='Keyed Note',
             description='v1',
             content=contents[0].content.encode('utf-8'),
-            document_key=document_id,
+            note_key=document_id,
         )
         fp = temp_note.content_fingerprint
 
@@ -70,7 +70,7 @@ async def test_ingest_with_explicit_key(api, metastore):
     expected_uuid = UUID(hashlib.md5(key_str.encode()).hexdigest())
 
     # 1. First Ingestion
-    note1 = Note(name='Keyed Note', description='v1', content=b'content v1', document_key=key_str)
+    note1 = Note(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
     result1 = await api.ingest(note1)
 
     assert result1['status'] == 'success'
@@ -83,7 +83,7 @@ async def test_ingest_with_explicit_key(api, metastore):
         assert doc.original_text == 'content v1'
 
     # 2. Idempotency Check (Same content, same key)
-    note2 = Note(name='Keyed Note', description='v1', content=b'content v1', document_key=key_str)
+    note2 = Note(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
     result2 = await api.ingest(note2)
     assert result2['status'] == 'skipped'
     assert result2['reason'] == 'idempotency_check'
@@ -93,7 +93,7 @@ async def test_ingest_with_explicit_key(api, metastore):
         name='Keyed Note',
         description='v1',  # Keep description same to match mock assumption
         content=b'content v2',
-        document_key=key_str,
+        note_key=key_str,
     )
     result3 = await api.ingest(note3)
     assert result3['status'] == 'success'

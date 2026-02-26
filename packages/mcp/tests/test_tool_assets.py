@@ -16,7 +16,7 @@ async def test_mcp_list_assets(mock_api, mcp_client):
         'vault_id': uuid4(),
     }
 
-    result = await mcp_client.call_tool('memex_list_assets', {'document_id': str(doc_id)})
+    result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
 
     text = result.content[0].text
 

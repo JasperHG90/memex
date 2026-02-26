@@ -2,7 +2,7 @@ import base64
 
 import reflex as rx
 
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 
 from .api import api_client
 from .vault_state import VaultState
@@ -33,7 +33,7 @@ class State(rx.State):
         elif path == '/settings':
             return 'Settings'
         elif path == '/doc-search':
-            return 'Document Search'
+            return 'Note Search'
         return 'Overview'
 
     def set_quick_note_content(self, value: str):
@@ -50,8 +50,8 @@ class State(rx.State):
 
         self.is_saving_note = True
         try:
-            # Create a NoteDTO (Note: metadata is not a field in NoteDTO)
-            note = NoteDTO(
+            # Create a NoteCreateDTO (Note: metadata is not a field in NoteCreateDTO)
+            note = NoteCreateDTO(
                 name='Quick Note',
                 description='Note captured from dashboard',
                 # Pass as bytes; schema validator handles it or serializer handles it

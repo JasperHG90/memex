@@ -18,7 +18,7 @@ from pydantic import Field
 
 from memex_mcp.lifespan import lifespan, get_api
 from memex_mcp.types import NoteTemplateType
-from memex_common.schemas import ReflectionRequest, LineageResponse, NoteDTO
+from memex_common.schemas import ReflectionRequest, LineageResponse, NoteCreateDTO
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
 
@@ -189,29 +189,29 @@ async def memex_list_assets(
     document_id: Annotated[str, Field(description='The UUID of the document.')],
 ) -> str:
     """
-    List assets for a document.
+    List assets for a note.
     """
     try:
         api = get_api(ctx)
         try:
             uuid_obj = UUID(document_id)
         except ValueError:
-            return f'Invalid Document UUID: {document_id}'
+            return f'Invalid Note UUID: {document_id}'
 
         try:
-            doc = await api.get_document(uuid_obj)
+            note = await api.get_note(uuid_obj)
         except FileNotFoundError:
-            return f'Document {document_id} not found.'
+            return f'Note {document_id} not found.'
 
-        assets = doc.get('assets', [])
+        assets = note.get('assets', [])
 
         if not assets:
-            return 'No assets found for this document.'
+            return 'No assets found for this note.'
 
-        meta = doc.get('doc_metadata', {})
+        meta = note.get('doc_metadata', {})
         name = meta.get('name') or meta.get('title') or 'Untitled'
 
-        output = [f'Assets for Document: {name}']
+        output = [f'Assets for Note: {name}']
 
         for asset_path in assets:
             path_obj = plb.Path(asset_path)
@@ -249,8 +249,8 @@ async def memex_read_note(
         except ValueError:
             return f'Invalid Note UUID: {note_id}'
 
-        doc = await api.get_document(uuid_obj)
-        meta = doc.get('doc_metadata', {})
+        note = await api.get_note(uuid_obj)
+        meta = note.get('doc_metadata', {})
         name = meta.get('name') or meta.get('title') or 'Untitled'
 
         # Format the output
@@ -260,11 +260,11 @@ async def memex_read_note(
         if description:
             output.append(f'> {description}')
 
-        output.append(f'\n**ID:** {doc["id"]}')
-        output.append(f'**Vault:** {doc["vault_id"]}')
-        output.append(f'**Created:** {doc["created_at"]}')
+        output.append(f'\n**ID:** {note["id"]}')
+        output.append(f'**Vault:** {note["vault_id"]}')
+        output.append(f'**Created:** {note["created_at"]}')
 
-        content = doc.get('original_text')
+        content = note.get('original_text')
 
         if content:
             output.append(f'\n## Content\n{content}')
@@ -275,9 +275,9 @@ async def memex_read_note(
 
     except FileNotFoundError:
         raise ToolError(
-            f'Document with ID {note_id} not found. '
-            "Note: Retrieving full source documents is only available for 'fact', 'opinion', or 'experience' units. "
-            "If you are attempting to read an 'observation', it does not have a single source document "
+            f'Note with ID {note_id} not found. '
+            'Note: Retrieving full source notes is only available for fact, opinion, or experience units. '
+            'If you are attempting to read an observation, it does not have a single source note '
             'as it is a synthesized insight. Please check your search results for linkable unit types.'
         )
     except Exception as e:
@@ -451,11 +451,11 @@ async def memex_add_note(
             description='The UUID of the vault to add the note to. Defaults to the active vault.',
         ),
     ] = None,
-    document_key: Annotated[
+    note_key: Annotated[
         str | None,
         Field(
             default=None,
-            description='A unique stable key for the document to enable incremental updates.',
+            description='A unique stable key for the note to enable incremental updates.',
         ),
     ] = None,
 ):
@@ -499,19 +499,19 @@ async def memex_add_note(
 {markdown_content}
         """.strip()
 
-        # Create NoteDTO (data transfer object)
-        note = NoteDTO(
+        # Create NoteCreateDTO (data transfer object)
+        note = NoteCreateDTO(
             name=title,
             description=description,
             content=base64.b64encode(full_content.encode('utf-8')),
             files=files_content,
             tags=tags,
             vault_id=vault_id,
-            document_key=document_key,
+            note_key=note_key,
         )
 
         result = await api.ingest(note)
-        return f'Note added successfully. ID: {result.get("document_id")}'
+        return f'Note added successfully. ID: {result.get("note_id")}'
 
     except Exception as e:
         logging.error(f'Add note failed: {e}', exc_info=True)
@@ -593,9 +593,9 @@ async def memex_search(
 @mcp.tool(
     name='memex_doc_search',
     description=(
-        'Search for source documents using hybrid retrieval (semantic + keyword + graph + temporal). '
-        'Returns ranked documents with text snippets. '
-        'Use when you need original documents or notes rather than individual facts '
+        'Search for source notes using hybrid retrieval (semantic + keyword + graph + temporal). '
+        'Returns ranked notes with text snippets. '
+        'Use when you need original notes rather than individual facts '
         '(use `memex_search` for those). '
         'Set summarize=True to synthesize an answer from the retrieved sections. '
         'Set reason=True to identify relevant sections with reasoning (without full answer).'
@@ -603,8 +603,8 @@ async def memex_search(
 )
 async def memex_doc_search(
     ctx: Context,
-    query: Annotated[str, Field(description='The document search query.')],
-    limit: Annotated[int, Field(description='Maximum number of documents to return.')] = 5,
+    query: Annotated[str, Field(description='The note search query.')],
+    limit: Annotated[int, Field(description='Maximum number of notes to return.')] = 5,
     expand_query: Annotated[
         bool, Field(description='Enable multi-query expansion via LLM.')
     ] = False,
@@ -618,17 +618,17 @@ async def memex_doc_search(
         ),
     ] = False,
 ) -> str:
-    """Search Memex for source documents by hybrid retrieval."""
+    """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
-        results = await api.search_documents(
+        results = await api.search_notes(
             query=query, limit=limit, expand_query=expand_query, reason=reason, summarize=summarize
         )
 
         if not results:
-            return f"No documents found for query: '{query}'"
+            return f"No notes found for query: '{query}'"
 
-        lines = [f"Found {len(results)} document(s) for '{query}':\n"]
+        lines = [f"Found {len(results)} note(s) for '{query}':\n"]
 
         for i, doc in enumerate(results, 1):
             metadata = doc.metadata or {}
@@ -639,7 +639,7 @@ async def memex_doc_search(
                 or 'Untitled'
             )
             lines.append(f'## {i}. {title}')
-            lines.append(f'- **Document ID:** {doc.document_id}')
+            lines.append(f'- **Note ID:** {doc.note_id}')
             lines.append(f'- **Score:** {doc.score:.3f}')
             if src := metadata.get('source_uri'):
                 lines.append(f'- **Source:** {src}')
@@ -661,8 +661,8 @@ async def memex_doc_search(
             if ans := next((r.answer for r in results if r.answer), None):
                 lines += ['---', '## Synthesized Answer', ans]
 
-        lines.append('Tip: Use `memex_read_note` with a Document ID to read the full document.')
-        lines.append('Tip: Use `memex_get_page_index` to browse the document table of contents.')
+        lines.append('Tip: Use `memex_read_note` with a Note ID to read the full note.')
+        lines.append('Tip: Use `memex_get_page_index` to browse the note table of contents.')
         lines.append('Tip: Use `memex_get_node` with a Node ID to retrieve specific section text.')
         return '\n'.join(lines)
 
@@ -673,25 +673,25 @@ async def memex_doc_search(
 
 @mcp.tool(
     name='memex_get_page_index',
-    description='Get the hierarchical page index (table of contents) for a document. '
-    'Returns the document structure with section titles, summaries, and node IDs. '
+    description='Get the hierarchical page index (table of contents) for a note. '
+    'Returns the note structure with section titles, summaries, and node IDs. '
     'Use the node IDs with `memex_get_node` to retrieve specific section text.',
 )
 async def memex_get_page_index(
     ctx: Context,
-    document_id: Annotated[str, Field(description='The UUID of the document.')],
+    document_id: Annotated[str, Field(description='The UUID of the note.')],
 ) -> str:
-    """Get the hierarchical page index for a document."""
+    """Get the hierarchical page index for a note."""
     try:
         api = get_api(ctx)
         try:
             uuid_obj = UUID(document_id)
         except ValueError:
-            return f'Invalid Document UUID: {document_id}'
+            return f'Invalid Note UUID: {document_id}'
 
-        page_index = await api.get_document_page_index(uuid_obj)
+        page_index = await api.get_note_page_index(uuid_obj)
         if page_index is None:
-            return 'No page index available for this document. Only documents indexed with the page_index strategy have a table of contents.'
+            return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
         import json as _json
 
@@ -704,14 +704,14 @@ async def memex_get_page_index(
 
 @mcp.tool(
     name='memex_get_node',
-    description='Retrieve the full text content of a specific document section (node) by its ID. '
+    description='Retrieve the full text content of a specific note section (node) by its ID. '
     'Node IDs can be found in search results (reasoning field) or via `memex_get_page_index`.',
 )
 async def memex_get_node(
     ctx: Context,
     node_id: Annotated[str, Field(description='The UUID of the node to retrieve.')],
 ) -> str:
-    """Retrieve the full text content of a specific document node."""
+    """Retrieve the full text content of a specific note node."""
     try:
         api = get_api(ctx)
         try:
@@ -725,12 +725,12 @@ async def memex_get_node(
 
         title = node.title
         text = node.text
-        doc_id = node.document_id
+        doc_id = node.note_id
         level = node.level
 
         output = [f'# {"#" * level} {title}']
         output.append(f'**Node ID:** {node_id}')
-        output.append(f'**Document ID:** {doc_id}')
+        output.append(f'**Note ID:** {doc_id}')
         if text:
             output.append(f'\n{text}')
         else:
@@ -773,8 +773,8 @@ async def memex_batch_ingest(
 
             import base64
 
-            # Minimal NoteDTO for batch ingestion
-            note_dto = NoteDTO(
+            # Minimal NoteCreateDTO for batch ingestion
+            note_dto = NoteCreateDTO(
                 name=path.name,
                 description=f'Imported from {path}',
                 content=base64.b64encode(content).decode('utf-8'),
@@ -834,12 +834,12 @@ async def memex_get_batch_status(
         if job.completed_at:
             output.append(f'Completed: {job.completed_at}')
 
-        if job.status == 'completed' and job.document_ids:
-            output.append('\nCreated Document IDs (truncated):')
-            for did in job.document_ids[:10]:
+        if job.status == 'completed' and job.note_ids:
+            output.append('\nCreated Note IDs (truncated):')
+            for did in job.note_ids[:10]:
                 output.append(f'- {did}')
-            if len(job.document_ids) > 10:
-                output.append(f'- ... and {len(job.document_ids) - 10} more.')
+            if len(job.note_ids) > 10:
+                output.append(f'- ... and {len(job.note_ids) - 10} more.')
 
         if job.error_info:
             output.append('\nErrors:')

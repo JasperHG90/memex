@@ -71,7 +71,7 @@ def _build_retrieval_dtos(
             MemoryUnitDTO(
                 id=u.id,
                 document_id=doc_id,
-                source_document_ids=source_docs,
+                source_note_ids=source_docs,
                 text=u.text,
                 fact_type=ft,
                 status=u.status,

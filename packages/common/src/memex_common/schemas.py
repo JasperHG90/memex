@@ -304,15 +304,15 @@ class MemoryUnitDTO(MemoryUnitBase):
         examples=['123e4567-e89b-12d3-a456-426614174000'],
     )
 
-    document_id: UUID | None = Field(
+    note_id: UUID | None = Field(
         default=None,
-        description='The unique identifier of the source document.',
+        description='The unique identifier of the source note.',
         examples=['123e4567-e89b-12d3-a456-426614174000'],
     )
 
-    source_document_ids: list[UUID] = Field(
+    source_note_ids: list[UUID] = Field(
         default_factory=list,
-        description='List of source document IDs. For facts, typically single. For opinions, derived from evidence.',
+        description='List of source note IDs. For facts, typically single. For opinions, derived from evidence.',
         examples=[['123e4567-e89b-12d3-a456-426614174000']],
     )
 
@@ -418,17 +418,17 @@ class DefaultVaultsResponse(BaseModel):
     )
 
 
-class NoteDTO(BaseModel):
-    """DTO for a Note artifact."""
+class NoteCreateDTO(BaseModel):
+    """DTO for creating a Note artifact (input/ingestion)."""
 
     name: str = Field(
         description='The name of the note.',
         examples=['Meeting Notes'],
     )
-    document_key: str | None = Field(
+    note_key: str | None = Field(
         default=None,
-        description='A unique stable key for the document to enable incremental updates.',
-        examples=['my-stable-doc-id'],
+        description='A unique stable key for the note to enable incremental updates.',
+        examples=['my-stable-note-id'],
     )
     description: str = Field(
         description='A brief description or summary of the note.',
@@ -484,9 +484,9 @@ class IngestResponse(BaseModel):
         examples=['success', 'skipped', 'failed'],
     )
 
-    document_id: str | None = Field(
+    note_id: str | None = Field(
         default=None,
-        description='The unique identifier of the ingested document.',
+        description='The unique identifier of the ingested note.',
         examples=['123e4567-e89b-12d3-a456-426614174000'],
     )
 
@@ -543,7 +543,7 @@ class ReflectionQueueDTO(BaseModel):
 class BatchIngestRequest(BaseModel):
     """Request for batch ingestion of notes."""
 
-    notes: list[NoteDTO] = Field(..., description='List of notes to ingest.')
+    notes: list[NoteCreateDTO] = Field(..., description='List of notes to ingest.')
     vault_id: UUID | str | None = Field(
         default=None,
         description='Optional target vault ID or name that overrides note-level vault.',
@@ -557,9 +557,7 @@ class BatchIngestResponse(BaseModel):
     processed_count: int = Field(default=0, description='Number of successfully processed notes.')
     skipped_count: int = Field(default=0, description='Number of skipped notes (e.g. duplicates).')
     failed_count: int = Field(default=0, description='Number of notes that failed to process.')
-    document_ids: list[str] = Field(
-        default_factory=list, description='List of created Document UUIDs.'
-    )
+    note_ids: list[str] = Field(default_factory=list, description='List of created Note UUIDs.')
     errors: list[dict[str, Any]] = Field(
         default_factory=list, description='Detailed error information indexed by input.'
     )
@@ -602,12 +600,12 @@ class TokenUsageResponse(BaseModel):
 
 
 class NodeDTO(BaseModel):
-    """DTO for a document node (section produced by PageIndex)."""
+    """DTO for a note node (section produced by PageIndex)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    document_id: UUID
+    note_id: UUID
     vault_id: UUID
     title: str
     text: str
@@ -617,8 +615,8 @@ class NodeDTO(BaseModel):
     created_at: dt.datetime
 
 
-class DocumentDTO(BaseModel):
-    """DTO for a Document."""
+class NoteDTO(BaseModel):
+    """DTO for a Note (output/retrieval)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -632,8 +630,8 @@ class DocumentDTO(BaseModel):
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class DocumentSnippet(BaseModel):
-    """Snippet of text from a document."""
+class NoteSnippet(BaseModel):
+    """Snippet of text from a note."""
 
     text: str
     score: float = 0.0
@@ -648,12 +646,12 @@ class DocumentSnippet(BaseModel):
     node_level: int | None = None
 
 
-class DocumentSearchResult(BaseModel):
-    """Result of a document search."""
+class NoteSearchResult(BaseModel):
+    """Result of a note search."""
 
-    document_id: UUID
+    note_id: UUID
     metadata: dict[str, Any]
-    snippets: list[DocumentSnippet]
+    snippets: list[NoteSnippet]
     score: float = 0.0
     reasoning: list[dict[str, Any]] | None = Field(
         default=None,
@@ -665,8 +663,8 @@ class DocumentSearchResult(BaseModel):
     )
 
 
-class DocumentSearchRequest(BaseModel):
-    """Request to search for documents."""
+class NoteSearchRequest(BaseModel):
+    """Request to search for notes."""
 
     query: str
     limit: int = 10
@@ -685,7 +683,7 @@ class DocumentSearchRequest(BaseModel):
     )
 
     @model_validator(mode='after')
-    def _ensure_reason_if_summarize(self) -> 'DocumentSearchRequest':
+    def _ensure_reason_if_summarize(self) -> 'NoteSearchRequest':
         if self.summarize:
             self.reason = True
         return self

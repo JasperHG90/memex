@@ -227,7 +227,7 @@ async def list_mentions(
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    Show memories and documents mentioning this entity.
+    Show memories and notes mentioning this entity.
     """
     config: MemexConfig = ctx.obj
 
@@ -251,12 +251,12 @@ async def list_mentions(
 
     table = Table(title=f'Mentions for {entity.name}')
     table.add_column('Memory Segment', style='white')
-    table.add_column('Source Document', style='dim')
+    table.add_column('Source Note', style='dim')
     table.add_column('Date', style='cyan')
 
     for item in results:
         unit = item.get('unit')
-        doc = item.get('document')
+        doc = item.get('note')
 
         text = unit.text if unit else 'N/A'
         # Truncate text

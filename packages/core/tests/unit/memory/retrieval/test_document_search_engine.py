@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-from memex_common.schemas import DocumentSearchRequest
+from memex_common.schemas import NoteSearchRequest
 from memex_core.memory.retrieval.document_search import DocumentSearchEngine
 
 
@@ -47,7 +47,7 @@ class TestStrategySelection:
     @pytest.mark.asyncio
     async def test_empty_strategies_returns_empty(self, engine: DocumentSearchEngine) -> None:
         """When no strategies are active, return empty results."""
-        request = DocumentSearchRequest(query='test', strategies=[])
+        request = NoteSearchRequest(query='test', strategies=[])
         session = AsyncMock()
         result = await engine.search(session, request)
         assert result == []
@@ -55,7 +55,7 @@ class TestStrategySelection:
     @pytest.mark.asyncio
     async def test_default_strategies(self, engine: DocumentSearchEngine) -> None:
         """Default strategies include semantic, keyword, graph, and temporal."""
-        request = DocumentSearchRequest(query='test')
+        request = NoteSearchRequest(query='test')
         assert set(request.strategies) == {'semantic', 'keyword', 'graph', 'temporal'}
 
 

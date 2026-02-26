@@ -2,7 +2,7 @@ import pytest
 from uuid import uuid4
 from memex_core.memory.sql_models import Document, Vault
 from memex_common.exceptions import ResourceNotFoundError
-from memex_common.schemas import DocumentDTO
+from memex_common.schemas import NoteDTO
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_int_documents_api(api, metastore, memex_config):
     assert doc_result['doc_metadata'] == doc_metadata
 
     # Verify DTO Construction (Server Logic)
-    dto = DocumentDTO(
+    dto = NoteDTO(
         id=doc_result['id'],
         name=doc_result['doc_metadata'].get('name') or doc_result['doc_metadata'].get('title'),
         created_at=doc_result['created_at'],
@@ -58,7 +58,7 @@ async def test_int_documents_api(api, metastore, memex_config):
     d = docs_list[0]
 
     # Server Logic for List
-    list_dto = DocumentDTO(
+    list_dto = NoteDTO(
         id=d.id,
         name=d.doc_metadata.get('name') or d.doc_metadata.get('title'),
         created_at=d.created_at,

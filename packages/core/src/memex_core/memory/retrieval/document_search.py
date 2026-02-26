@@ -20,7 +20,7 @@ from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_core.memory.retrieval.strategies import DocumentGraphStrategy
 from memex_core.memory.sql_models import Chunk, Document, Node
-from memex_common.schemas import DocumentSearchRequest, DocumentSearchResult, DocumentSnippet
+from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
 
 
 class RelevantSection(BaseModel):
@@ -100,8 +100,8 @@ class DocumentSearchEngine:
     async def search(
         self,
         session: AsyncSession,
-        request: DocumentSearchRequest,
-    ) -> list[DocumentSearchResult]:
+        request: NoteSearchRequest,
+    ) -> list[NoteSearchResult]:
         """Execute a hybrid document search and return grouped results."""
         # 1. Query expansion (multi-query)
         queries = [request.query]
@@ -159,10 +159,10 @@ class DocumentSearchEngine:
     async def _identify_relevant_sections(
         self,
         session: AsyncSession,
-        results: list[DocumentSearchResult],
+        results: list[NoteSearchResult],
         query: str,
         lm: dspy.LM,
-    ) -> tuple[list[DocumentSearchResult], ReasoningOutput]:
+    ) -> tuple[list[NoteSearchResult], ReasoningOutput]:
         """Identify relevant sections from thin trees via skeleton-tree reasoning.
 
         For documents that have a ``page_index`` (thin tree):
@@ -222,11 +222,11 @@ class DocumentSearchEngine:
         # Step 3: Build refined snippets and reasoning grouped by document.
         # Map node_hash → (db_node_uuid, document_id) for enriching reasoning.
         hash_to_info: dict[str, tuple[UUID, UUID]] = {}
-        doc_snippets: dict[UUID, list[DocumentSnippet]] = {}
+        doc_snippets: dict[UUID, list[NoteSnippet]] = {}
         section_texts: list[str] = []
         for node_id, doc_id, title, text, level, node_hash in node_rows:
             hash_to_info[node_hash] = (node_id, doc_id)
-            snippet = DocumentSnippet(
+            snippet = NoteSnippet(
                 text=text or '',
                 score=1.0,
                 node_id=node_id,
@@ -256,11 +256,11 @@ class DocumentSearchEngine:
 
     async def _synthesize_answer(
         self,
-        results: list[DocumentSearchResult],
+        results: list[NoteSearchResult],
         query: str,
         all_section_texts: list[str],
         lm: dspy.LM,
-    ) -> list[DocumentSearchResult]:
+    ) -> list[NoteSearchResult]:
         """Synthesize an answer from identified sections.
 
         Runs ``AnswerFromSections`` and attaches the answer to the top result.
@@ -287,7 +287,7 @@ class DocumentSearchEngine:
         query: str,
         query_embedding: list[float],
         pool_size: int,
-        request: DocumentSearchRequest,
+        request: NoteSearchRequest,
     ) -> list[Any]:
         """Run all active strategies for a single query and fuse via RRF."""
         active = set(request.strategies)
@@ -320,7 +320,7 @@ class DocumentSearchEngine:
         self,
         query_embedding: list[float],
         pool_size: int,
-        request: DocumentSearchRequest,
+        request: NoteSearchRequest,
         weights: dict[str, float],
     ) -> Any:
         weight = weights.get('semantic', 1.0)
@@ -342,7 +342,7 @@ class DocumentSearchEngine:
         self,
         query: str,
         pool_size: int,
-        request: DocumentSearchRequest,
+        request: NoteSearchRequest,
         weights: dict[str, float],
     ) -> Any:
         weight = weights.get('keyword', 1.0)
@@ -397,7 +397,7 @@ class DocumentSearchEngine:
         query: str,
         query_embedding: list[float],
         pool_size: int,
-        request: DocumentSearchRequest,
+        request: NoteSearchRequest,
         weights: dict[str, float],
     ) -> Any:
         weight = weights.get('graph', 1.0)
@@ -424,7 +424,7 @@ class DocumentSearchEngine:
     def _temporal_cte(
         self,
         pool_size: int,
-        request: DocumentSearchRequest,
+        request: NoteSearchRequest,
         weights: dict[str, float],
     ) -> Any:
         """Rank chunks by their parent document's publish_date (most recent first)."""
@@ -489,7 +489,7 @@ class DocumentSearchEngine:
         session: AsyncSession,
         chunk_results: list[Any],
         limit: int,
-    ) -> list[DocumentSearchResult]:
+    ) -> list[NoteSearchResult]:
         # Group chunks by document
         doc_to_chunks: dict[UUID, list[tuple[Chunk, float]]] = {}
         for chunk, score in chunk_results:
@@ -524,7 +524,7 @@ class DocumentSearchEngine:
                 node_texts_by_block[block_id] = f'{existing}\n\n{text}' if existing else text
 
         # Build results
-        final_results: list[DocumentSearchResult] = []
+        final_results: list[NoteSearchResult] = []
         for doc_id, chunks_with_scores in doc_to_chunks.items():
             if doc_id not in docs:
                 continue
@@ -534,7 +534,7 @@ class DocumentSearchEngine:
 
             snippets = sorted(
                 [
-                    DocumentSnippet(
+                    NoteSnippet(
                         text=c.text
                         if c.text and c.text.strip()
                         else node_texts_by_block.get(c.id, ''),
@@ -556,7 +556,7 @@ class DocumentSearchEngine:
                     metadata['title'] = note_name
 
             final_results.append(
-                DocumentSearchResult(
+                NoteSearchResult(
                     document_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
                 )
             )

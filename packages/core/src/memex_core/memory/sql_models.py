@@ -1023,10 +1023,10 @@ class BatchJob(SQLModel, table=True):  # type: ignore
         description='Number of failed notes.',
     )
 
-    document_ids: list[str] = Field(
+    note_ids: list[str] = Field(
         default=[],
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
-        description='List of created Document UUIDs.',
+        description='List of created Note UUIDs.',
     )
 
     error_info: Any | None = Field(

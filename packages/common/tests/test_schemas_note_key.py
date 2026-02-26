@@ -1,28 +1,28 @@
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 import base64
 
 
-def test_note_dto_with_document_key():
-    """Test that NoteDTO can be instantiated with an optional document_key."""
+def test_note_dto_with_note_key():
+    """Test that NoteCreateDTO can be instantiated with an optional note_key."""
     content = b'test content'
     encoded_content = base64.b64encode(content)
 
-    # This should fail initially because document_key is not yet a field
-    note = NoteDTO(
+    # This should work because note_key is now a field
+    note = NoteCreateDTO(
         name='test note',
         description='test description',
         content=encoded_content,
-        document_key='my-stable-key',
+        note_key='my-stable-key',
     )
 
-    assert note.document_key == 'my-stable-key'
+    assert note.note_key == 'my-stable-key'
 
 
-def test_note_dto_without_document_key():
-    """Test that NoteDTO works without document_key."""
+def test_note_dto_without_note_key():
+    """Test that NoteCreateDTO works without note_key."""
     content = b'test content'
     encoded_content = base64.b64encode(content)
 
-    note = NoteDTO(name='test note', description='test description', content=encoded_content)
+    note = NoteCreateDTO(name='test note', description='test description', content=encoded_content)
 
-    assert note.document_key is None
+    assert note.note_key is None

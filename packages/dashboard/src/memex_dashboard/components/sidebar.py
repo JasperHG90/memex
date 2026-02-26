@@ -42,7 +42,7 @@ def sidebar() -> rx.Component:
             sidebar_item('share-2', 'Entity Graph', '/entity'),
             sidebar_item('git-branch', 'Lineage', '/lineage'),
             sidebar_item('search', 'Memory Search', '/search'),
-            sidebar_item('file-search', 'Document Search', '/doc-search'),
+            sidebar_item('file-search', 'Note Search', '/doc-search'),
             sidebar_item('activity', 'System Status', '/status'),
             spacing='1',
             width='100%',

@@ -34,7 +34,7 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
     """Test the add note tool via the MCP Client, including schema validation."""
     doc_id = str(uuid4())
     # API returns a dict, not an IngestResponse object
-    mock_api.ingest.return_value = {'status': 'success', 'document_id': doc_id, 'unit_ids': []}
+    mock_api.ingest.return_value = {'status': 'success', 'note_id': doc_id, 'unit_ids': []}
 
     result = await mcp_client.call_tool(
         'memex_add_note',
@@ -51,10 +51,10 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
     mock_api.ingest.assert_called_once()
 
     # Verify it was called with NoteDTO
-    from memex_common.schemas import NoteDTO
+    from memex_common.schemas import NoteCreateDTO
 
     args, _ = mock_api.ingest.call_args
-    assert isinstance(args[0], NoteDTO)
+    assert isinstance(args[0], NoteCreateDTO)
     assert args[0].name == 'Test Note'
 
 
@@ -117,7 +117,7 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     """Test reading a note successfully."""
     doc_id = uuid4()
     vault_id = uuid4()
-    # API returns a dict, not a DocumentDTO
+    # API returns a dict, not a NoteDTO
     mock_api.get_document.return_value = {
         'id': doc_id,
         'doc_metadata': {'name': 'Test Doc', 'description': 'Test Description'},

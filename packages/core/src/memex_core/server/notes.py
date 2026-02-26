@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from memex_common.schemas import DocumentDTO, DocumentSearchRequest, DocumentSearchResult, NodeDTO
+from memex_common.schemas import NoteDTO, NoteSearchRequest, NoteSearchResult, NodeDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -23,7 +23,7 @@ router = APIRouter(prefix='/api/v1')
 @router.get(
     '/notes',
     response_class=StreamingResponse,
-    responses=ndjson_openapi(DocumentDTO, 'Stream of notes.'),
+    responses=ndjson_openapi(NoteDTO, 'Stream of notes.'),
 )
 async def list_notes(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -54,10 +54,10 @@ async def list_notes(
 @router.post(
     '/notes/search',
     response_class=StreamingResponse,
-    responses=ndjson_openapi(DocumentSearchResult, 'Stream of note search results.'),
+    responses=ndjson_openapi(NoteSearchResult, 'Stream of note search results.'),
 )
 async def search_notes(
-    request: Annotated[DocumentSearchRequest, Body()],
+    request: Annotated[NoteSearchRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
     """Search for notes using multi-query expansion and note-level fusion."""
@@ -88,7 +88,7 @@ async def get_note_page_index(document_id: UUID, api: Annotated[MemexAPI, Depend
         raise _handle_error(e, 'Failed to get page index')
 
 
-@router.get('/notes/{document_id}', response_model=DocumentDTO)
+@router.get('/notes/{document_id}', response_model=NoteDTO)
 async def get_note(document_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get a note by ID."""
     try:

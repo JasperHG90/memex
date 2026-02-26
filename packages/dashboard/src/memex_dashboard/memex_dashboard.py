@@ -74,7 +74,7 @@ def main_content() -> rx.Component:
                 ('Entity Graph', entity_page()),
                 ('Lineage', lineage_page()),
                 ('Memory Search', search_page()),
-                ('Document Search', doc_search_page()),
+                ('Note Search', doc_search_page()),
                 ('System Status', status_page()),
                 ('Settings', settings_page()),
                 overview_page(),

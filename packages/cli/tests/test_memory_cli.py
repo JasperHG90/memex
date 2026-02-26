@@ -1,11 +1,11 @@
 from memex_cli.memory import app
-from memex_common.schemas import IngestResponse, NoteDTO
+from memex_common.schemas import IngestResponse, NoteCreateDTO
 from uuid import uuid4
 
 
 def test_add_memory_text(runner, mock_api, mock_config, monkeypatch):
     # Mock get_api_context
-    mock_api.ingest.return_value = IngestResponse(status='success', document_id='test-uuid')
+    mock_api.ingest.return_value = IngestResponse(status='success', note_id='test-uuid')
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     # Test adding text
@@ -17,8 +17,8 @@ def test_add_memory_text(runner, mock_api, mock_config, monkeypatch):
     # Verify call
     mock_api.ingest.assert_called_once()
     note = mock_api.ingest.call_args[0][0]
-    assert isinstance(note, NoteDTO)
-    # NoteDTO.content now stores Base64 encoded bytes
+    assert isinstance(note, NoteCreateDTO)
+    # NoteCreateDTO.content now stores Base64 encoded bytes
     assert note.content == b'SGVsbG8gd29ybGQ='
 
 
@@ -27,7 +27,7 @@ def test_add_memory_file(tmp_path, runner, mock_api, mock_config, monkeypatch):
     note_file = tmp_path / 'test_note.md'
     note_file.write_text('# Test Note')
 
-    mock_api.ingest_upload.return_value = IngestResponse(status='success', document_id='test-uuid')
+    mock_api.ingest_upload.return_value = IngestResponse(status='success', note_id='test-uuid')
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     # Test adding file
@@ -52,7 +52,7 @@ def test_add_memory_directory(tmp_path, runner, mock_api, mock_config, monkeypat
     (note_dir / 'NOTE.md').write_text('# Main')
     (note_dir / 'image.png').write_bytes(b'png')
 
-    mock_api.ingest_upload.return_value = IngestResponse(status='success', document_id='test-uuid')
+    mock_api.ingest_upload.return_value = IngestResponse(status='success', note_id='test-uuid')
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     # Test adding directory
@@ -88,7 +88,7 @@ def test_add_memory_with_vault(runner, mock_api, mock_config, monkeypatch):
         return mock_api
 
     mock_api.ingest.return_value = IngestResponse(
-        status='success', document_id='test-uuid', unit_ids=[uuid4()]
+        status='success', note_id='test-uuid', unit_ids=[uuid4()]
     )
     monkeypatch.setattr('memex_cli.memory.get_api_context', mock_get_api_context)
 
@@ -112,7 +112,7 @@ def test_add_memory_with_vault(runner, mock_api, mock_config, monkeypatch):
 
 def test_add_memory_with_key(runner, mock_api, mock_config, monkeypatch):
     # Mock get_api_context
-    mock_api.ingest.return_value = IngestResponse(status='success', document_id='test-uuid')
+    mock_api.ingest.return_value = IngestResponse(status='success', note_id='test-uuid')
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     # Test adding text with key
@@ -122,5 +122,5 @@ def test_add_memory_with_key(runner, mock_api, mock_config, monkeypatch):
     # Verify call
     mock_api.ingest.assert_called_once()
     note = mock_api.ingest.call_args[0][0]
-    assert isinstance(note, NoteDTO)
-    assert note.document_key == 'my-stable-key'
+    assert isinstance(note, NoteCreateDTO)
+    assert note.note_key == 'my-stable-key'

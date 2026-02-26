@@ -1,4 +1,4 @@
-from memex_common.schemas import NoteMetadata, NoteDTO
+from memex_common.schemas import NoteMetadata, NoteCreateDTO
 from memex_common.types import MemexTypes
 
 
@@ -15,7 +15,7 @@ def test_note_metadata_custom_type():
 
 
 def test_note_dto_instantiation():
-    """Test NoteDTO instantiation and type conversion."""
+    """Test NoteCreateDTO instantiation and type conversion."""
 
     # "Hello World" in Base64
     content_b64 = 'SGVsbG8gV29ybGQ='
@@ -26,11 +26,11 @@ def test_note_dto_instantiation():
     file_expected = b'file content'
 
     # Test 1: Direct instantiation with bytes (internal usage)
-    # NoteDTO expects Base64 encoded bytes
+    # NoteCreateDTO expects Base64 encoded bytes
     content_b64_bytes = content_b64.encode('utf-8')
     file_b64_bytes = file_b64.encode('utf-8')
 
-    dto_direct = NoteDTO(
+    dto_direct = NoteCreateDTO(
         name='test.md',
         description='Desc',
         content=content_b64_bytes,
@@ -41,7 +41,7 @@ def test_note_dto_instantiation():
     assert dto_direct.content_decoded == content_expected
 
     # Test 2: Validation from JSON-like dict (API usage)
-    dto_json = NoteDTO.model_validate(
+    dto_json = NoteCreateDTO.model_validate(
         {
             'name': 'test.md',
             'description': 'Desc',

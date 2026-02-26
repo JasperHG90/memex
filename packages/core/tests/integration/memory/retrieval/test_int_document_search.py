@@ -17,7 +17,7 @@ from memex_core.memory.sql_models import (
     UnitEntity,
 )
 from memex_common.config import GLOBAL_VAULT_ID
-from memex_common.schemas import DocumentSearchRequest
+from memex_common.schemas import NoteSearchRequest
 from memex_common.types import FactTypes
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.retrieval.document_search import DocumentSearchEngine
@@ -96,7 +96,7 @@ class TestDocumentSearchEngine:
 
     async def test_search_empty_db(self, session: AsyncSession, search_engine) -> None:
         """Search against an empty database returns no results."""
-        request = DocumentSearchRequest(query='Nothing here')
+        request = NoteSearchRequest(query='Nothing here')
         results = await search_engine.search(session, request)
         assert results == []
 
@@ -111,7 +111,7 @@ class TestDocumentSearchEngine:
         )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='SpaceX rocket launches',
             strategies=['semantic'],
             limit=5,
@@ -133,7 +133,7 @@ class TestDocumentSearchEngine:
         )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='PostgreSQL database',
             strategies=['keyword'],
             limit=5,
@@ -171,7 +171,7 @@ class TestDocumentSearchEngine:
         session.add(ue)
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='Tesla',
             strategies=['graph'],
             limit=5,
@@ -220,7 +220,7 @@ class TestDocumentSearchEngine:
         await session.commit()
 
         # Query for "SpaceX" — should find Mars document via co-occurrence
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='SpaceX',
             strategies=['graph'],
             limit=10,
@@ -261,7 +261,7 @@ class TestDocumentSearchEngine:
         await session.commit()
 
         # All strategies active (default)
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='Python programming language',
             limit=5,
         )
@@ -282,7 +282,7 @@ class TestDocumentSearchEngine:
             )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='machine learning algorithm',
             strategies=['semantic'],
             limit=2,
@@ -300,7 +300,7 @@ class TestDocumentSearchEngine:
         )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='Some text',
             strategies=[],
             limit=5,
@@ -320,7 +320,7 @@ class TestDocumentSearchEngine:
         await session.commit()
 
         # Run with default weights
-        request_default = DocumentSearchRequest(
+        request_default = NoteSearchRequest(
             query='AI healthcare',
             strategies=['semantic', 'keyword'],
             limit=5,
@@ -328,7 +328,7 @@ class TestDocumentSearchEngine:
         results_default = await search_engine.search(session, request_default)
 
         # Run with semantic heavily weighted
-        request_weighted = DocumentSearchRequest(
+        request_weighted = NoteSearchRequest(
             query='AI healthcare',
             strategies=['semantic', 'keyword'],
             strategy_weights={'semantic': 5.0, 'keyword': 0.1},
@@ -360,7 +360,7 @@ class TestDocumentSearchEngine:
         )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='quantum computing circuits gates',
             strategies=['semantic'],
             limit=5,
@@ -387,7 +387,7 @@ class TestDocumentSearchEngine:
         )
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='metadata passthrough test unique content',
             strategies=['semantic'],
             limit=5,
@@ -428,7 +428,7 @@ class TestDocumentSearchEngine:
         session.add(ue)
         await session.commit()
 
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query='Tesla',
             strategies=['graph'],
             limit=5,

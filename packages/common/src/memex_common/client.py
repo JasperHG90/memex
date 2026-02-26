@@ -18,7 +18,7 @@ from memex_common.schemas import (
     AdjustBeliefRequest,
     CreateVaultRequest,
     DefaultVaultsResponse,
-    NoteDTO,
+    NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
     VaultDTO,
@@ -29,9 +29,9 @@ from memex_common.schemas import (
     LineageDirection,
     SystemStatsCountsDTO,
     TokenUsageResponse,
-    DocumentDTO,
-    DocumentSearchResult,
-    DocumentSearchRequest,
+    NoteDTO,
+    NoteSearchResult,
+    NoteSearchRequest,
     NodeDTO,
     SummaryRequest,
     SummaryResponse,
@@ -125,7 +125,7 @@ class RemoteMemexAPI:
             raise
 
     # --- Memory ---
-    async def ingest(self, note: NoteDTO) -> IngestResponse:
+    async def ingest(self, note: NoteCreateDTO) -> IngestResponse:
         """Ingest a note into Memex."""
         result = await self._post('ingestions', note)
         return IngestResponse(**result)
@@ -191,10 +191,10 @@ class RemoteMemexAPI:
         result = await self._post('memories/summary', request)
         return SummaryResponse(**result)
 
-    async def list_notes(self, limit: int = 100, offset: int = 0) -> list[DocumentDTO]:
+    async def list_notes(self, limit: int = 100, offset: int = 0) -> list[NoteDTO]:
         """List all notes."""
         result = await self._get('notes', params={'limit': limit, 'offset': offset})
-        return [DocumentDTO(**d) for d in result]
+        return [NoteDTO(**d) for d in result]
 
     async def search_notes(
         self,
@@ -207,14 +207,14 @@ class RemoteMemexAPI:
         strategy_weights: dict[str, float] | None = None,
         reason: bool = False,
         summarize: bool = False,
-    ) -> list[DocumentSearchResult]:
+    ) -> list[NoteSearchResult]:
         """Search for notes."""
         kwargs: dict[str, Any] = {}
         if strategies is not None:
             kwargs['strategies'] = strategies
         if strategy_weights is not None:
             kwargs['strategy_weights'] = strategy_weights
-        request = DocumentSearchRequest(
+        request = NoteSearchRequest(
             query=query,
             limit=limit,
             vault_ids=vault_ids,
@@ -225,12 +225,12 @@ class RemoteMemexAPI:
             **kwargs,
         )
         result = await self._post('notes/search', request)
-        return [DocumentSearchResult(**r) for r in result]
+        return [NoteSearchResult(**r) for r in result]
 
-    async def get_note(self, note_id: UUID) -> DocumentDTO:
+    async def get_note(self, note_id: UUID) -> NoteDTO:
         """Get a note by ID."""
         result = await self._get(f'notes/{note_id}')
-        return DocumentDTO(**result)
+        return NoteDTO(**result)
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Get the page index (slim tree) for a note."""
@@ -291,10 +291,10 @@ class RemoteMemexAPI:
         result = await self._get('stats/token-usage')
         return TokenUsageResponse(**result)
 
-    async def get_recent_notes(self, limit: int = 5) -> list[DocumentDTO]:
+    async def get_recent_notes(self, limit: int = 5) -> list[NoteDTO]:
         """Get the most recent notes."""
         result = await self._get('notes', params={'limit': limit, 'sort': '-created_at'})
-        return [DocumentDTO(**d) for d in result]
+        return [NoteDTO(**d) for d in result]
 
     async def search_entities(self, query: str, limit: int = 20) -> list[EntityDTO]:
         """Search for entities by name."""
@@ -349,7 +349,7 @@ class RemoteMemexAPI:
         self, entity_id: UUID | str, limit: int = 20
     ) -> list[dict[str, Any]]:
         """Get mentions for an entity."""
-        # Returns list of dicts with 'unit': MemoryUnitDTO, 'document': DocumentDTO keys
+        # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
         result = await self._get(f'entities/{entity_id}/mentions', params={'limit': limit})
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
@@ -359,8 +359,8 @@ class RemoteMemexAPI:
             item = {}
             if 'unit' in r:
                 item['unit'] = MemoryUnitDTO(**r['unit'])
-            if 'document' in r:
-                item['document'] = DocumentDTO(**r['document'])
+            if 'note' in r:
+                item['note'] = NoteDTO(**r['note'])
             parsed.append(item)
         return parsed
 

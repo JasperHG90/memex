@@ -27,7 +27,7 @@ def test_resource_retrieval_workflow(client: TestClient):
     # Ingest
     resp = client.post('/api/v1/ingestions', json=payload)
     assert resp.status_code == 200
-    doc_id = resp.json()['document_id']
+    doc_id = resp.json()['note_id']
 
     # 2. Get the document to find the vault name/path
     # The active vault name is 'memex' as per config
@@ -63,7 +63,7 @@ def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
 
     resp = client.post('/api/v1/ingestions', json=payload)
     assert resp.status_code == 200
-    doc_id = resp.json()['document_id']
+    doc_id = resp.json()['note_id']
 
     # 2. Check Filesystem
     # The `tmp_env` fixture sets the current working directory to the temp dir.

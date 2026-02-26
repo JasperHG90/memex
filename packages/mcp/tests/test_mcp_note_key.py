@@ -5,11 +5,11 @@ from memex_common.schemas import NoteDTO
 
 @pytest.mark.asyncio
 async def test_mcp_add_note_with_key(mock_api, mcp_client):
-    """Test memex_add_note with document_key."""
+    """Test memex_add_note with note_key."""
     doc_id = str(uuid4())
     key = 'my-stable-key'
 
-    mock_api.ingest.return_value = {'status': 'success', 'document_id': doc_id, 'unit_ids': []}
+    mock_api.ingest.return_value = {'status': 'success', 'note_id': doc_id, 'unit_ids': []}
 
     result = await mcp_client.call_tool(
         'memex_add_note',
@@ -19,7 +19,7 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
             'description': 'Description',
             'author': 'tester',
             'tags': ['tag1'],
-            'document_key': key,
+            'note_key': key,
         },
     )
 
@@ -29,4 +29,4 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
     args, _ = mock_api.ingest.call_args
     note_dto = args[0]
     assert isinstance(note_dto, NoteDTO)
-    assert note_dto.document_key == key
+    assert note_dto.note_key == key

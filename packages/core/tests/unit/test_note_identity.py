@@ -6,7 +6,7 @@ from uuid import UUID
 
 
 def test_calculate_uuid_from_dto_uses_key():
-    """Test that calculate_uuid_from_dto uses document_key."""
+    """Test that calculate_uuid_from_dto uses note_key."""
     content = b'test content'
     encoded_content = base64.b64encode(content)
 
@@ -17,7 +17,7 @@ def test_calculate_uuid_from_dto_uses_key():
         name='test note',
         description='test description',
         content=encoded_content,
-        document_key=valid_uuid,
+        note_key=valid_uuid,
     )
 
     uuid = Note.calculate_uuid_from_dto(dto)
@@ -25,36 +25,36 @@ def test_calculate_uuid_from_dto_uses_key():
 
 
 def test_note_init_with_key():
-    """Test that Note class accepts document_key."""
+    """Test that Note class accepts note_key."""
     content = b'test content'
     valid_uuid = '123e4567-e89b-12d3-a456-426614174000'
 
     note = Note(
-        name='test note', description='test description', content=content, document_key=valid_uuid
+        name='test note', description='test description', content=content, note_key=valid_uuid
     )
 
-    assert note.document_key == valid_uuid
+    assert note.note_key == valid_uuid
     assert note.uuid == valid_uuid
 
 
-def test_document_key_hashing():
-    """Test that arbitrary document_key is hashed to a UUID."""
+def test_note_key_hashing():
+    """Test that arbitrary note_key is hashed to a UUID."""
     arbitrary_key = 'my-arbitrary-key'
     expected_hash = hashlib.md5(arbitrary_key.encode('utf-8')).hexdigest()
 
-    note = Note(name='test', description='test', content=b'test', document_key=arbitrary_key)
+    note = Note(name='test', description='test', content=b'test', note_key=arbitrary_key)
 
     # Should be hashed
-    assert note.document_key == expected_hash
+    assert note.note_key == expected_hash
 
     # Ensure it is parsable as UUID
-    assert UUID(note.document_key)
+    assert UUID(note.note_key)
 
 
-def test_document_key_uuid_passthrough():
-    """Test that valid UUID document_key is passed through."""
+def test_note_key_uuid_passthrough():
+    """Test that valid UUID note_key is passed through."""
     valid_uuid = '123e4567-e89b-12d3-a456-426614174000'
 
-    note = Note(name='test', description='test', content=b'test', document_key=valid_uuid)
+    note = Note(name='test', description='test', content=b'test', note_key=valid_uuid)
 
-    assert note.document_key == valid_uuid
+    assert note.note_key == valid_uuid

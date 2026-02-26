@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 from memex_dashboard.pages.overview import OverviewState
-from memex_common.schemas import SystemStatsCountsDTO, DocumentDTO, TokenUsageResponse
+from memex_common.schemas import SystemStatsCountsDTO, NoteDTO, TokenUsageResponse
 
 
 @pytest.mark.asyncio
@@ -17,18 +17,18 @@ async def test_fetch_metrics():
         memories=2, entities=3, reflection_queue=0, graph_edges=0
     )
 
-    # 2. get_recent_documents
-    doc1 = MagicMock(spec=DocumentDTO)
+    # 2. get_recent_notes
+    doc1 = MagicMock(spec=NoteDTO)
     doc1.id = 'doc1'
     doc1.doc_metadata = {'title': 'Doc One'}
     doc1.created_at = datetime(2023, 1, 1)
 
-    doc2 = MagicMock(spec=DocumentDTO)
+    doc2 = MagicMock(spec=NoteDTO)
     doc2.id = 'doc2'
     doc2.doc_metadata = {}
     doc2.created_at = datetime(2023, 1, 2)
 
-    mock_api.get_recent_documents.return_value = [doc1, doc2]
+    mock_api.get_recent_notes.return_value = [doc1, doc2]
 
     # 3. get_token_usage
     mock_api.get_token_usage.return_value = TokenUsageResponse(usage=[])
