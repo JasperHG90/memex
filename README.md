@@ -62,7 +62,7 @@ uv run memex memory search "How does Python handle memory management?"
 
 ## See it in action
 
-### Searching documents
+### Searching notes
 
 ![](assets/memex_cli_docs.gif)
 
