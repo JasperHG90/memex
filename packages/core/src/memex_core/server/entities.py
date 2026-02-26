@@ -167,7 +167,7 @@ async def get_entity_lineage(
         from memex_common.schemas import LineageDirection
 
         return await api.get_lineage(
-            entity_type='entity',
+            entity_type='mental_model',
             entity_id=id,
             direction=LineageDirection(direction),
             depth=depth,

@@ -1721,10 +1721,10 @@ ingested_at: {now}
         children: list[LineageResponse] = []
         stop_recursion = current_depth >= max_depth
 
-        if entity_type == 'document':
+        if entity_type == 'note':
             obj = await session.get(Note, entity_id)
             if not obj:
-                raise ResourceNotFoundError(f'Document {entity_id} not found.')
+                raise ResourceNotFoundError(f'Note {entity_id} not found.')
             entity_data = self._sanitize_data(obj.model_dump())
 
             if not stop_recursion:
@@ -1970,7 +1970,7 @@ ingested_at: {now}
                     try:
                         child_node = await self._get_lineage_upstream(
                             session,
-                            'document',
+                            'note',
                             obj.note_id,
                             current_depth + 1,
                             max_depth,
@@ -1980,10 +1980,10 @@ ingested_at: {now}
                     except ResourceNotFoundError:
                         pass
 
-        elif entity_type == 'document':
+        elif entity_type == 'note':
             obj = await session.get(Note, entity_id)
             if not obj:
-                raise ResourceNotFoundError(f'Document {entity_id} not found.')
+                raise ResourceNotFoundError(f'Note {entity_id} not found.')
 
             entity_data = self._sanitize_data(obj.model_dump())
             # Document is a leaf (upstream-wise)

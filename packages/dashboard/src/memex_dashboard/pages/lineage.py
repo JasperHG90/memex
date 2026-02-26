@@ -392,10 +392,10 @@ class LineageState(rx.State):
         # X positions: Fixed percentages
         x_positions = {
             0: 5,  # Asset
-            1: 20,  # Document
+            1: 20,  # Note
             2: 45,  # Memory
             3: 70,  # Observation
-            4: 95,  # Model
+            4: 85,  # Model
             5: 98,
         }
 
@@ -607,7 +607,7 @@ def lineage_graph_view() -> rx.Component:
         column_header('Notes', '20%'),
         column_header('Memory Units', '45%'),
         column_header('Observations', '70%'),
-        column_header('Mental Models', '95%'),
+        column_header('Mental Models', '85%'),
         # Edges Layer (SVG)
         rx.el.svg(
             rx.foreach(

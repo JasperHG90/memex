@@ -464,9 +464,7 @@ class EntityState(rx.State):
             entity_ids = [e['id'] for e in entities]
 
             # 2. Fetch Co-occurrences (Edges)
-            cooccurrences = await api._get(
-                'entities/cooccurrences', params={'ids': ','.join(entity_ids)}
-            )
+            cooccurrences = await api._get('cooccurrences', params={'ids': ','.join(entity_ids)})
 
             # Store raw data
             self.raw_entities = entities
