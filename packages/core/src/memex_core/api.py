@@ -1270,7 +1270,9 @@ ingested_at: {now}
             return {}
 
         async with self.metastore.session() as session:
-            stmt = select(MemoryUnit.id, MemoryUnit.note_id).where(col(MemoryUnit.id).in_(unit_ids))
+            stmt = select(MemoryUnit.id, MemoryUnit.document_id).where(
+                col(MemoryUnit.id).in_(unit_ids)
+            )
             results = (await session.exec(stmt)).all()
 
             return {row[0]: row[1] for row in results if row[1] is not None}

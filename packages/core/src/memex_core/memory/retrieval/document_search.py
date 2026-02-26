@@ -247,8 +247,8 @@ class DocumentSearchEngine:
                 reasoning_by_doc.setdefault(doc_id, []).append(data)
 
         for result in results:
-            if result.document_id in doc_snippets:
-                result.snippets = doc_snippets[result.document_id]
+            if result.note_id in doc_snippets:
+                result.snippets = doc_snippets[result.note_id]
 
         return results, ReasoningOutput(
             reasoning_by_doc=reasoning_by_doc, section_texts=section_texts
