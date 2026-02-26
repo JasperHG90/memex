@@ -39,3 +39,7 @@ embed_collections:
 # Embed code (update)
 update_collections: embed_collections
   qmd update
+
+# Build OpenClaw memory plugin
+build-openclaw:
+  cd packages/openclaw && npm install --no-bin-links && node node_modules/typescript/lib/tsc.js

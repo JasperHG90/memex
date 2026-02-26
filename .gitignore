@@ -178,3 +178,7 @@ gemini-extension.json
 
 # Memex
 .memex.yaml
+
+# OpenClaw plugin (TypeScript build artifacts)
+packages/openclaw/node_modules/
+packages/openclaw/dist/
