@@ -439,3 +439,215 @@ class TestNoteSearchEngine:
         assert doc.id in doc_ids, (
             'Graph strategy should resolve entity alias "Tesla" → "Tesla Motors".'
         )
+
+
+@pytest.mark.integration
+class TestMMR:
+    """Integration tests for MMR (Maximal Marginal Relevance) re-ranking."""
+
+    @pytest_asyncio.fixture(scope='class')
+    async def embedder(self):
+        return await get_embedding_model()
+
+    @pytest_asyncio.fixture(scope='function')
+    async def search_engine(self, embedder):
+        return NoteSearchEngine(embedder=embedder)
+
+    async def _seed_document(
+        self,
+        session: AsyncSession,
+        embedder,
+        text: str,
+        *,
+        vault_id=GLOBAL_VAULT_ID,
+        doc_metadata: dict | None = None,
+    ) -> Note:
+        """Create a Note with a single Chunk."""
+        doc = Note(
+            id=uuid4(),
+            original_text=text,
+            vault_id=vault_id,
+            doc_metadata=doc_metadata or {},
+        )
+        session.add(doc)
+
+        embedding = embedder.encode([text])[0].tolist()
+        chunk = Chunk(
+            id=uuid4(),
+            note_id=doc.id,
+            vault_id=vault_id,
+            text=text,
+            embedding=embedding,
+            chunk_index=0,
+            content_hash=content_hash(text),
+        )
+        session.add(chunk)
+        await session.flush()
+        return doc
+
+    async def test_mmr_promotes_diversity(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """MMR re-ranks results to promote diverse documents."""
+        # Create 3 documents about the same topic (similar embeddings)
+        doc_a = await self._seed_document(
+            session,
+            embedder,
+            'Machine learning is a subset of artificial intelligence that enables systems to learn from data.',
+        )
+        doc_b = await self._seed_document(
+            session,
+            embedder,
+            'Machine learning algorithms can identify patterns in large datasets automatically.',
+        )
+        doc_c = await self._seed_document(
+            session,
+            embedder,
+            'The culinary traditions of France emphasize fresh ingredients and classical techniques.',
+        )
+        await session.commit()
+
+        # Search with pure relevance (λ=1.0) - should rank by similarity only
+        request_relevance = NoteSearchRequest(
+            query='machine learning artificial intelligence',
+            strategies=['semantic'],
+            limit=3,
+            mmr_lambda=1.0,
+        )
+        results_relevance = await search_engine.search(session, request_relevance)
+
+        # All three should be returned with relevance ranking
+        assert len(results_relevance) == 3
+        relevance_ids = [r.note_id for r in results_relevance]
+        assert doc_a.id in relevance_ids
+        assert doc_b.id in relevance_ids
+        assert doc_c.id in relevance_ids
+        # ML docs should be top 2 (higher semantic similarity)
+        ml_ids = {doc_a.id, doc_b.id}
+        top_two = set(relevance_ids[:2])
+        assert ml_ids == top_two, 'ML docs should rank highest with pure relevance'
+
+        # Search with balanced MMR (λ=0.5) - should promote diversity
+        request_mmr = NoteSearchRequest(
+            query='machine learning artificial intelligence',
+            strategies=['semantic'],
+            limit=3,
+            mmr_lambda=0.5,
+        )
+        results_mmr = await search_engine.search(session, request_mmr)
+
+        assert len(results_mmr) == 3
+        mmr_ids = [r.note_id for r in results_mmr]
+
+        # With MMR, the diverse doc (French cuisine) should rank higher
+        # because after picking the first ML doc, the second ML doc is penalized
+        # for similarity to the first, while the French cuisine doc is promoted
+        mmr_set = set(mmr_ids)
+        assert doc_a.id in mmr_set
+        assert doc_b.id in mmr_set
+        assert doc_c.id in mmr_set
+
+        # The French cuisine doc should not be last (MMR promotes diversity)
+        french_position = mmr_ids.index(doc_c.id)
+        assert french_position < 2, (
+            f'MMR should promote diverse doc; French cuisine was at position {french_position}'
+        )
+
+    async def test_mmr_pure_relevance_preserves_order(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """λ=1.0 (pure relevance) preserves semantic ranking order."""
+        # Create documents with clearly different relevance
+        doc_high = await self._seed_document(
+            session,
+            embedder,
+            'Neural networks are computational models inspired by biological neural networks in the brain.',
+        )
+        await self._seed_document(
+            session,
+            embedder,
+            'The weather today is sunny with mild temperatures and clear skies.',
+        )
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='neural networks computational models brain',
+            strategies=['semantic'],
+            limit=2,
+            mmr_lambda=1.0,
+        )
+        results = await search_engine.search(session, request)
+
+        assert len(results) == 2
+        # High-relevance doc should be first regardless of MMR
+        assert results[0].note_id == doc_high.id
+
+    async def test_mmr_disabled_by_default(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """When mmr_lambda is None, MMR is not applied."""
+        # Create two very similar documents
+        doc_a = await self._seed_document(
+            session,
+            embedder,
+            'Deep learning uses neural networks with many layers for feature learning.',
+        )
+        doc_b = await self._seed_document(
+            session,
+            embedder,
+            'Deep learning applies multi-layer neural networks for representation learning.',
+        )
+        await session.commit()
+
+        # Search without MMR (default)
+        request = NoteSearchRequest(
+            query='deep learning neural networks',
+            strategies=['semantic'],
+            limit=2,
+            # mmr_lambda is None by default
+        )
+        results = await search_engine.search(session, request)
+
+        assert len(results) == 2
+        # Both similar docs should be returned (no diversity penalty)
+        result_ids = {r.note_id for r in results}
+        assert doc_a.id in result_ids
+        assert doc_b.id in result_ids
+
+    async def test_mmr_with_many_similar_documents(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """MMR with many similar documents still returns diverse results."""
+        # Create 5 similar documents and 1 different one
+        similar_texts = [
+            'Python is a programming language known for its readable syntax.',
+            'Python programming language features dynamic typing and memory management.',
+            'The Python language supports multiple programming paradigms.',
+            'Python is widely used for web development and data science.',
+            'Programming in Python emphasizes code readability and simplicity.',
+        ]
+        for text in similar_texts:
+            await self._seed_document(session, embedder, text)
+
+        doc_diverse = await self._seed_document(
+            session,
+            embedder,
+            'The grand piano has 88 keys and produces sound through vibrating strings.',
+        )
+        await session.commit()
+
+        # Search with MMR - limit to 3 results
+        request = NoteSearchRequest(
+            query='Python programming language',
+            strategies=['semantic'],
+            limit=3,
+            mmr_lambda=0.6,
+        )
+        results = await search_engine.search(session, request)
+
+        assert len(results) == 3
+        # The diverse doc (piano) should be included due to MMR diversity bonus
+        result_ids = {r.note_id for r in results}
+        assert doc_diverse.id in result_ids, (
+            'MMR should include diverse document even when many similar docs exist'
+        )
