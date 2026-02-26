@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.sql_models import MemoryUnit, EvidenceLog, Document
+from memex_core.memory.sql_models import MemoryUnit, EvidenceLog, Note
 from memex_common.types import FactTypes
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.memory.confidence import ConfidenceEngine
@@ -14,7 +14,7 @@ from memex_core.memory.confidence import ConfidenceEngine
 async def test_reproduce_evidence_log(session: AsyncSession):
     # 0. Create a Document
     doc_id = uuid4()
-    doc = Document(
+    doc = Note(
         id=doc_id,
         original_text='Source document text',
         created_at=datetime.now(timezone.utc),
@@ -26,7 +26,7 @@ async def test_reproduce_evidence_log(session: AsyncSession):
     unit_id = uuid4()
     unit = MemoryUnit(
         id=unit_id,
-        document_id=doc.id,
+        note_id=doc.id,
         text='Python is slow.',
         fact_type=FactTypes.OPINION,
         vault_id=GLOBAL_VAULT_ID,
@@ -74,7 +74,7 @@ async def test_reproduce_evidence_log(session: AsyncSession):
 async def test_custom_update_log(session: AsyncSession):
     # 0. Create a Document
     doc_id = uuid4()
-    doc = Document(
+    doc = Note(
         id=doc_id,
         original_text='Source doc 2',
         created_at=datetime.now(timezone.utc),
@@ -86,7 +86,7 @@ async def test_custom_update_log(session: AsyncSession):
     unit_id = uuid4()
     unit = MemoryUnit(
         id=unit_id,
-        document_id=doc_id,
+        note_id=doc_id,
         text='Opinion for merge test',
         embedding=[0.0] * 384,
         fact_type=FactTypes.OPINION,

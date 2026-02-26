@@ -2,7 +2,7 @@ import pytest
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from memex_core.memory.sql_models import Document, MemoryUnit, MentalModel, Entity, Vault
+from memex_core.memory.sql_models import Note, MemoryUnit, MentalModel, Entity, Vault
 from memex_common.types import FactTypes
 from memex_common.schemas import LineageDirection
 
@@ -27,12 +27,12 @@ async def test_reproduce_observation_lineage_failure(api, metastore):
         # Entity
         session.add(Entity(id=entity_id, canonical_name='Test Entity', vault_id=vault_id))
         # Document
-        session.add(Document(id=doc_id, vault_id=vault_id, original_text='Test Doc'))
+        session.add(Note(id=doc_id, vault_id=vault_id, original_text='Test Doc'))
         # Memory Unit
         session.add(
             MemoryUnit(
                 id=mem_unit_id,
-                document_id=doc_id,
+                note_id=doc_id,
                 text='Test Fact',
                 fact_type=FactTypes.WORLD,
                 vault_id=vault_id,

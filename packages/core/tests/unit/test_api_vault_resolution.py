@@ -99,9 +99,9 @@ async def test_ingest_resolves_vault_from_config(api, mock_session):
     mock_session.exec.side_effect = [mock_result_vault, mock_result_exists]
 
     # Mock Transaction and MemoryEngine
-    from memex_core.api import Note
+    from memex_core.api import NoteInput
 
-    note = Note(name='test', description='d', content=b'c')
+    note = NoteInput(name='test', description='d', content=b'c')
 
     # Mock MemoryEngine.retain
     api.memory.retain = AsyncMock()

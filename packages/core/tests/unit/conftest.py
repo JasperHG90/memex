@@ -156,7 +156,7 @@ def patch_api_engines():
         patch('memex_core.api.EntityResolver') as m1,
         patch('memex_core.api.ExtractionEngine') as m2,
         patch('memex_core.api.RetrievalEngine') as m3,
-        patch('memex_core.api.DocumentSearchEngine') as m4,
+        patch('memex_core.api.NoteSearchEngine') as m4,
         patch('memex_core.api.MemoryEngine') as m5,
         patch('memex_core.api.ReflectionQueueService') as m6,
         patch('memex_core.api.FileContentProcessor') as m7,

@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.sql_models import (
     Chunk,
-    Document,
+    Note,
     Entity,
     EntityAlias,
     EntityCooccurrence,
@@ -20,12 +20,12 @@ from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.schemas import NoteSearchRequest
 from memex_common.types import FactTypes
 from memex_core.memory.models.embedding import get_embedding_model
-from memex_core.memory.retrieval.document_search import DocumentSearchEngine
+from memex_core.memory.retrieval.document_search import NoteSearchEngine
 from memex_core.memory.extraction.core import content_hash
 
 
 @pytest.mark.integration
-class TestDocumentSearchEngine:
+class TestNoteSearchEngine:
     """Integration tests for hybrid document search with RRF fusion."""
 
     @pytest_asyncio.fixture(scope='class')
@@ -34,7 +34,7 @@ class TestDocumentSearchEngine:
 
     @pytest_asyncio.fixture(scope='function')
     async def search_engine(self, embedder):
-        return DocumentSearchEngine(embedder=embedder)
+        return NoteSearchEngine(embedder=embedder)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -49,9 +49,9 @@ class TestDocumentSearchEngine:
         vault_id=GLOBAL_VAULT_ID,
         original_text: str = 'Test document',
         doc_metadata: dict | None = None,
-    ) -> tuple[Document, list[Chunk]]:
-        """Create a Document with Chunks and a MemoryUnit (needed for graph traversal)."""
-        doc = Document(
+    ) -> tuple[Note, list[Chunk]]:
+        """Create a Note with Chunks and a MemoryUnit (needed for graph traversal)."""
+        doc = Note(
             id=uuid4(),
             original_text=original_text,
             vault_id=vault_id,
@@ -64,7 +64,7 @@ class TestDocumentSearchEngine:
             embedding = embedder.encode([text])[0].tolist()
             chunk = Chunk(
                 id=uuid4(),
-                document_id=doc.id,
+                note_id=doc.id,
                 vault_id=vault_id,
                 text=text,
                 embedding=embedding,
@@ -74,11 +74,11 @@ class TestDocumentSearchEngine:
             session.add(chunk)
             chunks.append(chunk)
 
-        # Graph strategy requires Entity → UnitEntity → MemoryUnit → Document path,
+        # Graph strategy requires Entity → UnitEntity → MemoryUnit → Note path,
         # so we also create a MemoryUnit linked to this document.
         unit = MemoryUnit(
             id=uuid4(),
-            document_id=doc.id,
+            note_id=doc.id,
             text=texts[0],
             embedding=embedder.encode([texts[0]])[0].tolist(),
             fact_type=FactTypes.WORLD,
@@ -147,7 +147,7 @@ class TestDocumentSearchEngine:
     async def test_graph_first_order_search(
         self, session: AsyncSession, search_engine, embedder
     ) -> None:
-        """Graph strategy retrieves chunks via Entity → UnitEntity → MemoryUnit → Document → Chunk."""
+        """Graph strategy retrieves chunks via Entity → UnitEntity → MemoryUnit → Note → Chunk."""
         doc, chunks = await self._seed_document_with_chunks(
             session,
             embedder,
@@ -162,7 +162,7 @@ class TestDocumentSearchEngine:
         # Find the MemoryUnit we created for this document
         from sqlmodel import select, col
 
-        stmt = select(MemoryUnit).where(col(MemoryUnit.document_id) == doc.id)
+        stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == doc.id)
         result = await session.exec(stmt)
         unit = result.first()
         assert unit is not None
@@ -186,7 +186,7 @@ class TestDocumentSearchEngine:
         self, session: AsyncSession, search_engine, embedder
     ) -> None:
         """Graph strategy retrieves chunks for co-occurring entities (2nd order)."""
-        # Document about Mars (linked to entity Mars)
+        # Note about Mars (linked to entity Mars)
         doc_mars, _ = await self._seed_document_with_chunks(
             session,
             embedder,
@@ -201,7 +201,7 @@ class TestDocumentSearchEngine:
         # Link Mars entity to the Mars document's MemoryUnit
         from sqlmodel import select, col
 
-        stmt = select(MemoryUnit).where(col(MemoryUnit.document_id) == doc_mars.id)
+        stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == doc_mars.id)
         result = await session.exec(stmt)
         unit_mars = result.first()
         assert unit_mars is not None
@@ -251,7 +251,7 @@ class TestDocumentSearchEngine:
 
         from sqlmodel import select, col
 
-        stmt = select(MemoryUnit).where(col(MemoryUnit.document_id) == doc.id)
+        stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == doc.id)
         result = await session.exec(stmt)
         unit = result.first()
         assert unit is not None
@@ -377,7 +377,7 @@ class TestDocumentSearchEngine:
     async def test_metadata_passthrough(
         self, session: AsyncSession, search_engine, embedder
     ) -> None:
-        """Document metadata (including retain_params.note_name) is included in results."""
+        """Note metadata (including retain_params.note_name) is included in results."""
         meta = {'source': 'test', 'retain_params': {'note_name': 'My Research Note'}}
         doc, _ = await self._seed_document_with_chunks(
             session,
@@ -419,7 +419,7 @@ class TestDocumentSearchEngine:
 
         from sqlmodel import select, col
 
-        stmt = select(MemoryUnit).where(col(MemoryUnit.document_id) == doc.id)
+        stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == doc.id)
         result = await session.exec(stmt)
         unit = result.first()
         assert unit is not None

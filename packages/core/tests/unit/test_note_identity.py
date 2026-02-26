@@ -1,4 +1,4 @@
-from memex_core.api import Note
+from memex_core.api import NoteInput
 from memex_common.schemas import NoteCreateDTO
 import base64
 import hashlib
@@ -20,16 +20,16 @@ def test_calculate_uuid_from_dto_uses_key():
         note_key=valid_uuid,
     )
 
-    uuid = Note.calculate_uuid_from_dto(dto)
+    uuid = NoteInput.calculate_uuid_from_dto(dto)
     assert uuid == valid_uuid
 
 
 def test_note_init_with_key():
-    """Test that Note class accepts note_key."""
+    """Test that NoteInput class accepts note_key."""
     content = b'test content'
     valid_uuid = '123e4567-e89b-12d3-a456-426614174000'
 
-    note = Note(
+    note = NoteInput(
         name='test note', description='test description', content=content, note_key=valid_uuid
     )
 
@@ -42,7 +42,7 @@ def test_note_key_hashing():
     arbitrary_key = 'my-arbitrary-key'
     expected_hash = hashlib.md5(arbitrary_key.encode('utf-8')).hexdigest()
 
-    note = Note(name='test', description='test', content=b'test', note_key=arbitrary_key)
+    note = NoteInput(name='test', description='test', content=b'test', note_key=arbitrary_key)
 
     # Should be hashed
     assert note.note_key == expected_hash
@@ -55,6 +55,6 @@ def test_note_key_uuid_passthrough():
     """Test that valid UUID note_key is passed through."""
     valid_uuid = '123e4567-e89b-12d3-a456-426614174000'
 
-    note = Note(name='test', description='test', content=b'test', note_key=valid_uuid)
+    note = NoteInput(name='test', description='test', content=b'test', note_key=valid_uuid)
 
     assert note.note_key == valid_uuid

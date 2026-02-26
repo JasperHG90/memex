@@ -1,5 +1,5 @@
 import pytest
-from memex_core.memory.sql_models import Document, MemoryUnit, FactTypes
+from memex_core.memory.sql_models import Note, MemoryUnit, FactTypes
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.config import GLOBAL_VAULT_ID
@@ -15,13 +15,13 @@ async def test_retrieval_nplus1(session, metastore):
     docs = []
     units = []
     for i in range(20):
-        doc = Document(id=uuid4(), original_text=f'Doc {i}')
+        doc = Note(id=uuid4(), original_text=f'Doc {i}')
         session.add(doc)
         unit = MemoryUnit(
             text=f'Memory {i}',
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document=doc,
+            note=doc,
             embedding=[0.1] * 384,  # Dummy
             vault_id=GLOBAL_VAULT_ID,
         )
@@ -65,8 +65,8 @@ async def test_retrieval_nplus1(session, metastore):
         # 5. Access related attributes to trigger lazy loads if not eager
         # We simulate what downstream code (e.g., API response mapping) might do
         for u in results:
-            if u.document:
-                _ = u.document.original_text
+            if u.note:
+                _ = u.note.original_text
             _ = u.unit_entities
 
     finally:

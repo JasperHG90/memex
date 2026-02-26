@@ -297,7 +297,7 @@ class TestShortCircuit:
                 return_value=(pio, TokenUsage()),
             ),
             patch(
-                'memex_core.memory.extraction.engine.storage.get_document_nodes',
+                'memex_core.memory.extraction.engine.storage.get_note_nodes',
                 new_callable=AsyncMock,
                 return_value=[
                     {
@@ -334,11 +334,11 @@ class TestShortCircuit:
                 new_callable=AsyncMock,
             ),
             patch(
-                'memex_core.memory.extraction.engine.storage.update_document_page_index',
+                'memex_core.memory.extraction.engine.storage.update_note_page_index',
                 new_callable=AsyncMock,
             ),
             patch(
-                'memex_core.memory.extraction.engine.storage.update_document_title',
+                'memex_core.memory.extraction.engine.storage.update_note_title',
                 new_callable=AsyncMock,
             ),
             patch(
@@ -361,7 +361,7 @@ class TestShortCircuit:
                 session=mock_session,
                 contents=contents,
                 agent_name='test',
-                document_id=doc_id,
+                note_id=doc_id,
                 existing_blocks=existing_blocks,
                 vault_id=vault_id,
             )
@@ -387,7 +387,7 @@ class TestRouting:
 
         with (
             patch(
-                'memex_core.memory.extraction.engine.storage.get_document_blocks',
+                'memex_core.memory.extraction.engine.storage.get_note_blocks',
                 new_callable=AsyncMock,
                 return_value=existing_blocks,
             ),
@@ -401,7 +401,7 @@ class TestRouting:
             await extractor.extract_and_persist(
                 session=mock_session,
                 contents=contents,
-                document_id=doc_id,
+                note_id=doc_id,
                 is_first_batch=True,
             )
 
@@ -429,7 +429,7 @@ class TestRouting:
 
         with (
             patch(
-                'memex_core.memory.extraction.engine.storage.get_document_blocks',
+                'memex_core.memory.extraction.engine.storage.get_note_blocks',
                 new_callable=AsyncMock,
                 return_value=existing_blocks,
             ),
@@ -443,7 +443,7 @@ class TestRouting:
             await engine.extract_and_persist(
                 session=mock_session,
                 contents=contents,
-                document_id=doc_id,
+                note_id=doc_id,
                 is_first_batch=True,
             )
 

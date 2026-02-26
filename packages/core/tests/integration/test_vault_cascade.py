@@ -2,7 +2,7 @@ import pytest
 from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.memory.sql_models import (
     Vault,
-    Document,
+    Note,
     MemoryUnit,
     MentalModel,
     TokenUsage,
@@ -35,9 +35,9 @@ async def test_vault_cascading_delete(session: AsyncSession):
     await session.commit()  # Commit vault first to ensure it exists for FKs
 
     # 2. Create related entities tied to this vault
-    # Document
+    # Note
     doc_id = uuid.uuid4()
-    document = Document(
+    document = Note(
         id=doc_id,
         vault_id=vault_id,
         original_text='Test document for cascade',
@@ -50,7 +50,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
     chunk = Chunk(
         id=chunk_id,
         vault_id=vault_id,
-        document_id=doc_id,
+        note_id=doc_id,
         text='Test chunk',
         chunk_index=0,  # Correct field name
     )
@@ -61,7 +61,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
     memory_unit = MemoryUnit(
         id=unit_id,
         vault_id=vault_id,
-        document_id=doc_id,
+        note_id=doc_id,
         text='Test memory unit',
         fact_type=FactTypes.WORLD,  # Correct fact_type
         embedding=[0.1] * 384,
@@ -77,7 +77,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
     )
     session.add(entity)
 
-    # Flush to ensure Document, Unit, Entity IDs exist for dependent FKs
+    # Flush to ensure Note, Unit, Entity IDs exist for dependent FKs
     await session.flush()
 
     # MentalModel (depends on Vault and Entity)
@@ -132,7 +132,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
 
     # 3. Verify entities exist
     assert await session.get(Vault, vault_id)
-    assert await session.get(Document, doc_id)
+    assert await session.get(Note, doc_id)
     assert await session.get(Chunk, chunk_id)
     assert await session.get(MemoryUnit, unit_id)
     assert await session.get(Entity, entity_id)
@@ -144,7 +144,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
     # 4. Create Global Vault entities (Control group)
     # Global vault should already exist from fixture
     global_doc_id = uuid.uuid4()
-    global_doc = Document(
+    global_doc = Note(
         id=global_doc_id,
         vault_id=GLOBAL_VAULT_ID,
         original_text='Global document',
@@ -152,7 +152,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
     )
     session.add(global_doc)
     await session.commit()
-    assert await session.get(Document, global_doc_id)
+    assert await session.get(Note, global_doc_id)
 
     # 5. Delete the Vault
     # Re-fetch vault to ensure it's attached to session
@@ -165,7 +165,7 @@ async def test_vault_cascading_delete(session: AsyncSession):
 
     # 6. Verify Cascade
     assert (await session.get(Vault, vault_id)) is None
-    assert (await session.get(Document, doc_id)) is None
+    assert (await session.get(Note, doc_id)) is None
     assert (await session.get(Chunk, chunk_id)) is None
     assert (await session.get(MemoryUnit, unit_id)) is None
     assert (await session.get(MentalModel, mm_id)) is None
@@ -175,4 +175,4 @@ async def test_vault_cascading_delete(session: AsyncSession):
 
     # 7. Verify Control group remains
     assert await session.get(Vault, GLOBAL_VAULT_ID)
-    assert await session.get(Document, global_doc_id)
+    assert await session.get(Note, global_doc_id)

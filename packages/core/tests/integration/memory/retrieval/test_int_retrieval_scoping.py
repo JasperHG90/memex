@@ -6,7 +6,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.types import FactTypes
-from memex_core.memory.sql_models import MemoryUnit, Document
+from memex_core.memory.sql_models import MemoryUnit, Note
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.models.embedding import get_embedding_model
@@ -40,7 +40,7 @@ class TestRetrievalScoping:
         if not await session.get(Vault, GLOBAL_VAULT_ID):
             session.add(Vault(id=GLOBAL_VAULT_ID, name='Global Vault'))
 
-        doc = Document(id=uuid4(), original_text='Scoping Test')
+        doc = Note(id=uuid4(), original_text='Scoping Test')
         session.add(doc)
 
         query_text = 'Universal Truth'
@@ -54,7 +54,7 @@ class TestRetrievalScoping:
             vault_id=GLOBAL_VAULT_ID,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(global_unit)
 
@@ -66,7 +66,7 @@ class TestRetrievalScoping:
             vault_id=vault_a_id,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(private_unit)
 
@@ -100,7 +100,7 @@ class TestRetrievalScoping:
         if not await session.get(Vault, GLOBAL_VAULT_ID):
             session.add(Vault(id=GLOBAL_VAULT_ID, name='Global'))
 
-        doc = Document(id=uuid4(), original_text='Inheritance Test')
+        doc = Note(id=uuid4(), original_text='Inheritance Test')
         session.add(doc)
 
         query_text = 'Shared Knowledge'
@@ -114,7 +114,7 @@ class TestRetrievalScoping:
             vault_id=GLOBAL_VAULT_ID,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(unit_global)
 
@@ -126,7 +126,7 @@ class TestRetrievalScoping:
             vault_id=vault_a_id,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(unit_a)
 
@@ -138,7 +138,7 @@ class TestRetrievalScoping:
             vault_id=vault_b_id,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(unit_b)
 
@@ -165,7 +165,7 @@ class TestRetrievalScoping:
         """
         from memex_core.memory.sql_models import Vault
 
-        doc = Document(id=uuid4(), original_text='None Test')
+        doc = Note(id=uuid4(), original_text='None Test')
         session.add(doc)
         embedding = embedder.encode(['Testing'])[0].tolist()
 
@@ -179,7 +179,7 @@ class TestRetrievalScoping:
             vault_id=random_vault_id,
             fact_type=FactTypes.WORLD,
             event_date=datetime.now(timezone.utc),
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(unit)
         await session.commit()

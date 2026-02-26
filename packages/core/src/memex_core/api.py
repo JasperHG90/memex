@@ -21,7 +21,7 @@ from memex_common.exceptions import (
     VaultNotFoundError,
     AmbiguousResourceError,
     ResourceNotFoundError,
-    DocumentNotFoundError,
+    NoteNotFoundError,
     EntityNotFoundError,
     MemoryUnitNotFoundError,
 )
@@ -48,7 +48,7 @@ from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.retrieval.engine import RetrievalEngine
-from memex_core.memory.retrieval.document_search import DocumentSearchEngine
+from memex_core.memory.retrieval.document_search import NoteSearchEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.reflect.models import (
     ReflectionRequest,
@@ -85,7 +85,7 @@ class JSONPath(UserDefinedType):
         return 'jsonpath'
 
 
-class Note:
+class NoteInput:
     """
     Represents a Note artifact (markdown content + assets).
     Acts as a DTO for transferring content into Memex.
@@ -270,7 +270,7 @@ class Note:
             content = target_file.read_bytes()
             return cls(
                 name=name or target_file.stem,
-                description=description or 'Imported Note',
+                description=description or 'Imported NoteInput',
                 content=content,
                 files=aux_files,
             )
@@ -285,7 +285,7 @@ class Note:
 
         # NB: args override template metadata
         final_name = name or name_ or target_file.stem
-        final_description = description or description_ or 'Imported Note'
+        final_description = description or description_ or 'Imported NoteInput'
 
         return cls(
             name=cast(str, final_name),
@@ -372,7 +372,7 @@ class MemexAPI:
             retrieval_config=self.config.server.memory.retrieval,
         )
 
-        self._doc_search = DocumentSearchEngine(
+        self._doc_search = NoteSearchEngine(
             embedder=self.embedding_model,
             ner_model=self.ner_model,
             lm=self.lm,
@@ -532,7 +532,7 @@ class MemexAPI:
         reflect_after: bool = True,
         assets: dict[str, bytes] | None = None,
     ) -> dict[str, Any]:
-        """Ingest content from a URL and store it as a Note."""
+        """Ingest content from a URL and store it as a NoteInput."""
 
         try:
             extracted = await WebContentProcessor.fetch_and_extract(url)
@@ -566,7 +566,7 @@ publish_date: {extracted.metadata.get('date')}
                 except Exception:
                     decoded_assets[k] = v
 
-        note = Note(
+        note = NoteInput(
             name=title,
             description=f'Content from {extracted.metadata.get("hostname", url)}',
             content=note_content.encode('utf-8'),
@@ -594,14 +594,14 @@ publish_date: {extracted.metadata.get('date')}
     ) -> dict[str, Any]:
         """
         Ingest content from a path.
-        - If it's a directory or a .md file, it's treated as a native Note (preserving structure/assets).
-        - Otherwise, it uses MarkItDown for extraction and summarizes it into a new Note.
+        - If it's a directory or a .md file, it's treated as a native NoteInput (preserving structure/assets).
+        - Otherwise, it uses MarkItDown for extraction and summarizes it into a new NoteInput.
         """
         path = plb.Path(file_path)
 
         if path.is_dir() or path.suffix.lower() == '.md':
-            logger.info(f'Ingesting {path} as a native Note.')
-            note = await Note.from_file(path)
+            logger.info(f'Ingesting {path} as a native NoteInput.')
+            note = await NoteInput.from_file(path)
             return await self.ingest(note)
 
         try:
@@ -626,7 +626,7 @@ ingested_at: {now}
 
         original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
 
-        note = Note(
+        note = NoteInput(
             name=path.stem,
             description=f'Content from {path.name}',
             content=note_content.encode('utf-8'),
@@ -649,7 +649,7 @@ ingested_at: {now}
 
     async def ingest(
         self,
-        note: Note,
+        note: NoteInput,
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
     ) -> dict[str, Any]:
@@ -657,7 +657,7 @@ ingested_at: {now}
         Transactional ingestion of a note into Memex.
 
         Workflow:
-        1. Calculate ID (Note.uuid).
+        1. Calculate ID (NoteInput.uuid).
         2. Idempotency Check: Skip if exists in MetaStore.
         3. Transaction: Open AsyncTransaction.
         4. Stage Files: Save to FileStore.
@@ -665,7 +665,7 @@ ingested_at: {now}
         6. Commit: 2PC via AsyncTransaction.
 
         Args:
-            note: The Note object to ingest.
+            note: The NoteInput object to ingest.
             vault_id: Optional target vault identifier. If None, uses active_vault.
             event_date: Optional document date for temporal anchoring. Falls back to now().
 
@@ -683,7 +683,7 @@ ingested_at: {now}
         # 2. Two-Gate Idempotency Check
         async with self.metastore.session() as session:
             # Fetch vault name for path organization
-            from memex_core.memory.sql_models import Vault, Document
+            from memex_core.memory.sql_models import Vault, Note
 
             vault = await session.get(Vault, target_vault_id)
             vault_name = vault.name if vault else str(target_vault_id)
@@ -691,7 +691,7 @@ ingested_at: {now}
             # Gate 1: Does note_key exist?
             from sqlmodel import select
 
-            stmt = select(Document.content_hash).where(col(Document.id) == note_uuid)
+            stmt = select(Note.content_hash).where(col(Note.id) == note_uuid)
             stored_hash = (await session.exec(stmt)).first()
             if stored_hash is not None:
                 # Gate 2: Has content_fingerprint changed?
@@ -747,7 +747,7 @@ ingested_at: {now}
             result = await self.memory.retain(
                 session=txn.db_session,
                 contents=[retain_content],
-                document_id=note_uuid,
+                note_id=note_uuid,
                 reflect_after=False,
                 agent_name='user',
             )
@@ -778,7 +778,7 @@ ingested_at: {now}
         Yields:
             Aggregated results (processed, skipped, failed counts and document IDs).
         """
-        from memex_core.memory.sql_models import Vault, Document
+        from memex_core.memory.sql_models import Vault, Note
         from sqlmodel import select
 
         target_vault_id = await self.resolve_vault_identifier(
@@ -792,12 +792,10 @@ ingested_at: {now}
 
         # 2. Two-Gate Idempotency Check
         # Gate 1: Does note_key exist? Gate 2: Has content_fingerprint changed?
-        note_uuids = [UUID(Note.calculate_uuid_from_dto(n)) for n in notes]
-        note_fingerprints = [Note.calculate_fingerprint_from_dto(n) for n in notes]
+        note_uuids = [UUID(NoteInput.calculate_uuid_from_dto(n)) for n in notes]
+        note_fingerprints = [NoteInput.calculate_fingerprint_from_dto(n) for n in notes]
         async with self.metastore.session() as session:
-            stmt = select(Document.id, Document.content_hash).where(
-                col(Document.id).in_(note_uuids)
-            )
+            stmt = select(Note.id, Note.content_hash).where(col(Note.id).in_(note_uuids))
             db_result = await session.exec(stmt)
             # Map note_key -> stored content_hash
             existing_docs: dict[UUID, str | None] = {row[0]: row[1] for row in db_result.all()}
@@ -882,7 +880,7 @@ ingested_at: {now}
                         await self.memory.retain(
                             session=txn.db_session,
                             contents=[retain_content],
-                            document_id=str(note_uuid),
+                            note_id=str(note_uuid),
                             reflect_after=False,
                             agent_name='user',
                         )
@@ -911,10 +909,10 @@ ingested_at: {now}
         """
         Retrieve a single document by ID.
         """
-        from memex_core.memory.sql_models import Document
+        from memex_core.memory.sql_models import Note
 
         async with self.metastore.session() as session:
-            doc = await session.get(Document, note_id)
+            doc = await session.get(Note, note_id)
             if not doc:
                 raise ResourceNotFoundError(f'Document {note_id} not found.')
 
@@ -922,10 +920,10 @@ ingested_at: {now}
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index (slim tree) for a document, or None if not indexed."""
-        from memex_core.memory.sql_models import Document
+        from memex_core.memory.sql_models import Note
 
         async with self.metastore.session() as session:
-            doc = await session.get(Document, note_id)
+            doc = await session.get(Note, note_id)
             if not doc:
                 raise ResourceNotFoundError(f'Document {note_id} not found.')
             return doc.page_index
@@ -945,14 +943,14 @@ ingested_at: {now}
         List ingested documents.
         Filters by the active vault (write target).
         """
-        from memex_core.memory.sql_models import Document
+        from memex_core.memory.sql_models import Note
         from sqlmodel import select
 
         target_vault_id = await self.resolve_vault_identifier(self.config.server.active_vault)
 
         async with self.metastore.session() as session:
-            stmt = select(Document)
-            stmt = stmt.where(col(Document.vault_id) == target_vault_id)
+            stmt = select(Note)
+            stmt = stmt.where(col(Note.vault_id) == target_vault_id)
 
             stmt = stmt.offset(offset).limit(limit)
             return list((await session.exec(stmt)).all())
@@ -961,11 +959,11 @@ ingested_at: {now}
         """
         Get total counts for documents, entities, and reflection queue.
         """
-        from memex_core.memory.sql_models import Document, Entity, ReflectionQueue
+        from memex_core.memory.sql_models import Note, Entity, ReflectionQueue
         from sqlmodel import select, func
 
         async with self.metastore.session() as session:
-            doc_count = (await session.exec(select(func.count(Document.id)))).one()
+            doc_count = (await session.exec(select(func.count(Note.id)))).one()
             entity_count = (await session.exec(select(func.count(Entity.id)))).one()
             queue_count = (await session.exec(select(func.count(ReflectionQueue.id)))).one()
 
@@ -979,11 +977,11 @@ ingested_at: {now}
         """
         Get the most recent notes.
         """
-        from memex_core.memory.sql_models import Document
+        from memex_core.memory.sql_models import Note
         from sqlmodel import select, desc
 
         async with self.metastore.session() as session:
-            stmt = select(Document).order_by(desc(Document.created_at)).limit(limit)
+            stmt = select(Note).order_by(desc(Note.created_at)).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def list_entities_ranked(self, limit: int = 100) -> AsyncGenerator[Any, None]:
@@ -995,7 +993,7 @@ ingested_at: {now}
         from sqlmodel import select, func, desc
 
         # Subquery for centrality (sum of cooccurrence counts)
-        # Note: an entity can be either entity_id_1 or entity_id_2
+        # NoteInput: an entity can be either entity_id_1 or entity_id_2
         centrality_stmt = (
             select(
                 func.coalesce(func.sum(EntityCooccurrence.cooccurrence_count), 0).label(
@@ -1064,15 +1062,15 @@ ingested_at: {now}
         """
         Get memory units and source documents where this entity is mentioned.
         """
-        from memex_core.memory.sql_models import MemoryUnit, Document, UnitEntity
+        from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
         from sqlmodel import select, desc
 
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
             stmt = (
-                select(MemoryUnit, Document)
+                select(MemoryUnit, Note)
                 .join(UnitEntity, UnitEntity.unit_id == MemoryUnit.id)
-                .join(Document, MemoryUnit.document_id == Document.id)
+                .join(Note, MemoryUnit.note_id == Note.id)
                 .where(UnitEntity.entity_id == eid)
                 .order_by(desc(MemoryUnit.created_at))
                 .limit(limit)
@@ -1270,9 +1268,7 @@ ingested_at: {now}
             return {}
 
         async with self.metastore.session() as session:
-            stmt = select(MemoryUnit.id, MemoryUnit.document_id).where(
-                col(MemoryUnit.id).in_(unit_ids)
-            )
+            stmt = select(MemoryUnit.id, MemoryUnit.note_id).where(col(MemoryUnit.id).in_(unit_ids))
             results = (await session.exec(stmt)).all()
 
             return {row[0]: row[1] for row in results if row[1] is not None}
@@ -1513,12 +1509,12 @@ ingested_at: {now}
         ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
         FileStore cleanup handles: assets and filestore_path.
         """
-        from memex_core.memory.sql_models import Document
+        from memex_core.memory.sql_models import Note
 
         async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
-            doc = await txn.db_session.get(Document, note_id)
+            doc = await txn.db_session.get(Note, note_id)
             if not doc:
-                raise DocumentNotFoundError(f'Document {note_id} not found.')
+                raise NoteNotFoundError(f'Note {note_id} not found.')
 
             # Stage filestore deletes (deferred until commit)
             if doc.assets:
@@ -1710,7 +1706,7 @@ ingested_at: {now}
         """
         Recursive helper for downstream lineage (Document -> Mental Model).
         """
-        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Document, Entity
+        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note, Entity
         from sqlmodel import select, col
 
         entity_data: dict[str, Any] = {}
@@ -1718,16 +1714,14 @@ ingested_at: {now}
         stop_recursion = current_depth >= max_depth
 
         if entity_type == 'document':
-            obj = await session.get(Document, entity_id)
+            obj = await session.get(Note, entity_id)
             if not obj:
                 raise ResourceNotFoundError(f'Document {entity_id} not found.')
             entity_data = self._sanitize_data(obj.model_dump())
 
             if not stop_recursion:
                 # Downstream: Memory Units
-                stmt = (
-                    select(MemoryUnit).where(col(MemoryUnit.document_id) == entity_id).limit(limit)
-                )
+                stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == entity_id).limit(limit)
                 units = (await session.exec(stmt)).all()
                 for unit in units:
                     child_node = await self._get_lineage_downstream(
@@ -1837,7 +1831,7 @@ ingested_at: {now}
         """
         Recursive helper for upstream lineage (Mental Model -> Document).
         """
-        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Document, Entity
+        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note, Entity
         from sqlmodel import select, col
 
         # Fetch the current entity
@@ -1964,12 +1958,12 @@ ingested_at: {now}
 
             if not stop_recursion:
                 # Upstream: Document
-                if obj.document_id:
+                if obj.note_id:
                     try:
                         child_node = await self._get_lineage_upstream(
                             session,
                             'document',
-                            obj.document_id,
+                            obj.note_id,
                             current_depth + 1,
                             max_depth,
                             limit,
@@ -1979,7 +1973,7 @@ ingested_at: {now}
                         pass
 
         elif entity_type == 'document':
-            obj = await session.get(Document, entity_id)
+            obj = await session.get(Note, entity_id)
             if not obj:
                 raise ResourceNotFoundError(f'Document {entity_id} not found.')
 

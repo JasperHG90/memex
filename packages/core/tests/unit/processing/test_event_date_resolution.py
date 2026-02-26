@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from memex_core.api import MemexAPI, Note
+from memex_core.api import MemexAPI, NoteInput
 from memex_core.processing.models import ExtractedContent
 
 
@@ -228,8 +228,8 @@ class TestIngestEventDateToRetainContent:
         """When event_date is provided, it should be used in RetainContent."""
         custom_date = datetime(2020, 5, 1, tzinfo=timezone.utc)
 
-        note = Note(
-            name='Test Note',
+        note = NoteInput(
+            name='Test NoteInput',
             description='A test note',
             content=b'# Test\nContent here.',
             tags=['test'],
@@ -262,8 +262,8 @@ class TestIngestEventDateToRetainContent:
     @pytest.mark.asyncio
     async def test_ingest_defaults_to_now_when_no_event_date(self, api):
         """When event_date is None, RetainContent should use datetime.now(UTC)."""
-        note = Note(
-            name='Test Note',
+        note = NoteInput(
+            name='Test NoteInput',
             description='A test note',
             content=b'# Test\nContent here.',
             tags=['test'],

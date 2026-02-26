@@ -23,7 +23,7 @@ from memex_common.schemas import (
     NoteCreateDTO,
 )
 
-from memex_core.api import MemexAPI, Note
+from memex_core.api import MemexAPI, NoteInput
 from memex_core.server.common import _handle_error, get_api
 
 router = APIRouter(prefix='/api/v1')
@@ -36,13 +36,13 @@ async def ingest_note(
     """Ingest a note artifact."""
     try:
         # NoteCreateDTO now uses Base64 encoded bytes for content and files.
-        # We MUST decode these to raw bytes for the internal Note object
+        # We MUST decode these to raw bytes for the internal NoteInput object
         # so that they are stored correctly (e.g., as raw images) in the filestore.
 
         decoded_content = base64.b64decode(request.content)
         decoded_files = {name: base64.b64decode(content) for name, content in request.files.items()}
 
-        note = Note(
+        note = NoteInput(
             name=request.name,
             description=request.description,
             content=decoded_content,
@@ -54,7 +54,7 @@ async def ingest_note(
         return IngestResponse(**result)
 
     except Exception as e:
-        raise _handle_error(e, 'Note ingestion failed')
+        raise _handle_error(e, 'NoteInput ingestion failed')
 
 
 @router.post('/ingestions/url', response_model=IngestResponse)
@@ -107,7 +107,7 @@ async def ingest_upload(
     """
     Upload and ingest files.
     - If it's a single non-markdown file, use MarkItDown.
-    - If it's multiple files or a markdown file, treat as a native Note.
+    - If it's multiple files or a markdown file, treat as a native NoteInput.
     """
     try:
         parsed_metadata = json.loads(metadata) if metadata else {}
@@ -133,7 +133,7 @@ async def ingest_upload(
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
 
-        # Handle Native Note construction
+        # Handle Native NoteInput construction
         priority_names = ['note.md', 'readme.md', 'index.md']
         best_candidate = None
 
@@ -163,9 +163,9 @@ async def ingest_upload(
             else:
                 aux_files[f.filename] = content
 
-        note = Note(
+        note = NoteInput(
             name=parsed_metadata.get('name') or plb.Path(main_filename).stem,
-            description=parsed_metadata.get('description') or 'Uploaded Note',
+            description=parsed_metadata.get('description') or 'Uploaded NoteInput',
             content=main_content,
             files=aux_files,
             tags=parsed_metadata.get('tags', []),

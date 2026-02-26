@@ -54,7 +54,7 @@ def _build_retrieval_dtos(
         source_docs: list[UUID] = []
 
         # A. Direct Document ID (Facts)
-        doc_id = getattr(u, 'document_id', None)
+        doc_id = getattr(u, 'note_id', None)
         if doc_id:
             source_docs.append(doc_id)
 
@@ -76,7 +76,7 @@ def _build_retrieval_dtos(
         dtos.append(
             MemoryUnitDTO(
                 id=u.id,
-                document_id=doc_id,
+                note_id=doc_id,
                 source_note_ids=source_docs,
                 text=u.text,
                 fact_type=ft,
@@ -205,7 +205,7 @@ async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
             text=unit.text,
             fact_type=unit.fact_type,
             metadata=unit.unit_metadata,
-            document_id=unit.document_id,
+            note_id=unit.note_id,
             vault_id=unit.vault_id,
             mentioned_at=unit.mentioned_at,
             occurred_start=unit.occurred_start,

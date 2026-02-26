@@ -17,7 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.context import get_session_id
 
-from memex_core.memory.sql_models import Document, MemoryUnit, Chunk, Node, ContentStatus
+from memex_core.memory.sql_models import Note, MemoryUnit, Chunk, Node, ContentStatus
 from memex_core.memory.extraction.models import ProcessedFact, ChunkMetadata
 
 logger = logging.getLogger('memex.core.memory.extraction.storage')
@@ -26,7 +26,7 @@ logger = logging.getLogger('memex.core.memory.extraction.storage')
 async def insert_facts_batch(
     session: AsyncSession,
     facts: list[ProcessedFact],
-    document_id: str | None = None,
+    note_id: str | None = None,
 ) -> list[str]:
     """
     Insert facts into the database in batch using high-performance Core Insert.
@@ -34,7 +34,7 @@ async def insert_facts_batch(
     Args:
         session: Active database session.
         facts: List of ProcessedFact objects to insert.
-        document_id: Optional document ID to associate with facts.
+        note_id: Optional note ID to associate with facts.
 
     Returns:
         List of unit IDs (UUIDs as strings) for the inserted facts.
@@ -45,8 +45,8 @@ async def insert_facts_batch(
     insert_data = []
 
     for fact in facts:
-        # Determine effective document_id
-        effective_doc_id = fact.document_id if fact.document_id else document_id
+        # Determine effective note_id
+        effective_doc_id = fact.note_id if fact.note_id else note_id
 
         # Determine effective event_date
         event_date = fact.occurred_start if fact.occurred_start is not None else fact.mentioned_at
@@ -74,7 +74,7 @@ async def insert_facts_batch(
             'confidence_beta': fact.confidence_beta,
             'access_count': 0,
             'unit_metadata': metadata_merged,
-            'document_id': UUID(effective_doc_id) if effective_doc_id else None,
+            'note_id': UUID(effective_doc_id) if effective_doc_id else None,
             'chunk_id': UUID(fact.chunk_id) if fact.chunk_id else None,
             'vault_id': fact.vault_id if fact.vault_id else GLOBAL_VAULT_ID,
             'status': ContentStatus.ACTIVE,
@@ -93,7 +93,7 @@ async def insert_facts_batch(
 
 async def handle_document_tracking(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
     combined_content: str,
     is_first_batch: bool,
     retain_params: dict | None = None,
@@ -109,7 +109,7 @@ async def handle_document_tracking(
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
         combined_content: Combined content text.
         is_first_batch: Whether this is the first batch (triggers deletion of old data).
         retain_params: Optional parameters passed during retain.
@@ -119,7 +119,7 @@ async def handle_document_tracking(
         content_fingerprint: Optional explicit content hash. If None, SHA256 of text is used.
         title: Resolved human-readable title for the document.
     """
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
 
     if content_fingerprint:
         content_hash = content_fingerprint
@@ -128,7 +128,7 @@ async def handle_document_tracking(
 
     # 1. Delete old document if this is the first batch
     if is_first_batch:
-        delete_stmt = delete(Document).where(col(Document.id) == doc_uuid)
+        delete_stmt = delete(Note).where(col(Note.id) == doc_uuid)
         await session.exec(delete_stmt)
 
     # Prepare metadata (merging tags and params into doc_metadata)
@@ -161,7 +161,7 @@ async def handle_document_tracking(
         # created_at/updated_at handled by server_default
     }
 
-    insert_stmt = pg_insert(Document.__table__).values(**values)  # type: ignore[attr-defined]
+    insert_stmt = pg_insert(Note.__table__).values(**values)  # type: ignore[attr-defined]
 
     # Now we reference 'insert_stmt' in the on_conflict clause
     # Logic: If we are tracking a doc, we overwrite its vault_id if provided.
@@ -188,7 +188,7 @@ async def handle_document_tracking(
 
 async def store_chunks_batch(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
     chunks: list[ChunkMetadata],
     vault_id: UUID = GLOBAL_VAULT_ID,
 ) -> dict[int, str]:
@@ -200,7 +200,7 @@ async def store_chunks_batch(
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
         chunks: List of ChunkMetadata objects.
         vault_id: Vault ID.
 
@@ -210,12 +210,12 @@ async def store_chunks_batch(
     if not chunks:
         return {}
 
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
     insert_data = []
 
     for chunk in chunks:
         row = {
-            'document_id': doc_uuid,
+            'note_id': doc_uuid,
             'text': chunk.chunk_text,
             'chunk_index': chunk.chunk_index,
             'vault_id': vault_id,
@@ -229,7 +229,7 @@ async def store_chunks_batch(
         pg_insert(Chunk)
         .values(insert_data)
         .on_conflict_do_update(
-            constraint='uq_chunks_document_content_hash',
+            constraint='uq_chunks_note_content_hash',
             set_={
                 'chunk_index': pg_insert(Chunk).excluded.chunk_index,
                 'status': ContentStatus.ACTIVE,
@@ -476,9 +476,9 @@ async def find_temporal_neighbor(
 # --- Incremental ingestion storage functions ---
 
 
-async def get_document_blocks(
+async def get_note_blocks(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
 ) -> list[dict[str, object]]:
     """Retrieve existing block hashes and metadata for a document.
 
@@ -488,17 +488,17 @@ async def get_document_blocks(
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
 
     Returns:
         List of block metadata dicts for all active blocks.
     """
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
     stmt = (
         select(Chunk.id, Chunk.content_hash, Chunk.chunk_index)
         .where(
             and_(
-                col(Chunk.document_id) == doc_uuid,
+                col(Chunk.note_id) == doc_uuid,
                 col(Chunk.status) == ContentStatus.ACTIVE,
             )
         )
@@ -585,7 +585,7 @@ async def insert_nodes_batch(
         pg_insert(Node)
         .values(nodes_data)
         .on_conflict_do_update(
-            constraint='uq_nodes_document_node_hash',
+            constraint='uq_nodes_note_node_hash',
             set_={
                 'title': pg_insert(Node).excluded.title,
                 'text': pg_insert(Node).excluded.text,
@@ -605,25 +605,25 @@ async def insert_nodes_batch(
     return [str(row[0]) for row in results.all()]
 
 
-async def get_document_nodes(
+async def get_note_nodes(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
 ) -> list[dict[str, object]]:
     """Fetch all active nodes for a document.
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
 
     Returns:
         List of node metadata dicts with keys: id, node_hash, block_id, seq.
     """
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
     stmt = (
         select(Node.id, Node.node_hash, Node.block_id, Node.seq)
         .where(
             and_(
-                col(Node.document_id) == doc_uuid,
+                col(Node.note_id) == doc_uuid,
                 col(Node.status) == ContentStatus.ACTIVE,
             )
         )
@@ -638,7 +638,7 @@ async def get_document_nodes(
 
 async def backfill_node_block_ids(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
     node_hash_to_block_id: dict[str, UUID],
 ) -> None:
     """Set Node.block_id for nodes matching the given node_hash -> chunk UUID mapping.
@@ -647,13 +647,13 @@ async def backfill_node_block_ids(
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
         node_hash_to_block_id: Mapping of node_hash string to chunk UUID.
     """
     if not node_hash_to_block_id:
         return
 
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
     whens = [
         (Node.node_hash == nh, type_coerce(bid, SA_UUID()))
         for nh, bid in node_hash_to_block_id.items()
@@ -662,7 +662,7 @@ async def backfill_node_block_ids(
         update(Node)
         .where(
             and_(
-                col(Node.document_id) == doc_uuid,
+                col(Node.note_id) == doc_uuid,
                 col(Node.node_hash).in_(list(node_hash_to_block_id.keys())),
                 col(Node.status) == ContentStatus.ACTIVE,
             )
@@ -699,21 +699,21 @@ async def migrate_facts_to_chunks(
 
 async def get_node_hashes_by_block(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
 ) -> dict[UUID, set[str]]:
     """Return {chunk_id -> set of node_hashes} for all active nodes with a block_id.
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
 
     Returns:
         Mapping of chunk UUID to the set of node_hash strings belonging to it.
     """
-    doc_uuid = UUID(document_id)
+    doc_uuid = UUID(note_id)
     stmt = select(Node.block_id, Node.node_hash).where(
         and_(
-            col(Node.document_id) == doc_uuid,
+            col(Node.note_id) == doc_uuid,
             col(Node.status) == ContentStatus.ACTIVE,
             col(Node.block_id).is_not(None),
         )
@@ -741,37 +741,37 @@ async def mark_nodes_stale(
     await session.exec(stmt)
 
 
-async def update_document_page_index(
+async def update_note_page_index(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
     page_index_json: dict | list | None,
 ) -> None:
-    """Update the Document.page_index JSONB column.
+    """Update the Note.page_index JSONB column.
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
         page_index_json: The thin tree structure to store, or None to clear.
     """
-    doc_uuid = UUID(document_id)
-    stmt = update(Document).where(col(Document.id) == doc_uuid).values(page_index=page_index_json)
+    doc_uuid = UUID(note_id)
+    stmt = update(Note).where(col(Note.id) == doc_uuid).values(page_index=page_index_json)
     await session.exec(stmt)
 
 
-async def update_document_title(
+async def update_note_title(
     session: AsyncSession,
-    document_id: str,
+    note_id: str,
     title: str,
 ) -> None:
-    """Update the Document.title column.
+    """Update the Note.title column.
 
     Args:
         session: Active database session.
-        document_id: Document identifier.
+        note_id: Note identifier.
         title: The resolved title to store.
     """
-    doc_uuid = UUID(document_id)
-    stmt = update(Document).where(col(Document.id) == doc_uuid).values(title=title)
+    doc_uuid = UUID(note_id)
+    stmt = update(Note).where(col(Note.id) == doc_uuid).values(title=title)
     await session.exec(stmt)
 
 

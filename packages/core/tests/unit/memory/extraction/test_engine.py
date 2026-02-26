@@ -123,7 +123,7 @@ async def test_extract_and_persist_flow(extractor, mock_session):
 
             contents = [RetainContent(content='Test Content')]
             ids, usage, touched = await extractor.extract_and_persist(
-                mock_session, contents, document_id=str(uuid4())
+                mock_session, contents, note_id=str(uuid4())
             )
 
             assert len(ids) == 1
@@ -181,7 +181,7 @@ async def test_persist_page_index_nodes_deduplicates_identical_content(extractor
         await extractor._persist_page_index_nodes_and_blocks(
             session=mock_session,
             page_index_output=pio,
-            document_id=str(uuid4()),
+            note_id=str(uuid4()),
             vault_id=uuid4(),
         )
 

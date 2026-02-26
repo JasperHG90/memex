@@ -415,7 +415,7 @@ class RetrievalEngine:
                     select(MemoryUnit)
                     .where(col(MemoryUnit.id).in_(unit_ids))
                     .options(defer(MemoryUnit.embedding))  # type: ignore
-                    .options(selectinload(MemoryUnit.document))
+                    .options(selectinload(MemoryUnit.note))
                     .options(selectinload(MemoryUnit.unit_entities))
                 )
             ).all()
@@ -585,7 +585,7 @@ class RetrievalEngine:
                     status=ContentStatus.ACTIVE,
                     event_date=model.last_refreshed,
                     vault_id=model.vault_id,
-                    document_id=model.id,
+                    note_id=model.id,
                     embedding=[],
                     unit_metadata={
                         'observation': True,

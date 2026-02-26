@@ -59,7 +59,7 @@ async def test_convert_mm_to_units():
     assert len(units) == 2
     assert units[0].text == '[Test Model] Obs 1: Content 1'
     assert units[0].fact_type == 'observation'
-    assert units[0].document_id == mm_id
+    assert units[0].note_id == mm_id
     assert units[0].unit_metadata['observation'] is True
     # New observation with recent evidence defaults to 'new'
     assert units[0].unit_metadata['trend'] == 'new'

@@ -12,7 +12,7 @@ from memex_core.memory.sql_models import (
     UnitEntity,
     EntityCooccurrence,
     Chunk,
-    Document,
+    Note,
     ContentStatus,
 )
 from memex_core.memory.sql_models import MentalModel
@@ -372,7 +372,7 @@ class TemporalStrategy:
         return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
 
 
-class DocumentGraphStrategy:
+class NoteGraphStrategy:
     """
     Retrieves document chunks linked to entities mentioned in the query.
 
@@ -463,8 +463,8 @@ class DocumentGraphStrategy:
             select(Chunk.id)
             .select_from(Chunk)
             .add_columns((literal(1.0) + temporal_score).label('score'))
-            .join(Document, col(Document.id) == col(Chunk.document_id))
-            .join(MemoryUnit, col(MemoryUnit.document_id) == col(Document.id))
+            .join(Note, col(Note.id) == col(Chunk.note_id))
+            .join(MemoryUnit, col(MemoryUnit.note_id) == col(Note.id))
             .join(UnitEntity, col(UnitEntity.unit_id) == col(MemoryUnit.id))
             .join(seed_entities, col(UnitEntity.entity_id) == seed_entities.c.id)
         )
@@ -503,8 +503,8 @@ class DocumentGraphStrategy:
             select(Chunk.id)
             .select_from(Chunk)
             .add_columns(co_occurrences.c.link_strength.label('score'))
-            .join(Document, col(Document.id) == col(Chunk.document_id))
-            .join(MemoryUnit, col(MemoryUnit.document_id) == col(Document.id))
+            .join(Note, col(Note.id) == col(Chunk.note_id))
+            .join(MemoryUnit, col(MemoryUnit.note_id) == col(Note.id))
             .join(UnitEntity, col(UnitEntity.unit_id) == col(MemoryUnit.id))
             .join(co_occurrences, col(UnitEntity.entity_id) == co_occurrences.c.neighbor_id)
         )

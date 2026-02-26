@@ -34,8 +34,8 @@ class MemoryUnitNotFoundError(ResourceNotFoundError):
     pass
 
 
-class DocumentNotFoundError(ResourceNotFoundError):
-    """Raised when a document is not found."""
+class NoteNotFoundError(ResourceNotFoundError):
+    """Raised when a note is not found."""
 
     pass
 

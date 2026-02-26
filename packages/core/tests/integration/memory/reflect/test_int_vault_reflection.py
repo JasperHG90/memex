@@ -5,7 +5,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.reflect.reflection import ReflectionEngine
 from memex_common.types import FactTypes
-from memex_core.memory.sql_models import MemoryUnit, Entity, Vault, Document
+from memex_core.memory.sql_models import MemoryUnit, Entity, Vault, Note
 from memex_common.config import MemexConfig, GLOBAL_VAULT_ID
 
 
@@ -17,7 +17,7 @@ async def test_reflection_engine_vault_isolation(session: AsyncSession, memex_co
     but DOES see global memories (Fall-through logic).
     """
     # 0. Setup Dummy Document
-    doc = Document(id=uuid4(), original_text='Dummy', content_hash='abc')
+    doc = Note(id=uuid4(), original_text='Dummy', content_hash='abc')
     session.add(doc)
     await session.commit()
     await session.refresh(doc)
@@ -47,7 +47,7 @@ async def test_reflection_engine_vault_isolation(session: AsyncSession, memex_co
         event_date=datetime.now(timezone.utc),
         vault_id=GLOBAL_VAULT_ID,
         fact_type=FactTypes.WORLD,
-        document_id=doc.id,
+        note_id=doc.id,
         embedding=dummy_embedding,
     )
     # Vault A memory
@@ -57,7 +57,7 @@ async def test_reflection_engine_vault_isolation(session: AsyncSession, memex_co
         event_date=datetime.now(timezone.utc),
         vault_id=vault_a.id,
         fact_type=FactTypes.WORLD,
-        document_id=doc.id,
+        note_id=doc.id,
         embedding=dummy_embedding,
     )
     # Vault B memory
@@ -67,7 +67,7 @@ async def test_reflection_engine_vault_isolation(session: AsyncSession, memex_co
         event_date=datetime.now(timezone.utc),
         vault_id=vault_b.id,
         fact_type=FactTypes.WORLD,
-        document_id=doc.id,
+        note_id=doc.id,
         embedding=dummy_embedding,
     )
     session.add_all([mem_global, mem_a, mem_b])

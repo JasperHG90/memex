@@ -59,10 +59,10 @@ class EntityState(rx.State):
             # For now, let's assume we might need to add it to client or use a generic GET.
             unit = await api._get(f'memories/{mention_id}')
             if unit:
-                doc_id = unit.get('document_id')
+                doc_id = unit.get('note_id')
                 doc_title = 'Unknown'
                 if doc_id:
-                    doc = await api.get_document(UUID(doc_id))
+                    doc = await api.get_note(UUID(doc_id))
                     doc_title = doc.name or 'Untitled'
 
                 props = []

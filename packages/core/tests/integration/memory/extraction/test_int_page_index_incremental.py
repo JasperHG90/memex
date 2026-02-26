@@ -17,11 +17,11 @@ from memex_core.memory.extraction.models import (
     ChunkMetadata,
     content_hash_md5,
 )
-from memex_core.memory.sql_models import Document, Chunk, MemoryUnit, ContentStatus
+from memex_core.memory.sql_models import Note, Chunk, MemoryUnit, ContentStatus
 
 
-async def _create_document(session: AsyncSession, doc_id: UUID) -> Document:
-    doc = Document(id=doc_id, original_text='test doc')
+async def _create_document(session: AsyncSession, doc_id: UUID) -> Note:
+    doc = Note(id=doc_id, original_text='test doc')
     session.add(doc)
     await session.flush()
     return doc
@@ -70,7 +70,7 @@ async def test_backfill_node_block_ids(session: AsyncSession):
 
     node_rows = [
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_1,
             'title': 'Node 1',
             'text': 'content of node 1',
@@ -80,7 +80,7 @@ async def test_backfill_node_block_ids(session: AsyncSession):
             'status': ContentStatus.ACTIVE,
         },
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_2,
             'title': 'Node 2',
             'text': 'content of node 2',
@@ -102,7 +102,7 @@ async def test_backfill_node_block_ids(session: AsyncSession):
     await session.flush()
 
     # Verify
-    nodes = await storage.get_document_nodes(session, str(doc_id))
+    nodes = await storage.get_note_nodes(session, str(doc_id))
     node_by_hash = {str(n['node_hash']): n for n in nodes}
     assert node_by_hash[node_hash_1]['block_id'] == chunk_a.id
     assert node_by_hash[node_hash_2]['block_id'] == chunk_b.id
@@ -140,7 +140,7 @@ async def test_migrate_facts_to_chunks(session: AsyncSession):
         payload={},
         chunk_id=str(old_chunk.id),
     )
-    unit_ids = await storage.insert_facts_batch(session, [fact], document_id=str(doc_id))
+    unit_ids = await storage.insert_facts_batch(session, [fact], note_id=str(doc_id))
     unit_uuid = UUID(unit_ids[0])
 
     # Migrate
@@ -177,7 +177,7 @@ async def test_get_node_hashes_by_block(session: AsyncSession):
 
     node_rows = [
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_1,
             'title': 'N1',
             'text': 'node content 1',
@@ -188,7 +188,7 @@ async def test_get_node_hashes_by_block(session: AsyncSession):
             'status': ContentStatus.ACTIVE,
         },
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_2,
             'title': 'N2',
             'text': 'node content 2',
@@ -221,7 +221,7 @@ async def test_get_node_hashes_by_block_excludes_stale(session: AsyncSession):
 
     node_rows = [
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_active,
             'title': 'Active',
             'text': 'active node',
@@ -232,7 +232,7 @@ async def test_get_node_hashes_by_block_excludes_stale(session: AsyncSession):
             'status': ContentStatus.ACTIVE,
         },
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash_stale,
             'title': 'Stale',
             'text': 'stale node',
@@ -261,7 +261,7 @@ async def test_get_node_hashes_by_block_excludes_null_block_id(session: AsyncSes
     node_hash = content_hash_md5('orphan node')
     node_rows = [
         {
-            'document_id': doc_id,
+            'note_id': doc_id,
             'node_hash': node_hash,
             'title': 'Orphan',
             'text': 'orphan node',

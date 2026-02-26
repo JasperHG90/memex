@@ -38,7 +38,7 @@ def make_fact(occurred=None, mentioned=None, doc_id='doc1'):
         embedding=[],
         occurred_start=occurred,
         mentioned_at=mentioned or datetime.now(timezone.utc),
-        document_id=doc_id,
+        note_id=doc_id,
     )
 
 

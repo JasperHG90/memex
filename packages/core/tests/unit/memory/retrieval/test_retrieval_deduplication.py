@@ -29,7 +29,7 @@ def test_deduplicate_and_cite_logic(mock_retrieval_engine):
         text=fact_text,
         fact_type=FactTypes.WORLD,
         event_date=fact_date,
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[0.1] * 384,
     )
 
@@ -39,7 +39,7 @@ def test_deduplicate_and_cite_logic(mock_retrieval_engine):
         text='[User Preference] Diet: The user enjoys spicy food.',
         fact_type='observation',
         event_date=datetime(2024, 1, 25, tzinfo=timezone.utc),
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[0.2] * 384,
         unit_metadata={
             'observation': True,
@@ -79,7 +79,7 @@ def test_deduplicate_no_match(mock_retrieval_engine):
         text='Fact A',
         fact_type=FactTypes.WORLD,
         event_date=datetime.now(timezone.utc),
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[],
     )
     u2 = MemoryUnit(
@@ -87,7 +87,7 @@ def test_deduplicate_no_match(mock_retrieval_engine):
         text='Fact B',
         fact_type=FactTypes.WORLD,
         event_date=datetime.now(timezone.utc),
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[],
     )
 
@@ -109,7 +109,7 @@ def test_deduplicate_missing_evidence(mock_retrieval_engine):
         text='Observation with missing evidence',
         fact_type='observation',
         event_date=datetime.now(timezone.utc),
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[],
         unit_metadata={'observation': True, 'evidence_ids': [str(missing_id)]},
     )
@@ -137,7 +137,7 @@ def test_deduplicate_opinion_logic(mock_retrieval_engine):
         text=fact_text,
         fact_type=FactTypes.WORLD,
         event_date=fact_date,
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[0.1] * 384,
     )
 
@@ -147,7 +147,7 @@ def test_deduplicate_opinion_logic(mock_retrieval_engine):
         text='It seems the user really likes Indian food.',
         fact_type=FactTypes.OPINION,
         event_date=datetime(2024, 1, 25, tzinfo=timezone.utc),
-        document_id=uuid4(),
+        note_id=uuid4(),
         embedding=[0.2] * 384,
         unit_metadata={
             # NO 'observation': True flag here!

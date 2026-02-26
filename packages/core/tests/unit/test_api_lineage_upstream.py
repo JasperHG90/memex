@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock
 from uuid import uuid4
 from memex_common.schemas import LineageDirection
-from memex_core.memory.sql_models import MentalModel, MemoryUnit, Document
+from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note
 
 
 @pytest.mark.asyncio
@@ -19,8 +19,8 @@ async def test_get_lineage_upstream_observation_to_document(api, mock_session):
 
     mm = MentalModel(id=mm_id, entity_id=uuid4(), vault_id=uuid4(), observations=[obs_data])
 
-    unit = MemoryUnit(id=unit_id, text='Test Unit', fact_type='event', document_id=doc_id)
-    doc = Document(id=doc_id, content='Test Doc', vault_id=uuid4())
+    unit = MemoryUnit(id=unit_id, text='Test Unit', fact_type='event', note_id=doc_id)
+    doc = Note(id=doc_id, content='Test Doc', vault_id=uuid4())
 
     # Mock session.exec for MentalModel lookup (for Observation)
     # and session.get for MemoryUnit and Document
@@ -32,7 +32,7 @@ async def test_get_lineage_upstream_observation_to_document(api, mock_session):
     async def mock_get(model, id):
         if model == MemoryUnit and str(id) == str(unit_id):
             return unit
-        if model == Document and str(id) == str(doc_id):
+        if model == Note and str(id) == str(doc_id):
             return doc
         return None
 

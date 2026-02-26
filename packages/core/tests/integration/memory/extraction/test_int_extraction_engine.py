@@ -69,7 +69,7 @@ async def test_extract_and_persist_end_to_end(session: AsyncSession):
         session=session,
         contents=[content],
         agent_name='integration_test_agent',
-        document_id=None,  # Let it generate a doc ID or handle logic internally
+        note_id=None,  # Let it generate a doc ID or handle logic internally
         is_first_batch=True,
     )
 

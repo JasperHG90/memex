@@ -24,7 +24,7 @@ class DocSnippet(BaseModel):
 
 
 class DocResult(BaseModel):
-    document_id: str
+    note_id: str
     title: str
     score: float = 0.0
     snippets: list[DocSnippet] = []
@@ -315,7 +315,7 @@ class DocSearchState(rx.State):
                 ]
                 new_results.append(
                     DocResult(
-                        document_id=str(dr.document_id),
+                        note_id=str(dr.note_id),
                         title=title,
                         score=dr.score,
                         snippets=snippets,
@@ -350,18 +350,18 @@ class DocSearchState(rx.State):
 
         async def _get_content() -> str:
             try:
-                note = await api_client.api.get_note(UUID(result.document_id))
+                note = await api_client.api.get_note(UUID(result.note_id))
                 return note.original_text or ''
             except Exception as e:
-                logger.warning(f'Failed to load note content for {result.document_id}: {e}')
+                logger.warning(f'Failed to load note content for {result.note_id}: {e}')
                 return ''
 
         async def _get_page_index() -> list[PageIndexNode]:
             try:
-                raw = await api_client.api.get_note_page_index(UUID(result.document_id))
+                raw = await api_client.api.get_note_page_index(UUID(result.note_id))
                 return _flatten_page_index(raw) if raw is not None else []
             except Exception as e:
-                logger.warning(f'Failed to load page index for {result.document_id}: {e}')
+                logger.warning(f'Failed to load page index for {result.note_id}: {e}')
                 return []
 
         content, nodes = await asyncio.gather(_get_content(), _get_page_index())

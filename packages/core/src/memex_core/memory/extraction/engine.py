@@ -141,7 +141,7 @@ class ExtractionEngine:
         session: AsyncSession,
         contents: list[RetainContent],
         agent_name: str = 'memex_agent',
-        document_id: str | None = None,
+        note_id: str | None = None,
         is_first_batch: bool = True,
         extract_opinions: bool = False,
         content_fingerprint: str | None = None,
@@ -150,7 +150,7 @@ class ExtractionEngine:
         Main entry point: Extract facts from content and persist them to memory.
         Returns (unit_ids, usage, touched_entity_ids).
 
-        When ``document_id`` is provided and the document already has blocks in
+        When ``note_id`` is provided and the document already has blocks in
         the DB, the incremental path is used: only changed blocks trigger LLM
         extraction.
         """
@@ -161,15 +161,15 @@ class ExtractionEngine:
         vault_id = contents[0].vault_id if contents else GLOBAL_VAULT_ID
 
         # Check if incremental path is viable
-        if document_id and is_first_batch:
-            existing_blocks = await storage.get_document_blocks(session, document_id)
+        if note_id and is_first_batch:
+            existing_blocks = await storage.get_note_blocks(session, note_id)
             if existing_blocks:
                 if self.config.active_strategy == 'page_index' and self.page_index_lm is not None:
                     return await self._extract_page_index_incremental(
                         session=session,
                         contents=contents,
                         agent_name=agent_name,
-                        document_id=document_id,
+                        note_id=note_id,
                         existing_blocks=existing_blocks,
                         vault_id=vault_id,
                         extract_opinions=extract_opinions,
@@ -179,7 +179,7 @@ class ExtractionEngine:
                     session=session,
                     contents=contents,
                     agent_name=agent_name,
-                    document_id=document_id,
+                    note_id=note_id,
                     existing_blocks=existing_blocks,
                     vault_id=vault_id,
                     extract_opinions=extract_opinions,
@@ -192,7 +192,7 @@ class ExtractionEngine:
                 session=session,
                 contents=contents,
                 agent_name=agent_name,
-                document_id=document_id,
+                note_id=note_id,
                 is_first_batch=is_first_batch,
                 vault_id=vault_id,
                 extract_opinions=extract_opinions,
@@ -213,9 +213,9 @@ class ExtractionEngine:
                 chunk.embedding = emb
 
         if not extracted_facts:
-            if document_id:
+            if note_id:
                 await self._track_document(
-                    session, document_id, contents, is_first_batch, vault_id=vault_id
+                    session, note_id, contents, is_first_batch, vault_id=vault_id
                 )
             return [], usage, set()
 
@@ -247,20 +247,18 @@ class ExtractionEngine:
 
         if not final_processed_facts:
             logger.info(f'All {len(processed_facts)} facts were duplicates.')
-            if document_id:
+            if note_id:
                 await self._track_document(
-                    session, document_id, contents, is_first_batch, vault_id=vault_id
+                    session, note_id, contents, is_first_batch, vault_id=vault_id
                 )
             return [], usage, set()
 
         extracted_facts = final_extracted_facts
         processed_facts = final_processed_facts
 
-        effective_doc_id = document_id
+        effective_doc_id = note_id
         if chunks and not effective_doc_id:
-            logger.warning(
-                'Chunks present but no document_id provided. Chunk linking may be partial.'
-            )
+            logger.warning('Chunks present but no note_id provided. Chunk linking may be partial.')
             effective_doc_id = str(UUID(int=0))
 
         if effective_doc_id:
@@ -273,12 +271,12 @@ class ExtractionEngine:
 
             # Link facts to chunks using the parallel lists
             for ef, pf in zip(extracted_facts, processed_facts):
-                pf.document_id = effective_doc_id
+                pf.note_id = effective_doc_id
                 if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                     pf.chunk_id = chunk_map[ef.chunk_index]
 
         unit_ids = await storage.insert_facts_batch(
-            session, processed_facts, document_id=effective_doc_id
+            session, processed_facts, note_id=effective_doc_id
         )
 
         touched_entity_ids = await self._resolve_entities(
@@ -298,7 +296,7 @@ class ExtractionEngine:
         usage.context_metadata = {
             'operation': 'extract',
             'mode': 'full',
-            'document_id': document_id,
+            'note_id': note_id,
             'unit_count': len(unit_ids),
             'vault_id': str(vault_id),
         }
@@ -311,7 +309,7 @@ class ExtractionEngine:
         session: AsyncSession,
         contents: list[RetainContent],
         agent_name: str,
-        document_id: str,
+        note_id: str,
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         extract_opinions: bool = False,
@@ -323,8 +321,8 @@ class ExtractionEngine:
             session: Active DB session.
             contents: Content items to extract from.
             agent_name: Agent performing extraction.
-            document_id: Stable document identifier.
-            existing_blocks: Current blocks from DB (via get_document_blocks).
+            note_id: Stable document identifier.
+            existing_blocks: Current blocks from DB (via get_note_blocks).
             vault_id: Vault scope.
             extract_opinions: Whether to extract opinions.
             content_fingerprint: Content fingerprint for document tracking.
@@ -357,7 +355,7 @@ class ExtractionEngine:
         removed_hashes = existing_hash_set - new_hash_set
 
         logger.info(
-            f'Incremental diff for document {document_id}: '
+            f'Incremental diff for document {note_id}: '
             f'blocks_total={len(new_blocks)} retained={len(retained_hashes)} '
             f'added={len(added_blocks)} removed={len(removed_hashes)}'
         )
@@ -465,16 +463,16 @@ class ExtractionEngine:
 
                     # Store new chunks for ADDED blocks
                     chunk_map = await self._store_chunks(
-                        session, document_id, all_chunk_metadata, vault_id=vault_id
+                        session, note_id, all_chunk_metadata, vault_id=vault_id
                     )
 
                     for ef, pf in zip(final_extracted, final_processed):
-                        pf.document_id = document_id
+                        pf.note_id = note_id
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
 
                     unit_ids = await storage.insert_facts_batch(
-                        session, final_processed, document_id=document_id
+                        session, final_processed, note_id=note_id
                     )
 
                     touched_entity_ids = await self._resolve_entities(
@@ -505,7 +503,7 @@ class ExtractionEngine:
 
         # Update document tracking
         await self._track_document(
-            session, document_id, contents, is_first_batch=False, vault_id=vault_id
+            session, note_id, contents, is_first_batch=False, vault_id=vault_id
         )
 
         # Update Reflection Queue
@@ -520,7 +518,7 @@ class ExtractionEngine:
         usage.context_metadata = {
             'operation': 'extract',
             'mode': 'incremental',
-            'document_id': document_id,
+            'note_id': note_id,
             'blocks_total': len(new_blocks),
             'blocks_retained': len(retained_hashes),
             'blocks_added': len(added_blocks),
@@ -537,7 +535,7 @@ class ExtractionEngine:
         session: AsyncSession,
         contents: list[RetainContent],
         agent_name: str,
-        document_id: str,
+        note_id: str,
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         extract_opinions: bool = False,
@@ -556,8 +554,8 @@ class ExtractionEngine:
             session: Active DB session.
             contents: Content items to extract from.
             agent_name: Agent performing extraction.
-            document_id: Stable document identifier.
-            existing_blocks: Current blocks from DB (via get_document_blocks).
+            note_id: Stable document identifier.
+            existing_blocks: Current blocks from DB (via get_note_blocks).
             vault_id: Vault scope.
             extract_opinions: Whether to extract opinions.
             content_fingerprint: Content fingerprint for document tracking.
@@ -600,7 +598,7 @@ class ExtractionEngine:
         removed_hashes = existing_hash_set - new_hash_set
 
         # 3. Node-level change detection for new blocks
-        prev_nodes = await storage.get_document_nodes(session, document_id)
+        prev_nodes = await storage.get_note_nodes(session, note_id)
         prev_node_hash_set = {str(n['node_hash']) for n in prev_nodes}
 
         # Build block_hash -> constituent node hashes from new PageIndexOutput
@@ -629,7 +627,7 @@ class ExtractionEngine:
                 content_changed_hashes.add(block.id)
 
         logger.info(
-            f'PageIndex incremental diff for {document_id}: '
+            f'PageIndex incremental diff for {note_id}: '
             f'retained={len(retained_hashes)} boundary_shift={len(boundary_shift_hashes)} '
             f'content_changed={len(content_changed_hashes)} removed={len(removed_hashes)}'
         )
@@ -639,7 +637,7 @@ class ExtractionEngine:
         node_ids, block_chunk_map = await self._persist_page_index_nodes_and_blocks(
             session=session,
             page_index_output=page_index_output,
-            document_id=document_id,
+            note_id=note_id,
             vault_id=vault_id,
             min_node_tokens=min_tokens,
             skip_block_hashes=retained_hashes,
@@ -647,7 +645,7 @@ class ExtractionEngine:
 
         # 5. Fact migration for boundary-shift blocks
         # Get old block -> node_hashes mapping from DB
-        old_node_map = await storage.get_node_hashes_by_block(session, document_id)
+        old_node_map = await storage.get_node_hashes_by_block(session, note_id)
 
         chunk_migration: dict[UUID, UUID] = {}  # old_chunk_id -> new_chunk_id
         for removed_hash in removed_hashes:
@@ -793,12 +791,12 @@ class ExtractionEngine:
 
                     if final_processed:
                         for ef, pf in zip(final_extracted, final_processed):
-                            pf.document_id = document_id
+                            pf.note_id = note_id
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
                         unit_ids = await storage.insert_facts_batch(
-                            session, final_processed, document_id=document_id
+                            session, final_processed, note_id=note_id
                         )
 
                         touched_entity_ids = await self._resolve_entities(
@@ -810,7 +808,7 @@ class ExtractionEngine:
 
         # 10. Update thin tree + document tracking
         await self._track_document(
-            session, document_id, contents, is_first_batch=False, vault_id=vault_id
+            session, note_id, contents, is_first_batch=False, vault_id=vault_id
         )
 
         toc_id_to_hash: dict[str, str] = {}
@@ -835,7 +833,7 @@ class ExtractionEngine:
             for n in page_index_output.toc
             if min_tokens <= 0 or (n.token_estimate or 0) > min_tokens
         ]
-        await storage.update_document_page_index(session, document_id, thin_tree)
+        await storage.update_note_page_index(session, note_id, thin_tree)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
@@ -845,7 +843,7 @@ class ExtractionEngine:
             session=session,
             vault_id=vault_id,
         )
-        await storage.update_document_title(session, document_id, resolved_title)
+        await storage.update_note_title(session, note_id, resolved_title)
 
         # Update Reflection Queue
         if self.queue_service and touched_entity_ids:
@@ -859,7 +857,7 @@ class ExtractionEngine:
         usage.context_metadata = {
             'operation': 'extract',
             'mode': 'page_index_incremental',
-            'document_id': document_id,
+            'note_id': note_id,
             'blocks_total': len(page_index_output.blocks),
             'blocks_retained': len(retained_hashes),
             'blocks_boundary_shift': len(boundary_shift_hashes),
@@ -878,7 +876,7 @@ class ExtractionEngine:
         session: AsyncSession,
         contents: list[RetainContent],
         agent_name: str,
-        document_id: str | None,
+        note_id: str | None,
         is_first_batch: bool,
         vault_id: UUID,
         extract_opinions: bool = False,
@@ -916,7 +914,7 @@ class ExtractionEngine:
         )
 
         # Track document
-        effective_doc_id = document_id
+        effective_doc_id = note_id
         if not effective_doc_id:
             effective_doc_id = str(UUID(int=0))
 
@@ -929,7 +927,7 @@ class ExtractionEngine:
         node_rows, block_chunk_map = await self._persist_page_index_nodes_and_blocks(
             session=session,
             page_index_output=page_index_output,
-            document_id=effective_doc_id,
+            note_id=effective_doc_id,
             vault_id=vault_id,
             min_node_tokens=min_tokens,
         )
@@ -959,7 +957,7 @@ class ExtractionEngine:
             for n in page_index_output.toc
             if min_tokens <= 0 or (n.token_estimate or 0) > min_tokens
         ]
-        await storage.update_document_page_index(session, effective_doc_id, thin_tree)
+        await storage.update_note_page_index(session, effective_doc_id, thin_tree)
 
         # Resolve and store the document title from the TOC / block summaries.
         # This supersedes the rough title stored by _track_document above.
@@ -971,7 +969,7 @@ class ExtractionEngine:
             session=session,
             vault_id=vault_id,
         )
-        await storage.update_document_title(session, effective_doc_id, resolved_title)
+        await storage.update_note_title(session, effective_doc_id, resolved_title)
 
         # 4. Extract facts from block texts
         block_texts = [block.content for block in page_index_output.blocks]
@@ -1052,12 +1050,12 @@ class ExtractionEngine:
 
         # Link facts to blocks
         for ef, pf in zip(final_extracted, final_processed):
-            pf.document_id = effective_doc_id
+            pf.note_id = effective_doc_id
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
         unit_ids = await storage.insert_facts_batch(
-            session, final_processed, document_id=effective_doc_id
+            session, final_processed, note_id=effective_doc_id
         )
 
         touched_entity_ids = await self._resolve_entities(
@@ -1076,7 +1074,7 @@ class ExtractionEngine:
         usage.context_metadata = {
             'operation': 'extract',
             'mode': 'page_index',
-            'document_id': document_id,
+            'note_id': note_id,
             'unit_count': len(unit_ids),
             'blocks': len(page_index_output.blocks),
             'path_used': page_index_output.path_used,
@@ -1090,7 +1088,7 @@ class ExtractionEngine:
         self,
         session: AsyncSession,
         page_index_output: PageIndexOutput,
-        document_id: str,
+        note_id: str,
         vault_id: UUID,
         min_node_tokens: int = 0,
         skip_block_hashes: set[str] | None = None,
@@ -1100,7 +1098,7 @@ class ExtractionEngine:
         Args:
             session: Active DB session.
             page_index_output: PageIndex result with TOC and blocks.
-            document_id: Stable document identifier.
+            note_id: Stable document identifier.
             vault_id: Vault scope.
             min_node_tokens: Skip nodes with fewer tokens than this threshold.
             skip_block_hashes: Block content hashes to skip (retained blocks).
@@ -1111,7 +1109,7 @@ class ExtractionEngine:
             Tuple of (node_ids, block_chunk_map) where block_chunk_map maps
             block sequence index to chunk UUID string.
         """
-        doc_uuid = UUID(document_id)
+        doc_uuid = UUID(note_id)
 
         # Flatten TOC tree into node rows
         node_rows: list[dict[str, object]] = []
@@ -1137,7 +1135,7 @@ class ExtractionEngine:
                 node_rows.append(
                     {
                         'vault_id': vault_id,
-                        'document_id': doc_uuid,
+                        'note_id': doc_uuid,
                         'node_hash': node_hash,
                         'title': node.title,
                         'text': node.content or '',
@@ -1157,7 +1155,7 @@ class ExtractionEngine:
         flatten_nodes(page_index_output.toc)
 
         # Deduplicate by node_hash before the batch upsert. PostgreSQL raises
-        # CardinalityViolationError if the same (document_id, node_hash) appears
+        # CardinalityViolationError if the same (note_id, node_hash) appears
         # twice in one INSERT ... ON CONFLICT DO UPDATE batch.
         seen_hashes: set[str] = set()
         deduped: list[dict[str, object]] = []
@@ -1197,7 +1195,7 @@ class ExtractionEngine:
                 cm.embedding = emb
 
         block_chunk_map = await self._store_chunks(
-            session, document_id, block_chunk_metadata, vault_id=vault_id
+            session, note_id, block_chunk_metadata, vault_id=vault_id
         )
 
         # Backfill Node.block_id using the node_to_block_map and block_chunk_map.
@@ -1220,7 +1218,7 @@ class ExtractionEngine:
             if node_hash:
                 node_hash_to_block_id[node_hash] = UUID(chunk_uuid_str)
 
-        await storage.backfill_node_block_ids(session, document_id, node_hash_to_block_id)
+        await storage.backfill_node_block_ids(session, note_id, node_hash_to_block_id)
 
         return node_ids, block_chunk_map
 
@@ -1408,16 +1406,16 @@ class ExtractionEngine:
     async def _store_chunks(
         self,
         session: AsyncSession,
-        document_id: str,
+        note_id: str,
         chunks: list[ChunkMetadata],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> dict[int, str]:
-        return await storage.store_chunks_batch(session, document_id, chunks, vault_id=vault_id)
+        return await storage.store_chunks_batch(session, note_id, chunks, vault_id=vault_id)
 
     async def _track_document(
         self,
         session: AsyncSession,
-        document_id: str,
+        note_id: str,
         contents: list[RetainContent],
         is_first_batch: bool,
         vault_id: UUID = GLOBAL_VAULT_ID,
@@ -1443,7 +1441,7 @@ class ExtractionEngine:
 
         await storage.handle_document_tracking(
             session,
-            document_id,
+            note_id,
             combined_content,
             is_first_batch,
             retain_params,
@@ -1559,7 +1557,7 @@ class ExtractionEngine:
             fact_b = facts[idx_b]
 
             # Intra-document temporal links
-            if fact_a.document_id and fact_a.document_id == fact_b.document_id:
+            if fact_a.note_id and fact_a.note_id == fact_b.note_id:
                 links.append(
                     {
                         'from_unit_id': unit_ids[idx_a],

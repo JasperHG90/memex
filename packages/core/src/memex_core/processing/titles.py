@@ -32,7 +32,7 @@ _UUID_PATTERN = re.compile(
 )
 
 
-class ExtractDocumentTitle(dspy.Signature):
+class ExtractNoteTitle(dspy.Signature):
     """Extract a concise, descriptive title for a document from its content summary.
 
     Return only the title text — no quotes, no punctuation at the end,
@@ -126,7 +126,7 @@ async def extract_title_via_llm(
     if not excerpt.strip():
         return None
 
-    predictor = dspy.Predict(ExtractDocumentTitle)
+    predictor = dspy.Predict(ExtractNoteTitle)
 
     try:
         prediction, _ = await run_dspy_operation(

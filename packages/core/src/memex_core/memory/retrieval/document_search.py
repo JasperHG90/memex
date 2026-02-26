@@ -18,8 +18,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.memory.models.embedding import FastEmbedder
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
-from memex_core.memory.retrieval.strategies import DocumentGraphStrategy
-from memex_core.memory.sql_models import Chunk, Document, Node
+from memex_core.memory.retrieval.strategies import NoteGraphStrategy
+from memex_core.memory.sql_models import Chunk, Note, Node
 from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
 
 
@@ -71,7 +71,7 @@ K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
 
 
-class DocumentSearchEngine:
+class NoteSearchEngine:
     """Searches raw document chunks using hybrid retrieval with weighted RRF fusion.
 
     Supports three strategies:
@@ -90,7 +90,7 @@ class DocumentSearchEngine:
     ) -> None:
         self.embedder = embedder
         self.lm = lm
-        self.graph_strategy = DocumentGraphStrategy(ner_model=ner_model)
+        self.graph_strategy = NoteGraphStrategy(ner_model=ner_model)
         self.expander = QueryExpander(lm=lm) if lm else None
 
     # ------------------------------------------------------------------
@@ -176,9 +176,9 @@ class DocumentSearchEngine:
         # Collect document IDs that have page_index
         doc_ids = [r.note_id for r in results]
         doc_stmt = (
-            select(Document.id, Document.page_index)
-            .where(col(Document.id).in_(doc_ids))
-            .where(col(Document.page_index).is_not(None))
+            select(Note.id, Note.page_index)
+            .where(col(Note.id).in_(doc_ids))
+            .where(col(Note.page_index).is_not(None))
         )
         doc_results = await session.exec(doc_stmt)
         trees_by_doc: dict[str, Any] = {}
@@ -208,7 +208,7 @@ class DocumentSearchEngine:
 
         # Step 2: Fetch node texts for the identified sections
         node_stmt = (
-            select(Node.id, Node.document_id, Node.title, Node.text, Node.level, Node.node_hash)
+            select(Node.id, Node.note_id, Node.title, Node.text, Node.level, Node.node_hash)
             .where(col(Node.node_hash).in_(list(relevant_node_ids)))
             .where(col(Node.status) == 'active')
             .order_by(col(Node.seq))
@@ -431,7 +431,7 @@ class DocumentSearchEngine:
         weight = weights.get('temporal', 0.5)
 
         # Join Chunk → Document to access publish_date
-        epoch = extract('epoch', col(Document.publish_date))
+        epoch = extract('epoch', col(Note.publish_date))
 
         stmt = (
             select(
@@ -440,8 +440,8 @@ class DocumentSearchEngine:
                 literal(weight).label('weight'),
             )
             .select_from(Chunk)
-            .join(Document, col(Chunk.document_id) == col(Document.id))
-            .where(col(Document.publish_date).is_not(None))
+            .join(Note, col(Chunk.note_id) == col(Note.id))
+            .where(col(Note.publish_date).is_not(None))
         )
 
         if request.vault_ids:
@@ -493,11 +493,11 @@ class DocumentSearchEngine:
         # Group chunks by document
         doc_to_chunks: dict[UUID, list[tuple[Chunk, float]]] = {}
         for chunk, score in chunk_results:
-            doc_to_chunks.setdefault(chunk.document_id, []).append((chunk, score))
+            doc_to_chunks.setdefault(chunk.note_id, []).append((chunk, score))
 
         # Fetch documents
         doc_ids = list(doc_to_chunks.keys())
-        doc_stmt = select(Document).where(col(Document.id).in_(doc_ids))
+        doc_stmt = select(Note).where(col(Note.id).in_(doc_ids))
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}
 

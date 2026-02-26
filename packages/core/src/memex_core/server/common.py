@@ -55,7 +55,7 @@ def _resolve_doc_name(metadata: dict[str, Any]) -> str | None:
     )
 
 
-def build_document_dto(doc: Any) -> NoteDTO:
+def build_note_dto(doc: Any) -> NoteDTO:
     """Build a NoteDTO from an ORM object or a dict."""
     if isinstance(doc, dict):
         metadata = doc.get('doc_metadata') or {}

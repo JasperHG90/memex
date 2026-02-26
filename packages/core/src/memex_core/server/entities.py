@@ -13,7 +13,7 @@ from memex_core.api import MemexAPI
 from memex_core.server.common import (
     _handle_error,
     async_ndjson_response,
-    build_document_dto,
+    build_note_dto,
     build_entity_dto,
     get_api,
     ndjson_openapi,
@@ -104,13 +104,13 @@ async def get_entity_mentions(
                     text=r['unit'].text,
                     fact_type=r['unit'].fact_type,
                     metadata=r['unit'].unit_metadata,
-                    document_id=r['unit'].document_id,
+                    note_id=r['unit'].note_id,
                     vault_id=r['unit'].vault_id,
                     mentioned_at=r['unit'].mentioned_at,
                     occurred_start=r['unit'].occurred_start,
                     occurred_end=r['unit'].occurred_end,
                 ),
-                'document': build_document_dto(r['document']),
+                'document': build_note_dto(r['document']),
             }
             for r in results
         ]

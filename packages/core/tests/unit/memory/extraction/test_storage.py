@@ -52,7 +52,7 @@ async def test_insert_facts_batch_success(mock_session, sample_fact):
     mock_session.exec.return_value = mock_result
 
     # Act
-    ids = await storage.insert_facts_batch(mock_session, [sample_fact], document_id=str(uuid4()))
+    ids = await storage.insert_facts_batch(mock_session, [sample_fact], note_id=str(uuid4()))
 
     # Assert
     assert len(ids) == 1
@@ -67,7 +67,7 @@ async def test_insert_facts_batch_verify_values(mock_session, sample_fact):
         mock_stmt = MagicMock()
         mock_insert.return_value.values.return_value.returning.return_value = mock_stmt
 
-        await storage.insert_facts_batch(mock_session, [sample_fact], document_id=document_id)
+        await storage.insert_facts_batch(mock_session, [sample_fact], note_id=document_id)
 
         # Verify values passed to insert
         mock_insert.return_value.values.assert_called_once()
@@ -77,7 +77,7 @@ async def test_insert_facts_batch_verify_values(mock_session, sample_fact):
 
         assert row['text'] == sample_fact.fact_text
         assert row['embedding'] == sample_fact.embedding
-        assert row['document_id'] == UUID(document_id)
+        assert row['note_id'] == UUID(document_id)
         assert row['unit_metadata']['tags'] == ['tag1', 'tag2']
         # The stored metadata might still have the string or UUID depending on impl details,
         # but the COLUMN 'chunk_id' is what matters most now.
@@ -212,7 +212,7 @@ async def test_store_chunks_batch(mock_session):
 
         assert inserted_rows[0]['text'] == 'Chunk 1'
         assert inserted_rows[0]['chunk_index'] == 0
-        assert inserted_rows[0]['document_id'] == UUID(doc_id)
+        assert inserted_rows[0]['note_id'] == UUID(doc_id)
 
         assert inserted_rows[1]['text'] == 'Chunk 2'
         assert inserted_rows[1]['chunk_index'] == 1

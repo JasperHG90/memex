@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 # Import your models
 from memex_core.memory.sql_models import (
-    Document,
+    Note,
     MemoryUnit,
     Chunk,
     Entity,
@@ -24,12 +24,12 @@ from memex_common.types import FactTypes
 @pytest.mark.asyncio
 async def test_create_document_and_units(session: AsyncSession):
     """
-    Test that we can save a Document and associated MemoryUnits,
+    Test that we can save a Note and associated MemoryUnits,
     and that relationships (back_populates) work.
     """
-    # 1. Create a Document
+    # 1. Create a Note
     doc_id = uuid4()
-    doc = Document(
+    doc = Note(
         id=doc_id,
         original_text='Elon Musk bought Twitter.',
         content_hash='abc123hash',
@@ -38,10 +38,10 @@ async def test_create_document_and_units(session: AsyncSession):
     session.add(doc)
     await session.commit()
 
-    # 2. Create a MemoryUnit linked to that Document
+    # 2. Create a MemoryUnit linked to that Note
     unit = MemoryUnit(
         bank_id='user_1',
-        document_id=doc_id,  # Link via ID
+        note_id=doc_id,  # Link via ID
         fact_type=FactTypes.WORLD,
         text='Elon Musk bought Twitter.',
         event_date=datetime.now(),
@@ -55,7 +55,7 @@ async def test_create_document_and_units(session: AsyncSession):
 
     assert len(doc.memory_units) == 1
     assert doc.memory_units[0].text == 'Elon Musk bought Twitter.'
-    assert doc.memory_units[0].document_id == doc_id
+    assert doc.memory_units[0].note_id == doc_id
 
     # Verify Array storage
     assert doc.assets == ['images/logo.png', 'data/table.csv']
@@ -64,12 +64,12 @@ async def test_create_document_and_units(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_create_document_and_chunks(session: AsyncSession):
     """
-    Test that we can save a Document and associated Chunks,
+    Test that we can save a Note and associated Chunks,
     and that relationships (back_populates) work.
     """
-    # 1. Create a Document
+    # 1. Create a Note
     doc_id = uuid4()
-    doc = Document(
+    doc = Note(
         id=doc_id,
         original_text='This is a long document that will be chunked.',
         content_hash='chunktest123',
@@ -77,15 +77,15 @@ async def test_create_document_and_chunks(session: AsyncSession):
     session.add(doc)
     await session.commit()
 
-    # 2. Create Chunks linked to that Document
+    # 2. Create Chunks linked to that Note
     chunk1 = Chunk(
-        document_id=doc_id,
+        note_id=doc_id,
         text='This is a long document',
         chunk_index=0,
         content_hash='chunk_hash_1',
     )
     chunk2 = Chunk(
-        document_id=doc_id,
+        note_id=doc_id,
         text='that will be chunked.',
         chunk_index=1,
         content_hash='chunk_hash_2',
@@ -102,21 +102,21 @@ async def test_create_document_and_chunks(session: AsyncSession):
     sorted_chunks = sorted(doc.chunks, key=lambda x: x.chunk_index)
     assert sorted_chunks[0].text == 'This is a long document'
     assert sorted_chunks[1].text == 'that will be chunked.'
-    assert sorted_chunks[0].document_id == doc_id
+    assert sorted_chunks[0].note_id == doc_id
 
 
 @pytest.mark.asyncio
 async def test_chunk_cascade_delete(session: AsyncSession):
     """
-    Test that deleting a Document automatically deletes its Chunks.
+    Test that deleting a Note automatically deletes its Chunks.
     """
     # Setup: Create Doc + Chunk
-    doc = Document(id=uuid4())
+    doc = Note(id=uuid4())
     session.add(doc)
     await session.commit()
 
     chunk = Chunk(
-        document_id=doc.id,
+        note_id=doc.id,
         text='Temporary chunk',
         chunk_index=0,
         content_hash='temp_chunk_hash',
@@ -128,7 +128,7 @@ async def test_chunk_cascade_delete(session: AsyncSession):
     result = await session.get(Chunk, chunk.id)
     assert result is not None
 
-    # ACT: Delete the Document
+    # ACT: Delete the Note
     await session.delete(doc)
     await session.commit()
 
@@ -141,15 +141,15 @@ async def test_chunk_cascade_delete(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_cascade_delete(session: AsyncSession):
     """
-    Test that deleting a Document automatically deletes its MemoryUnits.
+    Test that deleting a Note automatically deletes its MemoryUnits.
     """
     # Setup: Create Doc + Unit
-    doc = Document(id=uuid4())
+    doc = Note(id=uuid4())
     session.add(doc)
     await session.commit()
 
     unit = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='Temporary thought',
         embedding=[0.0] * 384,
         event_date=datetime.now(timezone.utc),
@@ -162,7 +162,7 @@ async def test_cascade_delete(session: AsyncSession):
     result = await session.get(MemoryUnit, unit.id)
     assert result is not None
 
-    # ACT: Delete the Document
+    # ACT: Delete the Note
     await session.delete(doc)
     await session.commit()
 
@@ -232,12 +232,12 @@ async def test_entity_and_unit_association(session: AsyncSession):
     and verifying cascading deletes.
     """
     # 1. Setup: Doc + Unit
-    doc = Document(id=uuid4(), original_text='Context')
+    doc = Note(id=uuid4(), original_text='Context')
     session.add(doc)
     await session.commit()
 
     unit = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='Elon Musk owns Tesla.',
         embedding=[0.1] * 384,
         event_date=datetime.now(timezone.utc),
@@ -317,19 +317,19 @@ async def test_memory_links_and_constraints(session: AsyncSession):
     Test linking two units, valid link_types, and weight constraints.
     """
     # 1. Setup Units
-    doc = Document(id=uuid4())
+    doc = Note(id=uuid4())
     session.add(doc)
     await session.commit()
 
     u_from = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='Cause',
         embedding=[0] * 384,
         event_date=datetime.now(timezone.utc),
         fact_type=FactTypes.WORLD,
     )
     u_to = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='Effect',
         embedding=[0] * 384,
         event_date=datetime.now(timezone.utc),
@@ -390,19 +390,19 @@ async def test_memory_link_with_entity_cascade(session: AsyncSession):
     deletes the Link (Cascade).
     """
     # Setup
-    doc = Document(id=uuid4())
+    doc = Note(id=uuid4())
     session.add(doc)
     await session.commit()
 
     u1 = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='A',
         embedding=[0] * 384,
         event_date=datetime.now(timezone.utc),
         fact_type=FactTypes.WORLD,
     )
     u2 = MemoryUnit(
-        document_id=doc.id,
+        note_id=doc.id,
         text='B',
         embedding=[0] * 384,
         event_date=datetime.now(timezone.utc),

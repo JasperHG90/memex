@@ -15,7 +15,7 @@ def client():
 
 
 def test_ingest_upload_single_md(client):
-    mock_api.ingest = AsyncMock(return_value={'status': 'success', 'document_id': '123'})
+    mock_api.ingest = AsyncMock(return_value={'status': 'success', 'note_id': '123'})
 
     files = [('files', ('test.md', b'# Test Content', 'text/markdown'))]
 
@@ -27,7 +27,7 @@ def test_ingest_upload_single_md(client):
 
 
 def test_ingest_upload_single_non_md(client):
-    mock_api.ingest_from_file = AsyncMock(return_value={'status': 'success', 'document_id': '456'})
+    mock_api.ingest_from_file = AsyncMock(return_value={'status': 'success', 'note_id': '456'})
 
     files = [('files', ('test.pdf', b'pdf data', 'application/pdf'))]
 
@@ -39,7 +39,7 @@ def test_ingest_upload_single_non_md(client):
 
 
 def test_ingest_upload_directory_style(client):
-    mock_api.ingest = AsyncMock(return_value={'status': 'success', 'document_id': '789'})
+    mock_api.ingest = AsyncMock(return_value={'status': 'success', 'note_id': '789'})
 
     files = [
         ('files', ('NOTE.md', b'# Main Note', 'text/markdown')),

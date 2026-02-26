@@ -547,7 +547,7 @@ class ProcessedFact(SQLModel):
     )
 
     chunk_id: str | None = Field(default=None, description='ID of the text chunk source.')
-    document_id: str | None = Field(default=None, description='ID of the source document.')
+    note_id: str | None = Field(default=None, description='ID of the source note.')
     vault_id: UUID = Field(
         default=GLOBAL_VAULT_ID, description='The vault ID associated with this fact.'
     )

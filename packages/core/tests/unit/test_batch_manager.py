@@ -63,7 +63,7 @@ async def test_run_job_success(manager, mock_api, mock_session):
             'processed_count': 1,
             'skipped_count': 0,
             'failed_count': 0,
-            'document_ids': [str(uuid4())],
+            'note_ids': [str(uuid4())],
             'errors': [],
         }
 

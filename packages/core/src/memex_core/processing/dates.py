@@ -42,7 +42,7 @@ class DateExtraction(BaseModel):
     )
 
 
-class ExtractDocumentDate(dspy.Signature):
+class ExtractNoteDate(dspy.Signature):
     """Analyze the beginning of a document to extract its most likely creation or publication date.
 
     Look for explicit dates in headers, bylines, metadata, timestamps, or date references.
@@ -79,7 +79,7 @@ async def extract_document_date(
     if not header.strip():
         return None
 
-    predictor = dspy.ChainOfThought(ExtractDocumentDate)
+    predictor = dspy.ChainOfThought(ExtractNoteDate)
 
     try:
         prediction, _ = await run_dspy_operation(

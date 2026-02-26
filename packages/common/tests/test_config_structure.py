@@ -63,7 +63,8 @@ def test_default_model_propagation():
 
 def test_default_model_override_propagates():
     """A custom default_model propagates to all sub-configs."""
-    config = MemexConfig(server={'default_model': {'model': 'custom/model'}})
+    with patch.dict(os.environ, {'MEMEX_LOAD_LOCAL_CONFIG': 'false'}):
+        config = MemexConfig(server={'default_model': {'model': 'custom/model'}})
     assert config.server.memory.extraction.model.model == 'custom/model'
     assert config.server.memory.reflection.model.model == 'custom/model'
     assert config.server.document.model.model == 'custom/model'
@@ -71,12 +72,13 @@ def test_default_model_override_propagates():
 
 def test_default_model_sub_override_preserved():
     """Sub-config explicit model is preserved; others get the default."""
-    config = MemexConfig(
-        server={
-            'default_model': {'model': 'a'},
-            'memory': {'extraction': {'model': {'model': 'b'}}},
-        }
-    )
+    with patch.dict(os.environ, {'MEMEX_LOAD_LOCAL_CONFIG': 'false'}):
+        config = MemexConfig(
+            server={
+                'default_model': {'model': 'a'},
+                'memory': {'extraction': {'model': {'model': 'b'}}},
+            }
+        )
     assert config.server.memory.extraction.model.model == 'b'
     assert config.server.memory.reflection.model.model == 'a'
     assert config.server.document.model.model == 'a'

@@ -1,8 +1,8 @@
 import pytest
 from uuid import UUID
 import hashlib
-from memex_core.api import Note
-from memex_core.memory.sql_models import Document
+from memex_core.api import NoteInput
+from memex_core.memory.sql_models import Note
 
 
 @pytest.mark.asyncio
@@ -22,31 +22,31 @@ async def test_ingest_with_explicit_key(api, metastore):
     from memex_core.memory.sql_models import MemoryUnit
     from memex_common.types import FactTypes
 
-    async def _fake_retain_upsert(session, contents, document_id, **kwargs):
+    async def _fake_retain_upsert(session, contents, note_id, **kwargs):
         vault_id = contents[0].vault_id
 
-        # Workaround: Reconstruct Note to get expected fingerprint so idempotency check passes
+        # Workaround: Reconstruct NoteInput to get expected fingerprint so idempotency check passes
         # The real system has a mismatch (SHA256 vs MD5) which causes false negatives in idempotency
         # But here we want to test that note_key logic flows through
 
-        # We need to match the Note creation in the test
+        # We need to match the NoteInput creation in the test
         # name="Keyed Note", description="v1"
         # Since we don't have metadata here, we'll cheat and assume we know them
         # OR we just rely on the fact that we can set content_hash to whatever we want
         # BUT MemexAPI checks against note.content_fingerprint.
 
-        # We can just import Note and create it
-        temp_note = Note(
+        # We can just import NoteInput and create it
+        temp_note = NoteInput(
             name='Keyed Note',
             description='v1',
             content=contents[0].content.encode('utf-8'),
-            note_key=document_id,
+            note_key=note_id,
         )
         fp = temp_note.content_fingerprint
 
         # Check if doc exists to simulate UPSERT or use merge
-        doc = Document(
-            id=document_id,
+        doc = Note(
+            id=note_id,
             content_hash=fp,
             vault_id=vault_id,
             original_text=contents[0].content,
@@ -54,7 +54,7 @@ async def test_ingest_with_explicit_key(api, metastore):
         await session.merge(doc)
 
         unit = MemoryUnit(
-            document_id=document_id,
+            note_id=note_id,
             text='Extracted fact',
             fact_type=FactTypes.WORLD,
             vault_id=vault_id,
@@ -70,7 +70,7 @@ async def test_ingest_with_explicit_key(api, metastore):
     expected_uuid = UUID(hashlib.md5(key_str.encode()).hexdigest())
 
     # 1. First Ingestion
-    note1 = Note(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
+    note1 = NoteInput(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
     result1 = await api.ingest(note1)
 
     assert result1['status'] == 'success'
@@ -78,18 +78,18 @@ async def test_ingest_with_explicit_key(api, metastore):
 
     # Verify DB
     async with metastore.session() as session:
-        doc = await session.get(Document, expected_uuid)
+        doc = await session.get(Note, expected_uuid)
         assert doc is not None
         assert doc.original_text == 'content v1'
 
     # 2. Idempotency Check (Same content, same key)
-    note2 = Note(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
+    note2 = NoteInput(name='Keyed Note', description='v1', content=b'content v1', note_key=key_str)
     result2 = await api.ingest(note2)
     assert result2['status'] == 'skipped'
     assert result2['reason'] == 'idempotency_check'
 
     # 3. Incremental Update (New content, same key)
-    note3 = Note(
+    note3 = NoteInput(
         name='Keyed Note',
         description='v1',  # Keep description same to match mock assumption
         content=b'content v2',
@@ -105,7 +105,7 @@ async def test_ingest_with_explicit_key(api, metastore):
     # ingest() -> AsyncTransaction -> Document is fetched/updated?
     # Ingest creates new MemoryUnits.
     # But Document row:
-    # Document(id=note_uuid) is overwritten?
+    # Note(id=note_uuid) is overwritten?
     # Or updated?
     # SQLAlchemy session.merge() or similar?
 
@@ -118,7 +118,7 @@ async def test_ingest_with_explicit_key(api, metastore):
         pass
 
     async with metastore.session() as session:
-        doc = await session.get(Document, expected_uuid)
+        doc = await session.get(Note, expected_uuid)
         assert doc is not None
         # With current implementation, the Document record is updated/replaced
         assert doc.original_text == 'content v2'

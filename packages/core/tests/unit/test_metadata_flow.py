@@ -1,11 +1,11 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from memex_core.api import Note
+from memex_core.api import NoteInput
 
 
 @pytest.mark.asyncio
 async def test_note_source_uri():
-    note = Note('name', 'desc', b'content', source_uri='http://example.com')
+    note = NoteInput('name', 'desc', b'content', source_uri='http://example.com')
     assert note.source_uri == 'http://example.com'
 
 
@@ -14,7 +14,7 @@ async def test_note_from_file_source_uri(tmp_path):
     f = tmp_path / 'test.md'
     f.write_text('# content')
 
-    note = await Note.from_file(f)
+    note = await NoteInput.from_file(f)
     assert note.source_uri == str(f.absolute())
 
 
@@ -37,7 +37,7 @@ async def test_ingest_payload_source_uri(api, mock_metastore, mock_session):
     mock_txn.__aenter__.return_value = mock_txn
     # We need to mock the AsyncTransaction context manager
     with patch('memex_core.api.AsyncTransaction', return_value=mock_txn):
-        note = Note('name', 'desc', b'content', source_uri='http://source.com')
+        note = NoteInput('name', 'desc', b'content', source_uri='http://source.com')
         await api.ingest(note)
 
     # Check retain call

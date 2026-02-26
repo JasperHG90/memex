@@ -32,9 +32,9 @@ async def test_ingest_from_url(api, metastore, fake_retain_factory):
 
         # Verify Metastore
         async with metastore.session() as session:
-            from memex_core.memory.sql_models import Document
+            from memex_core.memory.sql_models import Note
 
-            doc = await session.get(Document, result['note_id'])
+            doc = await session.get(Note, result['note_id'])
             assert doc is not None
             assert doc.original_text.startswith('---')
             assert 'This is a test article about Python.' in doc.original_text

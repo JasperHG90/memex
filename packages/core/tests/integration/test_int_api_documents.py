@@ -1,6 +1,6 @@
 import pytest
 from uuid import uuid4
-from memex_core.memory.sql_models import Document, Vault
+from memex_core.memory.sql_models import Note, Vault
 from memex_common.exceptions import ResourceNotFoundError
 from memex_common.schemas import NoteDTO
 
@@ -22,7 +22,7 @@ async def test_int_documents_api(api, metastore, memex_config):
 
     async with metastore.session() as session:
         session.add(
-            Document(
+            Note(
                 id=doc_id,
                 content_hash='hash',
                 vault_id=vault_id,
@@ -99,7 +99,7 @@ async def test_int_get_note_page_index_with_data(api, metastore):
 
     async with metastore.session() as session:
         session.add(
-            Document(
+            Note(
                 id=doc_id,
                 content_hash=str(uuid4()),
                 vault_id=GLOBAL_VAULT_ID,
@@ -123,7 +123,7 @@ async def test_int_get_note_page_index_none_when_absent(api, metastore):
 
     async with metastore.session() as session:
         session.add(
-            Document(
+            Note(
                 id=doc_id,
                 content_hash=str(uuid4()),
                 vault_id=GLOBAL_VAULT_ID,

@@ -59,13 +59,13 @@ async def test_get_entity_mentions(api, metastore, init_global_vault):
     await api.initialize()
     app.state.api = api
 
-    from memex_core.memory.sql_models import Entity, Document, MemoryUnit, UnitEntity
+    from memex_core.memory.sql_models import Entity, Note, MemoryUnit, UnitEntity
     from memex_common.config import GLOBAL_VAULT_ID
     import datetime
 
     async with metastore.session() as session:
         e1 = Entity(canonical_name='Target')
-        d1 = Document(
+        d1 = Note(
             id=UUID('00000000-0000-0000-0000-000000000001'),
             vault_id=GLOBAL_VAULT_ID,
             original_text='Test',
@@ -78,7 +78,7 @@ async def test_get_entity_mentions(api, metastore, init_global_vault):
         u1 = MemoryUnit(
             text='Target mentioned here',
             vault_id=GLOBAL_VAULT_ID,
-            document_id=d1.id,
+            note_id=d1.id,
             embedding=[0.1] * 384,
             event_date=datetime.datetime.now(datetime.timezone.utc),
         )

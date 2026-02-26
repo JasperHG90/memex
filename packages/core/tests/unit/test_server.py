@@ -26,7 +26,7 @@ def mock_api():
     api_mock.ingest.return_value = {
         'status': 'success',
         'unit_ids': [MOCK_UNIT_ID],
-        'document_id': 'doc_123',
+        'note_id': 'doc_123',
     }
 
     # Use SimpleNamespace to simulate an object with attributes that Pydantic can read
@@ -203,7 +203,7 @@ def test_get_note_page_index_with_data(client, mock_api):
 
     assert response.status_code == 200
     data = response.json()
-    assert data['document_id'] == str(doc_id)
+    assert data['note_id'] == str(doc_id)
     assert data['page_index'] == page_index
     mock_api.get_note_page_index.assert_called_once_with(doc_id)
 
@@ -217,7 +217,7 @@ def test_get_note_page_index_none(client, mock_api):
 
     assert response.status_code == 200
     data = response.json()
-    assert data['document_id'] == str(doc_id)
+    assert data['note_id'] == str(doc_id)
     assert data['page_index'] is None
 
 

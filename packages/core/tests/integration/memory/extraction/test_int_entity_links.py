@@ -5,13 +5,13 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.types import FactTypes
-from memex_core.memory.sql_models import MemoryUnit, MemoryLink, Entity, Document
+from memex_core.memory.sql_models import MemoryUnit, MemoryLink, Entity, Note
 from memex_core.memory.extraction import entity_links
 from memex_core.memory.extraction.models import EntityLink
 
 
-async def create_document(session: AsyncSession) -> Document:
-    doc = Document(id=uuid4(), original_text='Test Doc')
+async def create_document(session: AsyncSession) -> Note:
+    doc = Note(id=uuid4(), original_text='Test Doc')
     session.add(doc)
     await session.commit()
     await session.refresh(doc)
@@ -33,7 +33,7 @@ async def create_unit(
 
     unit = MemoryUnit(
         id=uuid4(),
-        document_id=doc_id,
+        note_id=doc_id,
         text=text,
         event_date=event_date,
         embedding=embedding,

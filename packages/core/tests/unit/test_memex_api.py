@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from memex_core.api import Note
+from memex_core.api import NoteInput
 
 
 @pytest.mark.asyncio
@@ -25,7 +25,7 @@ async def test_ingest_new_note(api, mock_metastore, mock_session, mock_filestore
     api.memory.retain = AsyncMock()
     api.memory.retain.return_value = {'status': 'success', 'unit_ids': ['123']}
 
-    note = Note(name='test', description='test desc', content=b'content')
+    note = NoteInput(name='test', description='test desc', content=b'content')
 
     result = await api.ingest(note)
 
@@ -49,7 +49,7 @@ async def test_ingest_existing_note(api, mock_session, mock_filestore):
     mock_vault_res = MagicMock()
     mock_vault_res.all.return_value = [Vault(id=GLOBAL_VAULT_ID, name='global')]
 
-    note = Note(name='test', description='test desc', content=b'content')
+    note = NoteInput(name='test', description='test desc', content=b'content')
 
     # 2. Document existence check (exists with matching content_fingerprint)
     mock_doc_res = MagicMock()

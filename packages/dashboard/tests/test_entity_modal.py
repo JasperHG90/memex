@@ -16,7 +16,7 @@ async def test_open_mention():
     doc_id = uuid4()
     mock_api._get.return_value = {
         'id': str(uuid4()),
-        'document_id': str(doc_id),
+        'note_id': str(doc_id),
         'text': 'Some memory text',
         'fact_type': 'observation',
         'unit_metadata': {'confidence': 0.9},
@@ -25,7 +25,7 @@ async def test_open_mention():
     # Mock get_document returning DTO
     doc_dto = MagicMock(spec=NoteDTO)
     doc_dto.name = 'My Document'
-    mock_api.get_document.return_value = doc_dto
+    mock_api.get_note.return_value = doc_dto
 
     with patch('memex_dashboard.pages.entity.api_client') as mock_client_module:
         mock_client_module.api = mock_api
@@ -43,4 +43,4 @@ async def test_open_mention():
         assert props_dict['meta.confidence'] == '0.9'
 
         # Verify API calls
-        mock_api.get_document.assert_called_once()
+        mock_api.get_note.assert_called_once()

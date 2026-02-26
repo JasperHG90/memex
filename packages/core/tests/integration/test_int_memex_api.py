@@ -2,8 +2,8 @@ import pytest
 from uuid import uuid4
 
 from sqlmodel import select, col
-from memex_core.api import MemexAPI, Note
-from memex_core.memory.sql_models import Document, MemoryUnit
+from memex_core.api import MemexAPI, NoteInput
+from memex_core.memory.sql_models import Note, MemoryUnit
 
 
 @pytest.mark.asyncio
@@ -17,9 +17,9 @@ async def test_int_ingest_success(api, metastore, fake_retain_factory):
     # api.memory is already an AsyncMock from patch_api_engines (included in api fixture)
     api.memory.retain.side_effect = fake_retain_factory
 
-    # Create a Note
-    note_content = b'# Test Note\nThis is a test.'
-    note = Note(name='test_int_note', description='desc', content=note_content)
+    # Create a NoteInput
+    note_content = b'# Test NoteInput\nThis is a test.'
+    note = NoteInput(name='test_int_note', description='desc', content=note_content)
     note_uuid = note.uuid
 
     # Execute Ingest
@@ -29,20 +29,20 @@ async def test_int_ingest_success(api, metastore, fake_retain_factory):
 
     # Verify DB Persistence
     async with metastore.session() as session:
-        doc = await session.get(Document, note_uuid)
+        doc = await session.get(Note, note_uuid)
         assert doc is not None
         assert doc.original_text == note_content.decode('utf-8')
 
         # Verify Memory Unit
         units = (
-            await session.exec(select(MemoryUnit).where(col(MemoryUnit.document_id) == note_uuid))
+            await session.exec(select(MemoryUnit).where(col(MemoryUnit.note_id) == note_uuid))
         ).all()
         assert len(units) == 1
         assert units[0].text == 'Extracted fact'
 
     # Verify FileStore
-    # We didn't add any files to the Note, so nothing should be saved in FileStore
-    # Wait, Note has no files in this test.
+    # We didn't add any files to the NoteInput, so nothing should be saved in FileStore
+    # Wait, NoteInput has no files in this test.
 
     # Verify transaction cleanup (staging should be empty/deleted)
     # staging_path = f"staging/{note_uuid}"
@@ -60,7 +60,7 @@ async def test_int_ingest_rollback_on_error(api, metastore, filestore):
     # api.memory.retain is already an AsyncMock from patch_api_engines (included in api fixture)
     api.memory.retain.side_effect = RuntimeError('Extraction Failed!')
 
-    note = Note(name='fail_note', description='desc', content=b'fail')
+    note = NoteInput(name='fail_note', description='desc', content=b'fail')
     note_uuid = note.uuid
 
     with pytest.raises(RuntimeError, match='Extraction Failed!'):
@@ -68,7 +68,7 @@ async def test_int_ingest_rollback_on_error(api, metastore, filestore):
 
     # Verify DB is Empty
     async with metastore.session() as session:
-        doc = await session.get(Document, note_uuid)
+        doc = await session.get(Note, note_uuid)
         assert doc is None
 
         # Verify File System is Empty (Cleaned up)
@@ -105,11 +105,9 @@ async def test_int_list_documents_vault_filter(
         await session.commit()
 
     async with metastore.session() as session:
-        doc1 = Document(id=uuid4(), content_hash='h1', vault_id=vault_a, original_text='A')
-        doc2 = Document(id=uuid4(), content_hash='h2', vault_id=vault_b, original_text='B')
-        doc3 = Document(
-            id=uuid4(), content_hash='h3', vault_id=GLOBAL_VAULT_ID, original_text='Global'
-        )
+        doc1 = Note(id=uuid4(), content_hash='h1', vault_id=vault_a, original_text='A')
+        doc2 = Note(id=uuid4(), content_hash='h2', vault_id=vault_b, original_text='B')
+        doc3 = Note(id=uuid4(), content_hash='h3', vault_id=GLOBAL_VAULT_ID, original_text='Global')
         session.add(doc1)
         session.add(doc2)
         session.add(doc3)

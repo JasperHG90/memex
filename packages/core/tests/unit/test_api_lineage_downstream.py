@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock
 from uuid import uuid4
 from memex_common.schemas import LineageDirection
-from memex_core.memory.sql_models import MentalModel, MemoryUnit, Document
+from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note
 
 
 @pytest.mark.asyncio
@@ -14,8 +14,8 @@ async def test_get_lineage_downstream_document_to_mental_model(api, mock_session
     mm_id = uuid4()
 
     # Data
-    doc = Document(id=doc_id, content='Test Doc', vault_id=uuid4())
-    unit = MemoryUnit(id=unit_id, text='Test Unit', fact_type='event', document_id=doc_id)
+    doc = Note(id=doc_id, content='Test Doc', vault_id=uuid4())
+    unit = MemoryUnit(id=unit_id, text='Test Unit', fact_type='event', note_id=doc_id)
 
     obs_data = {'id': str(obs_id), 'content': 'Test Obs', 'evidence': [{'memory_id': str(unit_id)}]}
 
@@ -25,7 +25,7 @@ async def test_get_lineage_downstream_document_to_mental_model(api, mock_session
 
     # 1. Get Document and MemoryUnit
     async def mock_get(model, id):
-        if model == Document and str(id) == str(doc_id):
+        if model == Note and str(id) == str(doc_id):
             return doc
         if model == MemoryUnit and str(id) == str(unit_id):
             return unit

@@ -72,16 +72,16 @@ def patch_api_engines():
 @pytest.fixture
 def fake_retain_factory():
     """Factory to create a fake retain function that persists minimal data to DB."""
-    from memex_core.memory.sql_models import Document, MemoryUnit
+    from memex_core.memory.sql_models import Note, MemoryUnit
     from memex_common.types import FactTypes
 
-    async def _fake_retain(session, contents, document_id, **kwargs):
+    async def _fake_retain(session, contents, note_id, **kwargs):
         content_item = contents[0]
         vault_id = content_item.vault_id
         payload = content_item.payload or {}
 
-        doc = Document(
-            id=document_id,
+        doc = Note(
+            id=note_id,
             content_hash=payload.get('content_fingerprint', 'hash'),
             vault_id=vault_id,
             original_text=content_item.content,
@@ -90,7 +90,7 @@ def fake_retain_factory():
         )
         session.add(doc)
         unit = MemoryUnit(
-            document_id=document_id,
+            note_id=note_id,
             text='Extracted fact',
             fact_type=FactTypes.WORLD,
             vault_id=vault_id,

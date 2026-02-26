@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_common.types import FactTypes
 from memex_core.memory.sql_models import (
     MemoryUnit,
-    Document,
+    Note,
     Entity,
     UnitEntity,
     EntityCooccurrence,
@@ -45,7 +45,7 @@ class TestRetrievalReranking:
             - entities (list[str], optional): Canonical names of entities to link
             - event_date (datetime, optional): Specific date for the memory
         """
-        doc = Document(id=uuid4(), original_text='Scenario Setup Doc')
+        doc = Note(id=uuid4(), original_text='Scenario Setup Doc')
         session.add(doc)
 
         # Cache entities to avoid duplicates in the session
@@ -85,7 +85,7 @@ class TestRetrievalReranking:
                     embedding=embedding,
                     fact_type=FactTypes.WORLD,
                     event_date=evt_date,
-                    document_id=doc.id,
+                    note_id=doc.id,
                 )
                 session.add(unit)
 
@@ -98,7 +98,7 @@ class TestRetrievalReranking:
                     confidence_alpha=2.0,
                     confidence_beta=2.0,
                     event_date=evt_date,
-                    document_id=doc.id,
+                    note_id=doc.id,
                 )
                 session.add(unit)
 

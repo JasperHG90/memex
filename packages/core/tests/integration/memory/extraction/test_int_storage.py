@@ -4,7 +4,7 @@ from uuid import uuid4, UUID
 
 from memex_core.memory.extraction import storage
 from memex_core.memory.extraction.models import ProcessedFact, FactTypes, ChunkMetadata
-from memex_core.memory.sql_models import MemoryUnit, Document, Chunk
+from memex_core.memory.sql_models import MemoryUnit, Note, Chunk
 
 
 @pytest.mark.asyncio
@@ -12,7 +12,7 @@ async def test_int_insert_facts_batch_db(session):
     # Arrange
     doc_id = uuid4()
     # Create the document first to satisfy FK
-    doc = Document(id=doc_id, original_text='Test Doc')
+    doc = Note(id=doc_id, original_text='Test Doc')
     session.add(doc)
     await session.commit()
 
@@ -27,7 +27,7 @@ async def test_int_insert_facts_batch_db(session):
     )
 
     # Act
-    ids = await storage.insert_facts_batch(session, [fact], document_id=str(doc_id))
+    ids = await storage.insert_facts_batch(session, [fact], note_id=str(doc_id))
 
     # Assert
     assert len(ids) == 1
@@ -37,7 +37,7 @@ async def test_int_insert_facts_batch_db(session):
     db_unit = await session.get(MemoryUnit, unit_id)
     assert db_unit is not None
     assert db_unit.text == 'Integration Test Fact'
-    assert db_unit.document_id == doc_id
+    assert db_unit.note_id == doc_id
     assert db_unit.unit_metadata['test_key'] == 'test_val'
     assert db_unit.unit_metadata['tags'] == ['integration']
     assert db_unit.unit_metadata.get('chunk_id') is None
@@ -56,7 +56,7 @@ async def test_int_handle_document_tracking_db(session):
 
     # Verify DB
     session.expire_all()
-    doc = await session.get(Document, doc_id)
+    doc = await session.get(Note, doc_id)
     assert doc is not None
     assert doc.original_text == content_v1
     assert doc.doc_metadata['tags'] == ['v1']
@@ -69,7 +69,7 @@ async def test_int_handle_document_tracking_db(session):
 
     # Verify DB (Should be updated)
     session.expire_all()
-    doc = await session.get(Document, doc_id)
+    doc = await session.get(Note, doc_id)
     assert doc.original_text == content_v2
     assert doc.doc_metadata['tags'] == ['v2']
 
@@ -82,7 +82,7 @@ async def test_int_handle_document_tracking_db(session):
     )
 
     session.expire_all()
-    doc = await session.get(Document, doc_id)
+    doc = await session.get(Note, doc_id)
     assert doc.original_text == content_v3
     assert doc.doc_metadata['tags'] == ['v3']
 
@@ -93,7 +93,7 @@ async def test_int_store_chunks_batch_db(session):
 
     # Arrange
     doc_id = uuid4()
-    doc = Document(id=doc_id, original_text='Chunk Test Doc')
+    doc = Note(id=doc_id, original_text='Chunk Test Doc')
     session.add(doc)
     await session.commit()
 
@@ -131,7 +131,7 @@ async def test_int_store_chunks_batch_db(session):
     assert db_chunk0 is not None
     assert db_chunk0.text == 'Integration Chunk 1'
     assert db_chunk0.chunk_index == 0
-    assert db_chunk0.document_id == doc_id
+    assert db_chunk0.note_id == doc_id
 
     # Check chunk 1
     chunk1_id = UUID(chunk_map[1])
@@ -139,7 +139,7 @@ async def test_int_store_chunks_batch_db(session):
     assert db_chunk1 is not None
     assert db_chunk1.text == 'Integration Chunk 2'
     assert db_chunk1.chunk_index == 1
-    assert db_chunk1.document_id == doc_id
+    assert db_chunk1.note_id == doc_id
 
 
 @pytest.mark.asyncio
@@ -150,7 +150,7 @@ async def test_int_chunk_reactivation_on_reingest(session):
 
     # Arrange: Create document and store chunks
     doc_id = uuid4()
-    doc = Document(id=doc_id, original_text='Test Doc')
+    doc = Note(id=doc_id, original_text='Test Doc')
     session.add(doc)
     await session.commit()
 
@@ -237,7 +237,7 @@ async def test_int_chunk_index_update_on_reingest(session):
 
     # Arrange
     doc_id = uuid4()
-    doc = Document(id=doc_id, original_text='Test Doc')
+    doc = Note(id=doc_id, original_text='Test Doc')
     session.add(doc)
     await session.commit()
 

@@ -1,7 +1,7 @@
 import pytest
 from uuid import UUID
-from memex_core.api import MemexAPI, Note
-from memex_core.memory.sql_models import Document
+from memex_core.api import MemexAPI, NoteInput
+from memex_core.memory.sql_models import Note
 from memex_common.config import MemexConfig
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
@@ -32,10 +32,10 @@ async def test_ingest_storage_refactor(
     # Configure mocked memory engine to use our fake_retain
     api.memory.retain.side_effect = fake_retain_factory
 
-    # Create a Note with content and auxiliary files
+    # Create a NoteInput with content and auxiliary files
     content = b'# Hello World\nThis is a test note.'
     files = {'image.png': b'fake_image_data'}
-    note = Note(
+    note = NoteInput(
         name='Test Note',
         description='A test note for storage refactor.',
         content=content,
@@ -49,8 +49,8 @@ async def test_ingest_storage_refactor(
     doc_id_str = result['note_id']
     doc_id_uuid = UUID(doc_id_str)
 
-    # 1. Verify Note NOT in FileStore (NOTE.md) under old path
-    # Note: verify that we catch the specific exception raised by local filestore
+    # 1. Verify NoteInput NOT in FileStore (NOTE.md) under old path
+    # NoteInput: verify that we catch the specific exception raised by local filestore
     vault_name = 'global'  # default active vault name
 
     # We expect filestore.load to raise an error for the missing NOTE.md
@@ -73,7 +73,7 @@ async def test_ingest_storage_refactor(
     assert loaded_asset == b'fake_image_data'
 
     # 3. Verify DB Document
-    doc = await session.get(Document, doc_id_uuid)
+    doc = await session.get(Note, doc_id_uuid)
     assert doc is not None
     assert doc.original_text == content.decode('utf-8')
     assert doc.assets == [asset_path]
@@ -114,7 +114,7 @@ async def test_ingest_no_assets(
     api.memory.retain.side_effect = fake_retain_factory
 
     content = b'# Just Text'
-    note = Note(
+    note = NoteInput(
         name='Text Note', description='No assets here.', content=content, files=None, tags=['test']
     )
 
@@ -122,6 +122,6 @@ async def test_ingest_no_assets(
     doc_id_str = result['note_id']
     doc_id_uuid = UUID(doc_id_str)
 
-    doc = await session.get(Document, doc_id_uuid)
+    doc = await session.get(Note, doc_id_uuid)
     assert doc.assets == []
     assert doc.filestore_path is None

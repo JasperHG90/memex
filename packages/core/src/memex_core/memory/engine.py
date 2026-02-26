@@ -130,7 +130,7 @@ class MemoryEngine:
         self,
         session: AsyncSession,
         contents: list[RetainContent],
-        document_id: str | None = None,
+        note_id: str | None = None,
         reflect_after: bool = True,
         agent_name: str = 'memex_agent',
     ) -> dict[str, Any]:
@@ -149,7 +149,7 @@ class MemoryEngine:
         Args:
             session: Active DB session.
             contents: List of content items to retain.
-            document_id: Optional ID of the parent document.
+            note_id: Optional ID of the parent document.
             reflect_after: If True, trigger reflection on touched entities immediately.
             agent_name: Name of the agent performing the extraction.
 
@@ -164,7 +164,7 @@ class MemoryEngine:
             session=session,
             contents=contents,
             agent_name=agent_name,
-            document_id=document_id,
+            note_id=note_id,
         )
 
         logger.info(f'Retained {len(unit_ids)} units. Touched {len(touched_entities)} entities.')

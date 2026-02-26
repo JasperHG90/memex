@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.sql_models import (
     MemoryUnit,
-    Document,
+    Note,
     Entity,
     UnitEntity,
     EntityCooccurrence,
@@ -39,8 +39,8 @@ class TestRetrievalEngine:
 
         now = datetime.now(timezone.utc)
 
-        # 1. Document & Memory
-        doc = Document(id=uuid4(), original_text='Dummy')
+        # 1. Note & Memory
+        doc = Note(id=uuid4(), original_text='Dummy')
         session.add(doc)
 
         u1 = MemoryUnit(
@@ -49,7 +49,7 @@ class TestRetrievalEngine:
             embedding=emb_musk,
             fact_type=FactTypes.WORLD,
             event_date=now,
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(u1)
 
@@ -103,7 +103,7 @@ class TestRetrievalEngine:
         """
         # Ensure pg_trgm is created
         now = datetime.now(timezone.utc)
-        doc = Document(id=uuid4(), original_text='BFS Test')
+        doc = Note(id=uuid4(), original_text='BFS Test')
         session.add(doc)
 
         # Entity A: Elon Musk
@@ -134,7 +134,7 @@ class TestRetrievalEngine:
             embedding=emb_mars,
             fact_type=FactTypes.WORLD,
             event_date=now,
-            document_id=doc.id,
+            note_id=doc.id,
         )
         session.add(u_mars)
         await session.flush()
@@ -170,7 +170,7 @@ class TestRetrievalEngine:
         self, session: AsyncSession, engine_instance, embedder
     ):
         """Test that the limit parameter is respected."""
-        doc = Document(id=uuid4(), original_text='Pagination Test')
+        doc = Note(id=uuid4(), original_text='Pagination Test')
         session.add(doc)
 
         # Create 5 identical memories
@@ -183,7 +183,7 @@ class TestRetrievalEngine:
                     embedding=embedding,
                     fact_type=FactTypes.WORLD,
                     event_date=datetime.now(timezone.utc),
-                    document_id=doc.id,
+                    note_id=doc.id,
                 )
             )
         await session.commit()
@@ -200,7 +200,7 @@ class TestRetrievalEngine:
         self, session: AsyncSession, engine_instance, embedder
     ):
         """Test date-based filtering."""
-        doc = Document(id=uuid4(), original_text='Temporal Test')
+        doc = Note(id=uuid4(), original_text='Temporal Test')
         session.add(doc)
         embedding = embedder.encode(['Temporal'])[0].tolist()
 
@@ -212,14 +212,14 @@ class TestRetrievalEngine:
             text='Old Memory',
             embedding=embedding,
             event_date=old_date,
-            document_id=doc.id,
+            note_id=doc.id,
         )
         u_new = MemoryUnit(
             id=uuid4(),
             text='New Memory',
             embedding=embedding,
             event_date=new_date,
-            document_id=doc.id,
+            note_id=doc.id,
         )
 
         session.add(u_old)
@@ -244,7 +244,7 @@ class TestRetrievalEngine:
         """
         Verifies Token Budget Filtering and Min Score Filtering integration.
         """
-        doc = Document(id=uuid4(), original_text='Hindsight Filter Test')
+        doc = Note(id=uuid4(), original_text='Hindsight Filter Test')
         session.add(doc)
         embedding = embedder.encode(['Hindsight'])[0].tolist()
         now = datetime.now(timezone.utc)
@@ -261,7 +261,7 @@ class TestRetrievalEngine:
                 embedding=embedding,
                 fact_type=FactTypes.WORLD,
                 event_date=now,
-                document_id=doc.id,
+                note_id=doc.id,
             )
             session.add(u)
             units.append(u)

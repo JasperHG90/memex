@@ -229,21 +229,21 @@ class MentalModel(SQLModel, table=True):  # type: ignore
     )
 
 
-class Document(SQLModel, table=True):  # type: ignore
+class Note(SQLModel, table=True):  # type: ignore
     """
     What it is: The raw container for information.
     Function: Represents a file, an email, a chat log, or a web page that was ingested into the system.
     Key Features:
         - content_hash: Used to prevent duplicate processing of the same file.
         - doc_metadata: A JSONB field to store arbitrary source info (author, URL, file path) without changing the schema.
-        - Relationship: One Document splits into many MemoryUnits.
+        - Relationship: One Note splits into many MemoryUnits.
     """
 
-    __tablename__ = 'documents'
+    __tablename__ = 'notes'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True),
-        description='Unique identifier for the document.',
+        description='Unique identifier for the note.',
     )
 
     vault_id: UUID = vault_id_field()
@@ -251,19 +251,19 @@ class Document(SQLModel, table=True):  # type: ignore
     session_id: str = Field(
         default_factory=get_session_id,
         sa_column=Column(Text, nullable=False, server_default='global', index=True),
-        description='The session identifier during which this document was ingested.',
+        description='The session identifier during which this note was ingested.',
     )
 
     title: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='Resolved human-readable title for the document.',
+        description='Resolved human-readable title for the note.',
     )
 
     original_text: str | None = Field(
         default=None,
         sa_column=Column(Text),
-        description='The full, raw text content of the document.',
+        description='The full, raw text content of the note.',
     )
 
     page_index: dict[str, Any] | None = Field(
@@ -308,13 +308,13 @@ class Document(SQLModel, table=True):  # type: ignore
 
     # Relationships
     memory_units: list['MemoryUnit'] = Relationship(
-        back_populates='document', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
+        back_populates='note', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
     )
     chunks: list['Chunk'] = Relationship(
-        back_populates='document', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
+        back_populates='note', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
     )
 
-    __table_args__ = (Index('idx_documents_content_hash', 'content_hash'),)
+    __table_args__ = (Index('idx_notes_content_hash', 'content_hash'),)
 
 
 class Chunk(SQLModel, table=True):  # type: ignore
@@ -336,9 +336,7 @@ class Chunk(SQLModel, table=True):  # type: ignore
         description='Unique identifier for the chunk.',
     )
     vault_id: UUID = vault_id_field()
-    document_id: UUID = Field(
-        sa_column=Column(SA_UUID()), description='Identifier of the source document.'
-    )
+    note_id: UUID = Field(sa_column=Column(SA_UUID()), description='Identifier of the source note.')
     text: str = Field(
         sa_column=Column(Text, nullable=False),
         description='The raw text content of the chunk.',
@@ -365,7 +363,7 @@ class Chunk(SQLModel, table=True):  # type: ignore
     )
 
     # Relationships
-    document: Document = Relationship(back_populates='chunks')
+    note: Note = Relationship(back_populates='chunks')
     memory_units: list['MemoryUnit'] = Relationship(back_populates='chunk')
     nodes: list['Node'] = Relationship(
         back_populates='chunk', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
@@ -373,15 +371,15 @@ class Chunk(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ['document_id'],
-            ['documents.id'],
-            name='chunks_document_fkey',
+            ['note_id'],
+            ['notes.id'],
+            name='chunks_note_fkey',
             ondelete='CASCADE',
         ),
         CheckConstraint("status IN ('active', 'stale')", name='chunks_status_check'),
-        UniqueConstraint('document_id', 'content_hash', name='uq_chunks_document_content_hash'),
-        Index('idx_chunks_document_id', 'document_id'),
-        Index('idx_chunks_document_index', 'document_id', 'chunk_index'),
+        UniqueConstraint('note_id', 'content_hash', name='uq_chunks_note_content_hash'),
+        Index('idx_chunks_note_id', 'note_id'),
+        Index('idx_chunks_note_index', 'note_id', 'chunk_index'),
         Index(
             'idx_chunks_text_tsvector',
             sql_text("to_tsvector('english', text)"),
@@ -411,9 +409,9 @@ class Node(SQLModel, table=True):  # type: ignore
         description='Unique identifier for the node.',
     )
     vault_id: UUID = vault_id_field()
-    document_id: UUID = Field(
+    note_id: UUID = Field(
         sa_column=Column(SA_UUID(), nullable=False),
-        description='Identifier of the source document.',
+        description='Identifier of the source note.',
     )
     block_id: UUID | None = Field(
         default=None,
@@ -469,9 +467,9 @@ class Node(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ['document_id'],
-            ['documents.id'],
-            name='nodes_document_fkey',
+            ['note_id'],
+            ['notes.id'],
+            name='nodes_note_fkey',
             ondelete='CASCADE',
         ),
         ForeignKeyConstraint(
@@ -481,8 +479,8 @@ class Node(SQLModel, table=True):  # type: ignore
             ondelete='SET NULL',
         ),
         CheckConstraint("status IN ('active', 'stale')", name='nodes_status_check'),
-        UniqueConstraint('document_id', 'node_hash', name='uq_nodes_document_node_hash'),
-        Index('idx_nodes_document_id', 'document_id'),
+        UniqueConstraint('note_id', 'node_hash', name='uq_nodes_note_node_hash'),
+        Index('idx_nodes_note_id', 'note_id'),
         Index('idx_nodes_block_id', 'block_id'),
         Index(
             'idx_nodes_text_tsvector',
@@ -538,8 +536,8 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='The datetime when the memory unit was mentioned, if applicable.',
     )
 
-    document_id: UUID | None = Field(
-        default=None, sa_column=Column(SA_UUID()), description='Identifier of the source document.'
+    note_id: UUID | None = Field(
+        default=None, sa_column=Column(SA_UUID()), description='Identifier of the source note.'
     )
 
     chunk_id: UUID | None = Field(
@@ -598,7 +596,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
-    document: Document | None = Relationship(back_populates='memory_units')
+    note: Note | None = Relationship(back_populates='memory_units')
     chunk: Chunk | None = Relationship(back_populates='memory_units')
     unit_entities: list['UnitEntity'] = Relationship(
         back_populates='memory_unit', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
@@ -632,9 +630,9 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ['document_id'],
-            ['documents.id'],
-            name='memory_units_document_fkey',
+            ['note_id'],
+            ['notes.id'],
+            name='memory_units_note_fkey',
             ondelete='CASCADE',
         ),
         ForeignKeyConstraint(
@@ -653,7 +651,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             "(fact_type NOT IN ('opinion') AND confidence_alpha IS NULL AND confidence_beta IS NULL)",
             name='confidence_score_fact_type_check',
         ),
-        Index('idx_memory_units_document_id', 'document_id'),
+        Index('idx_memory_units_note_id', 'note_id'),
         Index('idx_memory_units_chunk_id', 'chunk_id'),
         Index('idx_memory_units_status', 'status'),
         Index('idx_memory_units_event_date', 'event_date', postgresql_ops={'event_date': 'DESC'}),

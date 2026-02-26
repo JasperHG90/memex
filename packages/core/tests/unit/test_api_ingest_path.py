@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from memex_core.api import MemexAPI, Note
+from memex_core.api import MemexAPI, NoteInput
 
 
 @pytest.mark.asyncio
@@ -12,11 +12,11 @@ async def test_ingest_from_file_markdown(api, tmp_path):
 
     with (
         patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
-        patch.object(Note, 'from_file', new_callable=AsyncMock) as mock_from_file,
+        patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
         patch.object(MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock) as mock_resolve,
     ):
         mock_resolve.return_value = uuid4()
-        mock_note = MagicMock(spec=Note)
+        mock_note = MagicMock(spec=NoteInput)
         mock_from_file.return_value = mock_note
         mock_ingest.return_value = {'status': 'success'}
 
@@ -32,13 +32,13 @@ async def test_ingest_from_file_directory(api, tmp_path):
     # Setup a dummy directory
     note_dir = tmp_path / 'my_note'
     note_dir.mkdir()
-    (note_dir / 'NOTE.md').write_text('# Note')
+    (note_dir / 'NOTE.md').write_text('# NoteInput')
 
     with (
         patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
-        patch.object(Note, 'from_file', new_callable=AsyncMock) as mock_from_file,
+        patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
     ):
-        mock_note = MagicMock(spec=Note)
+        mock_note = MagicMock(spec=NoteInput)
         mock_from_file.return_value = mock_note
         mock_ingest.return_value = {'status': 'success'}
 
@@ -57,7 +57,7 @@ async def test_ingest_from_file_markitdown(api, tmp_path):
 
     with (
         patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
-        patch.object(Note, 'from_file', new_callable=AsyncMock) as mock_from_file,
+        patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
         patch.object(MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock) as mock_resolve,
     ):
         mock_resolve.return_value = uuid4()

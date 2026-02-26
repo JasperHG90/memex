@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from uuid import UUID
 from sqlmodel import select
 
-from memex_core.memory.sql_models import Document, Node, MemoryUnit, Chunk
+from memex_core.memory.sql_models import Note, Node, MemoryUnit, Chunk
 from memex_core.memory.extraction.models import PageIndexOutput, TOCNode, PageIndexBlock
 
 
@@ -111,25 +111,25 @@ Content of section 1."""
             # 3. Verify Database State
 
             # Check Document
-            doc = await db_session.get(Document, UUID(doc_id))
+            doc = await db_session.get(Note, UUID(doc_id))
             assert doc is not None
             assert doc.page_index is not None  # Should store the thin tree
 
             # Check Page Index Nodes
-            stmt = select(Node).where(Node.document_id == UUID(doc_id))
+            stmt = select(Node).where(Node.note_id == UUID(doc_id))
             nodes = (await db_session.exec(stmt)).all()
             assert len(nodes) == 1
             assert nodes[0].title == 'Section 1'
 
             # Check Memory Blocks (Chunks)
             # In Page Index, blocks are stored as chunks
-            stmt = select(Chunk).where(Chunk.document_id == UUID(doc_id))
+            stmt = select(Chunk).where(Chunk.note_id == UUID(doc_id))
             blocks = (await db_session.exec(stmt)).all()
             assert len(blocks) == 1
             assert blocks[0].text == 'Content of section 1.'
 
             # Check Extracted Facts (Memory Units)
-            stmt = select(MemoryUnit).where(MemoryUnit.document_id == UUID(doc_id))
+            stmt = select(MemoryUnit).where(MemoryUnit.note_id == UUID(doc_id))
             units = (await db_session.exec(stmt)).all()
             assert len(units) == 1
             assert units[0].text == 'Fact from section 1'

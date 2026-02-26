@@ -35,7 +35,7 @@ def test_retrieve_lineage_resolution(client, mock_api):
     # 1. Fact Unit (Direct Link)
     fact_unit = SimpleNamespace(
         id=fact_unit_id,
-        document_id=doc_1,
+        note_id=doc_1,
         text='Fact Text',
         fact_type=FactTypes.WORLD,
         status='active',
@@ -51,7 +51,7 @@ def test_retrieve_lineage_resolution(client, mock_api):
     # 2. Opinion Unit (Indirect Link via Evidence)
     opinion_unit = SimpleNamespace(
         id=opinion_unit_id,
-        document_id=None,  # Opinions don't have a single source doc usually
+        note_id=None,  # Opinions don't have a single source doc usually
         text='Opinion Text',
         fact_type=FactTypes.OPINION,
         status='active',
