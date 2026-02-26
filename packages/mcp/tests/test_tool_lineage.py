@@ -22,7 +22,7 @@ async def test_mcp_get_lineage(mock_api, mcp_client):
         ],
     )
 
-    mock_api.get_lineage.return_value = mock_lineage
+    mock_api.get_entity_lineage.return_value = mock_lineage
 
     # Pass unit_id as string
     result = await mcp_client.call_tool(
@@ -32,7 +32,7 @@ async def test_mcp_get_lineage(mock_api, mcp_client):
     output_text = result.content[0].text
 
     # Verify the tool called the API
-    mock_api.get_lineage.assert_called_once_with(entity_id=root_id, entity_type='observation')
+    mock_api.get_entity_lineage.assert_called_once_with(root_id)
 
     # Verify output format contains key info
     assert 'Root Observation' in output_text

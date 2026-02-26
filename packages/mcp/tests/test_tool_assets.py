@@ -1,5 +1,7 @@
+import datetime as dt
 import pytest
 from uuid import uuid4
+from memex_common.schemas import NoteDTO
 
 
 @pytest.mark.asyncio
@@ -7,14 +9,13 @@ async def test_mcp_list_assets(mock_api, mcp_client):
     """Test memex_list_assets returns file list."""
     doc_id = uuid4()
 
-    # Mock Document Response (dict - API returns dict, not DTO)
-    mock_api.get_note.return_value = {
-        'id': doc_id,
-        'doc_metadata': {'name': 'Architecture Diagram'},
-        'assets': ['assets/docs/diagram.png', 'assets/docs/spec.pdf'],
-        'created_at': '2024-01-01T00:00:00Z',
-        'vault_id': uuid4(),
-    }
+    mock_api.get_note.return_value = NoteDTO(
+        id=doc_id,
+        doc_metadata={'name': 'Architecture Diagram'},
+        assets=['assets/docs/diagram.png', 'assets/docs/spec.pdf'],
+        created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        vault_id=uuid4(),
+    )
 
     result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
 

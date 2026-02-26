@@ -12,23 +12,23 @@ class MockEntity:
 @pytest.mark.asyncio
 async def test_lineage_layer_key_error_repro():
     """
-    Reproduces the KeyError: 'layer' bug when a Document has Assets.
+    Reproduces the KeyError: 'layer' bug when a Note has Assets.
     """
     state = LineageState()
 
-    # Construct lineage: Model -> Observation -> Document -> Asset
-    # The bug is suspected to be in how Document is handled when it has Assets.
+    # Construct lineage: Model -> Observation -> Note -> Asset
+    # The bug is suspected to be in how Note is handled when it has Assets.
 
     # Asset path
     asset_path = '/tmp/image.png'
 
-    # Document with asset
-    doc_node = MockEntity(
-        id='doc1', type='document', entity={'id': 'doc1', 'title': 'My Doc', 'assets': [asset_path]}
+    # Note with asset
+    note_node = MockEntity(
+        id='note1', type='note', entity={'id': 'note1', 'title': 'My Doc', 'assets': [asset_path]}
     )
 
     # Root node (Mental Model)
-    root_node = MockEntity(id='model1', type='mental_model', derived_from=[doc_node])
+    root_node = MockEntity(id='model1', type='mental_model', derived_from=[note_node])
 
     # Attempt to generate layout
     try:
@@ -40,10 +40,10 @@ async def test_lineage_layer_key_error_repro():
 
     # Check if nodes exist
     node_ids = [n.id for n in state.nodes]
-    assert 'doc1' in node_ids
+    assert 'note1' in node_ids
     assert f'asset:{asset_path}' in node_ids
 
     # Check attributes
-    # We expect doc1 to have a label. If the bug exists, it might be missing label/type in G.nodes
+    # We expect note1 to have a label. If the bug exists, it might be missing label/type in G.nodes
     # But generate_layout reads G.nodes to create LineageNode.
-    # If G.nodes['doc1'] is missing 'label', it will raise KeyError: 'label' in the final loop.
+    # If G.nodes['note1'] is missing 'label', it will raise KeyError: 'label' in the final loop.

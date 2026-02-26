@@ -5,11 +5,12 @@ import os
 import pathlib as plb
 import asyncio
 import base64
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 import mimetypes
 
 import aiofiles
+import httpx
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image, Audio, File
 from fastmcp.exceptions import ToolError
@@ -140,9 +141,11 @@ async def memex_get_lineage(
         except ValueError:
             return f'Invalid Unit UUID: {unit_id}'
 
-        lineage: LineageResponse = await api.get_lineage(
-            entity_type=entity_type, entity_id=uuid_obj
-        )
+        lineage: LineageResponse
+        if entity_type == 'note':
+            lineage = await api.get_note_lineage(uuid_obj)
+        else:
+            lineage = await api.get_entity_lineage(uuid_obj)
 
         # Helper to format lineage recursively
         def format_lineage(node: LineageResponse, depth: int = 0) -> list[str]:
@@ -203,12 +206,12 @@ async def memex_list_assets(
         except FileNotFoundError:
             return f'Note {note_id} not found.'
 
-        assets = note.get('assets', [])
+        assets = note.assets
 
         if not assets:
             return 'No assets found for this note.'
 
-        meta = note.get('doc_metadata', {})
+        meta = note.doc_metadata
         name = meta.get('name') or meta.get('title') or 'Untitled'
 
         output = [f'Assets for Note: {name}']
@@ -250,7 +253,7 @@ async def memex_read_note(
             return f'Invalid Note UUID: {note_id}'
 
         note = await api.get_note(uuid_obj)
-        meta = note.get('doc_metadata', {})
+        meta = note.doc_metadata
         name = meta.get('name') or meta.get('title') or 'Untitled'
 
         # Format the output
@@ -260,11 +263,11 @@ async def memex_read_note(
         if description:
             output.append(f'> {description}')
 
-        output.append(f'\n**ID:** {note["id"]}')
-        output.append(f'**Vault:** {note["vault_id"]}')
-        output.append(f'**Created:** {note["created_at"]}')
+        output.append(f'\n**ID:** {note.id}')
+        output.append(f'**Vault:** {note.vault_id}')
+        output.append(f'**Created:** {note.created_at}')
 
-        content = note.get('original_text')
+        content = note.original_text
 
         if content:
             output.append(f'\n## Content\n{content}')
@@ -561,7 +564,7 @@ async def memex_search(
         results = await api.search(
             query=query,
             limit=limit,
-            vault_ids=vault_ids,
+            vault_ids=cast(list[UUID | str] | None, vault_ids),
             skip_opinion_formation=False,
             token_budget=token_budget,
             strategies=strategies,
@@ -582,8 +585,7 @@ async def memex_search(
 
             # Note: res is a MemoryUnit (SQLModel) or MemoryUnitDTO
             unit_type = getattr(res, 'fact_type', 'unknown')
-            if hasattr(unit_type, 'value'):
-                unit_type = unit_type.value
+            unit_type = getattr(unit_type, 'value', unit_type)
 
             output.append(
                 f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]{score_str}\n   {snippet}\n'
@@ -783,22 +785,24 @@ async def memex_batch_ingest(
             note_dto = NoteCreateDTO(
                 name=path.name,
                 description=f'Imported from {path}',
-                content=base64.b64encode(content).decode('utf-8'),
+                content=base64.b64encode(content),
+                vault_id=vault_id,
             )
             notes.append(note_dto)
 
         if not notes:
             return 'No valid files found for ingestion.'
 
-        job_id = await api.batch_manager.create_job(
-            notes=notes, vault_id=vault_id, batch_size=batch_size
-        )
+        job_ids: list[str] = []
+        for note_dto in notes:
+            result = await api.ingest(note_dto, background=True)
+            job_ids.append(str(cast(BatchJobStatus, result).job_id))
 
         return (
-            f'Batch ingestion job created successfully.\n'
-            f'Job ID: {job_id}\n'
-            f'Total files: {len(notes)}\n'
-            f'Use `memex_get_batch_status` to track progress.'
+            f'Batch ingestion started.\n'
+            f'Files submitted: {len(notes)}\n'
+            f'Job IDs:\n' + '\n'.join(f'- {jid}' for jid in job_ids) + '\n'
+            'Use `memex_get_batch_status` with any job ID to track progress.'
         )
 
     except Exception as e:
@@ -824,36 +828,34 @@ async def memex_get_batch_status(
         except ValueError:
             return f'Invalid Job UUID: {job_id}'
 
-        job = await api.batch_manager.get_job_status(uuid_obj)
-        if not job:
-            return f'Job {job_id} not found.'
+        try:
+            job = await api.get_job_status(uuid_obj)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return f'Job {job_id} not found.'
+            raise
 
         output = [f'# Batch Job Status: {job.status.upper()}']
-        output.append(f'Job ID: {job.id}')
-        output.append(f'Notes Total: {job.notes_count}')
-        output.append(f'Processed: {job.processed_count}')
-        output.append(f'Skipped: {job.skipped_count}')
-        output.append(f'Failed: {job.failed_count}')
+        output.append(f'Job ID: {job.job_id}')
+        if job.progress:
+            output.append(f'Progress: {job.progress}')
 
-        if job.started_at:
-            output.append(f'Started: {job.started_at}')
-        if job.completed_at:
-            output.append(f'Completed: {job.completed_at}')
+        if job.result:
+            output.append(f'Processed: {job.result.processed_count}')
+            output.append(f'Skipped: {job.result.skipped_count}')
+            output.append(f'Failed: {job.result.failed_count}')
 
-        if job.status == 'completed' and job.note_ids:
-            output.append('\nCreated Note IDs (truncated):')
-            for did in job.note_ids[:10]:
-                output.append(f'- {did}')
-            if len(job.note_ids) > 10:
-                output.append(f'- ... and {len(job.note_ids) - 10} more.')
+            if job.status == 'completed' and job.result.note_ids:
+                output.append('\nCreated Note IDs (truncated):')
+                for did in job.result.note_ids[:10]:
+                    output.append(f'- {did}')
+                if len(job.result.note_ids) > 10:
+                    output.append(f'- ... and {len(job.result.note_ids) - 10} more.')
 
-        if job.error_info:
-            output.append('\nErrors:')
-            if isinstance(job.error_info, list):
-                for err in job.error_info[:5]:
-                    output.append(f'- Chunk at {err.get("chunk_start")}: {err.get("error")}')
-            else:
-                output.append(f'- {job.error_info}')
+            if job.result.errors:
+                output.append('\nErrors:')
+                for err in job.result.errors[:5]:
+                    output.append(f'- {err}')
 
         return '\n'.join(output)
 

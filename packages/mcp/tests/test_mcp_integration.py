@@ -1,10 +1,11 @@
+import datetime as dt
 import pytest
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastmcp import Client
 from memex_mcp.server import mcp
-from memex_common.schemas import MemoryUnitDTO, FactTypes, LineageResponse
+from memex_common.schemas import MemoryUnitDTO, FactTypes, LineageResponse, NoteDTO
 
 
 @pytest.fixture
@@ -12,7 +13,8 @@ def mock_api():
     """Mock the RemoteMemexAPI."""
     mock = AsyncMock()
     mock.search = AsyncMock()
-    mock.get_lineage = AsyncMock()
+    mock.get_entity_lineage = AsyncMock()
+    mock.get_note_lineage = AsyncMock()
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock
@@ -49,7 +51,7 @@ async def test_integration_search_lineage(mock_api):
             )
         ],
     )
-    mock_api.get_lineage.return_value = mock_lineage
+    mock_api.get_entity_lineage.return_value = mock_lineage
 
     async with Client(mcp) as client:
         # Step 1: Search
@@ -93,14 +95,13 @@ async def test_integration_search_assets_resource(mock_api):
     ]
 
     # 2. Setup Document Data (for List Assets)
-    # API returns dict, not SimpleNamespace or DTO
-    mock_api.get_note.return_value = {
-        'id': doc_id,
-        'doc_metadata': {'name': 'System Arch'},
-        'assets': ['assets/arch.png'],
-        'created_at': '2024-01-01T00:00:00Z',
-        'vault_id': uuid4(),
-    }
+    mock_api.get_note.return_value = NoteDTO(
+        id=doc_id,
+        doc_metadata={'name': 'System Arch'},
+        assets=['assets/arch.png'],
+        created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        vault_id=uuid4(),
+    )
 
     # 3. Setup Resource Data (for Get Resource)
     mock_api.get_resource.return_value = b'fake_image_bytes'

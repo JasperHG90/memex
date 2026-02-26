@@ -1,7 +1,9 @@
+import datetime as dt
 import pytest
 from uuid import uuid4
 from memex_common.schemas import (
     IngestResponse,
+    NoteDTO,
     ReflectionResultDTO,
     ObservationDTO,
     MemoryUnitDTO,
@@ -117,14 +119,13 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     """Test reading a note successfully."""
     doc_id = uuid4()
     vault_id = uuid4()
-    # API returns a dict, not a NoteDTO
-    mock_api.get_note.return_value = {
-        'id': doc_id,
-        'doc_metadata': {'name': 'Test Doc', 'description': 'Test Description'},
-        'original_text': 'Full content here.',
-        'vault_id': vault_id,
-        'created_at': '2024-01-01T00:00:00Z',
-    }
+    mock_api.get_note.return_value = NoteDTO(
+        id=doc_id,
+        doc_metadata={'name': 'Test Doc', 'description': 'Test Description'},
+        original_text='Full content here.',
+        vault_id=vault_id,
+        created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+    )
 
     result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
     assert '# Test Doc' in result.content[0].text

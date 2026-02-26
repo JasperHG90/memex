@@ -68,7 +68,7 @@ class LineageState(rx.State):
     # Legend data
     legend_items: List[Dict[str, str]] = [
         {'label': 'Asset', 'color': '#8b5cf6'},
-        {'label': 'Document', 'color': '#10b981'},
+        {'label': 'Note', 'color': '#10b981'},
         {'label': 'Memory Unit', 'color': '#3b82f6'},
         {'label': 'Observation', 'color': '#f59e0b'},
         {'label': 'Mental Model', 'color': '#ef4444'},
@@ -195,9 +195,10 @@ class LineageState(rx.State):
         self._graph_cache = None
 
         try:
-            lineage = await api_client.api.get_lineage(
-                entity_type=self.target_type, entity_id=self.target_id, depth=4
-            )
+            if self.target_type == 'note':
+                lineage = await api_client.api.get_note_lineage(note_id=self.target_id, depth=4)
+            else:
+                lineage = await api_client.api.get_entity_lineage(entity_id=self.target_id, depth=4)
             print(
                 f'Lineage fetched. Nodes: {len(lineage.derived_from) if lineage.derived_from else 0}'
             )
@@ -280,7 +281,7 @@ class LineageState(rx.State):
 
         layer_map = {
             'asset': 0,
-            'document': 1,
+            'note': 1,
             'memory_unit': 2,
             'observation': 3,
             'mental_model': 4,
@@ -340,8 +341,8 @@ class LineageState(rx.State):
                 if eid not in layers[layer_idx]:
                     layers[layer_idx].append(eid)
 
-            # If Document, check for Assets
-            if entity_type == 'document':
+            # If Note, check for Assets
+            if entity_type == 'note':
                 assets = entity.get('assets', [])
                 for asset_path in assets:
                     # Create Asset Node
@@ -494,7 +495,7 @@ def detail_modal() -> rx.Component:
                     bg=rx.match(
                         LineageState.selected_node_info.type,
                         ('asset', '#8b5cf6'),
-                        ('document', '#10b981'),
+                        ('note', '#10b981'),
                         ('memory_unit', '#3b82f6'),
                         ('observation', '#f59e0b'),
                         ('mental_model', '#ef4444'),
@@ -603,7 +604,7 @@ def lineage_graph_view() -> rx.Component:
         ),
         # Column Headers
         column_header('Assets', '5%'),
-        column_header('Documents', '20%'),
+        column_header('Notes', '20%'),
         column_header('Memory Units', '45%'),
         column_header('Observations', '70%'),
         column_header('Mental Models', '95%'),
@@ -658,7 +659,7 @@ def lineage_graph_view() -> rx.Component:
                         bg=rx.match(
                             n.type,
                             ('asset', '#8b5cf6'),
-                            ('document', '#10b981'),
+                            ('note', '#10b981'),
                             ('memory_unit', '#3b82f6'),
                             ('observation', '#f59e0b'),
                             ('mental_model', '#ef4444'),

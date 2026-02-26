@@ -15,7 +15,7 @@ async def test_lineage_data_transformation():
 
         # Mock LineageResponse
         # Model -> Observation -> Unit -> Doc
-        mock_api.get_lineage = AsyncMock(
+        mock_api.get_entity_lineage = AsyncMock(
             return_value=AsyncMock(
                 entity_type='mental_model',
                 entity={'id': str(entity_id), 'name': 'Test Model'},
@@ -29,8 +29,8 @@ async def test_lineage_data_transformation():
                                 entity={'id': str(uuid4()), 'text': 'Test Unit'},
                                 derived_from=[
                                     AsyncMock(
-                                        entity_type='document',
-                                        entity={'id': str(uuid4()), 'name': 'Test Doc'},
+                                        entity_type='note',
+                                        entity={'id': str(uuid4()), 'name': 'Test Note'},
                                         derived_from=[],
                                     )
                                 ],

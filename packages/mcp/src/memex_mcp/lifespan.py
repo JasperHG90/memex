@@ -40,7 +40,7 @@ def get_api(ctx: Context) -> RemoteMemexAPI:
     Get the RemoteMemexAPI instance from the context.
     """
     app_context: AppContext = cast(RequestContext, ctx.request_context).lifespan_context
-    return app_context._api
+    return cast(RemoteMemexAPI, app_context._api)
 
 
 def get_config(ctx: Context) -> MemexConfig:

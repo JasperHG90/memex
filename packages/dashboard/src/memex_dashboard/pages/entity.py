@@ -261,25 +261,35 @@ class EntityState(rx.State):
 
             new_mentions = []
             for item in results:
-                unit = item['unit']
-                doc = item['document']
+                unit = item.get('unit') if isinstance(item, dict) else getattr(item, 'unit')
+                doc = item.get('note') if isinstance(item, dict) else getattr(item, 'note')
 
-                raw_type = str(unit.get('fact_type', 'memory_unit'))
+                if isinstance(unit, dict):
+                    raw_type = str(unit.get('fact_type', 'memory_unit'))
+                    unit_text = unit.get('text')
+                    unit_id = str(unit['id'])
+                    created_at = unit.get('created_at')
+                else:
+                    raw_type = str(getattr(unit, 'fact_type', 'memory_unit'))
+                    unit_text = getattr(unit, 'text', '')
+                    unit_id = str(getattr(unit, 'id', ''))
+                    created_at = getattr(unit, 'created_at', None)
+
                 clean_type = (
                     raw_type.split('.')[-1].lower() if '.' in raw_type else raw_type.lower()
                 )
-                doc_title = doc.get('name') or 'Untitled'
 
-                created_at = unit.get('created_at')
+                doc_title = getattr(doc, 'name', getattr(doc, 'title', 'Untitled')) or 'Untitled'
+
                 if isinstance(created_at, str):
                     date_str = created_at[:10]
                 else:
-                    date_str = 'Unknown'
+                    date_str = str(created_at)[:10] if created_at else 'Unknown'
 
                 new_mentions.append(
                     Mention(
-                        id=str(unit['id']),
-                        unit_text=unit.get('text') or '',
+                        id=unit_id,
+                        unit_text=unit_text or '',
                         doc_title=doc_title,
                         date=date_str,
                         type=clean_type,
@@ -478,7 +488,7 @@ def type_badge(type_str: str) -> rx.Component:
         bg=rx.match(
             type_str,
             ('asset', '#8b5cf6'),
-            ('document', '#10b981'),
+            ('note', '#10b981'),
             ('memory_unit', '#3b82f6'),
             ('observation', '#f59e0b'),
             ('mental_model', '#ef4444'),

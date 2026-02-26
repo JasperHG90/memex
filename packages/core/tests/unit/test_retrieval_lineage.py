@@ -68,7 +68,7 @@ def test_retrieve_lineage_resolution(client, mock_api):
 
     # Mocks resolution method we are about to add
     # It should map Unit ID -> Document ID
-    mock_api.resolve_source_documents.return_value = {evidence_unit_id: doc_2}
+    mock_api.resolve_source_notes.return_value = {evidence_unit_id: doc_2}
 
     # Execute
     payload = {'query': 'test', 'limit': 10}
@@ -90,6 +90,6 @@ def test_retrieve_lineage_resolution(client, mock_api):
     assert data[1]['source_note_ids'] == [str(doc_2)]
 
     # Verify we called resolution with the correct evidence ID
-    mock_api.resolve_source_documents.assert_called_once()
-    called_ids = mock_api.resolve_source_documents.call_args[0][0]
+    mock_api.resolve_source_notes.assert_called_once()
+    called_ids = mock_api.resolve_source_notes.call_args[0][0]
     assert evidence_unit_id in called_ids
