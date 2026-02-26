@@ -18,7 +18,7 @@ from pydantic import Field
 
 from memex_mcp.lifespan import lifespan, get_api
 from memex_mcp.types import NoteTemplateType
-from memex_common.schemas import ReflectionRequest, LineageResponse, NoteCreateDTO
+from memex_common.schemas import BatchJobStatus, ReflectionRequest, LineageResponse, NoteCreateDTO
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
 
@@ -458,6 +458,10 @@ async def memex_add_note(
             description='A unique stable key for the note to enable incremental updates.',
         ),
     ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description='Queue ingestion in background.'),
+    ] = False,
 ):
     try:
         if len(description.split(' ')) > 250:
@@ -510,8 +514,10 @@ async def memex_add_note(
             note_key=note_key,
         )
 
-        result = await api.ingest(note)
-        return f'Note added successfully. ID: {result.get("note_id")}'
+        result = await api.ingest(note, background=background)
+        if isinstance(result, BatchJobStatus):
+            return f'Note queued. Job ID: {result.job_id}'
+        return f'Note added successfully. ID: {result.note_id}'
 
     except Exception as e:
         logging.error(f'Add note failed: {e}', exc_info=True)

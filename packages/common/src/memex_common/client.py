@@ -16,6 +16,7 @@ from memex_common.schemas import (
     IngestURLRequest,
     IngestFileRequest,
     AdjustBeliefRequest,
+    BatchJobStatus,
     CreateVaultRequest,
     DefaultVaultsResponse,
     NoteCreateDTO,
@@ -125,15 +126,31 @@ class RemoteMemexAPI:
             raise
 
     # --- Memory ---
-    async def ingest(self, note: NoteCreateDTO) -> IngestResponse:
+    async def ingest(
+        self, note: NoteCreateDTO, background: bool = False
+    ) -> IngestResponse | BatchJobStatus:
         """Ingest a note into Memex."""
-        result = await self._post('ingestions', note)
-        return IngestResponse(**result)
+        params = {'background': 'true'} if background else None
+        response = await self.client.post(
+            'ingestions', json=note.model_dump(mode='json'), params=params
+        )
+        response.raise_for_status()
+        if response.status_code == 202:
+            return BatchJobStatus(**response.json())
+        return IngestResponse(**response.json())
 
-    async def ingest_url(self, request: IngestURLRequest) -> IngestResponse:
+    async def ingest_url(
+        self, request: IngestURLRequest, background: bool = False
+    ) -> IngestResponse | dict[str, str]:
         """Ingest content from a URL."""
-        result = await self._post('ingestions/url', request)
-        return IngestResponse(**result)
+        params = {'background': 'true'} if background else None
+        response = await self.client.post(
+            'ingestions/url', json=request.model_dump(mode='json'), params=params
+        )
+        response.raise_for_status()
+        if response.status_code == 202:
+            return response.json()
+        return IngestResponse(**response.json())
 
     async def ingest_file(self, request: IngestFileRequest) -> IngestResponse:
         """Ingest content from a file (server-side path)."""
@@ -144,13 +161,15 @@ class RemoteMemexAPI:
         self,
         files: list[tuple[str, tuple[str, Any, str]]],
         metadata: dict[str, Any] | None = None,
-    ) -> IngestResponse:
+        background: bool = False,
+    ) -> IngestResponse | dict[str, str]:
         """
         Ingest content by uploading files from the client.
 
         Args:
             files: List of (field_name, (filename, file_handle/bytes, content_type))
             metadata: Optional metadata (name, description, tags, etc.)
+            background: If True, returns immediately with 202 Accepted.
         """
         data = {}
         if metadata:
@@ -158,9 +177,19 @@ class RemoteMemexAPI:
 
             data['metadata'] = json.dumps(metadata)
 
-        response = await self.client.post('ingestions/upload', data=data, files=files)
+        params = {'background': 'true'} if background else None
+        response = await self.client.post(
+            'ingestions/upload', data=data, files=files, params=params
+        )
         response.raise_for_status()
+        if response.status_code == 202:
+            return response.json()
         return IngestResponse(**response.json())
+
+    async def get_job_status(self, job_id: UUID) -> BatchJobStatus:
+        """Retrieve the current status of a batch ingestion job."""
+        result = await self._get(f'ingestions/{job_id}')
+        return BatchJobStatus(**result)
 
     async def search(
         self,

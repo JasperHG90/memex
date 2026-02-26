@@ -1,6 +1,7 @@
 import pytest
 from uuid import uuid4
 from memex_common.schemas import (
+    IngestResponse,
     ReflectionResultDTO,
     ObservationDTO,
     MemoryUnitDTO,
@@ -33,8 +34,7 @@ async def test_mcp_reflect_tool(mock_api, mcp_client):
 async def test_mcp_add_note_tool(mock_api, mcp_client):
     """Test the add note tool via the MCP Client, including schema validation."""
     doc_id = str(uuid4())
-    # API returns a dict, not an IngestResponse object
-    mock_api.ingest.return_value = {'status': 'success', 'note_id': doc_id, 'unit_ids': []}
+    mock_api.ingest.return_value = IngestResponse(note_id=doc_id, status='success', unit_ids=[])
 
     result = await mcp_client.call_tool(
         'memex_add_note',

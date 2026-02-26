@@ -28,6 +28,8 @@ from memex_cli.utils import (
 )
 from memex_common.config import MemexConfig
 from memex_common.schemas import (
+    BatchJobStatus,
+    IngestResponse,
     ReflectionRequest,
     MemoryUnitDTO,
     NoteCreateDTO,
@@ -135,6 +137,9 @@ async def add_memory(
     key: Annotated[
         str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
     ] = None,
+    background: Annotated[
+        bool, typer.Option('--background', '-b', help='Queue as background job.')
+    ] = False,
 ):
     """
     Add a new memory to Memex.
@@ -163,6 +168,7 @@ async def add_memory(
     console.print('[bold green]Adding Memory[/bold green]')
 
     async with get_api_context(config) as api:
+        result: IngestResponse | BatchJobStatus | dict[str, str]
         if url:
             try:
                 # Load assets if provided
@@ -183,7 +189,7 @@ async def add_memory(
                 req = IngestURLRequest(
                     url=url, assets=assets_dict, vault_id=config.server.active_vault
                 )
-                result = await api.ingest_url(req)
+                result = await api.ingest_url(req, background=background)
             except Exception as e:
                 handle_api_error(e)
         elif file and not asset:
@@ -222,7 +228,9 @@ async def add_memory(
                 if config.server.active_vault:
                     metadata['vault_id'] = str(config.server.active_vault)
 
-                result = await api.ingest_upload(files=files_to_upload, metadata=metadata)
+                result = await api.ingest_upload(
+                    files=files_to_upload, metadata=metadata, background=background
+                )
             except Exception as e:
                 handle_api_error(e)
         else:
@@ -271,12 +279,18 @@ async def add_memory(
                     vault_id=config.server.active_vault,
                 )
 
-                result = await api.ingest(note)
+                result = await api.ingest(note, background=background)
             except Exception as e:
                 handle_api_error(e)
 
         # 4. Show Result
-        if result.status == 'skipped':
+        if isinstance(result, BatchJobStatus):
+            console.print(f'[bold green]Queued.[/bold green] Job ID: [cyan]{result.job_id}[/cyan]')
+            console.print(f'[dim]Poll: GET /api/v1/ingestions/{result.job_id}[/dim]')
+        elif isinstance(result, dict):
+            # Fire-and-forget background (url/upload): server accepted but no job ID
+            console.print('[bold green]Accepted.[/bold green] Ingestion running in background.')
+        elif result.status == 'skipped':
             console.print(f'[yellow]Memory skipped: {result.reason}[/yellow]')
         else:
             console.print(f'[green]Memory added successfully![/green] UUID: {result.note_id}')

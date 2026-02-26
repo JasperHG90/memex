@@ -1,5 +1,6 @@
 """Ingestion endpoints."""
 
+import asyncio
 import base64
 import binascii
 import json
@@ -10,7 +11,8 @@ import tempfile
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse
 
 from memex_common.exceptions import ResourceNotFoundError
 from memex_common.schemas import (
@@ -29,15 +31,28 @@ from memex_core.server.common import _handle_error, get_api
 router = APIRouter(prefix='/api/v1')
 
 
-@router.post('/ingestions', response_model=IngestResponse)
+@router.post(
+    '/ingestions',
+    response_model=None,
+    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+)
 async def ingest_note(
-    request: Annotated[NoteCreateDTO, Body()], api: Annotated[MemexAPI, Depends(get_api)]
-):
+    request: Annotated[NoteCreateDTO, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    background: Annotated[bool, Query()] = False,
+) -> IngestResponse | JSONResponse:
     """Ingest a note artifact."""
     try:
         # NoteCreateDTO now uses Base64 encoded bytes for content and files.
         # We MUST decode these to raw bytes for the internal NoteInput object
         # so that they are stored correctly (e.g., as raw images) in the filestore.
+
+        if background:
+            job_id = await api.batch_manager.create_job(notes=[request], vault_id=request.vault_id)
+            return JSONResponse(
+                status_code=202,
+                content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
+            )
 
         decoded_content = base64.b64decode(request.content)
         decoded_files = {name: base64.b64decode(content) for name, content in request.files.items()}
@@ -57,10 +72,16 @@ async def ingest_note(
         raise _handle_error(e, 'NoteInput ingestion failed')
 
 
-@router.post('/ingestions/url', response_model=IngestResponse)
+@router.post(
+    '/ingestions/url',
+    response_model=None,
+    responses={200: {'model': IngestResponse}, 202: {'model': dict}},
+)
 async def ingest_url(
-    request: Annotated[IngestURLRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
-):
+    request: Annotated[IngestURLRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    background: Annotated[bool, Query()] = False,
+) -> IngestResponse | JSONResponse:
     try:
         # Decode assets if present
         assets_bytes = {}
@@ -70,6 +91,17 @@ async def ingest_url(
                     assets_bytes[name] = base64.b64decode(content)
             except binascii.Error:
                 raise HTTPException(status_code=400, detail='Invalid Base64 encoding in assets')
+
+        if background:
+            asyncio.create_task(
+                api.ingest_from_url(
+                    url=request.url,
+                    vault_id=request.vault_id,
+                    reflect_after=request.reflect_after,
+                    assets=assets_bytes,
+                )
+            )
+            return JSONResponse(status_code=202, content={'status': 'accepted'})
 
         result = await api.ingest_from_url(
             url=request.url,
@@ -98,12 +130,17 @@ async def ingest_file(
         raise _handle_error(e, 'File ingestion failed')
 
 
-@router.post('/ingestions/upload', response_model=IngestResponse)
+@router.post(
+    '/ingestions/upload',
+    response_model=None,
+    responses={200: {'model': IngestResponse}, 202: {'model': dict}},
+)
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
     files: list[UploadFile] = File(...),
     metadata: str | None = Body(None),
-):
+    background: bool = Query(False),
+) -> IngestResponse | JSONResponse:
     """
     Upload and ingest files.
     - If it's a single non-markdown file, use MarkItDown.
@@ -125,6 +162,18 @@ async def ingest_upload(
             ) as tmp:
                 shutil.copyfileobj(uploaded_file.file, tmp)
                 tmp_path = tmp.name
+
+            if background:
+
+                async def _ingest_and_cleanup(path: str) -> None:
+                    try:
+                        await api.ingest_from_file(path)
+                    finally:
+                        if os.path.exists(path):
+                            os.remove(path)
+
+                asyncio.create_task(_ingest_and_cleanup(tmp_path))
+                return JSONResponse(status_code=202, content={'status': 'accepted'})
 
             try:
                 result = await api.ingest_from_file(tmp_path)
@@ -170,6 +219,10 @@ async def ingest_upload(
             files=aux_files,
             tags=parsed_metadata.get('tags', []),
         )
+
+        if background:
+            asyncio.create_task(api.ingest(note, vault_id=parsed_metadata.get('vault_id')))
+            return JSONResponse(status_code=202, content={'status': 'accepted'})
 
         result = await api.ingest(note, vault_id=parsed_metadata.get('vault_id'))
         return IngestResponse(**result)

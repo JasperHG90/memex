@@ -1,6 +1,6 @@
 import pytest
 from uuid import uuid4
-from memex_common.schemas import NoteCreateDTO
+from memex_common.schemas import IngestResponse, NoteCreateDTO
 
 
 @pytest.mark.asyncio
@@ -9,7 +9,7 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
     doc_id = str(uuid4())
     key = 'my-stable-key'
 
-    mock_api.ingest.return_value = {'status': 'success', 'note_id': doc_id, 'unit_ids': []}
+    mock_api.ingest.return_value = IngestResponse(note_id=doc_id, status='success', unit_ids=[])
 
     result = await mcp_client.call_tool(
         'memex_add_note',

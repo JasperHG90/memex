@@ -5,7 +5,7 @@ import importlib
 import json
 import logging
 from functools import wraps
-from typing import Any, Callable, Coroutine, TypeVar, AsyncGenerator
+from typing import Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
 
 import click
@@ -110,7 +110,7 @@ def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., A
     return wrapper
 
 
-def handle_api_error(e: Exception):
+def handle_api_error(e: Exception) -> NoReturn:
     """
     Handle exceptions from RemoteMemexAPI and provide helpful feedback.
     """
