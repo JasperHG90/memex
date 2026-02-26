@@ -9,7 +9,7 @@ from uuid import UUID
 
 import dspy
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import extract, func, literal, union_all
+from sqlalchemy import extract, func, literal, union_all, text
 from sqlalchemy import cast as sql_cast, String
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
@@ -120,7 +120,11 @@ class NoteSearchEngine:
         all_embeddings = await asyncio.to_thread(self.embedder.encode, queries)
 
         limit = request.limit
-        pool_size = max(limit * 2, CANDIDATE_POOL_SIZE)
+        if request.mmr_lambda is not None:
+            # Need a larger pool of candidates to pick diverse ones from
+            pool_size = max(limit * 10, CANDIDATE_POOL_SIZE)
+        else:
+            pool_size = max(limit * 2, CANDIDATE_POOL_SIZE)
 
         # 3. Run search per query and collect scored chunks
         all_chunk_batches: list[tuple[list[Any], float]] = []
@@ -140,7 +144,9 @@ class NoteSearchEngine:
         if not merged:
             return []
 
-        results = await self._group_by_document(session, merged, limit)
+        results = await self._group_by_document(
+            session, merged, pool_size, mmr_lambda=request.mmr_lambda, final_limit=limit
+        )
 
         # Skeleton-tree reasoning refinement
         if (request.reason or request.summarize) and self.lm:
@@ -224,17 +230,17 @@ class NoteSearchEngine:
         hash_to_info: dict[str, tuple[UUID, UUID]] = {}
         doc_snippets: dict[UUID, list[NoteSnippet]] = {}
         section_texts: list[str] = []
-        for node_id, doc_id, title, text, level, node_hash in node_rows:
+        for node_id, doc_id, title, node_text, level, node_hash in node_rows:
             hash_to_info[node_hash] = (node_id, doc_id)
             snippet = NoteSnippet(
-                text=text or '',
+                text=node_text or '',
                 score=1.0,
                 node_id=node_id,
                 node_title=title,
                 node_level=level,
             )
             doc_snippets.setdefault(doc_id, []).append(snippet)
-            section_texts.append(f'## {title}\n{text}')
+            section_texts.append(f'## {title}\n{node_text}')
 
         # Build per-document reasoning enriched with the real node UUID.
         reasoning_by_doc: dict[UUID, list[dict[str, Any]]] = {}
@@ -489,6 +495,8 @@ class NoteSearchEngine:
         session: AsyncSession,
         chunk_results: list[Any],
         limit: int,
+        mmr_lambda: float | None = None,
+        final_limit: int | None = None,
     ) -> list[NoteSearchResult]:
         # Group chunks by document
         doc_to_chunks: dict[UUID, list[tuple[Chunk, float]]] = {}
@@ -520,17 +528,24 @@ class NoteSearchEngine:
             )
             node_results = await session.exec(node_stmt)
             for block_id, text in node_results.all():
+                if block_id is None:
+                    continue
                 existing = node_texts_by_block.get(block_id, '')
                 node_texts_by_block[block_id] = f'{existing}\n\n{text}' if existing else text
 
-        # Build results
+        # Build results and track representative chunk (best-scoring) per document
         final_results: list[NoteSearchResult] = []
+        doc_representative_chunk_ids: dict[UUID, UUID] = {}
         for doc_id, chunks_with_scores in doc_to_chunks.items():
             if doc_id not in docs:
                 continue
 
             doc = docs[doc_id]
             best_score = max(s for _, s in chunks_with_scores)
+
+            # Find the best-scoring chunk as representative for MMR
+            best_chunk = max(chunks_with_scores, key=lambda x: x[1])[0]
+            doc_representative_chunk_ids[doc_id] = best_chunk.id
 
             snippets = sorted(
                 [
@@ -561,8 +576,119 @@ class NoteSearchEngine:
                 )
             )
 
+        # Sort by score initially
         final_results.sort(key=lambda x: x.score, reverse=True)
-        return final_results[:limit]
+
+        # Apply MMR if enabled
+        effective_limit = final_limit if final_limit is not None else limit
+        if mmr_lambda is not None and len(final_results) > 1:
+            # Compute similarity matrix for representative chunks
+            similarity_matrix = await self._compute_similarity_matrix(
+                session, doc_representative_chunk_ids
+            )
+            # Apply MMR re-ranking
+            final_results = self._apply_mmr(
+                final_results, mmr_lambda, effective_limit, similarity_matrix
+            )
+        else:
+            final_results = final_results[:effective_limit]
+
+        return final_results
+
+    # ------------------------------------------------------------------
+    # MMR (Maximal Marginal Relevance)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _compute_similarity_matrix(
+        session: AsyncSession,
+        doc_representative_chunk_ids: dict[UUID, UUID],
+    ) -> dict[tuple[UUID, UUID], float]:
+        """Compute pairwise cosine similarity between representative chunk embeddings in PostgreSQL.
+
+        Returns a dict mapping (note_id_a, note_id_b) → cosine_similarity.
+        Only computes upper triangle (a < b) since matrix is symmetric.
+        """
+        if not doc_representative_chunk_ids:
+            return {}
+
+        chunk_ids = list(doc_representative_chunk_ids.values())
+        chunk_id_strs = [str(cid) for cid in chunk_ids]
+
+        # Single query: compute all pairwise similarities in PostgreSQL
+        # Using <=> (cosine distance operator), converted to similarity via 1 - distance
+        stmt = text("""
+            WITH reps AS (
+                SELECT c.note_id, c.embedding
+                FROM chunks c
+                WHERE c.id = ANY(:chunk_ids)
+            )
+            SELECT a.note_id AS note_a, b.note_id AS note_b,
+                   1 - (a.embedding <=> b.embedding) AS similarity
+            FROM reps a
+            CROSS JOIN reps b
+            WHERE a.note_id < b.note_id
+        """)
+        result = await session.execute(stmt, {'chunk_ids': chunk_id_strs})
+        rows = result.fetchall()
+
+        return {(UUID(str(row[0])), UUID(str(row[1]))): float(row[2]) for row in rows}
+
+    @staticmethod
+    def _apply_mmr(
+        results: list[NoteSearchResult],
+        lam: float,
+        limit: int,
+        similarity_matrix: dict[tuple[UUID, UUID], float],
+    ) -> list[NoteSearchResult]:
+        """Re-rank results using Maximal Marginal Relevance.
+
+        Balances relevance (original score) with diversity (cosine distance
+        between document representative embeddings, precomputed in PostgreSQL).
+        """
+        if len(results) <= 1:
+            return results
+
+        # Max-normalize scores so top result anchors at 1.0
+        max_score = max(r.score for r in results)
+        if max_score <= 0:
+            return results[:limit]
+
+        for r in results:
+            r.score = r.score / max_score
+
+        selected: list[NoteSearchResult] = []
+        remaining = list(results)
+
+        while len(selected) < limit and remaining:
+            best_score = float('-inf')
+            best_idx = 0
+
+            for i, candidate in enumerate(remaining):
+                # Relevance term
+                relevance = candidate.score
+
+                # Diversity term: max similarity to already selected docs
+                max_sim = 0.0
+                for sel in selected:
+                    # Look up similarity using canonical key (min, max)
+                    key = (
+                        min(candidate.note_id, sel.note_id),
+                        max(candidate.note_id, sel.note_id),
+                    )
+                    sim = similarity_matrix.get(key, 0.0)
+                    max_sim = max(max_sim, sim)
+
+                # MMR score: λ * relevance - (1-λ) * max_similarity
+                mmr_score = lam * relevance - (1 - lam) * max_sim
+
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = i
+
+            selected.append(remaining.pop(best_idx))
+
+        return selected
 
     # ------------------------------------------------------------------
     # Multi-query fusion

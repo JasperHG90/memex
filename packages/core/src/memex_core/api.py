@@ -1225,6 +1225,7 @@ ingested_at: {now}
         strategy_weights: dict[str, float] | None = None,
         reason: bool = False,
         summarize: bool = False,
+        mmr_lambda: float | None = None,
     ) -> list[NoteSearchResult]:
         """
         Search for documents containing relevant information using raw chunks.
@@ -1241,6 +1242,13 @@ ingested_at: {now}
             kwargs['strategies'] = strategies
         if strategy_weights is not None:
             kwargs['strategy_weights'] = strategy_weights
+
+        # Resolve effective mmr_lambda: per-request override, else config default
+        effective_mmr_lambda = mmr_lambda
+        if effective_mmr_lambda is None:
+            effective_mmr_lambda = self.config.server.document.mmr_lambda
+        if effective_mmr_lambda is not None:
+            kwargs['mmr_lambda'] = effective_mmr_lambda
 
         request = NoteSearchRequest(
             query=query,

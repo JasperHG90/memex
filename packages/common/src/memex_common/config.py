@@ -475,6 +475,16 @@ class DocumentConfig(BaseModel):
         default_factory=DocSearchStrategiesConfig,
         description='Default enabled search strategies for document search.',
     )
+    mmr_lambda: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Default MMR lambda for document search. '
+            '1.0 = pure relevance, 0.0 = max diversity. '
+            'None disables MMR. Overridden by per-request mmr_lambda.'
+        ),
+    )
 
 
 class ServerConfig(BaseModel):

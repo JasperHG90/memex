@@ -681,6 +681,16 @@ class NoteSearchRequest(BaseModel):
         default=False,
         description='Synthesize a full answer from identified sections (implies reason=True).',
     )
+    mmr_lambda: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'MMR lambda for relevance-diversity trade-off. '
+            '1.0 = pure relevance, 0.0 = max diversity. '
+            'None = use server config default (which itself defaults to disabled).'
+        ),
+    )
 
     @model_validator(mode='after')
     def _ensure_reason_if_summarize(self) -> 'NoteSearchRequest':
