@@ -18,6 +18,8 @@ When the server is running, visit:
 - `POST /api/v1/ingestions/batch`: Start batch job.
 - `GET /api/v1/ingestions/{job_id}`: Poll batch job status.
 
+> **Background ingestion**: All single-note ingestion endpoints (`POST /api/v1/ingestions`, `/url`, `/file`, `/upload`) accept an optional `?background=true` query parameter. When set, the server immediately returns `202 Accepted` with a `job_id`, and processing continues in the background. Track progress with `GET /api/v1/ingestions/{job_id}`.
+
 ### Memories & Retrieval
 - `POST /api/v1/memories/search`: General memory search.
 - `POST /api/v1/memories/summary`: Generate an AI summary for search results.
@@ -27,10 +29,10 @@ When the server is running, visit:
 
 ### Notes
 - `GET /api/v1/notes`: List notes.
-- `POST /api/v1/notes/search`: Search notes.
-- `GET /api/v1/notes/{document_id}`: Get note details.
-- `GET /api/v1/notes/{document_id}/page-index`: Get the page index (slim tree) for a note.
-- `DELETE /api/v1/notes/{document_id}`: Delete a note.
+- `POST /api/v1/notes/search`: Search notes. Accepts an optional `mmr_lambda` field (float 0.0–1.0 or `null`) in the request body to enable MMR re-ranking, which maximizes the diversity of returned notes rather than surfacing multiple chunks from the same note. A value of `0.0` favours pure diversity; `1.0` favours pure relevance. Omit or set to `null` to disable.
+- `GET /api/v1/notes/{note_id}`: Get note details.
+- `GET /api/v1/notes/{note_id}/page-index`: Get the page index (slim tree) for a note.
+- `DELETE /api/v1/notes/{note_id}`: Delete a note.
 - `GET /api/v1/notes/{id}/lineage`: Retrieve lineage of a note.
 - `GET /api/v1/nodes/{id}`: Get note node details.
 

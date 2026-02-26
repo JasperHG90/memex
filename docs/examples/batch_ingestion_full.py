@@ -63,7 +63,7 @@ This is the content for note {i}. It mentions entity-{i % 10}."""
         try:
             print('📤 Submitting batch job...')
             response = await client.post(
-                f'{MEMEX_API_URL}/api/v1/ingest/batch',
+                f'{MEMEX_API_URL}/api/v1/ingestions/batch',
                 json={
                     'notes': notes,
                     'vault_id': VAULT_ID,
@@ -87,7 +87,7 @@ This is the content for note {i}. It mentions entity-{i % 10}."""
         print('⏳ Polling for status...')
         while True:
             try:
-                status_res = await client.get(f'{MEMEX_API_URL}/api/v1/ingest/batch/{job_id}')
+                status_res = await client.get(f'{MEMEX_API_URL}/api/v1/ingestions/{job_id}')
                 status_res.raise_for_status()
                 status_data = status_res.json()
 

@@ -2,16 +2,16 @@
 
 Memex implements a **Cascading Deletion** policy to ensure data consistency.
 
-## Deleting a Document
+## Deleting a Note
 
-When you delete a document (Note), Memex cleans up all derived data.
+When you delete a note, Memex cleans up all derived data.
 
 ```bash
-memex document delete <document_uuid>
+memex note delete <note_uuid>
 ```
 
 **Cascade Effect:**
-1.  **Document**: The entry in the `documents` table is removed.
+1.  **Note**: The entry in the `notes` table is removed.
 2.  **FileStore**: The actual file content and assets are deleted from disk.
 3.  **Chunks**: All text chunks associated with the document are deleted.
 4.  **Memory Units**: All facts, observations, and opinions derived *solely* from this document are deleted.

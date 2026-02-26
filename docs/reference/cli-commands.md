@@ -53,12 +53,12 @@ Ingest and search memories (facts and opinions).
     - `--limit`: Max children per node.
     - `--json`: Output as JSON.
 
-### `document`
-Manage and view raw source documents.
+### `note`
+Manage and view source notes.
 
-- `document list`: List all documents.
-- `document recent`: Show most recent documents.
-- `document search <query>`: Search raw documents using RRF fusion.
+- `note list`: List all notes.
+- `note recent`: Show most recent notes.
+- `note search <query>`: Search raw notes using RRF fusion.
     - `--limit`, `-l`: Max results.
     - `--expand`: Enable query expansion.
     - `--blend`: Enable position-aware blending.
@@ -67,14 +67,14 @@ Manage and view raw source documents.
     - `--summarize`: Synthesize a full answer (implies --reason).
     - `--no-semantic`, `--no-keyword`, `--no-graph`, `--no-temporal`: Exclude specific search strategies.
     - `--json`: Output as JSON.
-    - `--minimal`: Output document IDs only.
-- `document view <id>`: View document content and metadata.
+    - `--minimal`: Output note IDs only.
+- `note view <id>`: View note content and metadata.
     - `--json`: Output as JSON.
-- `document page-index <id>`: View the page index (slim tree) of a document.
+- `note page-index <id>`: View the page index (slim tree) of a note.
     - `--json`: Output as JSON.
-- `document node <id>`: View a specific page-index node (section) by its ID.
+- `note node <id>`: View a specific page-index node (section) by its ID.
     - `--json`: Output as JSON.
-- `document delete <id>`: Delete a document and its extracted memories.
+- `note delete <id>`: Delete a note and its extracted memories.
 
 ### `entity`
 Explore and manage extracted entities.

@@ -16,11 +16,11 @@ memex memory add --file ./my-vault/ --vault project-x
 
 ## 2. API Batch Jobs (Asynchronous)
 
-For large-scale imports or integrations, use the `/ingest/batch` endpoint. This is the recommended method for processing hundreds of documents without blocking the client.
+For large-scale imports or integrations, use the `/ingestions/batch` endpoint. This is the recommended method for processing hundreds of documents without blocking the client.
 
 ### Workflow
-1.  **Submit**: POST a list of notes to `/api/v1/ingest/batch`.
-2.  **Poll**: The server returns a `job_id`. Use this to poll `/api/v1/ingest/batch/{job_id}` for progress.
+1.  **Submit**: POST a list of notes to `/api/v1/ingestions/batch`.
+2.  **Poll**: The server returns a `job_id`. Use this to poll `/api/v1/ingestions/{job_id}` for progress.
 3.  **Finish**: Once the status is `completed`, you will receive a list of the generated `document_ids`.
 
 ### Python Example
@@ -79,7 +79,7 @@ async def main():
         try:
             print("📤 Submitting batch job...")
             response = await client.post(
-                f"{MEMEX_API_URL}/api/v1/ingest/batch",
+                f"{MEMEX_API_URL}/api/v1/ingestions/batch",
                 json={
                     "notes": notes,
                     "vault_id": VAULT_ID,
@@ -103,7 +103,7 @@ async def main():
         print("⏳ Polling for status...")
         while True:
             try:
-                status_res = await client.get(f"{MEMEX_API_URL}/api/v1/ingest/batch/{job_id}")
+                status_res = await client.get(f"{MEMEX_API_URL}/api/v1/ingestions/{job_id}")
                 status_res.raise_for_status()
                 status_data = status_res.json()
 
@@ -140,6 +140,12 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+## 3. Single-Note Background Ingestion
+
+For a lighter-weight alternative to batch jobs, any single-note ingestion endpoint accepts `?background=true`. The server queues the work and returns `202 Accepted` immediately, so your client is never blocked waiting for extraction to complete.
+
+To track progress, use the returned `job_id` with `GET /api/v1/ingestions/{job_id}`.
 
 ## Considerations
 

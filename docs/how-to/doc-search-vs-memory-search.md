@@ -2,20 +2,21 @@
 
 Memex provides two distinct search interfaces. Choosing the right one depends on whether you need a specific passage from a source document (or subset of documents) or a synthesized fact from your entire knowledge graph.
 
-## 1. Document Search (`memex document search`)
+## 1. Note Search (`memex note search`)
 
-**Target**: Raw source documents (PDFs, Markdown, Web Scrapes).
+**Target**: Raw source notes (PDFs, Markdown, Web Scrapes).
 
-- **How it works**: Documents are split into semantic nodes (using the PageIndex algorithm). Memex searches these nodes using a hybrid multi-channel approach (Semantic Vector Search + Keyword BM25 + Entity Graph + Temporal). Results are fused using **Reciprocal Rank Fusion (RRF)** or a **Position-Aware Blending** algorithm.
+- **How it works**: Notes are split into semantic nodes (using the PageIndex algorithm). Memex searches these nodes using a hybrid multi-channel approach (Semantic Vector Search + Keyword BM25 + Entity Graph + Temporal). Results are fused using **Reciprocal Rank Fusion (RRF)** or a **Position-Aware Blending** algorithm.
 - **Advanced Capabilities**:
-    - **Skeleton-Tree Identification (`--reason`)**: Memex can scan the document's logical structure (TOC) and extract the exact sections relevant to your query, explaining *why* they are relevant.
+    - **Skeleton-Tree Identification (`--reason`)**: Memex can scan the note's logical structure (TOC) and extract the exact sections relevant to your query, explaining *why* they are relevant.
     - **Synthesis (`--summarize`)**: After finding relevant sections, it can synthesize a direct answer based purely on those sections.
-    - **Scoped Search (`--vault`)**: You can restrict the search to specific vaults or projects, effectively searching *within* specific sets of documents rather than your global memory.
+    - **Scoped Search (`--vault`)**: You can restrict the search to specific vaults or projects, effectively searching *within* specific sets of notes rather than your global memory.
+    - **MMR Diversity** (REST API): The `POST /api/v1/notes/search` endpoint accepts an `mmr_lambda` field (float 0.0–1.0 or `null`). When set, results are re-ranked using Maximal Marginal Relevance to surface distinct notes rather than multiple high-scoring chunks from the same note. `0.0` = pure diversity, `1.0` = pure relevance; omit or set `null` to disable.
 - **When to use**:
-    - You need to find a specific quote or paragraph from a known document.
-    - You want to see the original formatting and context of a document.
+    - You need to find a specific quote or paragraph from a known note.
+    - You want to see the original formatting and context of a note.
     - You are searching for "raw" information that hasn't been consolidated yet.
-    - You want to interrogate a specific document or vault ("Search in these specific documents").
+    - You want to interrogate a specific note or vault ("Search in these specific notes").
 
 ## 2. Memory Search (`memex memory search`)
 
@@ -33,7 +34,7 @@ Memex provides two distinct search interfaces. Choosing the right one depends on
 
 ## Summary Comparison
 
-| Feature | Document Search (`document`) | Memory Search (`memory`) |
+| Feature | Note Search (`note`) | Memory Search (`memory`) |
 | :--- | :--- | :--- |
 | **Granularity** | Coarse (Chunks/Snippets/Nodes) | Atomic (Facts/Opinions) |
 | **Retrieval Architecture** | Hybrid RRF / Position-Aware Fusion | TEMPR (Hindsight) |

@@ -56,6 +56,8 @@ A hierarchical, semantic indexing algorithm designed for long documents. It conv
 **Why PageIndex?**
 It allows Memex to answer questions like "What does section 3 say about X?" and preserves the semantic scope of information.
 
+> **Incremental Updates**: On re-ingestion, Memex computes a hash of each block. Blocks whose content has not changed are reused without re-running LLM extraction, reducing cost and latency significantly for large documents.
+
 ## Pipeline Steps
 
 1.  **Ingestion**: Raw content is wrapped in a `Note` object with metadata.
