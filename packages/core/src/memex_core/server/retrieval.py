@@ -139,7 +139,7 @@ async def search_memories(
 
         evidence_doc_map: dict[UUID, UUID] = {}
         if evidence_to_resolve:
-            evidence_doc_map = await api.resolve_source_documents(list(evidence_to_resolve))
+            evidence_doc_map = await api.resolve_source_notes(list(evidence_to_resolve))
 
         return ndjson_response(_build_retrieval_dtos(units, evidence_doc_map))
     except Exception as e:

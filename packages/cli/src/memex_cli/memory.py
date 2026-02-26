@@ -312,7 +312,7 @@ async def search_memory(
     ] = None,
     answer: Annotated[
         bool, typer.Option('--answer', '-a', help='Generate an AI answer from results.')
-    ] = True,
+    ] = False,
     skip_opinions: Annotated[
         bool, typer.Option('--skip-opinions', help='Skip automated opinion formation.')
     ] = False,
