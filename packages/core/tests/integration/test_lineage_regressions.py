@@ -86,9 +86,9 @@ async def test_reproduce_observation_lineage_failure(api, metastore):
 
 
 @pytest.mark.asyncio
-async def test_get_document_returns_404_not_500(api):
+async def test_get_note_returns_404_not_500(api):
     """
-    Verify that get_document raises ResourceNotFoundError for missing documents,
+    Verify that get_note raises ResourceNotFoundError for missing documents,
     which the server translates to 404.
     """
     from memex_common.exceptions import ResourceNotFoundError
@@ -96,4 +96,4 @@ async def test_get_document_returns_404_not_500(api):
     missing_id = uuid4()
 
     with pytest.raises(ResourceNotFoundError):
-        await api.get_document(missing_id)
+        await api.get_note(missing_id)

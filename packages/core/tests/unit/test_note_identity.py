@@ -1,5 +1,5 @@
 from memex_core.api import Note
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 import base64
 import hashlib
 from uuid import UUID
@@ -13,7 +13,7 @@ def test_calculate_uuid_from_dto_uses_key():
     # Use a valid UUID to avoid hashing for this test
     valid_uuid = '123e4567-e89b-12d3-a456-426614174000'
 
-    dto = NoteDTO(
+    dto = NoteCreateDTO(
         name='test note',
         description='test description',
         content=encoded_content,

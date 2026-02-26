@@ -74,7 +74,7 @@ async def test_ingest_with_explicit_key(api, metastore):
     result1 = await api.ingest(note1)
 
     assert result1['status'] == 'success'
-    assert UUID(str(result1['document_id'])) == expected_uuid
+    assert UUID(str(result1['note_id'])) == expected_uuid
 
     # Verify DB
     async with metastore.session() as session:

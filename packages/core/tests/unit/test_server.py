@@ -197,7 +197,7 @@ def test_get_note_page_index_with_data(client, mock_api):
     """GET /notes/{document_id}/page-index returns page_index when present."""
     doc_id = UUID('00000000-0000-0000-0000-000000000099')
     page_index = {'toc': [{'level': 1, 'title': 'Intro', 'children': []}]}
-    mock_api.get_document_page_index.return_value = page_index
+    mock_api.get_note_page_index.return_value = page_index
 
     response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
@@ -205,13 +205,13 @@ def test_get_note_page_index_with_data(client, mock_api):
     data = response.json()
     assert data['document_id'] == str(doc_id)
     assert data['page_index'] == page_index
-    mock_api.get_document_page_index.assert_called_once_with(doc_id)
+    mock_api.get_note_page_index.assert_called_once_with(doc_id)
 
 
 def test_get_note_page_index_none(client, mock_api):
     """GET /notes/{document_id}/page-index returns null page_index when note has none."""
     doc_id = UUID('00000000-0000-0000-0000-000000000098')
-    mock_api.get_document_page_index.return_value = None
+    mock_api.get_note_page_index.return_value = None
 
     response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
@@ -226,7 +226,7 @@ def test_get_note_page_index_not_found(client, mock_api):
     from memex_common.exceptions import ResourceNotFoundError
 
     doc_id = UUID('00000000-0000-0000-0000-000000000097')
-    mock_api.get_document_page_index.side_effect = ResourceNotFoundError('Not found')
+    mock_api.get_note_page_index.side_effect = ResourceNotFoundError('Not found')
 
     response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 

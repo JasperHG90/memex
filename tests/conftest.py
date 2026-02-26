@@ -242,8 +242,8 @@ def reset_dspy_lm():
     original_lm = _mod.main_thread_config.get('lm')
     yield
     _mod.main_thread_config['lm'] = original_lm
-    # _mod.config_owner_thread_id = None
-    # _mod.config_owner_async_task = None
+    _mod.config_owner_thread_id = None  # type: ignore[attr-defined]
+    _mod.config_owner_async_task = None  # type: ignore[attr-defined]
 
 
 @pytest.fixture(scope='function', autouse=True)

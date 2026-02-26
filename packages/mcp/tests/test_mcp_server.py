@@ -118,7 +118,7 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     doc_id = uuid4()
     vault_id = uuid4()
     # API returns a dict, not a NoteDTO
-    mock_api.get_document.return_value = {
+    mock_api.get_note.return_value = {
         'id': doc_id,
         'doc_metadata': {'name': 'Test Doc', 'description': 'Test Description'},
         'original_text': 'Full content here.',
@@ -135,7 +135,7 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
 async def test_mcp_read_note_not_found(mock_api, mcp_client):
     """Test reading a note that doesn't exist returns the informative error."""
     doc_id = uuid4()
-    mock_api.get_document.side_effect = FileNotFoundError()
+    mock_api.get_note.side_effect = FileNotFoundError()
 
     from fastmcp.exceptions import ToolError
 

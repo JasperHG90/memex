@@ -43,8 +43,8 @@ def test_cli_note_search_success(mock_api):
         assert result.exit_code == 0
         assert 'Test Note' in result.stdout
         assert str(doc_id) in result.stdout
-        assert 'This is a' in result.stdout
-        assert 'test snippet' in result.stdout
+        assert 'This is a test' in result.stdout
+        assert 'snippet.' in result.stdout
 
 
 def test_cli_note_search_empty(mock_api):

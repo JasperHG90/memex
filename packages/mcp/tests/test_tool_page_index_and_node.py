@@ -15,7 +15,7 @@ def _make_node(
 ) -> NodeDTO:
     return NodeDTO(
         id=uuid4(),
-        document_id=uuid4(),
+        note_id=uuid4(),
         vault_id=uuid4(),
         title=title,
         text=text,
@@ -39,20 +39,20 @@ async def test_memex_get_page_index_returns_json(mock_api, mcp_client):
         {'id': str(uuid4()), 'title': 'Chapter 1', 'level': 1, 'children': []},
         {'id': str(uuid4()), 'title': 'Chapter 2', 'level': 1, 'children': []},
     ]
-    mock_api.get_document_page_index.return_value = page_index
+    mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(doc_id)})
     text = result.content[0].text
 
     assert 'Chapter 1' in text
     assert 'Chapter 2' in text
-    mock_api.get_document_page_index.assert_called_once_with(doc_id)
+    mock_api.get_note_page_index.assert_called_once_with(doc_id)
 
 
 @pytest.mark.asyncio
 async def test_memex_get_page_index_no_index(mock_api, mcp_client):
     """Tool returns a helpful message when the document has no page index."""
-    mock_api.get_document_page_index.return_value = None
+    mock_api.get_note_page_index.return_value = None
 
     result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
     text = result.content[0].text
@@ -66,14 +66,14 @@ async def test_memex_get_page_index_invalid_uuid(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_get_page_index', {'note_id': 'not-a-uuid'})
     text = result.content[0].text
 
-    assert 'Invalid Document UUID' in text
-    mock_api.get_document_page_index.assert_not_called()
+    assert 'Invalid Note UUID' in text
+    mock_api.get_note_page_index.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_memex_get_page_index_exception_handling(mock_api, mcp_client):
     """Tool returns a graceful error string on unexpected failure."""
-    mock_api.get_document_page_index.side_effect = RuntimeError('DB offline')
+    mock_api.get_note_page_index.side_effect = RuntimeError('DB offline')
 
     result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
     text = result.content[0].text
@@ -98,7 +98,7 @@ async def test_memex_get_node_returns_formatted_content(mock_api, mcp_client):
 
     assert 'Background' in text
     assert str(node.id) in text
-    assert str(node.document_id) in text
+    assert str(node.note_id) in text
     assert 'Some background text.' in text
     mock_api.get_node.assert_called_once_with(node.id)
 

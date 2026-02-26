@@ -8,13 +8,13 @@ from memex_common.schemas import (
 
 @pytest.mark.asyncio
 async def test_mcp_search_expanded_output(mock_api, mcp_client):
-    """Test that search tool output contains Unit ID, Document ID, and Type."""
+    """Test that search tool output contains Unit ID, Note ID, and Type."""
     unit_id = uuid4()
     doc_id = uuid4()
     mock_api.search.return_value = [
         MemoryUnitDTO(
             id=unit_id,
-            document_id=doc_id,
+            note_id=doc_id,
             text='Python is a popular programming language.',
             fact_type=FactTypes.WORLD,
             score=0.95,
@@ -28,7 +28,7 @@ async def test_mcp_search_expanded_output(mock_api, mcp_client):
     output_text = result.content[0].text
     assert 'Found 1 results' in output_text
     assert f'[Unit ID: {unit_id}]' in output_text
-    assert f'[Document ID: {doc_id}]' in output_text
+    assert f'[Note ID: {doc_id}]' in output_text
     assert '[Type: world]' in output_text
     assert '(Score: 0.95)' in output_text
 

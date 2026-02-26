@@ -88,6 +88,6 @@ async def test_list_documents(api, mock_session):
 
     mock_session.exec.side_effect = [mock_vault_res, mock_docs_res]
 
-    result = await api.list_documents()
+    result = await api.list_notes()
 
     assert result == ['doc1', 'doc2']

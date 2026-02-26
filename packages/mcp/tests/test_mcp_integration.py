@@ -28,7 +28,7 @@ async def test_integration_search_lineage(mock_api):
     mock_api.search.return_value = [
         MemoryUnitDTO(
             id=obs_id,
-            document_id=doc_id,
+            note_id=doc_id,
             text='Python is preferred for data science.',
             fact_type=FactTypes.OBSERVATION,
             score=0.95,
@@ -74,7 +74,7 @@ async def test_integration_search_lineage(mock_api):
 @pytest.mark.asyncio
 async def test_integration_search_assets_resource(mock_api):
     """Test flow: Search -> List Assets -> Get Resource."""
-    mock_api.get_document = AsyncMock()
+    mock_api.get_note = AsyncMock()
     mock_api.get_resource = AsyncMock()
 
     # 1. Setup Search Data
@@ -83,7 +83,7 @@ async def test_integration_search_assets_resource(mock_api):
     mock_api.search.return_value = [
         MemoryUnitDTO(
             id=unit_id,
-            document_id=doc_id,
+            note_id=doc_id,
             text='Architecture diagram shows the system layout.',
             fact_type=FactTypes.WORLD,
             score=0.95,
@@ -94,7 +94,7 @@ async def test_integration_search_assets_resource(mock_api):
 
     # 2. Setup Document Data (for List Assets)
     # API returns dict, not SimpleNamespace or DTO
-    mock_api.get_document.return_value = {
+    mock_api.get_note.return_value = {
         'id': doc_id,
         'doc_metadata': {'name': 'System Arch'},
         'assets': ['assets/arch.png'],

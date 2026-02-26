@@ -4,7 +4,7 @@ from memex_dashboard.pages.search import SearchState, SearchResult
 from memex_dashboard.pages.lineage import LineageState, LineageNode
 from memex_dashboard.pages.entity import EntityState, GraphNode, GraphEdge
 from memex_dashboard.state import State
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 
 
 @pytest.fixture
@@ -200,9 +200,9 @@ class TestQuickNote:
         mock_api_client_state.api.ingest.assert_called_once()
         call_args = mock_api_client_state.api.ingest.call_args[0][0]
 
-        assert isinstance(call_args, NoteDTO)
+        assert isinstance(call_args, NoteCreateDTO)
         assert call_args.name == 'Quick Note'
-        # NoteDTO.content stores Base64 encoded bytes
+        # NoteCreateDTO.content stores Base64 encoded bytes
         assert call_args.content == b'SW1wb3J0YW50IGlkZWE='
         assert 'dashboard' in call_args.tags
 

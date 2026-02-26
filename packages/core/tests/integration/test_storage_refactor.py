@@ -46,7 +46,7 @@ async def test_ingest_storage_refactor(
     # Ingest
     result = await api.ingest(note)
     assert result['status'] == 'success'
-    doc_id_str = result['document_id']
+    doc_id_str = result['note_id']
     doc_id_uuid = UUID(doc_id_str)
 
     # 1. Verify Note NOT in FileStore (NOTE.md) under old path
@@ -82,8 +82,8 @@ async def test_ingest_storage_refactor(
     expected_fs_path = f'assets/{vault_name}/{doc_id_str}'
     assert doc.filestore_path == expected_fs_path
 
-    # 4. Verify get_document API
-    doc_dto = await api.get_document(doc_id_uuid)
+    # 4. Verify get_note API
+    doc_dto = await api.get_note(doc_id_uuid)
     assert doc_dto['original_text'] == content.decode('utf-8')
     assert doc_dto['assets'] == [asset_path]
 
@@ -119,7 +119,7 @@ async def test_ingest_no_assets(
     )
 
     result = await api.ingest(note)
-    doc_id_str = result['document_id']
+    doc_id_str = result['note_id']
     doc_id_uuid = UUID(doc_id_str)
 
     doc = await session.get(Document, doc_id_uuid)

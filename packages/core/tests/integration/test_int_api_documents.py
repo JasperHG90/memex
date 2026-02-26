@@ -35,8 +35,8 @@ async def test_int_documents_api(api, metastore, memex_config):
     # Update config to search in the correct vault
     memex_config.server.active_vault = str(vault_id)
 
-    # 2. Test get_document
-    doc_result = await api.get_document(doc_id)
+    # 2. Test get_note
+    doc_result = await api.get_note(doc_id)
     assert doc_result['id'] == doc_id
     assert doc_result['doc_metadata'] == doc_metadata
 
@@ -52,8 +52,8 @@ async def test_int_documents_api(api, metastore, memex_config):
     assert dto.id == doc_id
     assert dto.vault_id == vault_id
 
-    # 3. Test list_documents
-    docs_list = await api.list_documents()
+    # 3. Test list_notes
+    docs_list = await api.list_notes()
     assert len(docs_list) == 1
     d = docs_list[0]
 
@@ -70,8 +70,8 @@ async def test_int_documents_api(api, metastore, memex_config):
 
 
 @pytest.mark.asyncio
-async def test_int_get_document_page_index_with_data(api, metastore):
-    """get_document_page_index returns the stored page_index when present."""
+async def test_int_get_note_page_index_with_data(api, metastore):
+    """get_note_page_index returns the stored page_index when present."""
     from memex_common.config import GLOBAL_VAULT_ID
 
     page_index = {
@@ -109,14 +109,14 @@ async def test_int_get_document_page_index_with_data(api, metastore):
         )
         await session.commit()
 
-    result = await api.get_document_page_index(doc_id)
+    result = await api.get_note_page_index(doc_id)
 
     assert result == page_index
 
 
 @pytest.mark.asyncio
-async def test_int_get_document_page_index_none_when_absent(api, metastore):
-    """get_document_page_index returns None for documents without a page index."""
+async def test_int_get_note_page_index_none_when_absent(api, metastore):
+    """get_note_page_index returns None for documents without a page index."""
     from memex_common.config import GLOBAL_VAULT_ID
 
     doc_id = uuid4()
@@ -132,15 +132,15 @@ async def test_int_get_document_page_index_none_when_absent(api, metastore):
         )
         await session.commit()
 
-    result = await api.get_document_page_index(doc_id)
+    result = await api.get_note_page_index(doc_id)
 
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_int_get_document_page_index_not_found(api):
-    """get_document_page_index raises ResourceNotFoundError for missing documents."""
+async def test_int_get_note_page_index_not_found(api):
+    """get_note_page_index raises ResourceNotFoundError for missing documents."""
     missing_id = uuid4()
 
     with pytest.raises(ResourceNotFoundError):
-        await api.get_document_page_index(missing_id)
+        await api.get_note_page_index(missing_id)

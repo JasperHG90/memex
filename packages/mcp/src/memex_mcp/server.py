@@ -186,7 +186,7 @@ async def memex_get_lineage(
 )
 async def memex_list_assets(
     ctx: Context,
-    document_id: Annotated[str, Field(description='The UUID of the document.')],
+    note_id: Annotated[str, Field(description='The UUID of the note.')],
 ) -> str:
     """
     List assets for a note.
@@ -194,14 +194,14 @@ async def memex_list_assets(
     try:
         api = get_api(ctx)
         try:
-            uuid_obj = UUID(document_id)
+            uuid_obj = UUID(note_id)
         except ValueError:
-            return f'Invalid Note UUID: {document_id}'
+            return f'Invalid Note UUID: {note_id}'
 
         try:
             note = await api.get_note(uuid_obj)
         except FileNotFoundError:
-            return f'Note {document_id} not found.'
+            return f'Note {note_id} not found.'
 
         assets = note.get('assets', [])
 
@@ -580,7 +580,7 @@ async def memex_search(
                 unit_type = unit_type.value
 
             output.append(
-                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Document ID: {res.document_id}]{score_str}\n   {snippet}\n'
+                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]{score_str}\n   {snippet}\n'
             )
 
         return '\n'.join(output)
@@ -679,15 +679,15 @@ async def memex_doc_search(
 )
 async def memex_get_page_index(
     ctx: Context,
-    document_id: Annotated[str, Field(description='The UUID of the note.')],
+    note_id: Annotated[str, Field(description='The UUID of the note.')],
 ) -> str:
     """Get the hierarchical page index for a note."""
     try:
         api = get_api(ctx)
         try:
-            uuid_obj = UUID(document_id)
+            uuid_obj = UUID(note_id)
         except ValueError:
-            return f'Invalid Note UUID: {document_id}'
+            return f'Invalid Note UUID: {note_id}'
 
         page_index = await api.get_note_page_index(uuid_obj)
         if page_index is None:

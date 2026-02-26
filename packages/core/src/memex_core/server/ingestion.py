@@ -20,7 +20,7 @@ from memex_common.schemas import (
     IngestFileRequest,
     IngestResponse,
     IngestURLRequest,
-    NoteDTO,
+    NoteCreateDTO,
 )
 
 from memex_core.api import MemexAPI, Note
@@ -31,11 +31,11 @@ router = APIRouter(prefix='/api/v1')
 
 @router.post('/ingestions', response_model=IngestResponse)
 async def ingest_note(
-    request: Annotated[NoteDTO, Body()], api: Annotated[MemexAPI, Depends(get_api)]
+    request: Annotated[NoteCreateDTO, Body()], api: Annotated[MemexAPI, Depends(get_api)]
 ):
     """Ingest a note artifact."""
     try:
-        # NoteDTO now uses Base64 encoded bytes for content and files.
+        # NoteCreateDTO now uses Base64 encoded bytes for content and files.
         # We MUST decode these to raw bytes for the internal Note object
         # so that they are stored correctly (e.g., as raw images) in the filestore.
 

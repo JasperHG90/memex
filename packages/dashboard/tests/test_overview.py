@@ -47,7 +47,7 @@ async def test_fetch_metrics():
         assert len(state.recent_memories) == 2
         assert state.recent_memories[0]['title'] == 'Doc One'
         # Fallback logic check
-        assert state.recent_memories[1]['title'] == 'Document doc2'
+        assert state.recent_memories[1]['title'] == 'Note doc2'
 
         # Check graph
         assert state.token_usage_graph is not None

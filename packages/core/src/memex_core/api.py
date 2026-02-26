@@ -752,8 +752,8 @@ ingested_at: {now}
                 agent_name='user',
             )
 
-            # Inject document_id into result for clients
-            result['document_id'] = note_uuid
+            # Inject note_id into result for clients
+            result['note_id'] = note_uuid
             result['status'] = 'success'
 
             # Transaction commit happens on exit
@@ -907,27 +907,27 @@ ingested_at: {now}
         """
         return await self.filestore.load(path)
 
-    async def get_document(self, document_id: UUID) -> dict[str, Any]:
+    async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """
         Retrieve a single document by ID.
         """
         from memex_core.memory.sql_models import Document
 
         async with self.metastore.session() as session:
-            doc = await session.get(Document, document_id)
+            doc = await session.get(Document, note_id)
             if not doc:
-                raise ResourceNotFoundError(f'Document {document_id} not found.')
+                raise ResourceNotFoundError(f'Document {note_id} not found.')
 
             return doc.model_dump()
 
-    async def get_document_page_index(self, document_id: UUID) -> dict[str, Any] | None:
+    async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index (slim tree) for a document, or None if not indexed."""
         from memex_core.memory.sql_models import Document
 
         async with self.metastore.session() as session:
-            doc = await session.get(Document, document_id)
+            doc = await session.get(Document, note_id)
             if not doc:
-                raise ResourceNotFoundError(f'Document {document_id} not found.')
+                raise ResourceNotFoundError(f'Document {note_id} not found.')
             return doc.page_index
 
     async def get_node(self, node_id: UUID) -> NodeDTO | None:
@@ -940,7 +940,7 @@ ingested_at: {now}
                 return None
             return NodeDTO.model_validate(node)
 
-    async def list_documents(self, limit: int = 100, offset: int = 0) -> list[Any]:
+    async def list_notes(self, limit: int = 100, offset: int = 0) -> list[Any]:
         """
         List ingested documents.
         Filters by the active vault (write target).
@@ -1216,7 +1216,7 @@ ingested_at: {now}
 
         return prediction.summary
 
-    async def search_documents(
+    async def search_notes(
         self,
         query: str,
         limit: int = 10,
@@ -1258,10 +1258,10 @@ ingested_at: {now}
         async with self.metastore.session() as session:
             return await self._doc_search.search(session, request)
 
-    async def resolve_source_documents(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
+    async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
         """
-        Resolve the source document ID for a list of Memory Unit IDs.
-        Returns a map of {unit_id: document_id}.
+        Resolve the source note ID for a list of Memory Unit IDs.
+        Returns a map of {unit_id: note_id}.
         """
         from memex_core.memory.sql_models import MemoryUnit
         from sqlmodel import select
@@ -1270,9 +1270,7 @@ ingested_at: {now}
             return {}
 
         async with self.metastore.session() as session:
-            stmt = select(MemoryUnit.id, MemoryUnit.document_id).where(
-                col(MemoryUnit.id).in_(unit_ids)
-            )
+            stmt = select(MemoryUnit.id, MemoryUnit.note_id).where(col(MemoryUnit.id).in_(unit_ids))
             results = (await session.exec(stmt)).all()
 
             return {row[0]: row[1] for row in results if row[1] is not None}
@@ -1505,7 +1503,7 @@ ingested_at: {now}
             _VAULT_RESOLUTION_CACHE.clear()
             return True
 
-    async def delete_document(self, document_id: UUID) -> bool:
+    async def delete_note(self, note_id: UUID) -> bool:
         """
         Delete a document and all associated data.
 
@@ -1515,10 +1513,10 @@ ingested_at: {now}
         """
         from memex_core.memory.sql_models import Document
 
-        async with AsyncTransaction(self.metastore, self.filestore, str(document_id)) as txn:
-            doc = await txn.db_session.get(Document, document_id)
+        async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
+            doc = await txn.db_session.get(Document, note_id)
             if not doc:
-                raise DocumentNotFoundError(f'Document {document_id} not found.')
+                raise DocumentNotFoundError(f'Document {note_id} not found.')
 
             # Stage filestore deletes (deferred until commit)
             if doc.assets:

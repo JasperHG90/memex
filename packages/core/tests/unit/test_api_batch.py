@@ -42,7 +42,7 @@ async def test_ingest_batch_internal_success(api, mock_metastore, mock_filestore
         assert final_result['processed_count'] == 1
         assert final_result['skipped_count'] == 0
         assert final_result['failed_count'] == 0
-        assert len(final_result['document_ids']) == 1
+        assert len(final_result['note_ids']) == 1
 
         # Verify idempotency check called
         mock_session.exec.assert_called()
@@ -79,4 +79,4 @@ async def test_ingest_batch_internal_skips_duplicates(api, mock_metastore, mock_
     assert final_result['processed_count'] == 0
     assert final_result['skipped_count'] == 1
     assert final_result['failed_count'] == 0
-    assert len(final_result['document_ids']) == 0
+    assert len(final_result['note_ids']) == 0

@@ -81,13 +81,13 @@ def test_retrieve_lineage_resolution(client, mock_api):
 
     # Verify Fact Lineage
     assert data[0]['id'] == str(fact_unit_id)
-    assert 'source_document_ids' in data[0]
-    assert data[0]['source_document_ids'] == [str(doc_1)]
+    assert 'source_note_ids' in data[0]
+    assert data[0]['source_note_ids'] == [str(doc_1)]
 
     # Verify Opinion Lineage
     assert data[1]['id'] == str(opinion_unit_id)
-    assert 'source_document_ids' in data[1]
-    assert data[1]['source_document_ids'] == [str(doc_2)]
+    assert 'source_note_ids' in data[1]
+    assert data[1]['source_note_ids'] == [str(doc_2)]
 
     # Verify we called resolution with the correct evidence ID
     mock_api.resolve_source_documents.assert_called_once()

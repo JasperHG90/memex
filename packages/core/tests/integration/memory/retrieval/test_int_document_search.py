@@ -119,7 +119,7 @@ class TestDocumentSearchEngine:
         results = await search_engine.search(session, request)
 
         assert len(results) >= 1
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc.id in doc_ids
 
     async def test_keyword_search_returns_matching_document(
@@ -141,7 +141,7 @@ class TestDocumentSearchEngine:
         results = await search_engine.search(session, request)
 
         assert len(results) >= 1
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc.id in doc_ids
 
     async def test_graph_first_order_search(
@@ -179,7 +179,7 @@ class TestDocumentSearchEngine:
         results = await search_engine.search(session, request)
 
         assert len(results) >= 1
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc.id in doc_ids
 
     async def test_graph_second_order_via_cooccurrence(
@@ -227,7 +227,7 @@ class TestDocumentSearchEngine:
         )
         results = await search_engine.search(session, request)
 
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc_mars.id in doc_ids, (
             'Failed to retrieve document via 2nd-order co-occurrence graph traversal.'
         )
@@ -268,7 +268,7 @@ class TestDocumentSearchEngine:
         results = await search_engine.search(session, request)
 
         assert len(results) >= 1
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc.id in doc_ids
 
     async def test_limit_respected(self, session: AsyncSession, search_engine, embedder) -> None:
@@ -340,8 +340,8 @@ class TestDocumentSearchEngine:
         assert len(results_default) >= 1
         assert len(results_weighted) >= 1
 
-        default_ids = [r.document_id for r in results_default]
-        weighted_ids = [r.document_id for r in results_weighted]
+        default_ids = [r.note_id for r in results_default]
+        weighted_ids = [r.note_id for r in results_weighted]
         assert doc.id in default_ids
         assert doc.id in weighted_ids
 
@@ -369,7 +369,7 @@ class TestDocumentSearchEngine:
 
         assert len(results) >= 1
         # Find the result for our document
-        doc_result = next((r for r in results if r.document_id == doc.id), None)
+        doc_result = next((r for r in results if r.note_id == doc.id), None)
         assert doc_result is not None
         # Should have multiple snippets (one per matching chunk)
         assert len(doc_result.snippets) >= 2
@@ -394,7 +394,7 @@ class TestDocumentSearchEngine:
         )
         results = await search_engine.search(session, request)
 
-        doc_result = next((r for r in results if r.document_id == doc.id), None)
+        doc_result = next((r for r in results if r.note_id == doc.id), None)
         assert doc_result is not None
         assert doc_result.metadata.get('source') == 'test'
         assert doc_result.metadata.get('name') == 'My Research Note'
@@ -435,7 +435,7 @@ class TestDocumentSearchEngine:
         )
         results = await search_engine.search(session, request)
 
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         assert doc.id in doc_ids, (
             'Graph strategy should resolve entity alias "Tesla" → "Tesla Motors".'
         )

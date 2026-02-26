@@ -1,6 +1,6 @@
 import pytest
 from uuid import uuid4
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import NoteCreateDTO
 
 
 @pytest.mark.asyncio
@@ -28,5 +28,5 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
 
     args, _ = mock_api.ingest.call_args
     note_dto = args[0]
-    assert isinstance(note_dto, NoteDTO)
+    assert isinstance(note_dto, NoteCreateDTO)
     assert note_dto.note_key == key

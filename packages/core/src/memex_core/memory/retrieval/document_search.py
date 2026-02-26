@@ -148,7 +148,7 @@ class DocumentSearchEngine:
                 session, results, request.query, self.lm
             )
             for r in results:
-                r.reasoning = reasoning.reasoning_by_doc.get(r.document_id)
+                r.reasoning = reasoning.reasoning_by_doc.get(r.note_id)
             if request.summarize:
                 results = await self._synthesize_answer(
                     results, request.query, reasoning.section_texts, self.lm
@@ -174,7 +174,7 @@ class DocumentSearchEngine:
             Tuple of (updated_results, ReasoningOutput).
         """
         # Collect document IDs that have page_index
-        doc_ids = [r.document_id for r in results]
+        doc_ids = [r.note_id for r in results]
         doc_stmt = (
             select(Document.id, Document.page_index)
             .where(col(Document.id).in_(doc_ids))
@@ -557,7 +557,7 @@ class DocumentSearchEngine:
 
             final_results.append(
                 NoteSearchResult(
-                    document_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
+                    note_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
                 )
             )
 

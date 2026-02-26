@@ -43,9 +43,9 @@ async def list_notes(
     """
     try:
         if sort == '-created_at':
-            docs = await api.get_recent_documents(limit=limit)
+            docs = await api.get_recent_notes(limit=limit)
         else:
-            docs = await api.list_documents(limit=limit, offset=offset)
+            docs = await api.list_notes(limit=limit, offset=offset)
         return ndjson_response([build_document_dto(d) for d in docs])
     except Exception as e:
         raise _handle_error(e, 'Failed to list notes')
@@ -62,7 +62,7 @@ async def search_notes(
 ):
     """Search for notes using multi-query expansion and note-level fusion."""
     try:
-        results = await api.search_documents(
+        results = await api.search_notes(
             query=request.query,
             limit=request.limit,
             vault_ids=request.vault_ids,
@@ -82,7 +82,7 @@ async def search_notes(
 async def get_note_page_index(document_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get the page index (slim tree) for a note."""
     try:
-        page_index = await api.get_document_page_index(document_id)
+        page_index = await api.get_note_page_index(document_id)
         return {'document_id': document_id, 'page_index': page_index}
     except Exception as e:
         raise _handle_error(e, 'Failed to get page index')
@@ -92,7 +92,7 @@ async def get_note_page_index(document_id: UUID, api: Annotated[MemexAPI, Depend
 async def get_note(document_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get a note by ID."""
     try:
-        doc = await api.get_document(document_id)
+        doc = await api.get_note(document_id)
         return build_document_dto(doc)
     except Exception as e:
         raise _handle_error(e, 'Failed to get note')
@@ -116,7 +116,7 @@ async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) ->
 async def delete_note(document_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a note and all associated data (memory units, chunks, links, assets)."""
     try:
-        await api.delete_document(document_id)
+        await api.delete_note(document_id)
         return {'status': 'success'}
     except Exception as e:
         raise _handle_error(e, 'Note deletion failed')
