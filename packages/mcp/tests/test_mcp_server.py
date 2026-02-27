@@ -1,6 +1,7 @@
 import datetime as dt
 import pytest
 from uuid import uuid4
+from fastmcp.exceptions import ToolError
 from memex_common.schemas import (
     IngestResponse,
     NoteDTO,
@@ -16,7 +17,6 @@ async def test_mcp_reflect_tool(mock_api, mcp_client):
     """Test the reflect tool via the MCP Client."""
     entity_id = uuid4()
 
-    # Mock result from API using real DTOs
     mock_api.reflect_batch.return_value = [
         ReflectionResultDTO(
             entity_id=entity_id,
@@ -52,7 +52,6 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
     assert f'ID: {doc_id}' in result.content[0].text
     mock_api.ingest.assert_called_once()
 
-    # Verify it was called with NoteDTO
     from memex_common.schemas import NoteCreateDTO
 
     args, _ = mock_api.ingest.call_args
@@ -63,7 +62,6 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
 @pytest.mark.asyncio
 async def test_mcp_search_tool(mock_api, mcp_client):
     """Test the search tool via the MCP Client."""
-    # Mock search results
     unit_id = uuid4()
     mock_api.search.return_value = [
         MemoryUnitDTO(
@@ -87,6 +85,29 @@ async def test_mcp_search_tool(mock_api, mcp_client):
     call_args = mock_api.search.call_args[1]
     assert call_args['query'] == 'python language'
     assert call_args['limit'] == 5
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_includes_date(mock_api, mcp_client):
+    """Search results should include dates when available."""
+    unit_id = uuid4()
+    ts = dt.datetime(2025, 6, 15, 12, 0, tzinfo=dt.timezone.utc)
+    mock_api.search.return_value = [
+        MemoryUnitDTO(
+            id=unit_id,
+            text='Event happened.',
+            fact_type=FactTypes.WORLD,
+            score=0.8,
+            vault_id=uuid4(),
+            metadata={},
+            mentioned_at=ts,
+        )
+    ]
+
+    result = await mcp_client.call_tool('memex_search', {'query': 'event'})
+    text = result.content[0].text
+
+    assert '(Date: 2025-06-15' in text
 
 
 @pytest.mark.asyncio
@@ -134,11 +155,9 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_mcp_read_note_not_found(mock_api, mcp_client):
-    """Test reading a note that doesn't exist returns the informative error."""
+    """Test reading a note that doesn't exist raises ToolError."""
     doc_id = uuid4()
     mock_api.get_note.side_effect = FileNotFoundError()
-
-    from fastmcp.exceptions import ToolError
 
     with pytest.raises(ToolError) as excinfo:
         await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
@@ -155,6 +174,17 @@ async def test_mcp_list_tools(mcp_client):
     assert 'memex_reflect' in names
     assert 'memex_add_note' in names
     assert 'memex_search' in names
+    assert 'memex_note_search' in names
+    assert 'memex_list_vaults' in names
+    assert 'memex_list_notes' in names
+    assert 'memex_list_entities' in names
+    assert 'memex_get_entity' in names
+    assert 'memex_get_entity_mentions' in names
+    assert 'memex_get_entity_cooccurrences' in names
+    assert 'memex_get_memory_unit' in names
+    assert 'memex_ingest_url' in names
+    # Renamed tools should not exist
+    assert 'memex_doc_search' not in names
     assert 'memex_adjust_belief' not in names
 
 
@@ -162,7 +192,5 @@ async def test_mcp_list_tools(mcp_client):
 async def test_mcp_list_prompts(mcp_client):
     """Verify that prompts are registered (if any)."""
     prompts = await mcp_client.list_prompts()
-    # FastMCP should auto-load from the prompts directory if configured
-    # Currently, prompts are not auto-loaded or configured in server.py, so we expect empty list.
     names = [p.name for p in prompts]
     assert names == []
