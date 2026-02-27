@@ -34,7 +34,7 @@ DEFAULT_GLOBAL_CONFIG = DEFAULT_CONFIG_DIR / 'config.yaml'
 app = typer.Typer(
     cls=LazyTyperGroup,
     help='Memex: Long-term memory and knowledge management for LLMs.',
-    no_args_is_help=True,
+    invoke_without_command=True,
     context_settings={'help_option_names': ['-h', '--help']},
 )
 
@@ -176,6 +176,16 @@ def main(
             logger.info("Run 'memex init' to generate a valid configuration.")
 
         raise typer.Exit(code=1)
+
+    # Show banner + help for bare `memex` invocation (no subcommand)
+    if ctx.invoked_subcommand is None:
+        from memex_cli.banner import print_banner
+
+        print_banner(Console(stderr=True))
+        import click
+
+        click.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 if __name__ == '__main__':

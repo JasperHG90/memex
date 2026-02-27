@@ -49,3 +49,37 @@ async def get_note_lineage(
         )
     except Exception as e:
         raise _handle_error(e, f'Failed to retrieve lineage for note {id}')
+
+
+VALID_LINEAGE_TYPES = {'note', 'entity', 'memory_unit', 'observation', 'mental_model'}
+
+
+@router.get('/lineage/{entity_type}/{id}', response_model=LineageResponse)
+async def get_lineage(
+    entity_type: str,
+    id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    direction: LineageDirection = LineageDirection.UPSTREAM,
+    depth: int = 3,
+    limit: int = 10,
+):
+    """Get the lineage of any entity type."""
+    if entity_type not in VALID_LINEAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Invalid entity type: {entity_type}. Must be one of: {VALID_LINEAGE_TYPES}',
+        )
+    # The API only understands 'mental_model', not 'entity'
+    resolved_type = 'mental_model' if entity_type == 'entity' else entity_type
+    try:
+        return await api.get_lineage(
+            entity_type=resolved_type,
+            entity_id=id,
+            direction=direction,
+            depth=depth,
+            limit=limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise _handle_error(e, f'Failed to retrieve lineage for {entity_type} {id}')

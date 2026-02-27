@@ -149,6 +149,10 @@ def start(
     ),
 ):
     """Start the Memex Core API server."""
+    from memex_cli.banner import print_banner
+
+    print_banner(console)
+
     check_core_installed()
 
     # Check if already running via PID file

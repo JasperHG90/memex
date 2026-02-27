@@ -47,3 +47,15 @@ build-openclaw:
 # Test OpenClaw memory plugin
 test-openclaw:
   cd packages/openclaw && npx vitest run
+
+# Start new dashboard in dev mode
+dashboard-ui-dev:
+  cd packages/dashboard-ui && npm run dev
+
+# Build new dashboard for production
+dashboard-ui-build:
+  cd packages/dashboard-ui && npm run build
+
+# Generate API types from OpenAPI spec
+dashboard-ui-generate-api:
+  cd packages/dashboard-ui && npm run generate-api

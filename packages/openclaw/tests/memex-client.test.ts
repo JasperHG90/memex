@@ -39,10 +39,10 @@ describe('MemexClient', () => {
       expect(body.query).toBe('test query');
       expect(body.limit).toBe(5);
       expect(body.skip_opinion_formation).toBe(true);
-      expect(body.vault_ids).toBeUndefined();
+      expect(body.vault_ids).toEqual(['OpenClaw']);
     });
 
-    it('includes vault_ids when vaultId is configured', async () => {
+    it('includes vault_ids with vaultId when explicitly configured', async () => {
       const config = makeConfig({ vaultId: 'vault-42' });
       const client = new MemexClient(config);
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
@@ -51,6 +51,17 @@ describe('MemexClient', () => {
 
       const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
       expect(body.vault_ids).toEqual(['vault-42']);
+    });
+
+    it('uses vaultName as fallback when vaultId is null', async () => {
+      const config = makeConfig({ vaultId: null, vaultName: 'MyVault' });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query');
+
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.vault_ids).toEqual(['MyVault']);
     });
 
     it('parses NDJSON stream into MemoryUnitDTO array', async () => {
@@ -66,7 +77,15 @@ describe('MemexClient', () => {
       expect(result[1]!.text).toBe('fact two');
     });
 
-    it('throws on non-ok response', async () => {
+    it('returns empty array on 404 (vault not found)', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      const result = await client.searchMemories('query');
+      expect(result).toEqual([]);
+    });
+
+    it('throws on non-ok response other than 404', async () => {
       const client = new MemexClient(makeConfig());
       fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Internal Server Error'));
 
@@ -180,7 +199,7 @@ describe('MemexClient', () => {
       expect(init.method).toBe('POST');
     });
 
-    it('merges vault_id from config', async () => {
+    it('merges vault_id from config when vaultId is set', async () => {
       const config = makeConfig({ vaultId: 'v-99' });
       const client = new MemexClient(config);
       fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
@@ -197,6 +216,25 @@ describe('MemexClient', () => {
 
       const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
       expect(body.vault_id).toBe('v-99');
+    });
+
+    it('uses vaultName as vault_id fallback when vaultId is null', async () => {
+      const config = makeConfig({ vaultId: null, vaultName: 'MyVault' });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+      client.ingestNote({
+        name: 'test',
+        description: 'desc',
+        content: 'c',
+      });
+
+      await vi.waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledOnce();
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.vault_id).toBe('MyVault');
     });
 
     it('logs warning on non-ok response', async () => {
@@ -233,6 +271,386 @@ describe('MemexClient', () => {
       });
 
       expect(warnSpy.mock.calls[0]![0]).toMatch(/Network down/);
+    });
+
+    it('uses injected logger.warn when provided', async () => {
+      const logger = { warn: vi.fn() };
+      const client = new MemexClient(makeConfig(), logger);
+      fetchSpy.mockRejectedValueOnce(new Error('fail'));
+
+      client.ingestNote({ name: 'n', description: 'd', content: 'c' });
+
+      await vi.waitFor(() => {
+        expect(logger.warn).toHaveBeenCalledOnce();
+      });
+
+      expect(logger.warn.mock.calls[0]![0]).toMatch(/Background ingest failed/);
+    });
+
+    it('falls back to console.warn when no logger provided', async () => {
+      const client = new MemexClient(makeConfig());
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fetchSpy.mockRejectedValueOnce(new Error('oops'));
+
+      client.ingestNote({ name: 'n', description: 'd', content: 'c' });
+
+      await vi.waitFor(() => {
+        expect(warnSpy).toHaveBeenCalledOnce();
+      });
+
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/Background ingest failed/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // searchNotes
+  // -----------------------------------------------------------------------
+
+  describe('searchNotes', () => {
+    it('sends correct request body with defaults', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.searchNotes('find me');
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/notes/search');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.query).toBe('find me');
+      expect(body.limit).toBe(5);
+      expect(body.expand_query).toBe(false);
+      expect(body.reason).toBe(false);
+      expect(body.summarize).toBe(false);
+    });
+
+    it('passes custom opts', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.searchNotes('q', { limit: 3, summarize: true, reason: true });
+
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.limit).toBe(3);
+      expect(body.summarize).toBe(true);
+      expect(body.reason).toBe(true);
+    });
+
+    it('returns parsed JSON array', async () => {
+      const results = [{ note_id: 'n1', snippets: [], score: 0.9 }];
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse(results));
+
+      const res = await client.searchNotes('q');
+
+      expect(res).toHaveLength(1);
+      expect(res[0]!.note_id).toBe('n1');
+    });
+
+    it('returns empty array on 404 (vault not found)', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      const result = await client.searchNotes('q');
+      expect(result).toEqual([]);
+    });
+
+    it('throws on non-ok response other than 404', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Internal Server Error'));
+
+      await expect(client.searchNotes('q')).rejects.toThrow(
+        /Memex note search failed: 500/,
+      );
+    });
+
+    it('passes abort signal', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+      const controller = new AbortController();
+
+      await client.searchNotes('q', undefined, controller.signal);
+
+      expect(fetchSpy.mock.calls[0]![1].signal).toBe(controller.signal);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getNote
+  // -----------------------------------------------------------------------
+
+  describe('getNote', () => {
+    it('fetches correct URL', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ id: 'note-1', title: 'My Note' }));
+
+      await client.getNote('note-1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe('http://localhost:8000/api/v1/notes/note-1');
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { id: 'note-1', title: 'My Note' };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      const result = await client.getNote('note-1');
+
+      expect(result).toEqual(data);
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getNote('bad-id')).rejects.toThrow(
+        /Memex getNote failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getPageIndex
+  // -----------------------------------------------------------------------
+
+  describe('getPageIndex', () => {
+    it('fetches correct URL', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ toc: [] }));
+
+      await client.getPageIndex('note-1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe(
+        'http://localhost:8000/api/v1/notes/note-1/page-index',
+      );
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { toc: [{ id: 'n1', title: 'Intro', level: 1, seq: 0, children: [] }] };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      const result = await client.getPageIndex('note-1');
+
+      expect(result.toc).toHaveLength(1);
+      expect(result.toc[0]!.title).toBe('Intro');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getPageIndex('bad-id')).rejects.toThrow(
+        /Memex getPageIndex failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getNode
+  // -----------------------------------------------------------------------
+
+  describe('getNode', () => {
+    it('fetches correct URL', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ id: 'nd-1', note_id: 'n-1', title: 'Sec', text: 'body', level: 1, seq: 0 }),
+      );
+
+      await client.getNode('nd-1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe('http://localhost:8000/api/v1/nodes/nd-1');
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { id: 'nd-1', note_id: 'n-1', title: 'Sec', text: 'body', level: 1, seq: 0 };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      const result = await client.getNode('nd-1');
+
+      expect(result.id).toBe('nd-1');
+      expect(result.text).toBe('body');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getNode('bad-id')).rejects.toThrow(
+        /Memex getNode failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getLineage
+  // -----------------------------------------------------------------------
+
+  describe('getLineage', () => {
+    it('uses default entity type memory_unit', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { entity_type: 'memory_unit', entity: {}, derived_from: [] };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      await client.getLineage('unit-1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe(
+        'http://localhost:8000/api/v1/lineage/memory_unit/unit-1',
+      );
+    });
+
+    it('uses custom entity type', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { entity_type: 'observation', entity: {}, derived_from: [] };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      await client.getLineage('obs-1', 'observation');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe(
+        'http://localhost:8000/api/v1/lineage/observation/obs-1',
+      );
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { entity_type: 'memory_unit', entity: { id: 'u1' }, derived_from: [] };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      const result = await client.getLineage('u1');
+
+      expect(result.entity_type).toBe('memory_unit');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getLineage('bad-id')).rejects.toThrow(
+        /Memex getLineage failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // listEntities
+  // -----------------------------------------------------------------------
+
+  describe('listEntities', () => {
+    it('sends query and limit as URL params', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.listEntities('python', 10);
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('query=python');
+      expect(url).toContain('limit=10');
+    });
+
+    it('works without query param', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.listEntities();
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).not.toContain('query=');
+      expect(url).toContain('limit=20');
+    });
+
+    it('returns parsed JSON array', async () => {
+      const client = new MemexClient(makeConfig());
+      const entities = [{ id: 'e1', name: 'Python', entity_type: 'technology' }];
+      fetchSpy.mockResolvedValueOnce(jsonResponse(entities));
+
+      const result = await client.listEntities('Python');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.name).toBe('Python');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Internal Server Error'));
+
+      await expect(client.listEntities()).rejects.toThrow(
+        /Memex listEntities failed: 500/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getEntity
+  // -----------------------------------------------------------------------
+
+  describe('getEntity', () => {
+    it('fetches correct URL', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ id: 'e1', name: 'Python', entity_type: 'tech' }),
+      );
+
+      await client.getEntity('e1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe('http://localhost:8000/api/v1/entities/e1');
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const data = { id: 'e1', name: 'Python', entity_type: 'tech' };
+      fetchSpy.mockResolvedValueOnce(jsonResponse(data));
+
+      const result = await client.getEntity('e1');
+
+      expect(result.name).toBe('Python');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getEntity('bad-id')).rejects.toThrow(
+        /Memex getEntity failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getEntityMentions
+  // -----------------------------------------------------------------------
+
+  describe('getEntityMentions', () => {
+    it('sends limit as URL param', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.getEntityMentions('e1', 5);
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('limit=5');
+      expect(url).toContain('/entities/e1/mentions');
+    });
+
+    it('returns parsed JSON array', async () => {
+      const client = new MemexClient(makeConfig());
+      const mentions = [{ id: 'm1', text: 'fact about Python', fact_type: 'observation' }];
+      fetchSpy.mockResolvedValueOnce(jsonResponse(mentions));
+
+      const result = await client.getEntityMentions('e1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.text).toBe('fact about Python');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Internal Server Error'));
+
+      await expect(client.getEntityMentions('e1')).rejects.toThrow(
+        /Memex getEntityMentions failed: 500/,
+      );
     });
   });
 });
@@ -353,6 +771,13 @@ describe('formatConversationNote', () => {
   it('filters empty tags', () => {
     const note = formatConversationNote('msg', 'resp', ts, ['valid', '', ' ']);
     expect(note).toContain('tags: [valid]');
+  });
+
+  it('omits Assistant section when aiResponse is empty', () => {
+    const note = formatConversationNote('User question', '', ts);
+    expect(note).toContain('## User');
+    expect(note).toContain('User question');
+    expect(note).not.toContain('## Assistant');
   });
 });
 

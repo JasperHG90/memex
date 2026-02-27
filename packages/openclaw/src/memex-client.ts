@@ -1,22 +1,30 @@
 import { createHash } from 'node:crypto';
 
 import type {
+  EntityDTO,
+  EntityMentionDTO,
   IngestResponse,
+  LineageResponse,
   MemorySearchRequest,
   MemorySummaryRequest,
   MemorySummaryResponse,
   MemoryUnitDTO,
+  NodeDTO,
   NoteCreateRequest,
+  NoteSearchResult,
+  PageIndexOutput,
   PluginConfig,
 } from './types';
 
 export class MemexClient {
   private readonly baseUrl: string;
   private readonly config: PluginConfig;
+  private readonly logger?: { warn?: (msg: string) => void };
 
-  constructor(config: PluginConfig) {
+  constructor(config: PluginConfig, logger?: { warn?: (msg: string) => void }) {
     this.config = config;
     this.baseUrl = config.serverUrl.replace(/\/$/, '');
+    this.logger = logger;
   }
 
   /**
@@ -24,11 +32,12 @@ export class MemexClient {
    * Returns a stream of MemoryUnitDTO via NDJSON.
    */
   async searchMemories(query: string, signal?: AbortSignal): Promise<MemoryUnitDTO[]> {
+    const vaultIdentifier = this.config.vaultId ?? this.config.vaultName;
     const request: MemorySearchRequest = {
       query,
       limit: this.config.searchLimit,
       skip_opinion_formation: true,
-      ...(this.config.vaultId != null ? { vault_ids: [this.config.vaultId] } : {}),
+      vault_ids: [vaultIdentifier],
     };
 
     const response = await fetch(`${this.baseUrl}/api/v1/memories/search`, {
@@ -39,6 +48,12 @@ export class MemexClient {
     });
 
     if (!response.ok) {
+      // 404 = vault not found or empty — treat as "no memories" rather than
+      // a hard error so the agent doesn't retry in an infinite loop.
+      if (response.status === 404) {
+        this.logger?.warn?.(`Memex vault not found (404) — returning empty results`);
+        return [];
+      }
       throw new Error(`Memex search failed: ${response.status} ${response.statusText}`);
     }
 
@@ -75,9 +90,10 @@ export class MemexClient {
    * Fire-and-forget: returns 202 immediately; errors are logged, never thrown.
    */
   ingestNote(request: NoteCreateRequest): void {
+    const vaultIdentifier = this.config.vaultId ?? this.config.vaultName;
     const body: NoteCreateRequest = {
       ...request,
-      ...(this.config.vaultId != null ? { vault_id: this.config.vaultId } : {}),
+      vault_id: vaultIdentifier,
     };
 
     void fetch(`${this.baseUrl}/api/v1/ingestions?background=true`, {
@@ -94,8 +110,135 @@ export class MemexClient {
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[memex-openclaw] Background ingest failed: ${message}`);
+        const warn = this.logger?.warn ?? console.warn;
+        warn(`[memex-openclaw] Background ingest failed: ${message}`);
       });
+  }
+
+  /**
+   * POST /api/v1/notes/search
+   * Search source notes with optional synthesis.
+   */
+  async searchNotes(
+    query: string,
+    opts?: { limit?: number; expand_query?: boolean; reason?: boolean; summarize?: boolean },
+    signal?: AbortSignal,
+  ): Promise<NoteSearchResult[]> {
+    const body = {
+      query,
+      limit: opts?.limit ?? 5,
+      expand_query: opts?.expand_query ?? false,
+      reason: opts?.reason ?? false,
+      summarize: opts?.summarize ?? false,
+    };
+
+    const response = await fetch(`${this.baseUrl}/api/v1/notes/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        this.logger?.warn?.(`Memex vault not found (404) — returning empty note results`);
+        return [];
+      }
+      throw new Error(`Memex note search failed: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json() as Promise<NoteSearchResult[]>;
+  }
+
+  /** GET /api/v1/notes/{id} */
+  async getNote(noteId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/v1/notes/${noteId}`, { signal });
+    if (!response.ok) {
+      throw new Error(`Memex getNote failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<Record<string, unknown>>;
+  }
+
+  /** GET /api/v1/notes/{id}/page-index */
+  async getPageIndex(noteId: string, signal?: AbortSignal): Promise<PageIndexOutput> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/notes/${noteId}/page-index`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex getPageIndex failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<PageIndexOutput>;
+  }
+
+  /** GET /api/v1/nodes/{id} */
+  async getNode(nodeId: string, signal?: AbortSignal): Promise<NodeDTO> {
+    const response = await fetch(`${this.baseUrl}/api/v1/nodes/${nodeId}`, { signal });
+    if (!response.ok) {
+      throw new Error(`Memex getNode failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<NodeDTO>;
+  }
+
+  /** GET /api/v1/lineage/{type}/{id} */
+  async getLineage(
+    unitId: string,
+    entityType = 'memory_unit',
+    signal?: AbortSignal,
+  ): Promise<LineageResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/lineage/${entityType}/${unitId}`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex getLineage failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<LineageResponse>;
+  }
+
+  /** GET /api/v1/entities */
+  async listEntities(
+    query?: string,
+    limit = 20,
+    signal?: AbortSignal,
+  ): Promise<EntityDTO[]> {
+    const params = new URLSearchParams();
+    if (query) params.set('query', query);
+    params.set('limit', String(limit));
+    const qs = params.toString();
+    const response = await fetch(`${this.baseUrl}/api/v1/entities?${qs}`, { signal });
+    if (!response.ok) {
+      throw new Error(`Memex listEntities failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<EntityDTO[]>;
+  }
+
+  /** GET /api/v1/entities/{id} */
+  async getEntity(entityId: string, signal?: AbortSignal): Promise<EntityDTO> {
+    const response = await fetch(`${this.baseUrl}/api/v1/entities/${entityId}`, { signal });
+    if (!response.ok) {
+      throw new Error(`Memex getEntity failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<EntityDTO>;
+  }
+
+  /** GET /api/v1/entities/{id}/mentions */
+  async getEntityMentions(
+    entityId: string,
+    limit = 10,
+    signal?: AbortSignal,
+  ): Promise<EntityMentionDTO[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/entities/${entityId}/mentions?${params}`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Memex getEntityMentions failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    return response.json() as Promise<EntityMentionDTO[]>;
   }
 
   /**
@@ -170,10 +313,7 @@ export function formatConversationNote(
     '## User',
     '',
     userMessage,
-    '',
-    '## Assistant',
-    '',
-    aiResponse,
+    ...(aiResponse ? ['', '## Assistant', '', aiResponse] : []),
     '',
   ].join('\n');
 }

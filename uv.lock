@@ -2383,9 +2383,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dashboard = [
-    { name = "memex-dashboard" },
-]
 mcp = [
     { name = "memex-mcp" },
 ]
@@ -2399,7 +2396,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "memex-common", editable = "packages/common" },
     { name = "memex-core", marker = "extra == 'server'", editable = "packages/core" },
-    { name = "memex-dashboard", marker = "extra == 'dashboard'", editable = "packages/dashboard" },
     { name = "memex-mcp", marker = "extra == 'mcp'", editable = "packages/mcp" },
     { name = "platformdirs", specifier = ">=4.2.0" },
     { name = "python-box", specifier = ">=7.1.1" },
@@ -2407,7 +2403,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
-provides-extras = ["dashboard", "server", "mcp"]
+provides-extras = ["server", "mcp"]
 
 [[package]]
 name = "memex-common"

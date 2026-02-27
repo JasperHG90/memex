@@ -19,7 +19,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dashboard = ["memex_dashboard"]
 server = ["memex-core"]
 mcp = ["memex-mcp"]
 

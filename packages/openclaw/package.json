@@ -1,7 +1,8 @@
 {
-  "name": "@memex/openclaw-memory",
+  "name": "memory-memex",
   "version": "0.1.0",
-  "description": "Memex memory plugin for OpenClaw — auto-recall and auto-capture via lifecycle hooks",
+  "description": "Memex memory plugin for OpenClaw — full tool suite with auto-recall, auto-capture, and 9 agent tools",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -12,10 +13,22 @@
     "test:watch": "vitest"
   },
   "openclaw": {
-    "kind": "memory"
+    "kind": "memory",
+    "extensions": ["./src/plugin.ts"]
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

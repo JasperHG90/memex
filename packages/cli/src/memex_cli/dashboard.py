@@ -1,7 +1,6 @@
 """CLI commands for managing the Memex Dashboard."""
 
 import subprocess
-import sys
 from pathlib import Path
 import shutil
 
@@ -26,61 +25,28 @@ app = typer.Typer(name='dashboard', help='Manage the Memex Dashboard.', no_args_
 SERVICE = 'dashboard'
 
 
+def _get_dashboard_dir() -> Path:
+    """Locate the dashboard-ui directory."""
+    # Check relative to this package (monorepo layout)
+    mono_path = Path(__file__).parent.parent.parent.parent.parent / 'dashboard-ui'
+    if mono_path.exists():
+        return mono_path
+    # Check common install location
+    return Path(user_data_dir('memex')) / 'dashboard-ui'
+
+
 def check_dashboard_installed() -> None:
-    """Verify memex_dashboard and reflex are available."""
-    try:
-        import memex_dashboard  # noqa: F401
-        import reflex  # noqa: F401
-    except ImportError as e:
-        console.print(f"[bold red]Error:[/bold red] Missing dependency '{e.name}'.")
-        console.print('Install the dashboard package:')
-        console.print('  [cyan]uv add memex-dashboard[/cyan]')
+    """Verify Node.js is available and dashboard-ui exists."""
+    if not shutil.which('node'):
+        console.print('[bold red]Error:[/bold red] Node.js is not installed or not on PATH.')
+        console.print('Install Node.js from: [cyan]https://nodejs.org/[/cyan]')
         raise typer.Exit(1)
 
-
-def _get_dashboard_pkg_root() -> Path:
-    """Return the location where the package is installed."""
-    import memex_dashboard
-
-    return Path(memex_dashboard.__file__).parent.parent
-
-
-def _setup_runtime_cwd() -> Path:
-    """Sets up a writable directory for Reflex to run in."""
-    import memex_dashboard
-
-    # 1. Locate the installed package directory
-    # This points to .../site-packages/memex_dashboard/
-    pkg_dir = Path(memex_dashboard.__file__).parent
-
-    # 2. Target: Writable runtime dir
-    runtime_dir = Path(user_data_dir('memex')) / 'runtime'
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-
-    # 3. Find rxconfig.py
-    # We look INSIDE the package directory first (where force-include puts it)
-    config_src = (pkg_dir.parent.parent) / 'rxconfig.py'
-
-    # Fallback: specific to some editable install structures
-    if not config_src.exists():
-        # Check root of the install (parent of memex_dashboard)
-        config_src = pkg_dir.parent / 'rxconfig.py'
-
-    if config_src.exists():
-        config_dst = runtime_dir / 'rxconfig.py'
-        # Copy if newer or missing
-        if not config_dst.exists() or config_src.stat().st_mtime > config_dst.stat().st_mtime:
-            shutil.copy2(config_src, config_dst)
-            console.print(f'[dim]Copied config from {config_src}[/dim]')
-    else:
-        # CRITICAL ERROR: We can't start without config
-        console.print(f'[bold red]Error:[/bold red] Could not find rxconfig.py in {pkg_dir}')
-        console.print(
-            '[yellow]Hint: Ensure rxconfig.py is included in your package build (e.g. via force-include).[/yellow]'
-        )
+    dashboard_dir = _get_dashboard_dir()
+    if not dashboard_dir.exists():
+        console.print(f'[bold red]Error:[/bold red] Dashboard UI not found at {dashboard_dir}')
+        console.print('Run: [cyan]cd packages/dashboard-ui && npm install[/cyan]')
         raise typer.Exit(1)
-
-    return runtime_dir
 
 
 @app.command()
@@ -118,27 +84,19 @@ def start(
         )
         daemon = False
 
-    env_flag = [] if dev else ['--env', 'prod']
-    port_flags = (
-        ['--frontend-port', str(port), '--backend-port', str(port + 1)]
-        if dev
-        else ['--single-port', '--backend-host', host, '--backend-port', str(port)]
-    )
-    cmd = [
-        sys.executable,
-        '-m',
-        'reflex',
-        'run',
-        *env_flag,
-        *port_flags,
-    ]
+    dashboard_dir = _get_dashboard_dir()
 
-    try:
-        cwd = _setup_runtime_cwd()
-        console.print(f'[dim]Dashboard runtime directory: {cwd}[/dim]')
-    except Exception as e:
-        console.print(f'[bold red]Error setup runtime env:[/bold red] {e}')
-        raise typer.Exit(1)
+    if dev:
+        cmd = ['npm', 'run', 'dev', '--', '--host', host, '--port', str(port)]
+    else:
+        dist_dir = dashboard_dir / 'dist'
+        if not dist_dir.exists():
+            console.print(
+                '[bold red]Error:[/bold red] Production build not found. '
+                'Run [cyan]npm run build[/cyan] in the dashboard-ui directory first.'
+            )
+            raise typer.Exit(1)
+        cmd = ['npx', 'serve', 'dist', '-l', f'tcp://{host}:{port}']
 
     mode = 'development' if dev else 'production'
     log = log_file_path(SERVICE)
@@ -153,15 +111,14 @@ def start(
                 stdout=lf,
                 stderr=lf,
                 start_new_session=True,
-                cwd=cwd,
+                cwd=dashboard_dir,
             )
         write_pid(SERVICE, proc.pid)
         console.print(f'[green]Dashboard started (PID {proc.pid}).[/green]')
     else:
         console.print(f'Starting dashboard in {mode} mode on {host}:{port}')
         try:
-            # Foreground: inherit parent stdout/stderr so logs stream to terminal
-            subprocess.run(cmd, cwd=cwd, check=True, stdout=None, stderr=None)
+            subprocess.run(cmd, cwd=dashboard_dir, check=True, stdout=None, stderr=None)
         except KeyboardInterrupt:
             console.print('\nDashboard stopped.')
         except subprocess.CalledProcessError as e:
@@ -191,7 +148,7 @@ async def status() -> None:
     console.print(f'[green]Dashboard is running.[/green] PID: {pid}')
 
     config = parse_memex_config()
-    ping_url = f'http://localhost:{config.dashboard.port}/ping/'
+    ping_url = f'http://localhost:{config.dashboard.port}/'
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

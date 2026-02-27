@@ -2,8 +2,8 @@
  * Memex API interfaces — mirror Python Pydantic schemas from
  * packages/common/src/memex_common/schemas.py
  *
- * OpenClaw plugin interfaces are hand-rolled below; they should match
- * @openclaw/plugin-types once that package is published.
+ * OpenClaw plugin interfaces (ConversationMessage, AgentBeforeTurnEvent,
+ * AgentAfterTurnEvent, PluginContext) are provided by @openclaw/plugin-sdk.
  */
 
 // ---------------------------------------------------------------------------
@@ -69,51 +69,104 @@ export interface IngestResponse {
   reason?: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Note search DTOs
+// ---------------------------------------------------------------------------
+
+/** Body for POST /api/v1/notes/search */
+export interface NoteSearchRequest {
+  query: string;
+  limit?: number;
+  expand_query?: boolean;
+  reason?: boolean;
+  summarize?: boolean;
+}
+
+export interface NoteSearchSnippet {
+  text: string;
+  node_title: string;
+  node_id: string;
+}
+
+export interface NoteSearchResult {
+  note_id: string;
+  metadata?: Record<string, unknown>;
+  snippets: NoteSearchSnippet[];
+  score?: number | null;
+  reasoning?: string[];
+  answer?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Page index / node DTOs
+// ---------------------------------------------------------------------------
+
+export interface PageIndexNode {
+  id: string;
+  title: string;
+  summary?: string | null;
+  level: number;
+  seq: number;
+  children: PageIndexNode[];
+}
+
+export interface PageIndexOutput {
+  toc: PageIndexNode[];
+}
+
+export interface NodeDTO {
+  id: string;
+  note_id: string;
+  title: string;
+  text: string;
+  level: number;
+  seq: number;
+}
+
+// ---------------------------------------------------------------------------
+// Lineage DTOs
+// ---------------------------------------------------------------------------
+
+export interface LineageItem {
+  entity_type: string;
+  entity: Record<string, unknown>;
+  derived_from: LineageItem[];
+}
+
+export type LineageResponse = LineageItem;
+
+// ---------------------------------------------------------------------------
+// Entity DTOs
+// ---------------------------------------------------------------------------
+
+export interface EntityDTO {
+  id: string;
+  name: string;
+  entity_type?: string | null;
+  mention_count?: number | null;
+}
+
+export interface EntityMentionDTO {
+  id: string;
+  text: string;
+  fact_type: string;
+  score?: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin configuration
+// ---------------------------------------------------------------------------
+
 /** Resolved plugin configuration. */
 export interface PluginConfig {
   serverUrl: string;
   searchLimit: number;
   defaultTags: string[];
   vaultId: string | null;
+  vaultName: string;
   beforeTurnTimeoutMs: number;
   minCaptureLength: number;
-}
-
-// ---------------------------------------------------------------------------
-// OpenClaw plugin contract
-// (hand-rolled until @openclaw/plugin-types is published to npm)
-// ---------------------------------------------------------------------------
-
-export interface ConversationMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp?: string;
-}
-
-/** Event passed to `agent:beforeTurn` hooks. */
-export interface AgentBeforeTurnEvent {
-  /** Messages in the current conversation so far. */
-  messages: ConversationMessage[];
-  /** Inject additional context that will be prepended to the next LLM call. */
-  injectContext(contextBlock: string): void;
-}
-
-/** Event passed to `agent:afterTurn` hooks. */
-export interface AgentAfterTurnEvent {
-  /** Full conversation messages including the latest AI response. */
-  messages: ConversationMessage[];
-  /** The latest AI response text. */
-  response: string;
-}
-
-/** Context object passed to `registerPlugin`. */
-export interface PluginContext {
-  on(event: 'agent:beforeTurn', handler: (event: AgentBeforeTurnEvent) => Promise<void>): void;
-  on(event: 'agent:afterTurn', handler: (event: AgentAfterTurnEvent) => Promise<void>): void;
-  logger: {
-    debug(msg: string, ...args: unknown[]): void;
-    info(msg: string, ...args: unknown[]): void;
-    warn(msg: string, ...args: unknown[]): void;
-    error(msg: string, ...args: unknown[]): void;
-  };
+  autoRecall: boolean;
+  autoCapture: boolean;
+  timeoutMs: number;
 }

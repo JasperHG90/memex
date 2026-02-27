@@ -414,6 +414,12 @@ class EntityDTO(BaseModel):
         examples=['123e4567-e89b-12d3-a456-426614174000'],
     )
 
+    entity_type: str | None = Field(
+        default=None,
+        description='The semantic type of the entity (e.g. Person, Organization, Concept).',
+        examples=['Person', 'Technology'],
+    )
+
 
 class VaultDTO(BaseModel):
     """DTO for a Vault."""

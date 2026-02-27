@@ -1,0 +1,3206 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Memex Core API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "description": "Endpoint that serves Prometheus metrics.",
+        "operationId": "metrics_api_v1_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions": {
+      "post": {
+        "summary": "Ingest Note",
+        "description": "Ingest a note artifact.",
+        "operationId": "ingest_note_api_v1_ingestions_post",
+        "parameters": [
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Background"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteCreateDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchJobStatus"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions/url": {
+      "post": {
+        "summary": "Ingest Url",
+        "operationId": "ingest_url_api_v1_ingestions_url_post",
+        "parameters": [
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Background"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestURLRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response 202 Ingest Url Api V1 Ingestions Url Post"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions/file": {
+      "post": {
+        "summary": "Ingest File",
+        "description": "Ingest content from a local file on the server.",
+        "operationId": "ingest_file_api_v1_ingestions_file_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestFileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions/upload": {
+      "post": {
+        "summary": "Ingest Upload",
+        "description": "Upload and ingest files.\n- If it's a single non-markdown file, use MarkItDown.\n- If it's multiple files or a markdown file, treat as a native NoteInput.",
+        "operationId": "ingest_upload_api_v1_ingestions_upload_post",
+        "parameters": [
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Background"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_ingest_upload_api_v1_ingestions_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response 202 Ingest Upload Api V1 Ingestions Upload Post"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions/batch": {
+      "post": {
+        "summary": "Ingest Batch",
+        "description": "Asynchronously ingest a batch of notes.\nReturns 202 Accepted with a job_id for status tracking.",
+        "operationId": "ingest_batch_api_v1_ingestions_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchJobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ingestions/{job_id}": {
+      "get": {
+        "summary": "Get Batch Job Status",
+        "description": "Retrieve the current status and results of a batch ingestion job.",
+        "operationId": "get_batch_job_status_api_v1_ingestions__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchJobStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memories/search": {
+      "post": {
+        "summary": "Search Memories",
+        "operationId": "search_memories_api_v1_memories_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stream of memory units with resolved lineage.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a MemoryUnitDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reflections": {
+      "post": {
+        "summary": "Reflect",
+        "description": "Trigger reflection on an entity.",
+        "operationId": "reflect_api_v1_reflections_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReflectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReflectionResultDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Reflections",
+        "description": "List reflections.\n\nQuery params:\n- limit: Maximum number of items to return\n- status: Optional filter by status. Use 'queued' for queue items.",
+        "operationId": "list_reflections_api_v1_reflections_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "queued",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status",
+              "title": "Status"
+            },
+            "description": "Filter by status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of reflection queue items.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a ReflectionQueueDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reflections/batch": {
+      "post": {
+        "summary": "Reflect Batch",
+        "description": "Trigger reflection on a batch of entities.",
+        "operationId": "reflect_batch_api_v1_reflections_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReflectionRequest"
+                  },
+                  "type": "array"
+                },
+                "type": "object",
+                "title": "Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stream of reflection results.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a ReflectionResultDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reflections/claim": {
+      "post": {
+        "summary": "Claim Reflections",
+        "description": "Claim reflection queue items for processing.",
+        "operationId": "claim_reflections_api_v1_reflections_claim_post",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of claimed reflection queue items.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a ReflectionQueueDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vaults": {
+      "get": {
+        "summary": "List Vaults",
+        "description": "List vaults.\n\nQuery params:\n- state: Optional filter by state. Use 'active' for the active vault.\n- is_default: Optional filter by default status. True for default vaults.",
+        "operationId": "list_vaults_api_v1_vaults_get",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "active",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by state: \"active\" for active vault",
+              "title": "State"
+            },
+            "description": "Filter by state: \"active\" for active vault"
+          },
+          {
+            "name": "is_default",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by default status",
+              "title": "Is Default"
+            },
+            "description": "Filter by default status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of vaults.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a VaultDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Vault",
+        "description": "Create a new vault.",
+        "operationId": "create_vault_api_v1_vaults_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVaultRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vaults/{identifier}": {
+      "get": {
+        "summary": "Get Or Resolve Vault",
+        "description": "Get a vault by ID or resolve by name.\n\nIf the identifier is a valid UUID, returns the vault with that ID.\nOtherwise, treats it as a name and resolves to the vault's ID.",
+        "operationId": "get_or_resolve_vault_api_v1_vaults__identifier__get",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Identifier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Or Resolve Vault Api V1 Vaults  Identifier  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vaults/{vault_id}": {
+      "delete": {
+        "summary": "Delete Vault",
+        "description": "Delete a vault.",
+        "operationId": "delete_vault_api_v1_vaults__vault_id__delete",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes": {
+      "get": {
+        "summary": "List Notes",
+        "description": "List notes.\n\nQuery params:\n- limit: Maximum number of notes to return\n- offset: Number of notes to skip\n- sort: Optional sort option. Use '-created_at' for most recent first.",
+        "operationId": "list_notes_api_v1_notes_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "-created_at",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sort option: -created_at for recency",
+              "title": "Sort"
+            },
+            "description": "Sort option: -created_at for recency"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of notes.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a NoteDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/search": {
+      "post": {
+        "summary": "Search Notes",
+        "description": "Search for notes using multi-query expansion and note-level fusion.",
+        "operationId": "search_notes_api_v1_notes_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stream of note search results.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a NoteSearchResult object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/{note_id}/page-index": {
+      "get": {
+        "summary": "Get Note Page Index",
+        "description": "Get the page index (slim tree) for a note.",
+        "operationId": "get_note_page_index_api_v1_notes__note_id__page_index_get",
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/{note_id}": {
+      "get": {
+        "summary": "Get Note",
+        "description": "Get a note by ID.",
+        "operationId": "get_note_api_v1_notes__note_id__get",
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Note",
+        "description": "Delete a note and all associated data (memory units, chunks, links, assets).",
+        "operationId": "delete_note_api_v1_notes__note_id__delete",
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}": {
+      "get": {
+        "summary": "Get Node",
+        "description": "Get a specific note node by its ID.",
+        "operationId": "get_node_api_v1_nodes__node_id__get",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/counts": {
+      "get": {
+        "summary": "Get Stats Counts",
+        "description": "Get total counts for documents, entities, and reflection queue.",
+        "operationId": "get_stats_counts_api_v1_stats_counts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatsCountsDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/token-usage": {
+      "get": {
+        "summary": "Get Token Usage",
+        "description": "Get daily aggregated token usage.",
+        "operationId": "get_token_usage_api_v1_stats_token_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities": {
+      "get": {
+        "summary": "List Entities",
+        "description": "List entities.\n\nQuery params:\n- limit: Maximum number of entities to return\n- q: Optional search query for name-based search\n- sort: Optional sort option. Use '-mentions' for top entities by mention count.",
+        "operationId": "list_entities_api_v1_entities_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "-mentions",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sort option: -mentions for top by mention count",
+              "title": "Sort"
+            },
+            "description": "Sort option: -mentions for top by mention count"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of entities.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a EntityDTO object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cooccurrences": {
+      "get": {
+        "summary": "Get Bulk Cooccurrences",
+        "description": "Get co-occurrences for a set of entity IDs.",
+        "operationId": "get_bulk_cooccurrences_api_v1_cooccurrences_get",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of co-occurrence records.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a BaseModel object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{id}/mentions": {
+      "get": {
+        "summary": "Get Entity Mentions",
+        "description": "Get mentions for an entity.",
+        "operationId": "get_entity_mentions_api_v1_entities__id__mentions_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of entity mentions.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a BaseModel object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{id}": {
+      "get": {
+        "summary": "Get Entity",
+        "description": "Get entity details.",
+        "operationId": "get_entity_api_v1_entities__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{id}/cooccurrences": {
+      "get": {
+        "summary": "Get Entity Cooccurrences",
+        "description": "Get co-occurrence edges for an entity.",
+        "operationId": "get_entity_cooccurrences_api_v1_entities__id__cooccurrences_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream of co-occurrence records for an entity.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string",
+                  "description": "Newline-delimited JSON. Each line is a BaseModel object."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{id}/lineage": {
+      "get": {
+        "summary": "Get Entity Lineage",
+        "description": "Get the lineage of an entity.",
+        "operationId": "get_entity_lineage_api_v1_entities__id__lineage_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "upstream",
+              "title": "Direction"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "title": "Depth"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{entity_id}": {
+      "delete": {
+        "summary": "Delete Entity",
+        "description": "Delete an entity and all associated data (mental models, aliases, links, cooccurrences).",
+        "operationId": "delete_entity_api_v1_entities__entity_id__delete",
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{entity_id}/mental-model": {
+      "delete": {
+        "summary": "Delete Mental Model",
+        "description": "Delete a mental model for a specific entity in a specific vault.",
+        "operationId": "delete_mental_model_api_v1_entities__entity_id__mental_model_delete",
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "vault_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memories/summary": {
+      "post": {
+        "summary": "Summarize search results",
+        "description": "Generate an AI summary with citations from search result texts.",
+        "operationId": "summarize_memories_api_v1_memories_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memories/{unit_uuid}/belief": {
+      "patch": {
+        "summary": "Adjust Memory Belief",
+        "description": "Adjust belief confidence for a memory unit.",
+        "operationId": "adjust_memory_belief_api_v1_memories__unit_uuid__belief_patch",
+        "parameters": [
+          {
+            "name": "unit_uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Unit Uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjustBeliefRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memories/{id}": {
+      "get": {
+        "summary": "Get Memory Unit",
+        "description": "Get memory unit details.",
+        "operationId": "get_memory_unit_api_v1_memories__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryUnitDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Memory Unit",
+        "description": "Delete a memory unit and all associated data (entity links, memory links, evidence).",
+        "operationId": "delete_memory_unit_api_v1_memories__id__delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{path}": {
+      "get": {
+        "summary": "Get Resource",
+        "description": "Retrieve a raw resource (file) from the filestore.",
+        "operationId": "get_resource_api_v1_resources__path__get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/{id}/lineage": {
+      "get": {
+        "summary": "Get Note Lineage",
+        "description": "Get the lineage of a note.",
+        "operationId": "get_note_lineage_api_v1_notes__id__lineage_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LineageDirection",
+              "default": "upstream"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "title": "Depth"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdjustBeliefRequest": {
+        "properties": {
+          "unit_uuid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Unit Uuid",
+            "description": "The UUID of the memory unit."
+          },
+          "evidence_type_key": {
+            "type": "string",
+            "title": "Evidence Type Key",
+            "description": "The type of evidence (e.g. \"confirm\")."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional explanation."
+          }
+        },
+        "type": "object",
+        "required": [
+          "unit_uuid",
+          "evidence_type_key"
+        ],
+        "title": "AdjustBeliefRequest",
+        "description": "Request to adjust belief confidence."
+      },
+      "BatchIngestRequest": {
+        "properties": {
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteCreateDTO"
+            },
+            "type": "array",
+            "title": "Notes",
+            "description": "List of notes to ingest."
+          },
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "Optional target vault ID or name that overrides note-level vault."
+          },
+          "batch_size": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Batch Size",
+            "description": "Internal processing chunk size.",
+            "default": 32
+          }
+        },
+        "type": "object",
+        "required": [
+          "notes"
+        ],
+        "title": "BatchIngestRequest",
+        "description": "Request for batch ingestion of notes."
+      },
+      "BatchIngestResponse": {
+        "properties": {
+          "processed_count": {
+            "type": "integer",
+            "title": "Processed Count",
+            "description": "Number of successfully processed notes.",
+            "default": 0
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count",
+            "description": "Number of skipped notes (e.g. duplicates).",
+            "default": 0
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count",
+            "description": "Number of notes that failed to process.",
+            "default": 0
+          },
+          "note_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Note Ids",
+            "description": "List of created Note UUIDs."
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Errors",
+            "description": "Detailed error information indexed by input."
+          }
+        },
+        "type": "object",
+        "title": "BatchIngestResponse",
+        "description": "Final response from a batch ingestion operation."
+      },
+      "BatchJobStatus": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id",
+            "description": "The unique identifier of the batch job."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Current status of the job.",
+            "examples": [
+              "pending",
+              "processing",
+              "completed",
+              "failed"
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress",
+            "description": "Optional human-readable progress info."
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BatchIngestResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Final results, available when status is \"completed\"."
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "BatchJobStatus",
+        "description": "Current status of an asynchronous batch job."
+      },
+      "Body_ingest_upload_api_v1_ingestions_upload_post": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_ingest_upload_api_v1_ingestions_upload_post"
+      },
+      "CreateVaultRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The name of the vault."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateVaultRequest",
+        "description": "Request to create a new vault."
+      },
+      "EntityDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id",
+            "description": "The unique identifier of the entity.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The canonical name of the entity.",
+            "examples": [
+              "Python"
+            ]
+          },
+          "mention_count": {
+            "type": "integer",
+            "title": "Mention Count",
+            "description": "Cumulative number of times this entity has been mentioned.",
+            "default": 0,
+            "examples": [
+              42
+            ]
+          },
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "The UUID of the vault this entity belongs to.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "EntityDTO",
+        "description": "DTO for an Entity."
+      },
+      "FactTypes": {
+        "type": "string",
+        "enum": [
+          "world",
+          "experience",
+          "opinion",
+          "observation"
+        ],
+        "title": "FactTypes",
+        "description": "Types of extracted facts."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IngestFileRequest": {
+        "properties": {
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "The UUID or name of the vault this record belongs to."
+          },
+          "file_path": {
+            "type": "string",
+            "title": "File Path",
+            "description": "The absolute path to the file on the server."
+          },
+          "reflect_after": {
+            "type": "boolean",
+            "title": "Reflect After",
+            "description": "Whether to run reflection after ingestion.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_path"
+        ],
+        "title": "IngestFileRequest",
+        "description": "Request to ingest content from a local file path (server-side)."
+      },
+      "IngestResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Status of the ingestion operation.",
+            "examples": [
+              "success",
+              "skipped",
+              "failed"
+            ]
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Id",
+            "description": "The unique identifier of the ingested note.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "unit_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Unit Ids",
+            "description": "List of UUIDs for the extracted memory units.",
+            "examples": [
+              [
+                "123e4567-e89b-12d3-a456-426614174001",
+                "123e4567-e89b-12d3-a456-426614174002"
+              ]
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Reason for skipping or failure, if applicable.",
+            "examples": [
+              "idempotency_check"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "IngestResponse",
+        "description": "Response from ingestion."
+      },
+      "IngestURLRequest": {
+        "properties": {
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "The UUID or name of the vault this record belongs to."
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "The URL to ingest."
+          },
+          "reflect_after": {
+            "type": "boolean",
+            "title": "Reflect After",
+            "description": "Whether to run reflection after ingestion.",
+            "default": true
+          },
+          "assets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Assets",
+            "description": "Optional dictionary of assets (filename -> base64 content)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "IngestURLRequest",
+        "description": "Request to ingest content from a URL."
+      },
+      "LineageDirection": {
+        "type": "string",
+        "enum": [
+          "upstream",
+          "downstream",
+          "both"
+        ],
+        "title": "LineageDirection",
+        "description": "Direction of lineage traversal."
+      },
+      "LineageResponse": {
+        "properties": {
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type",
+            "description": "The type of the entity (mental_model, observation, etc.)"
+          },
+          "entity": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Entity",
+            "description": "The full DTO of the entity."
+          },
+          "derived_from": {
+            "items": {
+              "$ref": "#/components/schemas/LineageResponse"
+            },
+            "type": "array",
+            "title": "Derived From",
+            "description": "List of entities this entity is derived from (upstream) or that are derived from it (downstream)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity_type",
+          "entity"
+        ],
+        "title": "LineageResponse",
+        "description": "Recursive schema for lineage response."
+      },
+      "MemoryUnitDTO": {
+        "properties": {
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "The UUID or name of the vault this record belongs to."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The textual content of the memory unit."
+          },
+          "fact_type": {
+            "$ref": "#/components/schemas/FactTypes",
+            "description": "The type/category of the memory unit."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Content status: active or stale.",
+            "default": "active",
+            "examples": [
+              "active",
+              "stale"
+            ]
+          },
+          "mentioned_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mentioned At",
+            "description": "The datetime when the memory unit was mentioned."
+          },
+          "occurred_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred Start",
+            "description": "The start datetime of when the fact/event occurred."
+          },
+          "occurred_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred End",
+            "description": "The end datetime of when the fact/event occurred."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id",
+            "description": "The unique identifier of the memory unit.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Id",
+            "description": "The unique identifier of the source note.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "source_note_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Source Note Ids",
+            "description": "List of source note IDs. For facts, typically single. For opinions, derived from evidence.",
+            "examples": [
+              [
+                "123e4567-e89b-12d3-a456-426614174000"
+              ]
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Additional metadata associated with the memory unit.",
+            "examples": [
+              {
+                "author": "user",
+                "source": "interview"
+              }
+            ]
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score",
+            "description": "Relevance score from retrieval or reranking (0.0 to 1.0).",
+            "examples": [
+              0.95
+            ]
+          },
+          "confidence_alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Alpha",
+            "description": "Alpha parameter of Beta distribution (positive evidence)."
+          },
+          "confidence_beta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Beta",
+            "description": "Beta parameter of Beta distribution (negative evidence)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "fact_type",
+          "id"
+        ],
+        "title": "MemoryUnitDTO",
+        "description": "DTO for a Memory Unit (Fact/Experience)."
+      },
+      "NodeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "note_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Note Id"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Vault Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "level": {
+            "type": "integer",
+            "title": "Level"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "note_id",
+          "vault_id",
+          "title",
+          "text",
+          "level",
+          "seq",
+          "status",
+          "created_at"
+        ],
+        "title": "NodeDTO",
+        "description": "DTO for a note node (section produced by PageIndex)."
+      },
+      "NoteCreateDTO": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The name of the note.",
+            "examples": [
+              "Meeting Notes"
+            ]
+          },
+          "note_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Key",
+            "description": "A unique stable key for the note to enable incremental updates.",
+            "examples": [
+              "my-stable-note-id"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "A brief description or summary of the note.",
+            "examples": [
+              "Notes from the weekly team sync."
+            ]
+          },
+          "content": {
+            "type": "string",
+            "format": "binary",
+            "title": "Content",
+            "description": "Base64 encoded content of the note.",
+            "examples": [
+              "VGhpcyBpcyBhIHRlc3Qgbm90ZS4="
+            ]
+          },
+          "files": {
+            "additionalProperties": {
+              "type": "string",
+              "format": "binary"
+            },
+            "type": "object",
+            "title": "Files",
+            "description": "Dictionary mapping filenames to Base64 encoded content.",
+            "examples": [
+              {
+                "image.png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "description": "List of tags associated with the note.",
+            "examples": [
+              [
+                "meeting",
+                "work"
+              ]
+            ]
+          },
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "Optional target vault ID or name."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "content"
+        ],
+        "title": "NoteCreateDTO",
+        "description": "DTO for creating a Note artifact (input/ingestion)."
+      },
+      "NoteDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "original_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Text"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Vault Id"
+          },
+          "assets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assets"
+          },
+          "doc_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Doc Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "vault_id"
+        ],
+        "title": "NoteDTO",
+        "description": "DTO for a Note (output/retrieval)."
+      },
+      "NoteSearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 10
+          },
+          "vault_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Ids"
+          },
+          "expand_query": {
+            "type": "boolean",
+            "title": "Expand Query",
+            "default": false
+          },
+          "fusion_strategy": {
+            "type": "string",
+            "title": "Fusion Strategy",
+            "default": "rrf"
+          },
+          "strategies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Strategies",
+            "default": [
+              "semantic",
+              "keyword",
+              "graph",
+              "temporal"
+            ]
+          },
+          "strategy_weights": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Weights"
+          },
+          "reason": {
+            "type": "boolean",
+            "title": "Reason",
+            "description": "Run skeleton-tree identification \u2014 returns reasoning + relevant section IDs.",
+            "default": false
+          },
+          "summarize": {
+            "type": "boolean",
+            "title": "Summarize",
+            "description": "Synthesize a full answer from identified sections (implies reason=True).",
+            "default": false
+          },
+          "mmr_lambda": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mmr Lambda",
+            "description": "MMR lambda for relevance-diversity trade-off. 1.0 = pure relevance, 0.0 = max diversity. None = use server config default (which itself defaults to disabled)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "NoteSearchRequest",
+        "description": "Request to search for notes."
+      },
+      "ObservationDTO": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "The unique identifier of the observation.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Short title or headline for the observation.",
+            "examples": [
+              "User prefers Python over Java"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "Detailed content of the observation.",
+            "examples": [
+              "The user consistently chooses Python for new projects due to its simplicity."
+            ]
+          },
+          "trend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trend",
+            "description": "Current trend of this observation (e.g. new, stable, strengthening).",
+            "examples": [
+              "strengthening"
+            ]
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "description": "List of supporting evidence items.",
+            "examples": [
+              {
+                "memory_id": "...",
+                "quote": "I love Python"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "content"
+        ],
+        "title": "ObservationDTO",
+        "description": "DTO for an Observation (Mental Model component)."
+      },
+      "ReflectionRequest": {
+        "properties": {
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id",
+            "description": "The UUID or name of the vault this record belongs to."
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id",
+            "description": "The UUID of the entity to reflect upon."
+          },
+          "limit_recent_memories": {
+            "type": "integer",
+            "title": "Limit Recent Memories",
+            "description": "Number of recent memories to consider.",
+            "default": 20
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity_id"
+        ],
+        "title": "ReflectionRequest",
+        "description": "Request to run the reflection loop on a specific entity."
+      },
+      "ReflectionResultDTO": {
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id",
+            "description": "The UUID of the entity reflected upon.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "new_observations": {
+            "items": {
+              "$ref": "#/components/schemas/ObservationDTO"
+            },
+            "type": "array",
+            "title": "New Observations",
+            "description": "List of new observations generated during reflection."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Status of the reflection operation.",
+            "default": "success",
+            "examples": [
+              "success",
+              "failed"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity_id",
+          "new_observations"
+        ],
+        "title": "ReflectionResultDTO",
+        "description": "DTO for reflection results."
+      },
+      "RetrievalRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "The search query or context string."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Maximum number of results to return.",
+            "default": 10
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Number of results to skip.",
+            "default": 0
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget",
+            "description": "Maximum token budget for results (greedy packing)."
+          },
+          "vault_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Ids",
+            "description": "List of specific vault IDs or names to search. If None or empty, searches ALL vaults."
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters",
+            "description": "Optional key-value filters (e.g. fact_type)."
+          },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank",
+            "description": "Whether to apply neural reranking if available.",
+            "default": true
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Score",
+            "description": "Minimum score threshold for results (post-reranking)."
+          },
+          "strategy_weights": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Weights",
+            "description": "Optional custom weights for RRF fusion."
+          },
+          "strategies": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategies",
+            "description": "Inclusion list of strategies to run. Valid values: semantic, keyword, graph, temporal, mental_model. If None, all strategies are used."
+          },
+          "include_vectors": {
+            "type": "boolean",
+            "title": "Include Vectors",
+            "description": "Whether to include embeddings in the result (slower).",
+            "default": false
+          },
+          "include_stale": {
+            "type": "boolean",
+            "title": "Include Stale",
+            "description": "Whether to include stale memory units in results.",
+            "default": false
+          },
+          "skip_opinion_formation": {
+            "type": "boolean",
+            "title": "Skip Opinion Formation",
+            "description": "Whether to skip the automated opinion formation loop.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "RetrievalRequest",
+        "description": "Unified request object for memory retrieval."
+      },
+      "SummaryRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "The original search query."
+          },
+          "texts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Texts",
+            "description": "Search result texts to summarize."
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "texts"
+        ],
+        "title": "SummaryRequest",
+        "description": "Request for AI-generated summary of search results."
+      },
+      "SummaryResponse": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "AI-generated summary with bracket citations (e.g. [0], [1])."
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "title": "SummaryResponse",
+        "description": "Response containing an AI-generated summary with citations."
+      },
+      "SystemStatsCountsDTO": {
+        "properties": {
+          "memories": {
+            "type": "integer",
+            "title": "Memories",
+            "description": "Total number of memories (Documents)."
+          },
+          "entities": {
+            "type": "integer",
+            "title": "Entities",
+            "description": "Total number of entities."
+          },
+          "reflection_queue": {
+            "type": "integer",
+            "title": "Reflection Queue",
+            "description": "Number of items in the reflection queue."
+          }
+        },
+        "type": "object",
+        "required": [
+          "memories",
+          "entities",
+          "reflection_queue"
+        ],
+        "title": "SystemStatsCountsDTO",
+        "description": "Counts for system entities."
+      },
+      "TokenUsageResponse": {
+        "properties": {
+          "usage": {
+            "items": {
+              "$ref": "#/components/schemas/TokenUsageStatDTO"
+            },
+            "type": "array",
+            "title": "Usage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "usage"
+        ],
+        "title": "TokenUsageResponse",
+        "description": "Daily aggregated token usage response."
+      },
+      "TokenUsageStatDTO": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "total_tokens"
+        ],
+        "title": "TokenUsageStatDTO",
+        "description": "Token usage for a specific date."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VaultDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id",
+            "description": "The unique identifier of the vault.",
+            "examples": [
+              "123e4567-e89b-12d3-a456-426614174000"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The name of the vault.",
+            "examples": [
+              "Personal",
+              "Work"
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description of the vault.",
+            "examples": [
+              "My personal memories and notes."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "VaultDTO",
+        "description": "DTO for a Vault."
+      }
+    }
+  }
+}

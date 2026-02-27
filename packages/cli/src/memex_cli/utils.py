@@ -90,8 +90,10 @@ class LazyTyperGroup(TyperGroup):
                 console.print('Install with: [cyan]uv add memex-cli[mcp][/cyan]')
                 raise typer.Exit(code=1)
             elif cmd_name == 'dashboard':
-                console.print('[bold red]Error:[/bold red] Missing dependency for dashboard.')
-                console.print('Install with: [cyan]uv add memex-dashboard[/cyan]')
+                console.print('[bold red]Error:[/bold red] Dashboard requires Node.js.')
+                console.print(
+                    'Install Node.js and run: [cyan]cd packages/dashboard-ui && npm install[/cyan]'
+                )
                 raise typer.Exit(code=1)
 
             logger.error(f"Failed to load command '{cmd_name}': {e}")
