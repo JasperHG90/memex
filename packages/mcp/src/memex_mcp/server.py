@@ -576,8 +576,17 @@ async def memex_search(
             date = res.mentioned_at or res.occurred_start
             date_str = f' (Date: {date.isoformat()})' if date else ''
 
+            # Include confidence annotation for contradicted/disputed opinions
+            confidence = res.confidence_score if hasattr(res, 'confidence_score') else None
+            confidence_str = ''
+            if confidence is not None and confidence < 0.3:
+                confidence_str = ' [CONTRADICTED - Low Confidence]'
+            elif confidence is not None and confidence < 0.5:
+                confidence_str = ' [Disputed]'
+
             output.append(
-                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]{score_str}{date_str}\n   {snippet}\n'
+                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]'
+                f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
 
         return '\n'.join(output)

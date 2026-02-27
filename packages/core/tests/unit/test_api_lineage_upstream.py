@@ -56,7 +56,7 @@ async def test_get_lineage_upstream_observation_to_document(api, mock_session):
     assert str(child.entity['id']) == str(unit_id)
 
     grandchild = child.derived_from[0]
-    assert grandchild.entity_type == 'document'
+    assert grandchild.entity_type == 'note'
     assert str(grandchild.entity['id']) == str(doc_id)
 
 

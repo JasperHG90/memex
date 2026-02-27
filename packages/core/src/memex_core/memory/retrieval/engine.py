@@ -195,6 +195,9 @@ class RetrievalEngine:
         # 9. Deduplicate and Cite
         final_results = self._deduplicate_and_cite(final_results)
 
+        # 9b. Demote contradicted opinions
+        final_results = self._apply_confidence_penalty(final_results)
+
         # 10. Update Resonance
         if final_results:
             await self._update_resonance(session, final_results, vault_id=primary_vault_id)
@@ -500,6 +503,21 @@ class RetrievalEngine:
                 )
         except Exception as e:
             logger.error(f'Failed to update resonance priorities: {e}')
+
+    @staticmethod
+    def _apply_confidence_penalty(results: list[MemoryUnit]) -> list[MemoryUnit]:
+        """Demote contradicted opinions (confidence < 0.3) to end of result list."""
+        from memex_core.memory.sql_models import CONTRADICTION_THRESHOLD
+
+        confident: list[MemoryUnit] = []
+        contradicted: list[MemoryUnit] = []
+        for unit in results:
+            score = unit.confidence_score
+            if score is not None and score < CONTRADICTION_THRESHOLD:
+                contradicted.append(unit)
+            else:
+                confident.append(unit)
+        return confident + contradicted
 
     def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """

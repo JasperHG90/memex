@@ -395,6 +395,10 @@ async def search_memory(
             if len(content_preview) > 100:
                 content_preview = content_preview[:100] + '...'
 
+            # Visual indicator for contradicted results
+            cs = unit.confidence_score
+            marker = '[!] ' if cs is not None and cs < 0.3 else ''
+
             # Check unit_metadata for source info
             source = 'Unknown'
             if unit.metadata:
@@ -405,13 +409,13 @@ async def search_memory(
                     if source == 'Unknown':
                         source = unit.metadata.get('filestore_path', 'Unknown')
 
-            table.add_row(unit.fact_type, content_preview, str(source))
+            table.add_row(unit.fact_type, f'{marker}{content_preview}', str(source))
 
         console.print(table)
 
         # Generate Answer
         if answer and results:
-            ans = await api.summarize(query=query, texts=[r.text for r in results[:50]])
+            ans = await api.summarize(query=query, texts=[r.enriched_text for r in results[:50]])
             console.print(Panel(Markdown(ans.summary), title='Answer', border_style='green'))
 
 

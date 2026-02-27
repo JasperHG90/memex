@@ -48,10 +48,10 @@ async def test_get_lineage_downstream_document_to_mental_model(api, mock_session
     ]
 
     result = await api.get_lineage(
-        entity_type='document', entity_id=doc_id, direction=LineageDirection.DOWNSTREAM, depth=3
+        entity_type='note', entity_id=doc_id, direction=LineageDirection.DOWNSTREAM, depth=3
     )
 
-    assert result.entity_type == 'document'
+    assert result.entity_type == 'note'
     assert str(result.entity['id']) == str(doc_id)
     assert len(result.derived_from) == 1
 

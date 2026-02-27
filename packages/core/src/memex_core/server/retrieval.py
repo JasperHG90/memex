@@ -81,6 +81,8 @@ def _build_retrieval_dtos(
                 vault_id=u.vault_id,
                 metadata=u.unit_metadata,
                 score=getattr(u, 'score', None),
+                confidence_alpha=getattr(u, 'confidence_alpha', None),
+                confidence_beta=getattr(u, 'confidence_beta', None),
             )
         )
     return dtos

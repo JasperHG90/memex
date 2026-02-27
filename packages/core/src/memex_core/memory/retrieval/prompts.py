@@ -11,6 +11,10 @@ class SearchSummarySignature(dspy.Signature):
     where the number corresponds to the zero-based index of the search result.
     Only cite results that directly support a claim. If no results are relevant,
     say so explicitly.
+
+    IMPORTANT: Results marked [CONTRADICTED] have been superseded by newer information.
+    Prefer more recent, non-contradicted results. When a contradiction exists between
+    results, favor the correction over the original claim.
     """
 
     query: str = dspy.InputField(desc='The original user search query.')

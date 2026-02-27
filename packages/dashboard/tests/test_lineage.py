@@ -57,7 +57,7 @@ async def test_lineage_data_transformation():
 
         # Verify layers
         layers = [n.x for n in state.nodes]
-        assert '20%' in layers  # Doc
+        assert '20%' in layers  # Note
         assert '45%' in layers  # Unit
         assert '70%' in layers  # Observation
-        assert '95%' in layers  # Model
+        assert '85%' in layers  # Model

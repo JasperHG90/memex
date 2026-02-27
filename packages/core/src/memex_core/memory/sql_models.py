@@ -28,6 +28,7 @@ from memex_core.memory.mixins import vault_id_field, created_at_field, updated_a
 from memex_common.schemas import MemoryUnitBase, FactTypes
 
 EMBEDDING_DIMENSION = 384
+CONTRADICTION_THRESHOLD = 0.3
 
 
 class ContentStatus(str, Enum):
@@ -692,7 +693,13 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             self.occurred_start.strftime('%Y-%m-%d') if self.occurred_start else 'Unknown Date'
         )
         status_prefix = '[STALE] ' if self.status == ContentStatus.STALE else ''
-        base_text = f'{status_prefix}[{date_str}] {self.text}'
+        confidence = self.confidence_score
+        contradiction_prefix = (
+            '[CONTRADICTED] '
+            if confidence is not None and confidence < CONTRADICTION_THRESHOLD
+            else ''
+        )
+        base_text = f'{status_prefix}{contradiction_prefix}[{date_str}] {self.text}'
 
         # Append citations if present (from RetrievalEngine deduplication)
         citations = self.unit_metadata.get('citations', [])

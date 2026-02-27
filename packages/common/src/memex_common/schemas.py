@@ -328,6 +328,35 @@ class MemoryUnitDTO(MemoryUnitBase):
         examples=[0.95],
     )
 
+    confidence_alpha: float | None = Field(
+        default=None,
+        description='Alpha parameter of Beta distribution (positive evidence).',
+    )
+    confidence_beta: float | None = Field(
+        default=None,
+        description='Beta parameter of Beta distribution (negative evidence).',
+    )
+
+    @property
+    def confidence_score(self) -> float | None:
+        """Compute confidence as mean of the Beta distribution."""
+        if self.confidence_alpha is not None and self.confidence_beta is not None:
+            total = self.confidence_alpha + self.confidence_beta
+            if total > 0:
+                return self.confidence_alpha / total
+        return None
+
+    @property
+    def enriched_text(self) -> str:
+        """Text with contradiction/date metadata for LLM consumption."""
+        prefix = ''
+        cs = self.confidence_score
+        if cs is not None and cs < 0.3:
+            prefix = '[CONTRADICTED] '
+        date = self.mentioned_at or self.occurred_start
+        date_str = date.strftime('%Y-%m-%d') if date else 'Unknown'
+        return f'{prefix}[{date_str}] {self.text}'
+
 
 class ObservationDTO(BaseModel):
     """DTO for an Observation (Mental Model component)."""
