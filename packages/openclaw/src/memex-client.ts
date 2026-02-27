@@ -86,7 +86,7 @@ export class MemexClient {
       body: JSON.stringify(body),
     })
       .then((response: Response): Promise<void> | void => {
-        if (!response.ok && response.status !== 202) {
+        if (!response.ok) {
           return response.text().then((text: string) => {
             throw new Error(`Memex ingest failed: ${response.status} - ${text}`);
           });
@@ -153,16 +153,18 @@ export function formatConversationNote(
   userMessage: string,
   aiResponse: string,
   timestamp: Date,
+  tags: string[] = ['agent', 'openclaw'],
 ): string {
   const iso = timestamp.toISOString();
   const dateStr = iso.split('T')[0] ?? iso;
+  const tagList = tags.map((t) => t.trim()).filter(Boolean);
 
   return [
     '---',
     `date: ${dateStr}`,
     `timestamp: ${iso}`,
     'source: openclaw',
-    'tags: [agent, openclaw]',
+    `tags: [${tagList.join(', ')}]`,
     '---',
     '',
     '## User',

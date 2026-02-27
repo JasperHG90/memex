@@ -26,6 +26,7 @@ import {
 import type {
   AgentAfterTurnEvent,
   AgentBeforeTurnEvent,
+  ConversationMessage,
   PluginConfig,
   PluginContext,
 } from './types';
@@ -34,17 +35,26 @@ import type {
 // Configuration
 // ---------------------------------------------------------------------------
 
-function resolveConfig(): PluginConfig {
+/** Parse an integer from a string, returning `fallback` if the result is NaN. */
+export function safeParseInt(value: string, fallback: number): number {
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+export function resolveConfig(): PluginConfig {
   return {
     serverUrl: process.env['MEMEX_SERVER_URL'] ?? 'http://localhost:8000',
-    searchLimit: parseInt(process.env['MEMEX_SEARCH_LIMIT'] ?? '8', 10),
+    searchLimit: safeParseInt(process.env['MEMEX_SEARCH_LIMIT'] ?? '8', 8),
     defaultTags: (process.env['MEMEX_DEFAULT_TAGS'] ?? 'agent,openclaw')
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean),
     vaultId: process.env['MEMEX_VAULT_ID'] ?? null,
-    beforeTurnTimeoutMs: parseInt(process.env['MEMEX_BEFORE_TURN_TIMEOUT_MS'] ?? '3000', 10),
-    minCaptureLength: parseInt(process.env['MEMEX_MIN_CAPTURE_LENGTH'] ?? '50', 10),
+    beforeTurnTimeoutMs: safeParseInt(
+      process.env['MEMEX_BEFORE_TURN_TIMEOUT_MS'] ?? '3000',
+      3000,
+    ),
+    minCaptureLength: safeParseInt(process.env['MEMEX_MIN_CAPTURE_LENGTH'] ?? '50', 50),
   };
 }
 
@@ -109,6 +119,11 @@ export default async function registerPlugin(ctx: PluginContext): Promise<void> 
   // agent:afterTurn — auto-capture (fire-and-forget; never blocks)
   // -------------------------------------------------------------------------
   ctx.on('agent:afterTurn', async (event: AgentAfterTurnEvent): Promise<void> => {
+    if (breaker.isOpen()) {
+      ctx.logger.debug('[memex-openclaw] Circuit breaker open — skipping capture');
+      return;
+    }
+
     try {
       const userMessage = findLastUserMessage(event.messages);
       if (userMessage == null) return;
@@ -119,7 +134,12 @@ export default async function registerPlugin(ctx: PluginContext): Promise<void> 
       }
 
       const now = new Date();
-      const markdown = formatConversationNote(userMessage, event.response, now);
+      const markdown = formatConversationNote(
+        userMessage,
+        event.response,
+        now,
+        config.defaultTags,
+      );
       const content = encodeBase64(markdown);
       const noteKey = hashTurnKey(userMessage, now);
 
@@ -146,8 +166,8 @@ export default async function registerPlugin(ctx: PluginContext): Promise<void> 
 // Private helpers
 // ---------------------------------------------------------------------------
 
-function findLastUserMessage(
-  messages: Array<{ role: string; content: string }>,
+export function findLastUserMessage(
+  messages: ConversationMessage[],
 ): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === 'user') {
@@ -157,7 +177,7 @@ function findLastUserMessage(
   return undefined;
 }
 
-function formatMemoryContext(body: string, count: number): string {
+export function formatMemoryContext(body: string, count: number): string {
   return [
     '<!-- MEMEX MEMORY CONTEXT START -->',
     `Relevant memories (${count} retrieved):`,

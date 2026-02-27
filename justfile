@@ -43,3 +43,7 @@ update_collections: embed_collections
 # Build OpenClaw memory plugin
 build-openclaw:
   cd packages/openclaw && npm install --no-bin-links && node node_modules/typescript/lib/tsc.js
+
+# Test OpenClaw memory plugin
+test-openclaw:
+  cd packages/openclaw && npx vitest run
