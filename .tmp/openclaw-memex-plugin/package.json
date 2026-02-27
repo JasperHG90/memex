@@ -1,0 +1,12 @@
+{
+  "name": "@memex/openclaw-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Memex memory plugin for OpenClaw — auto-recall and auto-capture via Memex REST API",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

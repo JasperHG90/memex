@@ -24,7 +24,7 @@ runner = CliRunner()
 
 
 def _invoke(*args: str, **kwargs):
-    return runner.invoke(app, list(args), catch_exceptions=False, **kwargs)
+    return runner.invoke(app, ['claude-code', *args], catch_exceptions=False, **kwargs)
 
 
 # ===========================================================================

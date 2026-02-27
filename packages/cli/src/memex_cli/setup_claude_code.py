@@ -24,7 +24,13 @@ from memex_common.config import MemexConfig
 logger = logging.getLogger('memex_cli.setup')
 console = Console()
 
-app = typer.Typer(name='setup', help='Setup integrations.')
+app = typer.Typer(name='setup', help='Setup integrations.', no_args_is_help=True)
+
+
+@app.callback()
+def setup_callback():
+    """Setup integrations."""
+
 
 # ---------------------------------------------------------------------------
 # Template loading
