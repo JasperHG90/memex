@@ -10,6 +10,19 @@
         "firefox"
       ],
       "env": {}
+    },
+    "memex": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "memex",
+        "mcp",
+        "run"
+      ],
+      "env": {
+        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+      }
     }
   }
 }

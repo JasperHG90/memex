@@ -241,15 +241,13 @@ describe('registerPlugin', () => {
       expect(injectContext).not.toHaveBeenCalled();
     });
 
-    it('injects memory context with summary when available', async () => {
+    it('injects indexed memory texts directly from search results', async () => {
       const ctx = makePluginContext();
       await registerPlugin(ctx);
 
       const m1 = makeMemoryUnit({ text: 'fact 1' });
       const m2 = makeMemoryUnit({ text: 'fact 2' });
-      fetchSpy
-        .mockResolvedValueOnce(ndjsonResponse([m1, m2]))   // searchMemories
-        .mockResolvedValueOnce(jsonResponse({ summary: 'Summarized memories' })); // summarize
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
       const injectContext = vi.fn();
       await ctx.handlers.beforeTurn[0]!({
@@ -259,33 +257,9 @@ describe('registerPlugin', () => {
 
       expect(injectContext).toHaveBeenCalledOnce();
       const injected = injectContext.mock.calls[0]![0] as string;
-      expect(injected).toContain('Summarized memories');
+      expect(injected).toContain('[0] fact 1');
+      expect(injected).toContain('[1] fact 2');
       expect(injected).toContain('2 retrieved');
-    });
-
-    it('falls back to raw snippets when summary fails', async () => {
-      const ctx = makePluginContext();
-      await registerPlugin(ctx);
-
-      const m1 = makeMemoryUnit({ text: 'raw fact A' });
-      const m2 = makeMemoryUnit({ text: 'raw fact B' });
-      fetchSpy
-        .mockResolvedValueOnce(ndjsonResponse([m1, m2]))
-        .mockRejectedValueOnce(new Error('summary service down'));
-
-      const injectContext = vi.fn();
-      await ctx.handlers.beforeTurn[0]!({
-        messages: makeMessages({ role: 'user', content: 'question' }),
-        injectContext,
-      });
-
-      expect(injectContext).toHaveBeenCalledOnce();
-      const injected = injectContext.mock.calls[0]![0] as string;
-      expect(injected).toContain('raw fact A');
-      expect(injected).toContain('raw fact B');
-      expect(ctx.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('Summary failed'),
-      );
     });
 
     it('does not inject context when search returns empty', async () => {
@@ -324,9 +298,7 @@ describe('registerPlugin', () => {
       await registerPlugin(ctx);
 
       const m = makeMemoryUnit({ text: 'fact' });
-      fetchSpy
-        .mockResolvedValueOnce(ndjsonResponse([m]))
-        .mockResolvedValueOnce(jsonResponse({ summary: 'ok' }));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([m]));
 
       await ctx.handlers.beforeTurn[0]!({
         messages: makeMessages({ role: 'user', content: 'query' }),
@@ -334,16 +306,14 @@ describe('registerPlugin', () => {
       });
 
       // Verify breaker didn't open by doing another call that succeeds
-      fetchSpy
-        .mockResolvedValueOnce(ndjsonResponse([]))
-      ;
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
       await ctx.handlers.beforeTurn[0]!({
         messages: makeMessages({ role: 'user', content: 'another' }),
         injectContext: vi.fn(),
       });
 
       // Should have called fetch again (not blocked by breaker)
-      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -89,21 +89,9 @@ export default async function registerPlugin(ctx: PluginContext): Promise<void> 
         return;
       }
 
-      const texts = memories.map((m) => m.text);
-      let body: string;
-
-      try {
-        const summary = await client.summarizeMemories(userMessage, texts, signal);
-        body = summary.summary;
-      } catch (summaryErr: unknown) {
-        // Degrade gracefully: format top-5 raw snippets if summarization fails.
-        const errMsg = summaryErr instanceof Error ? summaryErr.message : String(summaryErr);
-        ctx.logger.warn(`[memex-openclaw] Summary failed (using raw snippets): ${errMsg}`);
-        body = texts
-          .slice(0, 5)
-          .map((t, i) => `[${i}] ${t}`)
-          .join('\n\n');
-      }
+      const body = memories
+        .map((m, i) => `[${i}] ${m.text}`)
+        .join('\n\n');
 
       event.injectContext(formatMemoryContext(body, memories.length));
       breaker.recordSuccess();
