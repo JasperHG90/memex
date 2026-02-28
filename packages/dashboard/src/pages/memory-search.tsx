@@ -79,7 +79,7 @@ export default function MemorySearch() {
         },
         {
           onSuccess: (data) => {
-            const newResults = data as unknown as MemoryUnitDTO[];
+            const newResults = data;
             if (append) {
               setResults((prev) => [...prev, ...newResults]);
             } else {

@@ -1,5 +1,6 @@
 export async function* streamNDJSON<T>(response: Response): AsyncGenerator<T> {
-  const reader = response.body!.getReader();
+  if (!response.body) return;
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   while (true) {

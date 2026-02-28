@@ -13,10 +13,18 @@ export class ApiError extends Error {
   }
 }
 
+export async function apiFetch(
+  path: string,
+  options: RequestInit & { rawResponse: true },
+): Promise<Response>;
+export async function apiFetch<T>(
+  path: string,
+  options?: RequestInit & { rawResponse?: false },
+): Promise<T>;
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit & { rawResponse?: boolean },
-): Promise<T> {
+): Promise<T | Response> {
   const url = `${API_BASE}${path}`;
   const response = await fetch(url, {
     ...options,
@@ -38,12 +46,12 @@ export async function apiFetch<T>(
   }
 
   if (options?.rawResponse) {
-    return response as unknown as T;
+    return response;
   }
 
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType.includes('x-ndjson')) {
-    return collectNDJSON<unknown>(response) as Promise<T>;
+    return collectNDJSON(response) as Promise<T>;
   }
 
   // Handle empty responses (204 No Content)
@@ -63,5 +71,5 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     apiFetch<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
-  getRaw: (path: string) => apiFetch<Response>(path, { rawResponse: true }),
+  getRaw: (path: string) => apiFetch(path, { rawResponse: true }),
 };

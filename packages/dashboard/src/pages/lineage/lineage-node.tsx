@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { FileText, Brain, Eye, Lightbulb, Tag, File, type LucideIcon } from 'lucide-react';
 
 export interface LineageNodeData extends Record<string, unknown> {
@@ -22,14 +22,15 @@ const NODE_STYLES: Record<string, { bg: string; border: string; icon: LucideIcon
 
 const DEFAULT_STYLE = { bg: 'rgba(161, 161, 170, 0.12)', border: '#71717A', icon: File };
 
-function LineageNodeComponent({ data }: NodeProps) {
-  const nodeData = data as unknown as LineageNodeData;
-  const style = NODE_STYLES[nodeData.entityType] ?? DEFAULT_STYLE;
+type LineageNodeType = Node<LineageNodeData>;
+
+function LineageNodeComponent({ data }: NodeProps<LineageNodeType>) {
+  const style = NODE_STYLES[data.entityType] ?? DEFAULT_STYLE;
   const Icon = style.icon;
-  const truncatedContent = nodeData.content
-    ? nodeData.content.length > 60
-      ? nodeData.content.slice(0, 60) + '...'
-      : nodeData.content
+  const truncatedContent = data.content
+    ? data.content.length > 60
+      ? data.content.slice(0, 60) + '...'
+      : data.content
     : null;
 
   return (
@@ -37,9 +38,9 @@ function LineageNodeComponent({ data }: NodeProps) {
       className="rounded-lg border px-3 py-2 shadow-md transition-all duration-150 hover:scale-105 hover:shadow-lg cursor-pointer"
       style={{
         backgroundColor: style.bg,
-        borderColor: nodeData.highlighted ? 'var(--foreground)' : style.border,
-        borderWidth: nodeData.highlighted ? 2 : 1,
-        opacity: nodeData.dimmed ? 0.2 : 1,
+        borderColor: data.highlighted ? 'var(--foreground)' : style.border,
+        borderWidth: data.highlighted ? 2 : 1,
+        opacity: data.dimmed ? 0.2 : 1,
         minWidth: 180,
         maxWidth: 220,
       }}
@@ -51,10 +52,10 @@ function LineageNodeComponent({ data }: NodeProps) {
           className="text-xs font-semibold uppercase tracking-wide"
           style={{ color: style.border }}
         >
-          {nodeData.entityType.replace('_', ' ')}
+          {data.entityType.replace('_', ' ')}
         </span>
       </div>
-      <div className="text-sm font-medium text-foreground truncate">{nodeData.label}</div>
+      <div className="text-sm font-medium text-foreground truncate">{data.label}</div>
       {truncatedContent && (
         <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{truncatedContent}</div>
       )}

@@ -49,7 +49,7 @@ export default function Timeline() {
         },
         {
           onSuccess: (data) => {
-            setResults(data as unknown as MemoryUnitDTO[]);
+            setResults(data);
             setHasSearched(true);
           },
         },
