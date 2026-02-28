@@ -555,6 +555,35 @@ class TestBuildThinTree:
         if child_entries:
             assert child_entries[0]['id'] == child.content_hash
 
+    def test_min_node_tokens_promotes_children(self) -> None:
+        """Small root nodes promote their children instead of discarding them."""
+        child_a = _make_toc_node('ca', content='child A content here')
+        child_a.token_estimate = 100
+        child_b = _make_toc_node('cb', content='child B content here')
+        child_b.token_estimate = 80
+        root = _make_toc_node('root', content='# Title', children=[child_a, child_b])
+        root.token_estimate = 5  # Below threshold
+
+        result = build_thin_tree([root], min_node_tokens=40)
+
+        assert len(result) == 2
+        assert result[0]['id'] == child_a.content_hash
+        assert result[1]['id'] == child_b.content_hash
+
+    def test_min_node_tokens_promotes_deeply_nested(self) -> None:
+        """Promotion works through multiple filtered levels."""
+        leaf = _make_toc_node('leaf', content='leaf content with enough tokens')
+        leaf.token_estimate = 100
+        mid = _make_toc_node('mid', content='mid', children=[leaf])
+        mid.token_estimate = 5  # Below threshold
+        root = _make_toc_node('root', content='# Title', children=[mid])
+        root.token_estimate = 5  # Below threshold
+
+        result = build_thin_tree([root], min_node_tokens=40)
+
+        assert len(result) == 1
+        assert result[0]['id'] == leaf.content_hash
+
 
 # ===========================================================================
 # flatten_toc_to_node_rows tests

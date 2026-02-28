@@ -246,11 +246,20 @@ def build_thin_tree(
         List of thin-tree dicts ready for storage.
     """
     id_map = collect_toc_hashes(toc)
-    return [
-        replace_tree_ids(n.tree_without_text(min_node_tokens=min_node_tokens), id_map)
-        for n in toc
-        if min_node_tokens <= 0 or (n.token_estimate or 0) > min_node_tokens
-    ]
+
+    def _collect(nodes: list[TOCNode]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for n in nodes:
+            if min_node_tokens > 0 and (n.token_estimate or 0) <= min_node_tokens:
+                # Skip this node but promote its children (same as flatten_toc_to_node_rows)
+                result.extend(_collect(n.children))
+            else:
+                result.append(
+                    replace_tree_ids(n.tree_without_text(min_node_tokens=min_node_tokens), id_map)
+                )
+        return result
+
+    return _collect(toc)
 
 
 # ---------------------------------------------------------------------------
