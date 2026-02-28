@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+  UV_VERSION: '0.10.x'
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      openclaw: ${{ steps.filter.outputs.openclaw }}
+      ci-config: ${{ steps.filter.outputs.ci-config }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'packages/core/**'
+              - 'packages/cli/**'
+              - 'packages/mcp/**'
+              - 'packages/common/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.pre-commit-config.yaml'
+            dashboard:
+              - 'packages/dashboard/**'
+            openclaw:
+              - 'packages/openclaw/**'
+            ci-config:
+              - '.github/workflows/ci.yaml'
+
+  pre-commit:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run pre-commit checks
+        uses: JasperHG90/toiminnot/actions/prek@main
+        with:
+          python_version: ${{ env.PYTHON_VERSION }}
+          prek_version: '0.2.25'
+
+  python-tests:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Run unit tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not integration"
+      - name: Run integration tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "integration and not llm"
+
+  dashboard-lint-test:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/dashboard/package-lock.json'
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/dashboard
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.app.json
+        working-directory: packages/dashboard
+      - name: Lint
+        run: npx eslint --max-warnings=0 src
+        working-directory: packages/dashboard
+      - name: Test
+        run: npx vitest run
+        working-directory: packages/dashboard
+
+  openclaw-lint-test:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.openclaw == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/openclaw/package-lock.json'
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/openclaw
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: packages/openclaw
+      - name: Test
+        run: npx vitest run
+        working-directory: packages/openclaw
+
+  # LLM tests — requires ANTHROPIC_API_KEY secret
+  # Uses @pytest.mark.llm marker
+  # Enable by removing the `if: false` condition
+  llm-tests:
+    if: false
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run LLM tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: tests
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ env.PYTHON_VERSION }}
+          markers: "llm"
+
+  build-python:
+    needs: [pre-commit, python-tests]
+    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build package
+        uses: JasperHG90/toiminnot/actions/uv_build@main
+        with:
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ env.PYTHON_VERSION }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+          retention-days: 7
+
+  build-dashboard:
+    needs: [dashboard-lint-test]
+    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/dashboard/package-lock.json'
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/dashboard
+      - name: Build
+        run: npm run build
+        working-directory: packages/dashboard
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: packages/dashboard/dist/
+          retention-days: 7
+
+  build-openclaw:
+    needs: [openclaw-lint-test]
+    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.openclaw == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/openclaw/package-lock.json'
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/openclaw
+      - name: Build
+        run: npm run build
+        working-directory: packages/openclaw
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-dist
+          path: packages/openclaw/dist/
+          retention-days: 7
