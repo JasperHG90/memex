@@ -20,7 +20,7 @@ class AsyncTransaction:
         self.meta = meta
         self.fs = fs
         self.txn_id = transaction_id
-        self._logger = logging.getLogger('memex_core.storage.transaction.AsyncTransaction')
+        self._logger = logging.getLogger('memex.core.storage.transaction.AsyncTransaction')
 
         self._session: AsyncSession | None = None
         self._transaction_ctx = None  # The generic Helper object from session.begin()

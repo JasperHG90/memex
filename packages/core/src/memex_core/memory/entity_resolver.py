@@ -106,7 +106,7 @@ class EntityResolver:
 
     def __init__(self, resolution_threshold: float = 0.65):
         self.resolution_threshold = resolution_threshold
-        self._logger = logging.getLogger('memex_core.memory.entity_resolver')
+        self._logger = logging.getLogger('memex.core.memory.entity_resolver')
 
     async def resolve_entities_batch(
         self,

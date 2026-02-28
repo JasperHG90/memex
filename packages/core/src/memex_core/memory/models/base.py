@@ -7,7 +7,7 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 from platformdirs import user_cache_dir
 
-logger = logging.getLogger('memex_core.memory.models.base')
+logger = logging.getLogger('memex.core.memory.models.base')
 
 # Shared ONNX Runtime options optimized for memory-constrained environments
 options = ort.SessionOptions()  # type: ignore

@@ -10,7 +10,7 @@ import aiofiles
 import asyncstdlib.functools
 
 
-logger = logging.getLogger('memex_core.templates')
+logger = logging.getLogger('memex.core.templates')
 
 
 class MemexTemplateFromFile(BaseModel):

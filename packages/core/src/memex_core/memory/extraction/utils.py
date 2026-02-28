@@ -16,7 +16,7 @@ from memex_core.memory.extraction.models import (
     estimate_token_count,
 )
 
-logger = logging.getLogger('memex_core.memory.extraction.utils')
+logger = logging.getLogger('memex.core.memory.extraction.utils')
 
 
 def sanitize_text(text: str) -> str:
@@ -33,7 +33,8 @@ def parse_datetime(date_str: str) -> datetime | None:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-    except Exception:
+    except Exception as e:
+        logger.debug('Failed to parse datetime string %r: %s', date_str, e)
         return None
 
 
@@ -191,7 +192,8 @@ def verify_headers(headers: list[DetectedHeader], full_text: str) -> list[Detect
                 h.verified = True
             else:
                 h.verified = False
-        except Exception:
+        except Exception as e:
+            logger.debug('Header verification failed for %r: %s', h.exact_text, e)
             h.verified = False
 
     return headers

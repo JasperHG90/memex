@@ -53,7 +53,7 @@ from memex_core.llm import run_dspy_operation
 
 BLOCK_HARD_LIMIT = 50_000  # chars — safety cap for pathological input
 
-logger = logging.getLogger('memex_core.memory.extraction.core')
+logger = logging.getLogger('memex.core.memory.extraction.core')
 
 
 class ExtractSemanticFacts(dspy.Signature):
@@ -859,7 +859,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self.summarizer = dspy.ChainOfThought(SummarizeSection)
         self.parent_summarizer = dspy.ChainOfThought(SummarizeParentSection)
         self.block_summarizer = dspy.ChainOfThought(SummarizeBlock)
-        self._logger = logging.getLogger('memex_core.memory.extraction.page_index')
+        self._logger = logging.getLogger('memex.core.memory.extraction.page_index')
 
     async def aforward(
         self,
@@ -1056,8 +1056,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
                         h.exact_text = match.group(0)
                         h.start_index = offset + match.start()
                         valid_headers.append(h)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._logger.debug('Fuzzy regex match failed for header: %s', e)
         except Exception as e:
             self._logger.error(f'Scanner Error at offset {offset}: {e}')
 

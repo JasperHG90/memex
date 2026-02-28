@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import logging
 from typing import Generic, TypeVar, cast, Self, AsyncGenerator
@@ -18,7 +19,7 @@ T = TypeVar('T', bound=FileStoreConfig)
 class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
     def __init__(self, config: T):
         self.config = config
-        self._logger = logging.getLogger(f'memex_core.storage.{self.__class__.__name__}')
+        self._logger = logging.getLogger(f'memex.core.storage.{self.__class__.__name__}')
         self._logger.debug(f'Initialized storage backend with config: {self.config}')
         self._fs = self.initialize()
         self._logger.debug(f'Storage backend filesystem initialized: {self._fs}')
@@ -43,10 +44,19 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
 
         Returns:
             str: joined path, e.g. /home/vscode/workspace/path/to/file.txt
+
+        Raises:
+            ValueError: If root path is not set or key resolves outside root.
         """
         if not self.config.root:
             raise ValueError('Root path is not set.')
-        return f'{self.config.root.rstrip("/")}/{key.lstrip("/")}'
+        if os.path.isabs(key):
+            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
+        root_real = os.path.realpath(self.config.root)
+        joined = os.path.realpath(os.path.join(root_real, key))
+        if not joined.startswith(root_real + os.sep) and joined != root_real:
+            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
+        return joined
 
     def begin_staging(self, transaction_id: str):
         """If using a transaction, then this is setting up the staging process

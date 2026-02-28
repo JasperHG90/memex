@@ -9,7 +9,7 @@ from async_lru import alru_cache
 from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
 from platformdirs import user_cache_dir
 
-logger = logging.getLogger('memex_core.memory.models.reranking')
+logger = logging.getLogger('memex.core.memory.models.reranking')
 
 
 @alru_cache(maxsize=1)

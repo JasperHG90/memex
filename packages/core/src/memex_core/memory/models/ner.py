@@ -12,7 +12,7 @@ from tokenizers import Tokenizer
 from async_lru import alru_cache
 from memex_core.memory.models.base import ModelDownloader, options
 
-logger = logging.getLogger('memex_core.memory.models.ner')
+logger = logging.getLogger('memex.core.memory.models.ner')
 
 
 @alru_cache(maxsize=1)

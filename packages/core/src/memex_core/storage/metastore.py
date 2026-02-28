@@ -27,7 +27,7 @@ class AsyncBaseMetaStoreEngine(Generic[T], metaclass=ABCMeta):
 
     def __init__(self, config: T):
         self._logger = logging.getLogger(
-            f'memex_core.storage.metastore.engine.{self.__class__.__name__}'
+            f'memex.core.storage.metastore.engine.{self.__class__.__name__}'
         )
         self._config: T = config
         self._engine: AsyncEngine | None = None

@@ -12,7 +12,7 @@ from memex_core.memory.sql_models import MemoryLink, MemoryUnit, UnitEntity
 from memex_core.memory.extraction.models import EntityLink
 from memex_core.memory.extraction import storage
 
-logger = logging.getLogger('memex_core.memory.extraction.entity_links')
+logger = logging.getLogger('memex.core.memory.extraction.entity_links')
 
 
 @overload

@@ -4,7 +4,7 @@ import logging
 
 from metaphone import doublemetaphone
 
-logger = logging.getLogger('memex_core.memory.utils')
+logger = logging.getLogger('memex.core.memory.utils')
 
 # Common stopwords to strip from entity names
 STOPWORDS = {

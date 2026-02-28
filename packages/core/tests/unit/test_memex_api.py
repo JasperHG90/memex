@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from memex_core.api import NoteInput
@@ -61,6 +63,18 @@ async def test_ingest_existing_note(api, mock_session, mock_filestore):
 
     assert result['status'] == 'skipped'
     assert result['reason'] == 'idempotency_check'
+
+
+def test_note_input_manifest_defaults_name_when_none():
+    note = NoteInput(name=None, description='test desc', content=b'content')
+    manifest = json.loads(note.manifest)
+    assert manifest['name'] == 'Untitled'
+
+
+def test_note_input_manifest_uses_provided_name():
+    note = NoteInput(name='my-note', description='test desc', content=b'content')
+    manifest = json.loads(note.manifest)
+    assert manifest['name'] == 'my-note'
 
 
 @pytest.mark.asyncio

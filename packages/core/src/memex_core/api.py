@@ -205,17 +205,16 @@ class NoteInput:
     @cached_property
     def manifest(self) -> bytes:
         if (
-            self._metadata.name is None
-            or self._metadata.description is None
+            self._metadata.description is None
             or self.uuid is None
             or self.etag is None
             or self._metadata.files is None
             or self._metadata.tags is None
         ):
-            raise ValueError('Name and description must be set in metadata to generate manifest.')
+            raise ValueError('Description must be set in metadata to generate manifest.')
         return (
             Manifest(
-                name=self._metadata.name,
+                name=self._metadata.name or 'Untitled',
                 description=self._metadata.description,
                 uuid=self.uuid,
                 etag=self.etag,
@@ -264,8 +263,10 @@ class NoteInput:
         # Permissive Frontmatter Loading
         try:
             fm = await template.frontmatter
-        except Exception:
-            logger.warning(f'Could not parse frontmatter for {target_file}. Using defaults.')
+        except Exception as e:
+            logger.warning(
+                'Could not parse frontmatter for %s: %s. Using defaults.', target_file, e
+            )
             # Fallback to raw read
             content = target_file.read_bytes()
             return cls(
@@ -577,7 +578,8 @@ publish_date: {extracted.metadata.get('date')}
             for k, v in assets.items():
                 try:
                     decoded_assets[k] = base64.b64decode(v)
-                except Exception:
+                except Exception as e:
+                    logger.debug('Base64 decode failed for asset %r, using raw value: %s', k, e)
                     decoded_assets[k] = v
 
         note = NoteInput(
@@ -867,7 +869,10 @@ ingested_at: {now}
                             # We must decode it to store raw files (e.g. images)
                             try:
                                 raw_content = base64.b64decode(content)
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(
+                                    'Base64 decode failed for file %r, using raw: %s', filename, e
+                                )
                                 raw_content = content
 
                             full_asset_key = f'{asset_path}/{filename}'
