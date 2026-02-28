@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useLineage, useEntitySearch } from './use-lineage'
+import { useLineage, useEntitySearch } from '@/api/hooks/use-lineage'
 
 function createWrapper() {
   const queryClient = new QueryClient({

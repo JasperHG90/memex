@@ -9,7 +9,7 @@ import {
   useEntityCooccurrences,
   useBulkCooccurrences,
   useEntityLineage,
-} from './use-entities'
+} from '@/api/hooks/use-entities'
 
 function createWrapper() {
   const queryClient = new QueryClient({

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatLabel } from './format-label'
+import { formatLabel } from '@/components/shared/format-label'
 
 describe('formatLabel', () => {
   it('replaces underscores with spaces and title-cases', () => {

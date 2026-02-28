@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { apiFetch, ApiError, api } from './client'
+import { apiFetch, ApiError, api } from '@/api/client'
 
 // Mock import.meta.env
 vi.stubEnv('VITE_API_BASE', '/api/v1')

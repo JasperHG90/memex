@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useConnectionStatus } from './use-connection-status'
+import { useConnectionStatus } from '@/hooks/use-connection-status'
 
 describe('useConnectionStatus', () => {
   let fetchSpy: ReturnType<typeof vi.fn>

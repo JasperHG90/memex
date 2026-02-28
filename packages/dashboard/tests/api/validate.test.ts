@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { z } from 'zod'
-import { validateResponse, validated, validateArrayResponse } from './validate'
+import { validateResponse, validated, validateArrayResponse } from '@/api/validate'
 
 const TestSchema = z.object({
   id: z.string(),

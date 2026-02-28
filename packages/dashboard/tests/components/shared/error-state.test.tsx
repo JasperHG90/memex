@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ErrorState } from './error-state'
+import { ErrorState } from '@/components/shared/error-state'
 
 describe('ErrorState', () => {
   it('renders default title and provided message', () => {

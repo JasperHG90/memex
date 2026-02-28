@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useNotes, useNote, useNotePageIndex, useNoteSearch, useIngestNote, useDeleteNote } from './use-notes'
+import { useNotes, useNote, useNotePageIndex, useNoteSearch, useIngestNote, useDeleteNote } from '@/api/hooks/use-notes'
 
 function createWrapper() {
   const queryClient = new QueryClient({

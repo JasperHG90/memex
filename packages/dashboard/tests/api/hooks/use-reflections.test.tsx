@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useReflectionQueue, useTriggerReflection } from './use-reflections'
+import { useReflectionQueue, useTriggerReflection } from '@/api/hooks/use-reflections'
 
 function createWrapper() {
   const queryClient = new QueryClient({

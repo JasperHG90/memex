@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useVaultStore } from './vault-store'
+import { useVaultStore } from '@/stores/vault-store'
 
 describe('vault-store', () => {
   beforeEach(() => {

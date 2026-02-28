@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { useKeyboardShortcuts } from './use-keyboard-shortcuts'
+import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 
 function fireKeyDown(key: string, opts: Partial<KeyboardEventInit> = {}) {
   document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...opts }))

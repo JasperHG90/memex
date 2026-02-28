@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { SummaryCard } from './summary-card'
+import { SummaryCard } from '@/components/shared/summary-card'
 
 describe('SummaryCard', () => {
   it('renders loading skeleton when isLoading is true', () => {

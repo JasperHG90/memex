@@ -8,7 +8,7 @@ import {
   useDeleteMemory,
   useAdjustBelief,
   useMemoryLineage,
-} from './use-memories'
+} from '@/api/hooks/use-memories'
 
 function createWrapper() {
   const queryClient = new QueryClient({

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { streamNDJSON, collectNDJSON } from './ndjson'
+import { streamNDJSON, collectNDJSON } from '@/api/ndjson'
 
 function makeResponse(body: string | ReadableStream<Uint8Array>, contentType = 'application/x-ndjson'): Response {
   const stream =

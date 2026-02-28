@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { encodeBase64 } from './utils'
+import { encodeBase64 } from '@/lib/utils'
 
 describe('encodeBase64', () => {
   it('encodes ASCII string correctly', () => {

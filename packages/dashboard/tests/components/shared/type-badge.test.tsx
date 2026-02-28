@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { TypeBadge } from './type-badge'
+import { TypeBadge } from '@/components/shared/type-badge'
 
 describe('TypeBadge', () => {
   it('renders formatted label for underscore-separated type', () => {

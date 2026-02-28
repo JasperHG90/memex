@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ConnectionBanner } from './connection-banner'
+import { ConnectionBanner } from '@/components/shared/connection-banner'
 
 describe('ConnectionBanner', () => {
   beforeEach(() => {

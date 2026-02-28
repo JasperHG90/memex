@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Search } from 'lucide-react'
-import { EmptyState } from './empty-state'
+import { EmptyState } from '@/components/shared/empty-state'
 
 describe('EmptyState', () => {
   it('renders title and description', () => {
