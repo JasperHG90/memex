@@ -1,7 +1,10 @@
 import base64
+
+import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.mark.integration
 def test_resource_retrieval_workflow(client: TestClient):
     """
     Test the full resource retrieval workflow:
@@ -42,6 +45,7 @@ def test_resource_retrieval_workflow(client: TestClient):
     assert res_resp.headers['content-type'] == 'image/png'
 
 
+@pytest.mark.integration
 def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
     """
     Verify that ingestion persists assets to disk but does NOT create a markdown file
@@ -89,6 +93,7 @@ def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
     assert uuid.UUID(get_resp.json()['id']) == uuid.UUID(doc_id)
 
 
+@pytest.mark.integration
 def test_resource_not_found(client: TestClient):
     """Test 404 for non-existent resource."""
     resp = client.get('/api/v1/resources/non/existent/path.txt')

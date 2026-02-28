@@ -18,11 +18,21 @@ jobs:
     name: Build Python packages
     runs-on: ubuntu-latest
     steps:
-      - name: Build packages
-        uses: JasperHG90/toiminnot/actions/uv_build@main
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          uv_version: ${{ env.UV_VERSION }}
-          python_version: ${{ env.PYTHON_VERSION }}
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build all packages
+        run: uv build --all-packages
 
       - name: Upload Python artifacts
         uses: actions/upload-artifact@v4

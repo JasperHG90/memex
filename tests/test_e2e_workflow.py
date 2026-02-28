@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from uuid import UUID
 
+import pytest
+
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
 from memex_core.memory.sql_models import TokenUsage
 
@@ -13,6 +15,7 @@ def parse_ndjson(text: str):
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+@pytest.mark.integration
 def test_workflow_ingest_retrieve(client: TestClient):
     """
     Test a full workflow:

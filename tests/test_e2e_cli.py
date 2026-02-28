@@ -1,5 +1,7 @@
 import os
 from unittest.mock import patch
+
+import pytest
 from typer.testing import CliRunner
 from httpx import AsyncClient, ASGITransport
 
@@ -71,6 +73,7 @@ def _setup_env(postgres_container):
     os.environ['MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD'] = parsed.password or 'test'
 
 
+@pytest.mark.integration
 def test_cli_vault_list(postgres_container):
     """Test 'memex vault list' command."""
     _setup_env(postgres_container)
@@ -102,6 +105,7 @@ def test_cli_vault_list(postgres_container):
         assert 'Active Vault' in result.stdout
 
 
+@pytest.mark.integration
 def test_cli_vault_create_delete(postgres_container):
     """Test creating and deleting a vault via CLI."""
     _setup_env(postgres_container)
