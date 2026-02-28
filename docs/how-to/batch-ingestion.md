@@ -117,7 +117,7 @@ For one-off imports that should not block the client, append `?background=true` 
 To verify that batch ingestion was successful, list recent notes in the target vault:
 
 ```bash
-memex note list --vault project-x
+memex --vault project-x note list
 ```
 
 Or poll the job status via the API:
