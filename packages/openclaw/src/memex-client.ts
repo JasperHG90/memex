@@ -93,6 +93,7 @@ export class MemexClient {
       limit: this.config.searchLimit,
       skip_opinion_formation: true,
       vault_ids: [vaultIdentifier],
+      ...(this.config.tokenBudget != null && { token_budget: this.config.tokenBudget }),
     };
 
     const response = await fetch(`${this.baseUrl}/api/v1/memories/search`, {

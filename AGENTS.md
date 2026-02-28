@@ -151,11 +151,41 @@ information already in the codebase.
 
 ### Memory retrieval
 
-Use `memex_search` or `memex_note_search` when:
+**Session start context is automatic.** The `on_session_start` hook prefills recent
+memories into your context. Do NOT call `memex_search` or `memex_note_search` to
+"load context" at the start of a session — it is already present.
 
-- Starting a new session to recall prior context
-- The user asks "what do you know about X"
-- You need background on a topic discussed in a previous session
+**PROHIBITED:** Do NOT use `memex_list_notes` for discovery. Note titles are often
+"Untitled" and the listing provides no useful information.
+
+### Memory search vs. Note search
+
+These are two distinct search interfaces. Choose based on what you need:
+
+**`memex_search` — Memory Search (atomic facts, cross-vault knowledge graph)**
+- Searches over atomic facts, observations, and mental models using the TEMPR
+  architecture (Temporal, Entity, Mental Model, Probabilistic Ranking).
+- Use when: you want a synthesized answer spanning the entire knowledge base,
+  exploring entity relationships, or asking general questions.
+- Think: "What do we know about X globally?"
+
+**`memex_note_search` — Note/Document Search (raw source notes, scoped)**
+- Searches raw source notes (PDFs, Markdown, web scrapes) split into semantic
+  nodes, using hybrid RRF (Semantic + Keyword + Entity Graph + Temporal).
+- Supports `reason=True` (identify relevant sections) and `summarize=True`
+  (synthesize an answer from matched sections).
+- Use when: you need a specific quote or paragraph, want original formatting/context,
+  or are searching within specific notes or vaults.
+- Think: "Find the note where X is mentioned."
+
+### Note reading protocol
+
+When you need to read note content from a Note ID:
+
+1. **Step 1:** Call `memex_get_page_index` with the Note ID to get the table of contents.
+2. **Step 2:** Call `memex_get_node` with the relevant node ID(s) to read specific sections.
+3. **Fallback only:** Use `memex_read_note` only for very short notes or when the page
+   index is unavailable. Never use it as the first step.
 
 ### Slash commands
 

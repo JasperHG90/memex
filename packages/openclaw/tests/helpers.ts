@@ -8,6 +8,7 @@ export function makeConfig(overrides: Partial<PluginConfig> = {}): PluginConfig 
   return {
     serverUrl: 'http://localhost:8000',
     searchLimit: 8,
+    tokenBudget: null,
     defaultTags: ['agent', 'openclaw'],
     vaultId: null,
     vaultName: 'OpenClaw',
@@ -145,6 +146,11 @@ export function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/** Build a 200 OK response for the vault check (ensureVault). */
+export function vaultOkResponse(): Response {
+  return jsonResponse({ id: 'v1', name: 'OpenClaw' });
 }
 
 /** Build an error response. */

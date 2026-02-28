@@ -38,6 +38,7 @@ describe('parseConfig', () => {
     const cfg = parseConfig();
     expect(cfg.serverUrl).toBe('http://localhost:8000');
     expect(cfg.searchLimit).toBe(8);
+    expect(cfg.tokenBudget).toBeNull();
     expect(cfg.defaultTags).toEqual(['agent', 'openclaw']);
     expect(cfg.vaultId).toBeNull();
     expect(cfg.vaultName).toBe('OpenClaw');
@@ -117,6 +118,29 @@ describe('parseConfig', () => {
     const cfg = parseConfig({ timeoutMs: 12345 });
     expect(cfg.beforeTurnTimeoutMs).toBe(cfg.timeoutMs);
     expect(cfg.beforeTurnTimeoutMs).toBe(12345);
+  });
+
+  it('uses explicit tokenBudget config value', () => {
+    const cfg = parseConfig({ tokenBudget: 3000 });
+    expect(cfg.tokenBudget).toBe(3000);
+  });
+
+  it('reads tokenBudget from MEMEX_TOKEN_BUDGET env var', () => {
+    process.env['MEMEX_TOKEN_BUDGET'] = '4000';
+    const cfg = parseConfig();
+    expect(cfg.tokenBudget).toBe(4000);
+  });
+
+  it('explicit tokenBudget config takes precedence over env var', () => {
+    process.env['MEMEX_TOKEN_BUDGET'] = '4000';
+    const cfg = parseConfig({ tokenBudget: 5000 });
+    expect(cfg.tokenBudget).toBe(5000);
+  });
+
+  it('returns null tokenBudget for non-numeric env var', () => {
+    process.env['MEMEX_TOKEN_BUDGET'] = 'abc';
+    const cfg = parseConfig();
+    expect(cfg.tokenBudget).toBeNull();
   });
 });
 

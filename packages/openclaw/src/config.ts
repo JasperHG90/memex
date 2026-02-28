@@ -25,6 +25,14 @@ export function parseConfig(raw?: unknown): PluginConfig {
       ? cfg.searchLimit
       : safeParseInt(process.env['MEMEX_SEARCH_LIMIT'], 8);
 
+  const tokenBudgetEnv = process.env['MEMEX_TOKEN_BUDGET'];
+  const tokenBudget =
+    typeof cfg.tokenBudget === 'number'
+      ? cfg.tokenBudget
+      : tokenBudgetEnv != null
+        ? (Number.isNaN(parseInt(tokenBudgetEnv, 10)) ? null : parseInt(tokenBudgetEnv, 10))
+        : null;
+
   const tagsRaw =
     typeof cfg.defaultTags === 'string'
       ? cfg.defaultTags
@@ -57,6 +65,7 @@ export function parseConfig(raw?: unknown): PluginConfig {
   return {
     serverUrl,
     searchLimit,
+    tokenBudget,
     defaultTags,
     vaultId,
     vaultName,

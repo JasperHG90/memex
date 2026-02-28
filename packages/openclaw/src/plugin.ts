@@ -51,16 +51,26 @@ const memexPlugin = {
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 8)' })),
+          token_budget: Type.Optional(
+            Type.Number({ description: 'Token budget for results (default: server config)' }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit } = params as { query: string; limit?: number };
+          const { query, limit, token_budget } = params as {
+            query: string;
+            limit?: number;
+            token_budget?: number;
+          };
           const origLimit = cfg.searchLimit;
+          const origTokenBudget = cfg.tokenBudget;
           if (limit != null) cfg.searchLimit = limit;
+          if (token_budget != null) cfg.tokenBudget = token_budget;
 
           const effectiveLimit = limit ?? cfg.searchLimit;
           try {
             const memories = (await client.searchMemories(query)).slice(0, effectiveLimit);
             cfg.searchLimit = origLimit;
+            cfg.tokenBudget = origTokenBudget;
 
             if (memories.length === 0) {
               return {
@@ -79,6 +89,7 @@ const memexPlugin = {
             };
           } catch (err) {
             cfg.searchLimit = origLimit;
+            cfg.tokenBudget = origTokenBudget;
             return {
               content: [{ type: 'text', text: `Memex search failed: ${String(err)}` }],
               details: { error: String(err) },

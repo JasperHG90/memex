@@ -13,6 +13,11 @@
         "minimum": 1,
         "maximum": 50
       },
+      "tokenBudget": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 50000
+      },
       "defaultTags": {
         "type": "string"
       },
@@ -47,6 +52,11 @@
       "label": "Search Limit",
       "placeholder": "8",
       "help": "Max memory results per recall query"
+    },
+    "tokenBudget": {
+      "label": "Token Budget",
+      "help": "Maximum token budget for memory retrieval results. Controls how many memories are returned via greedy packing. Leave unset to use server default (2000).",
+      "advanced": true
     },
     "defaultTags": {
       "label": "Default Tags",

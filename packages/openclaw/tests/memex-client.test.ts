@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { MemexClient, encodeBase64, formatConversationNote, hashTurnKey } from '../src/memex-client';
-import { makeConfig, makeMemoryUnit, ndjsonResponse, jsonResponse, errorResponse } from './helpers';
+import { makeConfig, makeMemoryUnit, ndjsonResponse, jsonResponse, errorResponse, vaultOkResponse } from './helpers';
 
 // ---------------------------------------------------------------------------
 // MemexClient
@@ -27,12 +27,13 @@ describe('MemexClient', () => {
     it('sends correct request body', async () => {
       const config = makeConfig({ searchLimit: 5 });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.searchMemories('test query');
 
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      const [url, init] = fetchSpy.mock.calls[1]!;
       expect(url).toBe('http://localhost:8000/api/v1/memories/search');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
@@ -45,22 +46,24 @@ describe('MemexClient', () => {
     it('includes vault_ids with vaultId when explicitly configured', async () => {
       const config = makeConfig({ vaultId: 'vault-42' });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.searchMemories('query');
 
-      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
       expect(body.vault_ids).toEqual(['vault-42']);
     });
 
     it('uses vaultName as fallback when vaultId is null', async () => {
       const config = makeConfig({ vaultId: null, vaultName: 'MyVault' });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.searchMemories('query');
 
-      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
       expect(body.vault_ids).toEqual(['MyVault']);
     });
 
@@ -68,6 +71,7 @@ describe('MemexClient', () => {
       const m1 = makeMemoryUnit({ text: 'fact one' });
       const m2 = makeMemoryUnit({ text: 'fact two' });
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
       const result = await client.searchMemories('query');
@@ -79,6 +83,7 @@ describe('MemexClient', () => {
 
     it('returns empty array on 404 (vault not found)', async () => {
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
 
       const result = await client.searchMemories('query');
@@ -87,6 +92,7 @@ describe('MemexClient', () => {
 
     it('throws on non-ok response other than 404', async () => {
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Internal Server Error'));
 
       await expect(client.searchMemories('query')).rejects.toThrow(
@@ -96,16 +102,46 @@ describe('MemexClient', () => {
 
     it('passes abort signal to fetch', async () => {
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
       const controller = new AbortController();
 
       await client.searchMemories('query', controller.signal);
 
-      expect(fetchSpy.mock.calls[0]![1].signal).toBe(controller.signal);
+      expect(fetchSpy.mock.calls[1]![1].signal).toBe(controller.signal);
+    });
+
+    it('omits token_budget from request body when null', async () => {
+      const config = makeConfig({ tokenBudget: null });
+      const client = new MemexClient(config);
+      // First mock for ensureVault, second for the actual search
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ id: 'v1', name: 'OpenClaw' }));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query');
+
+      // The search request is the second fetch call (after vault check)
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body).not.toHaveProperty('token_budget');
+    });
+
+    it('includes token_budget in request body when set', async () => {
+      const config = makeConfig({ tokenBudget: 3000 });
+      const client = new MemexClient(config);
+      // First mock for ensureVault, second for the actual search
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ id: 'v1', name: 'OpenClaw' }));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query');
+
+      // The search request is the second fetch call (after vault check)
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.token_budget).toBe(3000);
     });
 
     it('returns empty array when response body is null', async () => {
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       const nullBodyResponse = new Response(null, { status: 200 });
       fetchSpy.mockResolvedValueOnce(nullBodyResponse);
 
@@ -116,11 +152,12 @@ describe('MemexClient', () => {
     it('strips trailing slash from serverUrl', async () => {
       const config = makeConfig({ serverUrl: 'http://localhost:8000/' });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.searchMemories('query');
 
-      expect(fetchSpy.mock.calls[0]![0]).toBe(
+      expect(fetchSpy.mock.calls[1]![0]).toBe(
         'http://localhost:8000/api/v1/memories/search',
       );
     });
@@ -180,6 +217,7 @@ describe('MemexClient', () => {
   describe('ingestNote', () => {
     it('sends fire-and-forget POST request', async () => {
       const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'ok' }, 202));
 
       client.ingestNote({
@@ -189,12 +227,12 @@ describe('MemexClient', () => {
         tags: ['tag'],
       });
 
-      // Allow microtask to settle
+      // Allow microtask to settle (vault check + ingest)
       await vi.waitFor(() => {
-        expect(fetchSpy).toHaveBeenCalledOnce();
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
       });
 
-      const [url, init] = fetchSpy.mock.calls[0]!;
+      const [url, init] = fetchSpy.mock.calls[1]!;
       expect(url).toBe('http://localhost:8000/api/v1/ingestions?background=true');
       expect(init.method).toBe('POST');
     });
@@ -202,6 +240,7 @@ describe('MemexClient', () => {
     it('merges vault_id from config when vaultId is set', async () => {
       const config = makeConfig({ vaultId: 'v-99' });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
       client.ingestNote({
@@ -211,16 +250,17 @@ describe('MemexClient', () => {
       });
 
       await vi.waitFor(() => {
-        expect(fetchSpy).toHaveBeenCalledOnce();
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
       });
 
-      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
       expect(body.vault_id).toBe('v-99');
     });
 
     it('uses vaultName as vault_id fallback when vaultId is null', async () => {
       const config = makeConfig({ vaultId: null, vaultName: 'MyVault' });
       const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
       client.ingestNote({
@@ -230,16 +270,17 @@ describe('MemexClient', () => {
       });
 
       await vi.waitFor(() => {
-        expect(fetchSpy).toHaveBeenCalledOnce();
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
       });
 
-      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
       expect(body.vault_id).toBe('MyVault');
     });
 
     it('logs warning on non-ok response', async () => {
       const client = new MemexClient(makeConfig());
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockResolvedValueOnce(errorResponse(500, 'boom'));
 
       client.ingestNote({
@@ -258,6 +299,7 @@ describe('MemexClient', () => {
     it('logs warning on network error', async () => {
       const client = new MemexClient(makeConfig());
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockRejectedValueOnce(new Error('Network down'));
 
       client.ingestNote({
@@ -276,6 +318,7 @@ describe('MemexClient', () => {
     it('uses injected logger.warn when provided', async () => {
       const logger = { warn: vi.fn() };
       const client = new MemexClient(makeConfig(), logger);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockRejectedValueOnce(new Error('fail'));
 
       client.ingestNote({ name: 'n', description: 'd', content: 'c' });
@@ -290,6 +333,7 @@ describe('MemexClient', () => {
     it('falls back to console.warn when no logger provided', async () => {
       const client = new MemexClient(makeConfig());
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
       fetchSpy.mockRejectedValueOnce(new Error('oops'));
 
       client.ingestNote({ name: 'n', description: 'd', content: 'c' });
@@ -674,6 +718,7 @@ describe('NDJSON parsing', () => {
   it('parses a single NDJSON object', async () => {
     const client = new MemexClient(makeConfig());
     const m = makeMemoryUnit({ text: 'solo' });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m]));
 
     const result = await client.searchMemories('q');
@@ -694,6 +739,7 @@ describe('NDJSON parsing', () => {
         controller.close();
       },
     });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(
       new Response(stream, { status: 200 }),
     );
@@ -718,6 +764,7 @@ describe('NDJSON parsing', () => {
         controller.close();
       },
     });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(
       new Response(stream, { status: 200 }),
     );

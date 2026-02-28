@@ -7,6 +7,7 @@ import {
   ndjsonResponse,
   jsonResponse,
   errorResponse,
+  vaultOkResponse,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,7 @@ describe('before_agent_start hook', () => {
     const api = registerPlugin();
     const m1 = makeMemoryUnit({ text: 'fact about TypeScript' });
     const m2 = makeMemoryUnit({ text: 'fact about testing' });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
     const hook = api.hooks.get('before_agent_start')![0]!;
@@ -179,6 +181,7 @@ describe('agent_end hook', () => {
 
   it('captures only user message (no assistant text) with ingestNote', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
     const hook = api.hooks.get('agent_end')![0]!;
@@ -191,10 +194,10 @@ describe('agent_end hook', () => {
     });
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    const [url, init] = fetchSpy.mock.calls[0]!;
+    const [url, init] = fetchSpy.mock.calls[1]!;
     expect(url).toContain('/api/v1/ingestions?background=true');
     const body = JSON.parse(init.body);
     expect(body.name).toMatch(/^Conversation —/);
@@ -207,6 +210,7 @@ describe('agent_end hook', () => {
 
   it('extracts text from ContentBlock arrays (user only)', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
     const hook = api.hooks.get('agent_end')![0]!;
@@ -219,10 +223,10 @@ describe('agent_end hook', () => {
     });
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    const [, init] = fetchSpy.mock.calls[0]!;
+    const [, init] = fetchSpy.mock.calls[1]!;
     const body = JSON.parse(init.body);
     const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
     expect(decoded).toContain(longMsg);
@@ -231,6 +235,7 @@ describe('agent_end hook', () => {
 
   it('strips <relevant-memories> block from captured user text', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
     const memoriesBlock =
@@ -247,10 +252,10 @@ describe('agent_end hook', () => {
     });
 
     await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
 
-    const [, init] = fetchSpy.mock.calls[0]!;
+    const [, init] = fetchSpy.mock.calls[1]!;
     const body = JSON.parse(init.body);
     const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
     expect(decoded).not.toContain('<relevant-memories>');
@@ -333,6 +338,7 @@ describe('memex_search tool', () => {
     const api = registerPlugin();
     const m1 = makeMemoryUnit({ text: 'fact one', fact_type: 'observation' });
     const m2 = makeMemoryUnit({ text: 'fact two', fact_type: 'experience' });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
     const tool = api.tools.get('memex_search')!;
@@ -348,6 +354,7 @@ describe('memex_search tool', () => {
 
   it('returns empty message when no results', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
     const tool = api.tools.get('memex_search')!;
@@ -378,6 +385,7 @@ describe('memex_search tool', () => {
 describe('memex_store tool', () => {
   it('stores note and returns confirmation', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
     const tool = api.tools.get('memex_store')!;
@@ -626,6 +634,7 @@ describe('/recall command', () => {
   it('returns search results with query', async () => {
     const api = registerPlugin();
     const m = makeMemoryUnit({ text: 'found memory', fact_type: 'fact' });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m]));
 
     const cmd = api.commands.get('recall')!;
@@ -645,6 +654,7 @@ describe('/recall command', () => {
 
   it('returns empty message when no results', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
     const cmd = api.commands.get('recall')!;
@@ -661,6 +671,7 @@ describe('/recall command', () => {
 describe('/remember command', () => {
   it('stores note and returns confirmation', async () => {
     const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
     const cmd = api.commands.get('remember')!;

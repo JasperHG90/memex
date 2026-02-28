@@ -161,6 +161,7 @@ export interface EntityMentionDTO {
 export interface PluginConfig {
   serverUrl: string;
   searchLimit: number;
+  tokenBudget: number | null;
   defaultTags: string[];
   vaultId: string | null;
   vaultName: string;

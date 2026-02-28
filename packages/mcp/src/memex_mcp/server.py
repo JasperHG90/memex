@@ -39,16 +39,29 @@ mcp = FastMCP(
     instructions="""Memex is a personal knowledge management system.
 
 Tools:
-- `memex_search`: Find memory units (facts, experiences, observations). Returns Unit IDs and Note IDs.
-- `memex_note_search`: Find source notes via hybrid retrieval. Use summarize=True to synthesize an answer.
+- `memex_search`: Memory Search — find atomic facts, observations, mental models across the entire
+  knowledge graph using TEMPR (Temporal, Entity, Mental Model, Probabilistic Ranking). Use for
+  general questions ("What do we know about X?").
+- `memex_note_search`: Note/Document Search — find passages in raw source notes (PDFs, Markdown,
+  web scrapes) using hybrid RRF. Use summarize=True to synthesize, reason=True to identify relevant
+  sections. Use for specific quotes or scoped searches.
+- `memex_get_page_index`: Get the table of contents (section titles, summaries, node IDs) for a
+  note. Use BEFORE reading note content.
+- `memex_get_node`: Retrieve full text of a specific note section by node ID. Use after
+  `memex_get_page_index`.
+- `memex_read_note`: Read full note content. FALLBACK ONLY — prefer get_page_index + get_node.
 - `memex_get_lineage`: Trace provenance of a unit, observation, note, or mental model.
 - `memex_list_assets`: List file assets attached to a note by Note ID.
-- `memex_read_note`: Read full note content by Note ID.
 - `memex_get_resource`: Retrieve a file asset by path (get paths from `memex_list_assets`).
 - `memex_list_entities` / `memex_get_entity`: Browse and inspect the entity/knowledge graph.
 - `memex_list_vaults`: List available vaults.
+- `memex_list_notes`: List notes in a vault. NOT useful for discovery — use search tools instead.
 
-Workflow: use `memex_search` for facts/experiences; use `memex_note_search` for whole notes or synthesis.
+Workflow:
+1. Discovery: `memex_search` for global facts/entities; `memex_note_search` for source documents.
+2. Reading: `memex_get_page_index` → `memex_get_node`. Only fall back to `memex_read_note` for
+   small notes.
+3. AVOID: Do not use `memex_list_notes` for discovery.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -237,7 +250,10 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Retrieve the full content and metadata of a note by its UUID.',
+    description=(
+        'Retrieve the full content and metadata of a note by its UUID. '
+        'FALLBACK: Prefer memex_get_page_index + memex_get_node to read specific sections.'
+    ),
 )
 async def memex_read_note(
     ctx: Context,
@@ -674,9 +690,11 @@ async def memex_note_search(
             if ans := next((r.answer for r in results if r.answer), None):
                 lines += ['---', '## Synthesized Answer', ans]
 
-        lines.append('Tip: Use `memex_read_note` with a Note ID to read the full note.')
-        lines.append('Tip: Use `memex_get_page_index` to browse the note table of contents.')
+        lines.append(
+            'Tip: Use `memex_get_page_index` with a Note ID to browse the table of contents.'
+        )
         lines.append('Tip: Use `memex_get_node` with a Node ID to retrieve specific section text.')
+        lines.append('Tip: Use `memex_read_note` only as a fallback for small notes.')
         return '\n'.join(lines)
 
     except Exception as e:
@@ -897,7 +915,10 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_list_notes',
-    description='List notes in the active vault.',
+    description=(
+        'List notes in the active vault. '
+        'NOT recommended for discovery — use memex_search or memex_note_search instead.'
+    ),
 )
 async def memex_list_notes(
     ctx: Context,

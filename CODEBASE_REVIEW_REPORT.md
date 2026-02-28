@@ -44,7 +44,7 @@ Memex is a well-architected Python monorepo implementing a long-term memory syst
 4. **No authentication** -- FastAPI server has zero auth (mitigated by localhost binding)
 5. **Path traversal vulnerability** -- `join_path` uses f-string concatenation, no traversal guard
 6. **No schema migration tool** -- uses `create_all` instead of Alembic
-7. **No retry/backoff for LLM calls** -- zero fault tolerance at application layer
+7. ~~No retry/backoff for LLM calls~~ DSPy's `dspy.LM` provides `num_retries=3` with exponential backoff by default (see corrected A10/E6)
 8. **Dashboard has zero tests** -- the actual testing gap (not CLI/MCP as originally stated)
 9. **No structured logging** -- plain text with f-string interpolation
 
@@ -67,7 +67,7 @@ Memex is a well-architected Python monorepo implementing a long-term memory syst
 | A7 | Append-only note design has partial mitigation: `MentalModel` has version field, `Document` has `content_hash` dedup, incremental extraction handles updates via content-hash diffing. No explicit compaction. | Low | Architect | Partially Confirmed |
 | A8 | `SELECT ... FOR UPDATE SKIP LOCKED` pattern for distributed reflection queue is production-grade (queue_service.py:212, engine.py:366) | Positive | Architect | Confirmed |
 | A9 | Top-level `__init__.py` has no `__all__` exports, but sub-packages do have proper exports. `py.typed` marker exists. Inconsistent rather than absent. | Low | Architect | Partially Confirmed |
-| A10 | No retry, tenacity, backoff, or circuit breaker anywhere. LLM calls via dspy have no fault tolerance at the application layer. | High | Architect | Confirmed |
+| A10 | ~~No retry/backoff for LLM calls~~ **Corrected:** DSPy's `dspy.LM` has built-in `num_retries=3` with exponential backoff for transient failures (network errors, rate limiting). All 6 `dspy.LM()` instantiations inherit this default. **Remaining gap:** no circuit breaker pattern for prolonged outages. | Low | Architect | Corrected |
 
 ### Code Quality
 
@@ -142,7 +142,7 @@ Memex is a well-architected Python monorepo implementing a long-term memory syst
 | E3 | Centralized `_handle_error()` maps exceptions to HTTP codes. But generic 500s return only "Internal server error" with no context/correlation ID. | Medium | Senior Dev 2 | Confirmed |
 | E4 | No `/health`, `/ready`, `/live` endpoints. | Medium | Senior Dev 2 | Confirmed |
 | E5 | ~~Missing Prometheus metrics~~ **Corrected:** Prometheus metrics ARE integrated via `prometheus-fastapi-instrumentator`. Exposed at `/api/v1/metrics`. Provides HTTP request metrics. **Remaining gap:** custom app-level metrics (ingestion throughput, queue depth, strategy latencies). | Low | Senior Dev 2 | Corrected |
-| E6 | Zero retry/backoff logic. No tenacity, no manual retry loops. DSPy/litellm may have internal retries but app layer adds none. | High | Senior Dev 2 | Confirmed |
+| E6 | ~~Zero retry/backoff logic~~ **Corrected:** DSPy's `dspy.LM` provides `num_retries=3` with exponential backoff by default. All LM instantiations in the codebase inherit this. No additional `tenacity` wrapper needed. | -- | Senior Dev 2 | Disputed |
 | E7 | No Sentry, PagerDuty, etc. Prometheus could be scraped by Alertmanager but no rules defined. | Medium | Senior Dev 2 | Confirmed |
 | E8 | 15 bare `except Exception:` blocks. Truly silent: `extraction/core.py:1059-1060` has `except Exception: pass`. ~90 `except Exception as e:` throughout, many overly broad. | High | Senior Dev 2 | Confirmed |
 | E9 | Session ID IS propagated via middleware and stored in DB records. But NOT included in log messages. Log formatter only has asctime/name/levelname. | Low | Senior Dev 2 | Partially Confirmed (downgraded) |
@@ -236,7 +236,7 @@ Items that were found to be already implemented have been removed. Severities ha
 
 | # | Finding | Category | Severity | Effort | Impact | Priority Score |
 |---|---------|----------|----------|--------|--------|----------------|
-| E6 | Add retry logic with exponential backoff for LLM calls | Error Handling | High | S | High (3) | 3.00 |
+| ~~E6~~ | ~~Add retry logic with exponential backoff for LLM calls~~ **Already handled by DSPy (`num_retries=3`)** | -- | -- | -- | -- | -- |
 | E8 | Fix silent exception swallowing (15 bare blocks, ~90 broad catches) | Error Handling | High | S | High (3) | 3.00 |
 | S9 | Fix path traversal vulnerability in FileStore | Security | High | S | High (3) | 3.00 |
 | D5 | Configure statement_timeout for vector searches | Database | Medium | S | Med (2) | 2.00 |
@@ -256,7 +256,7 @@ Items that were found to be already implemented have been removed. Severities ha
 | T6 | Fix fixture side effects causing flaky tests | Testing | Medium | S | Med (2) | 2.00 |
 | S4 | Add authentication/authorization to FastAPI server | Security | High | M | High (3) | 1.50 |
 | D6 | Set up Alembic for schema migrations | Database | High | M | High (3) | 1.50 |
-| A10 | Add circuit breaker for LLM API calls (complements E6 retry logic) | Architecture | High | M | High (3) | 1.50 |
+| A10 | Add circuit breaker for LLM API calls (retries already handled by DSPy) | Architecture | Medium | M | Med (2) | 1.00 |
 | E1 | Implement structured logging (structlog) | Observability | High | M | High (3) | 1.50 |
 | CQ3 | Standardize error handling patterns across codebase | Code Quality | High | M | High (3) | 1.50 |
 | CQ2 | Decompose MemexAPI God Object (1994 lines, 60+ methods) | Code Quality | High | L | High (3) | 1.00 |
@@ -292,7 +292,7 @@ Items that were found to be already implemented have been removed. Severities ha
 
 These are high-impact, low-effort items that can be addressed immediately. Items from the original list that were found to be already implemented have been removed.
 
-1. **E6 - Proper retry logic for LLM calls** (Score: 3.00) -- Use `tenacity` library with exponential backoff + jitter. Zero retry logic exists at the application layer.
+1. ~~**E6 - Proper retry logic for LLM calls**~~ **Removed.** DSPy's `dspy.LM` already provides `num_retries=3` with exponential backoff by default. Adding `tenacity` would cause double-retrying.
 
 2. **E8 - Fix silent exception swallowing** (Score: 3.00) -- Audit 15 bare `except Exception:` blocks (e.g., `extraction/core.py:1059-1060` has `except Exception: pass`). Add proper logging before re-raising.
 
@@ -326,7 +326,7 @@ These are high-impact, low-effort items that can be addressed immediately. Items
 
 - [ ] Fix path traversal vulnerability in FileStore (S9)
 - [ ] Fix silent exception swallowing -- 15 bare blocks (E8)
-- [ ] Add retry/backoff logic for LLM API calls (E6)
+- [x] ~~Add retry/backoff logic for LLM API calls (E6)~~ -- Already handled by DSPy `num_retries=3`
 - [ ] Add authentication/authorization for production deployment (S4)
 - [ ] Configure `statement_timeout` for vector searches (D5)
 - [ ] Add health check endpoints (E4)
@@ -415,7 +415,7 @@ Ranked by strategic value and feasibility:
 
 The specialist review team found significant inaccuracies in the original report. For transparency, here is a summary of what changed:
 
-### 19 Findings Found to be Factually Wrong or Significantly Overstated
+### 20 Findings Found to be Factually Wrong or Significantly Overstated
 - **A3** (Store transaction coordination missing) -- `AsyncTransaction` exists with two-phase commit. Changed to Positive.
 - **D1** (Missing composite indexes) -- 38 explicit indexes found. Removed.
 - **D3** (No connection pooling) -- Pool configured with `pool_size=10`, `max_overflow=20`. Removed.
@@ -435,6 +435,7 @@ The specialist review team found significant inaccuracies in the original report
 - **U6** (No keyboard shortcuts) -- Ctrl+K, Ctrl+N, Escape implemented. Removed.
 - **CQ9** (Unused imports) -- Ruff passes clean. Removed.
 - **CQ10** (Mutable defaults) -- Pydantic handles safely. Removed.
+- **A10/E6** (No retry/backoff for LLM calls) -- DSPy's `dspy.LM` provides `num_retries=3` with exponential backoff by default. All 6 LM instantiations inherit this. Corrected/Removed.
 
 ### Technology Stack Correction
 - **Dashboard is NOT Reflex (Python)** -- it is React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui. This was a fundamental error in the original report.
