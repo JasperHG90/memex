@@ -1,0 +1,219 @@
+"""Entity service — CRUD and query operations for entities."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, AsyncGenerator
+from uuid import UUID
+
+from sqlmodel import col
+
+from memex_common.exceptions import EntityNotFoundError, ResourceNotFoundError
+
+from memex_core.services.base import BaseService
+
+logger = logging.getLogger('memex.core.services.entities')
+
+
+class EntityService(BaseService):
+    """Entity CRUD, search, and graph traversal operations."""
+
+    async def list_entities_ranked(
+        self, limit: int = 100, vault_ids: list[UUID] | None = None
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Stream entities ranked by hybrid score.
+        Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
+        """
+        from memex_core.memory.sql_models import Entity, EntityCooccurrence, UnitEntity
+        from sqlmodel import select, func, desc, col
+
+        # Subquery for centrality (sum of cooccurrence counts)
+        centrality_stmt = (
+            select(
+                func.coalesce(func.sum(EntityCooccurrence.cooccurrence_count), 0).label(
+                    'centrality'
+                ),
+                Entity.id.label('entity_id'),
+            )
+            .select_from(Entity)
+            .outerjoin(
+                EntityCooccurrence,
+                (EntityCooccurrence.entity_id_1 == Entity.id)
+                | (EntityCooccurrence.entity_id_2 == Entity.id),
+            )
+            .group_by(Entity.id)
+        ).subquery()
+
+        stmt = select(Entity).join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+
+        if vault_ids:
+            stmt = (
+                stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
+                .where(col(UnitEntity.vault_id).in_(vault_ids))
+                .distinct()
+            )
+
+        stmt = stmt.order_by(
+            desc(
+                0.4 * Entity.mention_count
+                + 0.4 * Entity.retrieval_count
+                + 0.2 * centrality_stmt.c.centrality
+            )
+        ).limit(limit)
+
+        async with self.metastore.session() as session:
+            stream = await session.stream(stmt)
+            async for row in stream:
+                yield row[0]
+
+    async def get_entity_cooccurrences(
+        self, entity_id: UUID | str, vault_ids: list[UUID] | None = None
+    ) -> list[Any]:
+        """Get co-occurrence edges for an entity."""
+        from memex_core.memory.sql_models import EntityCooccurrence
+        from sqlmodel import or_, select
+
+        eid = UUID(str(entity_id))
+        async with self.metastore.session() as session:
+            stmt = select(EntityCooccurrence).where(
+                or_(EntityCooccurrence.entity_id_1 == eid, EntityCooccurrence.entity_id_2 == eid)
+            )
+            if vault_ids:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
+            return list((await session.exec(stmt)).all())
+
+    async def get_bulk_cooccurrences(
+        self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
+    ) -> list[Any]:
+        """Get co-occurrences between a set of entities."""
+        from memex_core.memory.sql_models import EntityCooccurrence
+        from sqlmodel import col, select
+
+        async with self.metastore.session() as session:
+            stmt = select(EntityCooccurrence).where(
+                (col(EntityCooccurrence.entity_id_1).in_(entity_ids))
+                & (col(EntityCooccurrence.entity_id_2).in_(entity_ids))
+            )
+            if vault_ids:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
+            return list((await session.exec(stmt)).all())
+
+    async def get_entity_mentions(
+        self, entity_id: UUID | str, limit: int = 20, vault_ids: list[UUID] | None = None
+    ) -> list[dict[str, Any]]:
+        """Get memory units and source documents where this entity is mentioned."""
+        from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
+        from sqlmodel import desc, select
+
+        eid = UUID(str(entity_id))
+        async with self.metastore.session() as session:
+            stmt = (
+                select(MemoryUnit, Note)
+                .join(UnitEntity, UnitEntity.unit_id == MemoryUnit.id)
+                .join(Note, MemoryUnit.note_id == Note.id)
+                .where(UnitEntity.entity_id == eid)
+            )
+            if vault_ids:
+                stmt = stmt.where(col(MemoryUnit.vault_id).in_(vault_ids))
+            stmt = stmt.order_by(desc(MemoryUnit.created_at)).limit(limit)
+            results = (await session.exec(stmt)).all()
+            return [{'unit': unit, 'document': doc} for unit, doc in results]
+
+    async def get_entity(self, entity_id: UUID | str) -> Any | None:
+        """Get an entity by ID."""
+        from memex_core.memory.sql_models import Entity
+
+        eid = UUID(str(entity_id))
+        async with self.metastore.session() as session:
+            return await session.get(Entity, eid)
+
+    async def delete_entity(self, entity_id: UUID) -> bool:
+        """
+        Delete an entity and all associated data.
+
+        Explicit cleanup: MentalModel rows (no FK cascade exists).
+        ORM cascades handle: unit_entities, aliases, memory_links, cooccurrences.
+        DB FK cascade handles: reflection_queue.
+        """
+        from memex_core.memory.sql_models import Entity, MentalModel
+        from sqlmodel import select, col
+
+        async with self.metastore.session() as session:
+            entity = await session.get(Entity, entity_id)
+            if not entity:
+                raise EntityNotFoundError(f'Entity {entity_id} not found.')
+
+            # Delete MentalModel rows explicitly (no FK cascade exists)
+            stmt = select(MentalModel).where(col(MentalModel.entity_id) == entity_id)
+            models = (await session.exec(stmt)).all()
+            for model in models:
+                await session.delete(model)
+
+            # ORM cascades handle unit_entities, aliases, memory_links, cooccurrences
+            # DB FK cascade handles reflection_queue
+            await session.delete(entity)
+            await session.commit()
+
+        return True
+
+    async def delete_mental_model(self, entity_id: UUID, vault_id: UUID) -> bool:
+        """
+        Delete a mental model for a specific entity in a specific vault.
+
+        Does NOT delete the parent entity.
+        """
+        from memex_core.memory.sql_models import MentalModel
+        from sqlmodel import select, col
+
+        async with self.metastore.session() as session:
+            stmt = select(MentalModel).where(
+                (col(MentalModel.entity_id) == entity_id) & (col(MentalModel.vault_id) == vault_id)
+            )
+            model = (await session.exec(stmt)).first()
+            if not model:
+                raise ResourceNotFoundError(
+                    f'Mental model for entity {entity_id} in vault {vault_id} not found.'
+                )
+
+            await session.delete(model)
+            await session.commit()
+
+        return True
+
+    async def get_top_entities(
+        self, limit: int = 5, vault_ids: list[UUID] | None = None
+    ) -> list[Any]:
+        """Get top entities by mention count."""
+        from memex_core.memory.sql_models import Entity, UnitEntity
+        from sqlmodel import select, desc, col
+
+        async with self.metastore.session() as session:
+            stmt = select(Entity)
+            if vault_ids:
+                stmt = (
+                    stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
+                    .where(col(UnitEntity.vault_id).in_(vault_ids))
+                    .distinct()
+                )
+            stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
+            return list((await session.exec(stmt)).all())
+
+    async def search_entities(
+        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
+    ) -> list[Any]:
+        """Search for entities by canonical name using trigram similarity or ILIKE."""
+        from memex_core.memory.sql_models import Entity, UnitEntity
+        from sqlmodel import select, col
+
+        async with self.metastore.session() as session:
+            # Use ILIKE for broad matching
+            stmt = select(Entity).where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            if vault_ids:
+                stmt = (
+                    stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
+                    .where(col(UnitEntity.vault_id).in_(vault_ids))
+                    .distinct()
+                )
+            stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
+            return list((await session.exec(stmt)).all())
