@@ -205,8 +205,8 @@ def start(
         if workers is None:
             workers = 2
 
-        # Signal to workers (via env) that schema is already created
-        os.environ['MEMEX_SKIP_SCHEMA_CREATION'] = 'true'
+        # Signal to workers (via env) that schema check is already done
+        os.environ['MEMEX_SKIP_SCHEMA_CHECK'] = 'true'
 
         preload = False  # Preloading can cause issues on mac, but helps on other OS
         import platform

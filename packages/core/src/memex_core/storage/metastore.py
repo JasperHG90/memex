@@ -9,8 +9,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     async_sessionmaker,
 )
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlmodel import text, SQLModel
+from sqlmodel import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.config import PostgresMetaStoreConfig
@@ -109,31 +108,7 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
         )
 
         if create_schema:
-            # Initialize extensions separately to handle race conditions in multi-worker setups.
-            # We use separate transactions so that if one fails (e.g. UniqueViolation),
-            # it doesn't abort the transaction for the others.
-
-            # 1. Vector extension
-            try:
-                async with self.engine.begin() as conn:
-                    await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-            except IntegrityError:
-                self._logger.warning('Vector extension already exists (race condition handled).')
-            except SQLAlchemyError as e:
-                self._logger.warning(f'Error checking vector extension: {e}')
-
-            # 2. pg_trgm extension
-            try:
-                async with self.engine.begin() as conn:
-                    await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
-            except IntegrityError:
-                self._logger.warning('pg_trgm extension already exists (race condition handled).')
-            except SQLAlchemyError as e:
-                self._logger.warning(f'Error checking pg_trgm extension: {e}')
-
-            # 3. Create tables
-            async with self.engine.begin() as conn:
-                await conn.run_sync(SQLModel.metadata.create_all)
+            await self._check_schema_version()
 
         self._logger.debug('PostgreSQL async engine initialized.')
         return self
@@ -150,6 +125,49 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
         if self._session_factory is None:
             raise RuntimeError('Database not connected. Call connect() first.')
         return self._session_factory
+
+    async def _check_schema_version(self) -> None:
+        """Verify the database schema matches the expected Alembic head revision."""
+        from memex_core.migration import get_expected_head
+
+        expected = get_expected_head()
+
+        async with self.engine.begin() as conn:
+            # Check if alembic_version table exists
+            result = await conn.execute(
+                text(
+                    'SELECT EXISTS ('
+                    '  SELECT 1 FROM information_schema.tables '
+                    "  WHERE table_name = 'alembic_version'"
+                    ')'
+                )
+            )
+            has_table = result.scalar()
+
+            if not has_table:
+                raise RuntimeError(
+                    'Database schema not initialized (alembic_version table missing). '
+                    'Run: memex database upgrade'
+                )
+
+            result = await conn.execute(text('SELECT version_num FROM alembic_version'))
+            row = result.first()
+
+            if row is None:
+                raise RuntimeError(
+                    'Database schema not initialized (no version stamp). '
+                    'Run: memex database upgrade'
+                )
+
+            current = row[0]
+            if current != expected:
+                raise RuntimeError(
+                    f'Database schema version mismatch: '
+                    f'database is at {current!r}, expected {expected!r}. '
+                    'Run: memex database upgrade'
+                )
+
+        self._logger.debug('Schema version check passed (revision %s).', expected)
 
 
 def get_metastore(config: PostgresMetaStoreConfig) -> AsyncBaseMetaStoreEngine:

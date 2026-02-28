@@ -34,6 +34,37 @@ class TestAlembicStructure:
         versions = list((core_root / 'alembic' / 'versions').glob('001_*.py'))
         assert len(versions) == 1, f'Expected 1 baseline migration, found {len(versions)}'
 
+    def test_single_head(self):
+        """Verify ScriptDirectory.get_heads() returns exactly 1 head."""
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        import memex_core
+
+        core_root = plb.Path(memex_core.__file__).resolve().parent.parent.parent
+        cfg = Config(str(core_root / 'alembic.ini'))
+        cfg.set_main_option('script_location', str(core_root / 'alembic'))
+        script = ScriptDirectory.from_config(cfg)
+        heads = script.get_heads()
+        assert len(heads) == 1, f'Expected 1 head, found {len(heads)}: {heads}'
+
+    def test_revision_chain_valid(self):
+        """Walk the chain from head to base with no gaps."""
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        import memex_core
+
+        core_root = plb.Path(memex_core.__file__).resolve().parent.parent.parent
+        cfg = Config(str(core_root / 'alembic.ini'))
+        cfg.set_main_option('script_location', str(core_root / 'alembic'))
+        script = ScriptDirectory.from_config(cfg)
+
+        revisions = list(script.walk_revisions())
+        assert len(revisions) >= 1
+        # The last revision should have no down_revision (base)
+        assert revisions[-1].down_revision is None
+
 
 class TestGetDatabaseUrl:
     """Tests for the get_database_url helper in memex_core.storage.db_url."""
@@ -84,14 +115,14 @@ class TestBaselineMigration:
     """Tests for the baseline migration script content."""
 
     def test_baseline_has_extension_creation(self, core_root):
-        migration_path = core_root / 'alembic' / 'versions' / '001_baseline_extensions.py'
+        migration_path = core_root / 'alembic' / 'versions' / '001_full_baseline.py'
 
         spec = importlib.util.spec_from_file_location('baseline', migration_path)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        assert module.revision == '001_baseline'
+        assert module.revision == '001_full_baseline'
         assert module.down_revision is None
 
     def test_alembic_config_loads(self, core_root):

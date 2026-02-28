@@ -147,6 +147,9 @@ async def init_db(postgres_url: str):
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
         await conn.run_sync(SQLModel.metadata.create_all)
 
+    # Stamp alembic_version so metastore schema check passes
+    await _stamp_alembic_head(engine)
+
     # Initialize Global Vault
     # We need a session or just execute raw SQL. SQLModel is easier.
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -159,6 +162,27 @@ async def init_db(postgres_url: str):
         await session.commit()
 
     await engine.dispose()
+
+
+async def _stamp_alembic_head(engine) -> None:
+    """Stamp the alembic_version table at head so schema checks pass in tests."""
+    from memex_core.migration import get_expected_head
+
+    head = get_expected_head()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                'CREATE TABLE IF NOT EXISTS alembic_version ('
+                '  version_num VARCHAR(32) NOT NULL, '
+                '  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)'
+                ')'
+            )
+        )
+        await conn.execute(text('DELETE FROM alembic_version'))
+        await conn.execute(
+            text('INSERT INTO alembic_version (version_num) VALUES (:rev)'),
+            {'rev': head},
+        )
 
 
 @pytest_asyncio.fixture(scope='function')

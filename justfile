@@ -63,3 +63,23 @@ dashboard-generate-api:
 # Run performance benchmarks
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
+
+# Run database migrations to latest
+db-upgrade:
+  uv run memex database upgrade
+
+# Show current migration revision
+db-current:
+  uv run memex database current
+
+# Show migration history
+db-history:
+  uv run memex database history
+
+# Generate a new migration from model changes
+db-revision message:
+  uv run memex database revision -m "{{message}}"
+
+# Stamp database at head (for existing DBs)
+db-stamp:
+  uv run memex database stamp

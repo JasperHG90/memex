@@ -57,7 +57,7 @@ async def test_connect(
     mock_session_factory: MagicMock,
     mock_config: PostgresMetaStoreConfig,
 ) -> None:
-    """Test connect() initializes engine, session factory, and runs setup SQL."""
+    """Test connect() initializes engine, session factory, and runs schema check."""
     with (
         patch(
             'memex_core.storage.metastore.create_async_engine', return_value=mock_sqla_engine
@@ -65,6 +65,11 @@ async def test_connect(
         patch(
             'memex_core.storage.metastore.async_sessionmaker', return_value=mock_session_factory
         ) as mock_maker,
+        patch.object(
+            AsyncPostgresMetaStoreEngine,
+            '_check_schema_version',
+            new_callable=AsyncMock,
+        ) as mock_check,
     ):
         # Act
         result = await engine_instance.connect()
@@ -79,27 +84,8 @@ async def test_connect(
         assert call_args[1]['pool_size'] == 5
         assert call_args[1]['max_overflow'] == 10
 
-        # Verify setup SQL execution (CREATE EXTENSION and create_all)
-        assert mock_sqla_engine.begin.call_count == 3
-
-        # Verify both extensions were created and tables were initialized
-        # Note: In the implementation, each step uses its own transaction.
-        # Step 1: Vector
-        # Step 2: pg_trgm
-        # Step 3: create_all
-
-        # We need to check the connection used in each begin() call
-        # Since we use the same connection mock for all begin() calls in the test
-        connection = mock_sqla_engine.begin.return_value.__aenter__.return_value
-
-        # extensions are executed (2 calls)
-        assert connection.execute.await_count == 2
-        calls = connection.execute.await_args_list
-        assert str(calls[0][0][0]) == 'CREATE EXTENSION IF NOT EXISTS vector'
-        assert str(calls[1][0][0]) == 'CREATE EXTENSION IF NOT EXISTS pg_trgm'
-
-        # tables are created (1 call to run_sync)
-        assert connection.run_sync.call_count == 1
+        # Verify schema version check was called
+        mock_check.assert_awaited_once()
 
         # Verify session factory creation
         mock_maker.assert_called_once()

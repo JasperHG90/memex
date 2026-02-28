@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
 
-    create_schema = os.getenv('MEMEX_SKIP_SCHEMA_CREATION', 'false').lower() != 'true'
+    create_schema = os.getenv('MEMEX_SKIP_SCHEMA_CHECK', 'false').lower() != 'true'
     await metastore.connect(create_schema=create_schema)
 
     embedding_model = await get_embedding_model()

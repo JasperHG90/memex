@@ -10,7 +10,7 @@ from rich.console import Console
 console = Console()
 logger = logging.getLogger('memex_cli.db')
 
-app = typer.Typer(help='Database schema migration commands.')
+app = typer.Typer(name='database', help='Database schema migration commands.', no_args_is_help=True)
 
 
 def _alembic_cfg():
