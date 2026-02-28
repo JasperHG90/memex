@@ -16,6 +16,7 @@ from memex_core.memory.extraction.pipeline.diffing import (
     BlockDiffResult,
     PageIndexDiffResult,
     _walk_nodes,
+    assemble_llm_chunks,
     build_thin_tree,
     collect_toc_hashes,
     diff_blocks,
@@ -764,3 +765,68 @@ class TestFindNodeHash:
     def test_empty_toc(self) -> None:
         """Empty TOC returns None."""
         assert find_node_hash([], 'any') is None
+
+
+# ===========================================================================
+# assemble_llm_chunks tests
+# ===========================================================================
+
+
+class TestAssembleLlmChunks:
+    """Tests for assemble_llm_chunks."""
+
+    def test_basic_assembly(self) -> None:
+        """Added blocks are assembled into LLM chunks."""
+        b0 = _make_stable_block('block zero', 0)
+        b1 = _make_stable_block('block one', 1)
+        all_blocks = [b0, b1]
+        added = [b0, b1]
+
+        result = assemble_llm_chunks(all_blocks, added, set())
+
+        assert len(result) == 2
+        assert result[0]['text'] == 'block zero'
+        assert result[1]['text'] == 'block one'
+
+    def test_retained_neighbor_context(self) -> None:
+        """Retained neighbor blocks are included as context."""
+        b0 = _make_stable_block('retained before', 0)
+        b1 = _make_stable_block('added block', 1)
+        b2 = _make_stable_block('retained after', 2)
+        all_blocks = [b0, b1, b2]
+        added = [b1]
+        retained = {b0.content_hash, b2.content_hash}
+
+        result = assemble_llm_chunks(all_blocks, added, retained)
+
+        assert len(result) == 1
+        assert result[0]['text'] == 'added block'
+        assert 'retained before' in result[0]['context']
+        assert 'retained after' in result[0]['context']
+
+    def test_no_context_when_neighbors_not_retained(self) -> None:
+        """Non-retained neighbors are not included as context."""
+        b0 = _make_stable_block('also added', 0)
+        b1 = _make_stable_block('main added', 1)
+        all_blocks = [b0, b1]
+        added = [b1]
+
+        result = assemble_llm_chunks(all_blocks, added, set())
+
+        assert result[0]['context'] == ''
+
+    def test_empty_added_blocks(self) -> None:
+        """Empty added blocks produces empty result."""
+        b0 = _make_stable_block('retained', 0)
+
+        result = assemble_llm_chunks([b0], [], {b0.content_hash})
+
+        assert result == []
+
+    def test_content_hash_in_result(self) -> None:
+        """Each result dict includes the content_hash."""
+        b0 = _make_stable_block('test', 0)
+
+        result = assemble_llm_chunks([b0], [b0], set())
+
+        assert result[0]['content_hash'] == b0.content_hash

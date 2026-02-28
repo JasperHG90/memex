@@ -21,7 +21,6 @@ from memex_core.memory.extraction.models import (
     ExtractedFact,
     ChunkMetadata,
     ProcessedFact,
-    StableBlock,
     PageIndexOutput,
 )
 from memex_core.memory.extraction.core import (
@@ -37,6 +36,7 @@ from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.extraction.utils import parse_datetime
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
+    assemble_llm_chunks,
     build_thin_tree,
     diff_blocks,
     diff_page_index_blocks,
@@ -362,7 +362,7 @@ class ExtractionEngine:
 
         if added_blocks:
             # Assemble ADDED blocks into LLM chunks with ±1 RETAINED neighbor context
-            llm_chunks = self._assemble_llm_chunks(new_blocks, added_blocks, retained_hashes)
+            llm_chunks = assemble_llm_chunks(new_blocks, added_blocks, retained_hashes)
 
             # Extract facts from assembled chunks
             chunk_texts = [c['text'] for c in llm_chunks]
@@ -1085,55 +1085,6 @@ class ExtractionEngine:
         await storage.backfill_node_block_ids(session, note_id, node_hash_to_block_id)
 
         return node_ids, block_chunk_map
-
-    def _assemble_llm_chunks(
-        self,
-        all_blocks: list[StableBlock],
-        added_blocks: list[StableBlock],
-        retained_hashes: set[str],
-    ) -> list[dict[str, str]]:
-        """Assemble ADDED blocks into LLM chunks with ±1 RETAINED neighbor context.
-
-        Each ADDED block becomes one LLM chunk. The nearest RETAINED neighbor
-        block(s) before/after are included as read-only context in the DSPy
-        ``context`` field.
-
-        Args:
-            all_blocks: All blocks in document order.
-            added_blocks: Blocks that need extraction.
-            retained_hashes: Set of content hashes for retained blocks.
-
-        Returns:
-            List of dicts with ``text`` and ``context`` keys.
-        """
-        block_by_index = {b.block_index: b for b in all_blocks}
-        result: list[dict[str, str]] = []
-
-        for block in added_blocks:
-            context_parts: list[str] = []
-
-            # Look for ±1 RETAINED neighbor
-            prev_idx = block.block_index - 1
-            if prev_idx in block_by_index:
-                prev_block = block_by_index[prev_idx]
-                if prev_block.content_hash in retained_hashes:
-                    context_parts.append(prev_block.text)
-
-            next_idx = block.block_index + 1
-            if next_idx in block_by_index:
-                next_block = block_by_index[next_idx]
-                if next_block.content_hash in retained_hashes:
-                    context_parts.append(next_block.text)
-
-            result.append(
-                {
-                    'text': block.text,
-                    'context': '\n\n'.join(context_parts),
-                    'content_hash': block.content_hash,
-                }
-            )
-
-        return result
 
     async def adjust_belief(
         self,

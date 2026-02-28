@@ -334,6 +334,54 @@ def flatten_toc_to_node_rows(
     return deduped
 
 
+def assemble_llm_chunks(
+    all_blocks: list[StableBlock],
+    added_blocks: list[StableBlock],
+    retained_hashes: set[str],
+) -> list[dict[str, str]]:
+    """Assemble ADDED blocks into LLM chunks with retained neighbor context.
+
+    Each ADDED block becomes one LLM chunk. The nearest RETAINED neighbor
+    block(s) before/after are included as read-only context in the DSPy
+    ``context`` field.
+
+    Args:
+        all_blocks: All blocks in document order.
+        added_blocks: Blocks that need extraction.
+        retained_hashes: Set of content hashes for retained blocks.
+
+    Returns:
+        List of dicts with ``text``, ``context``, and ``content_hash`` keys.
+    """
+    block_by_index = {b.block_index: b for b in all_blocks}
+    result: list[dict[str, str]] = []
+
+    for block in added_blocks:
+        context_parts: list[str] = []
+
+        prev_idx = block.block_index - 1
+        if prev_idx in block_by_index:
+            prev_block = block_by_index[prev_idx]
+            if prev_block.content_hash in retained_hashes:
+                context_parts.append(prev_block.text)
+
+        next_idx = block.block_index + 1
+        if next_idx in block_by_index:
+            next_block = block_by_index[next_idx]
+            if next_block.content_hash in retained_hashes:
+                context_parts.append(next_block.text)
+
+        result.append(
+            {
+                'text': block.text,
+                'context': '\n\n'.join(context_parts),
+                'content_hash': block.content_hash,
+            }
+        )
+
+    return result
+
+
 def find_node_hash(toc: list[TOCNode], target_id: str) -> str | None:
     """Recursively find a TOC node by ID and return its content hash.
 
