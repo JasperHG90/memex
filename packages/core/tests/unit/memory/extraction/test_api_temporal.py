@@ -3,33 +3,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 from datetime import datetime, timezone, timedelta
 
-from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import ProcessedFact
-from memex_core.config import ExtractionConfig, ConfidenceConfig
+from memex_core.memory.extraction.pipeline.linking import create_cross_doc_links
 from memex_common.types import FactTypes
 
 
-@pytest.fixture
-def mock_storage():
-    with patch('memex_core.memory.extraction.engine.storage') as mock:
-        yield mock
-
-
-@pytest.fixture
-def extractor(mock_storage):
-    config = ExtractionConfig()
-    confidence_config = ConfidenceConfig()
-    lm = MagicMock()
-    predictor = MagicMock()
-    embedding_model = MagicMock()
-    entity_resolver = MagicMock()
-    return ExtractionEngine(
-        config, confidence_config, lm, predictor, embedding_model, entity_resolver
-    )
-
-
 @pytest.mark.asyncio
-async def test_create_cross_doc_links(extractor):
+async def test_create_cross_doc_links():
     session = AsyncMock()
 
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -62,8 +42,8 @@ async def test_create_cross_doc_links(extractor):
     successor_uuid = uuid4()
 
     with (
-        patch('memex_core.memory.extraction.engine.storage') as mock_storage,
-        patch('memex_core.memory.extraction.engine.pg_insert') as mock_pg_insert,
+        patch('memex_core.memory.extraction.pipeline.linking.storage') as mock_storage,
+        patch('memex_core.memory.extraction.pipeline.linking.pg_insert') as mock_pg_insert,
     ):
         # Mock storage responses
         # First call: find_temporal_neighbor(direction='before') -> returns predecessor
@@ -76,7 +56,7 @@ async def test_create_cross_doc_links(extractor):
             mock_insert_stmt
         )
 
-        await extractor._create_cross_doc_links(session, unit_ids, facts)
+        await create_cross_doc_links(session, unit_ids, facts)
 
         # Check storage calls
         assert mock_storage.find_temporal_neighbor.call_count == 2

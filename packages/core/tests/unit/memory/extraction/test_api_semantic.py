@@ -3,33 +3,13 @@ from uuid import uuid4
 from datetime import datetime, timezone
 
 import pytest
-from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import ProcessedFact
-from memex_core.config import ExtractionConfig, ConfidenceConfig
+from memex_core.memory.extraction.pipeline.linking import create_links
 from memex_common.types import FactTypes
 
 
-@pytest.fixture
-def mock_storage():
-    with patch('memex_core.memory.extraction.engine.storage') as mock:
-        yield mock
-
-
-@pytest.fixture
-def extractor(mock_storage):
-    config = ExtractionConfig()
-    confidence_config = ConfidenceConfig()
-    lm = MagicMock()
-    predictor = MagicMock()
-    embedding_model = MagicMock()
-    entity_resolver = MagicMock()
-    return ExtractionEngine(
-        config, confidence_config, lm, predictor, embedding_model, entity_resolver
-    )
-
-
 @pytest.mark.asyncio
-async def test_create_links_semantic(extractor, mock_storage):
+async def test_create_links_semantic():
     """Test that semantic links are created based on similarity search."""
     session = AsyncMock()
 
@@ -59,32 +39,33 @@ async def test_create_links_semantic(extractor, mock_storage):
     # Mock storage.find_similar_facts
     # Return a match for fact_1 (simulating it matched an existing fact_3)
     target_uuid = uuid4()
-    mock_storage.find_similar_facts = AsyncMock()
-    mock_storage.find_similar_facts.side_effect = [
-        [(target_uuid, 0.85)],  # Result for fact_1
-        [],  # Result for fact_2
-    ]
-    mock_storage.find_temporal_neighbor = AsyncMock()
 
-    # Call the method
-    await extractor._create_links(session, unit_ids, facts)
+    with patch('memex_core.memory.extraction.pipeline.linking.storage') as mock_storage:
+        mock_storage.find_similar_facts = AsyncMock()
+        mock_storage.find_similar_facts.side_effect = [
+            [(target_uuid, 0.85)],  # Result for fact_1
+            [],  # Result for fact_2
+        ]
+        mock_storage.find_temporal_neighbor = AsyncMock()
 
-    # Verify find_similar_facts calls
-    assert mock_storage.find_similar_facts.call_count == 2
+        await create_links(session, unit_ids, facts)
 
-    # Check arguments for first call
-    call_args = mock_storage.find_similar_facts.call_args_list[0]
-    assert call_args[0][1] == fact_1.embedding
-    assert call_args[1]['limit'] == 5
-    assert call_args[1]['threshold'] == 0.75
+        # Verify find_similar_facts calls
+        assert mock_storage.find_similar_facts.call_count == 2
 
-    # Verify DB insert for links
-    # We expect 1 semantic link: unit_id_1 -> target_uuid
-    assert session.exec.called
+        # Check arguments for first call
+        call_args = mock_storage.find_similar_facts.call_args_list[0]
+        assert call_args[0][1] == fact_1.embedding
+        assert call_args[1]['limit'] == 5
+        assert call_args[1]['threshold'] == 0.75
+
+        # Verify DB insert for links
+        # We expect 1 semantic link: unit_id_1 -> target_uuid
+        assert session.exec.called
 
 
 @pytest.mark.asyncio
-async def test_create_links_semantic_verify_values(extractor):
+async def test_create_links_semantic_verify_values():
     """Verify the exact values passed to DB insert."""
     session = AsyncMock()
 
@@ -104,8 +85,8 @@ async def test_create_links_semantic_verify_values(extractor):
     target_uuid = uuid4()
 
     with (
-        patch('memex_core.memory.extraction.engine.storage') as mock_storage,
-        patch('memex_core.memory.extraction.engine.pg_insert') as mock_pg_insert,
+        patch('memex_core.memory.extraction.pipeline.linking.storage') as mock_storage,
+        patch('memex_core.memory.extraction.pipeline.linking.pg_insert') as mock_pg_insert,
     ):
         mock_storage.find_similar_facts = AsyncMock()
         mock_storage.find_similar_facts.return_value = [(target_uuid, 0.9)]
@@ -115,7 +96,7 @@ async def test_create_links_semantic_verify_values(extractor):
         )
         mock_storage.find_temporal_neighbor = AsyncMock(return_value=None)
 
-        await extractor._create_links(session, unit_ids, facts)
+        await create_links(session, unit_ids, facts)
 
         # Verify pg_insert values
         mock_pg_insert.assert_called()

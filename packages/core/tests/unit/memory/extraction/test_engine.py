@@ -100,10 +100,7 @@ async def test_extract_and_persist_flow(extractor, mock_session):
     extractor._store_facts = AsyncMock(
         return_value=[str(uuid4())]
     )  # Assuming this logic was in storage.insert_facts_batch
-    extractor._track_document = AsyncMock()
     extractor._resolve_entities = AsyncMock(return_value={uuid4()})
-    extractor._create_links = AsyncMock()
-
     # Patch deduplication to avoid actual DB calls and force no-duplicate result
     with patch(
         'memex_core.memory.extraction.deduplication.check_duplicates_batch', new_callable=AsyncMock
@@ -116,9 +113,20 @@ async def test_extract_and_persist_flow(extractor, mock_session):
         mock_session.exec.return_value = mock_result
 
         # Mock storage.insert_facts_batch since it's called directly
-        with patch(
-            'memex_core.memory.extraction.storage.insert_facts_batch', new_callable=AsyncMock
-        ) as mock_insert:
+        with (
+            patch(
+                'memex_core.memory.extraction.storage.insert_facts_batch',
+                new_callable=AsyncMock,
+            ) as mock_insert,
+            patch(
+                'memex_core.memory.extraction.engine.track_document',
+                new_callable=AsyncMock,
+            ) as mock_track,
+            patch(
+                'memex_core.memory.extraction.engine.create_links',
+                new_callable=AsyncMock,
+            ) as mock_create_links,
+        ):
             mock_insert.return_value = [str(uuid4())]
 
             contents = [RetainContent(content='Test Content')]
@@ -133,11 +141,11 @@ async def test_extract_and_persist_flow(extractor, mock_session):
             # It seems it might be called twice in some execution paths or test setups,
             # but for now let's just assert it was called.
             assert extractor._process_embeddings.call_count >= 1
-            extractor._track_document.assert_called_once()
+            mock_track.assert_called_once()
             extractor._store_chunks.assert_called_once()
             mock_insert.assert_called_once()
             extractor._resolve_entities.assert_called_once()
-            extractor._create_links.assert_called_once()
+            mock_create_links.assert_called_once()
 
 
 @pytest.mark.asyncio
