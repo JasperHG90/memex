@@ -4,7 +4,6 @@ Note Management Commands.
 
 import json
 from typing import Annotated, Any
-from uuid import UUID
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -13,7 +12,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
 
 console = Console()
 
@@ -118,12 +117,7 @@ async def delete_note(
     Delete a note and all associated data (memory units, chunks, links, assets).
     """
     config: MemexConfig = ctx.obj
-
-    try:
-        uuid_obj = UUID(note_id)
-    except ValueError:
-        console.print(f'[red]Invalid UUID: {note_id}[/red]')
-        return
+    uuid_obj = parse_uuid(note_id, 'note')
 
     if not force:
         if not typer.confirm(
@@ -156,14 +150,11 @@ async def view_note(
     View content and metadata of a note.
     """
     config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
 
     async with get_api_context(config) as api:
         try:
-            uuid_obj = UUID(note_id)
             note = await api.get_note(uuid_obj)
-        except ValueError:
-            console.print(f'[red]Invalid UUID: {note_id}[/red]')
-            return
         except Exception as e:
             handle_api_error(e)
             return
@@ -199,14 +190,11 @@ async def view_page_index(
 ) -> None:
     """View the page index (slim tree) of a note."""
     config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
 
     async with get_api_context(config) as api:
         try:
-            uuid_obj = UUID(note_id)
             page_index = await api.get_note_page_index(uuid_obj)
-        except ValueError:
-            console.print(f'[red]Invalid UUID: {note_id}[/red]')
-            return
         except Exception as e:
             handle_api_error(e)
             return
@@ -237,12 +225,7 @@ async def view_node(
 ) -> None:
     """View a specific page-index node (section) by its ID."""
     config: MemexConfig = ctx.obj
-
-    try:
-        uuid_obj = UUID(node_id)
-    except ValueError:
-        console.print(f'[red]Invalid UUID: {node_id}[/red]')
-        return
+    uuid_obj = parse_uuid(node_id, 'node')
 
     async with get_api_context(config) as api:
         try:

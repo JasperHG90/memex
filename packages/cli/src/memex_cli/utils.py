@@ -7,6 +7,7 @@ import logging
 from functools import wraps
 from typing import Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 import click
 import httpx
@@ -142,6 +143,20 @@ def handle_api_error(e: Exception) -> NoReturn:
         console.print(f'[bold red]Error: {e}[/bold red]')
 
     raise typer.Exit(1)
+
+
+def parse_uuid(value: str, label: str = 'ID') -> UUID:
+    """
+    Parse a string as a UUID, exiting with a user-friendly error on failure.
+
+    This is CLI-specific validation: it provides fast local feedback without
+    a network round-trip to the server.
+    """
+    try:
+        return UUID(value)
+    except ValueError:
+        console.print(f'[red]Invalid UUID for {label}: {value}[/red]')
+        raise typer.Exit(1)
 
 
 def merge_overrides(config_data: dict[str, Any], overrides: list[str]) -> dict[str, Any]:

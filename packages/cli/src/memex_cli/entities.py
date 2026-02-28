@@ -14,7 +14,7 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 from memex_common.schemas import EntityDTO
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
 
 console = Console()
 
@@ -126,14 +126,7 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        parsed_vault_id = None
-        if vault_id:
-            try:
-                parsed_vault_id = UUID(vault_id)
-            except ValueError:
-                console.print(f'[red]Invalid vault UUID: {vault_id}[/red]')
-                return
-
+        parsed_vault_id = parse_uuid(vault_id, 'vault') if vault_id else None
         vault_label = vault_id or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):

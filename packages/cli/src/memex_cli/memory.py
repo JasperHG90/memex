@@ -25,6 +25,7 @@ from memex_cli.utils import (
     async_command,
     get_api_context,
     handle_api_error,
+    parse_uuid,
 )
 from memex_common.config import MemexConfig
 from memex_common.schemas import (
@@ -87,12 +88,7 @@ async def delete_memory(
     Delete a memory unit and all associated data (entity links, memory links, evidence).
     """
     config: MemexConfig = ctx.obj
-
-    try:
-        uuid_obj = UUID(unit_id)
-    except ValueError:
-        console.print(f'[red]Invalid UUID: {unit_id}[/red]')
-        return
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
 
     if not force:
         if not typer.confirm(
@@ -446,12 +442,7 @@ async def reflect(
     async with get_api_context(config) as api:
         try:
             if entity_id:
-                try:
-                    uuid_obj = UUID(entity_id)
-                    entities_to_process.append(uuid_obj)
-                except ValueError:
-                    console.print(f'[red]Invalid UUID: {entity_id}[/red]')
-                    return
+                entities_to_process.append(parse_uuid(entity_id, 'entity'))
             else:
                 console.print(
                     f'[dim]No entity ID provided. Fetching {limit} items from Reflection Queue...[/dim]'
@@ -552,12 +543,7 @@ async def get_lineage(
     from memex_common.schemas import LineageResponse
 
     config: MemexConfig = ctx.obj
-
-    try:
-        uuid_obj = UUID(entity_id)
-    except ValueError:
-        console.print(f'[red]Invalid UUID: {entity_id}[/red]')
-        raise typer.Exit(1)
+    uuid_obj = parse_uuid(entity_id, entity_type)
 
     async with get_api_context(config) as api:
         try:
