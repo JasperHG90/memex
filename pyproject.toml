@@ -63,6 +63,7 @@ explicit_package_bases = true
 markers = [
   "integration: marks integration tests",
   "llm: marks tests that require LLM calls",
+  "llm_mock: marks tests using the mock_dspy_lm fixture (no real LLM)",
 ]
 cache_dir = "/home/vscode/.cache/pytest"
 asyncio_mode = "auto"
@@ -86,6 +87,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "metaphone>=0.6",
     "pyright>=1.1.408",
+    "hypothesis>=6.151.9",
 ]
 
 [build-system]

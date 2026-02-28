@@ -1417,6 +1417,18 @@ wheels = [
 ]
 
 [[package]]
+name = "hypothesis"
+version = "6.151.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sortedcontainers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/19/e1/ef365ff480903b929d28e057f57b76cae51a30375943e33374ec9a165d9c/hypothesis-6.151.9.tar.gz", hash = "sha256:2f284428dda6c3c48c580de0e18470ff9c7f5ef628a647ee8002f38c3f9097ca", size = 463534, upload-time = "2026-02-16T22:59:23.09Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/f7/5cc291d701094754a1d327b44d80a44971e13962881d9a400235726171da/hypothesis-6.151.9-py3-none-any.whl", hash = "sha256:7b7220585c67759b1b1ef839b1e6e9e3d82ed468cfc1ece43c67184848d7edd9", size = 529307, upload-time = "2026-02-16T22:59:20.443Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.11"
 source = { registry = "https://pypi.org/simple" }
@@ -2264,6 +2276,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "hypothesis" },
     { name = "ipykernel" },
     { name = "metaphone" },
     { name = "nest-asyncio" },
@@ -2290,6 +2303,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "hypothesis", specifier = ">=6.151.9" },
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "metaphone", specifier = ">=0.6" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
