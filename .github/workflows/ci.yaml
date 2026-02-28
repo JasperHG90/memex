@@ -147,18 +147,16 @@ jobs:
     needs: [changes, pre-commit, python-tests]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [memex_core, memex_cli, memex_common, memex_mcp]
     steps:
       - name: Build package
         uses: JasperHG90/toiminnot/actions/uv_build@main
         with:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ env.PYTHON_VERSION }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-dist
-          path: dist/
-          retention-days: 7
+          package: ${{ matrix.package }}
 
   build-dashboard:
     needs: [changes, dashboard-lint-test]

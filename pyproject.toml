@@ -69,9 +69,6 @@ markers = [
 cache_dir = "/home/vscode/.cache/pytest"
 asyncio_mode = "auto"
 
-[tool.setuptools.packages.find]
-include = ["packages*"]
-
 [dependency-groups]
 dev = [
     "nest-asyncio>=1.6.0",
@@ -91,7 +88,3 @@ dev = [
     "hypothesis>=6.151.9",
     "pytest-benchmark>=5.2.3",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
