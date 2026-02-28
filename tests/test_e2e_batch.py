@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.llm
 async def test_e2e_batch_ingestion(client: TestClient):
     """
     Test full batch ingestion flow:

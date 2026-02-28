@@ -10,6 +10,7 @@ def parse_ndjson(text: str):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_e2e_doc_search_chunks_sync(client: TestClient):
     """
     Test that doc search correctly retrieves raw document chunks.

@@ -10,6 +10,7 @@ def parse_ndjson(text: str):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_e2e_incremental_idempotency(client: TestClient):
     """
     Verifies that:

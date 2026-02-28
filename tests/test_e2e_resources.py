@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_resource_retrieval_workflow(client: TestClient):
     """
     Test the full resource retrieval workflow:
@@ -46,6 +47,7 @@ def test_resource_retrieval_workflow(client: TestClient):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_ingest_does_not_create_note_file(client: TestClient, tmp_path):
     """
     Verify that ingestion persists assets to disk but does NOT create a markdown file

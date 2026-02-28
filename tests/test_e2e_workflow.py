@@ -16,6 +16,7 @@ def parse_ndjson(text: str):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_workflow_ingest_retrieve(client: TestClient):
     """
     Test a full workflow:

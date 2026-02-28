@@ -15,6 +15,7 @@ def parse_ndjson(text: str):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 def test_entity_type_partitioning_e2e(client: TestClient):
     """
     Verify that entities with same name but different types are treated as distinct.

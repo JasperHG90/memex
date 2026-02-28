@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.llm
 async def test_ingest_background_returns_job_id(client: TestClient):
     """Background ingestion returns a job_id and completes successfully."""
     note = {
@@ -46,6 +47,7 @@ async def test_ingest_background_returns_job_id(client: TestClient):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.llm
 async def test_ingest_foreground_still_works(client: TestClient):
     """Without background flag, ingestion still returns 200 with note_id."""
     note = {

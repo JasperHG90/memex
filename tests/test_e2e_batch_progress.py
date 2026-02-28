@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.llm
 async def test_batch_ingest_progress_polling(client: TestClient):
     """
     Test that batch ingestion progress is updated and can be polled.
