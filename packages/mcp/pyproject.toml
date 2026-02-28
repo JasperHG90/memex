@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 readme = "README.md"
 dependencies = [
     "memex-common",
+    "memex-core",
     "fastmcp>=2.14.4,<3.0.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0.0",
@@ -16,6 +17,7 @@ dependencies = [
 
 [tool.uv.sources]
 memex-common = { workspace = true }
+memex-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

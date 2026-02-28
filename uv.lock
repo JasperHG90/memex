@@ -2428,6 +2428,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "memex-common" },
+    { name = "memex-core" },
     { name = "pyyaml" },
 ]
 
@@ -2436,6 +2437,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.14.4,<3.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "memex-common", editable = "packages/common" },
+    { name = "memex-core", editable = "packages/core" },
     { name = "pyyaml", specifier = ">=6.0.0" },
 ]
 
