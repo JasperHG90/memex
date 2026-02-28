@@ -13,7 +13,7 @@ from memex_common.config import (
     LocalYamlConfigSettingsSource,
     MemexConfig,
 )
-from memex_core.context import set_session_id
+from memex_core.context import get_session_id, set_session_id
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
@@ -33,6 +33,14 @@ from memex_core.memory.models import get_embedding_model, get_reranking_model, g
 logger = logging.getLogger('memex.core.server')
 
 
+class SessionIdFilter(logging.Filter):
+    """Inject the current session ID into every log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.session_id = get_session_id()  # type: ignore[attr-defined]
+        return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle management for the Memex API."""
@@ -42,7 +50,10 @@ async def lifespan(app: FastAPI):
     memex_logger.setLevel(getattr(logging, log_level, logging.WARNING))
     if not memex_logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
+        handler.addFilter(SessionIdFilter())
+        handler.setFormatter(
+            logging.Formatter('%(asctime)s %(name)s %(levelname)s [%(session_id)s] %(message)s')
+        )
         memex_logger.addHandler(handler)
 
     config = parse_memex_config()
