@@ -1,193 +1,130 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to LLM models when working with code in this repository.
+Instructions for LLM agents working in this repository.
 
-## **CRITICAL**: Code Search Protocol (Non-negotiable)
+<constraint name="code-search-protocol" priority="critical">
+All code discovery MUST use `qmd`. Collections: `memex_src` (source), `memex_test` (tests).
 
-All code is indexed using `qmd`.
+Step 1 (MANDATORY): `qmd search --line-numbers -n 10 "<exact_term>" --collection <COLLECTION>`
+Step 2 (MANDATORY if Step 1 fails): `qmd vsearch --line-numbers -n 10 "<concept>" --collection <COLLECTION>`
+Step 3 (ONLY if Steps 1+2 fail): `qmd query --line-numbers -n 10 "<question>" --collection <COLLECTION>`
 
-**Collections**
-- Source code indexed in **memex_src**
-- Test code indexed in **memex_test**
+PROHIBITED: Skipping to `query`. Skipping Step 2. Using `read_file`, `glob`, `grep`, `ripgrep`, `find`, `search_file_content`, or any shell-based search for discovery before completing Steps 1-3.
+OVERRIDE: Use `run_shell_command` with `qmd search` for all code discovery.
+</constraint>
 
-1. **Step 1: Keyword Search.** You **MUST** first run `qmd search --line-numbers -n 10 "<exact_term>" --collection <COLLECTION>`.
-2. **Step 2: Vector Search.** If Step 1 fails or yields too many results, you **MUST** run `qmd vsearch --line-numbers -n 10 "<concept_description>" --collection <COLLECTION>`.
-3. **Step 3: Deep Query.** ONLY if Steps 1 & 2 fail, you may run `qmd query --line-numbers -n 10 "<complex_question>" --collection <COLLECTION>`.
+<constraint name="code-retrieval-protocol" priority="critical">
+Step 1 (MANDATORY): `qmd get <file>:<line> -l <lines>` — start with `-l 50`.
+Step 2 (FALLBACK): `qmd get <file>` — FORBIDDEN unless Step 1 output was insufficient.
+Exception: Config files (toml/yaml/json) under 100 lines may be read fully.
+</constraint>
 
-**PROHIBITED:**
-- Do NOT skip to `query`.
-- Do NOT skip step 2. Ever.
-- Do NOT use `read_file`, `glob`, `grep`, `ripgrep`, `find`, `search_file_content` or any other shell-based search command for discovery until Step 3 is complete.
+## Project
 
-**TOOL OVERRIDES**:
-- **REPLACEMENT**: You **MUST** use `run_shell_command` with `qmd search` for all code discovery.
-
-## **CRITICAL**: Code Retrieval Protocol (Non-negotiable)
-
-1. **Step 1 (Mandatory):** To retrieve code, you **MUST** use `qmd get <file>:<line> -l <lines>` to read the specific segment identified by your search.
-    - **Guideline:** Start with `-l 50` lines to get the immediate context.
-2. **Step 2 (Fallback):** `qmd get <file>` (Full file retrieval).
-    - **Constraint:** This is **FORBIDDEN** unless Step 1 has been executed and the output was insufficient.
-    - **Exception:** Small config files (toml/yaml/json) under 100 lines may be read fully.
-
-**Critical constraint**:
-- You are **PROHIBITED** from using Step 2 (full file retrieval) as your first step for source code.
-
-## Project Overview
-
-Memex is a long-term memory system for LLMs - "Obsidian for LLMs". It stores notes as Markdown files (FileStore) with PostgreSQL+pgvector for metadata and vector search (MetaStore).
+Memex: long-term memory system for LLMs. Stores notes as Markdown (FileStore) with PostgreSQL+pgvector for metadata and vector search (MetaStore).
 
 ## Commands
 
 ```bash
-# Setup
-just setup              # Install deps + pre-commit hooks
-
-# Development
-just test               # Run pytest on /tests
-just prek               # Run linting/formatting (ruff + mypy)
-
-# Run a single test
-uv run pytest tests/test_file.py::test_name -v
-
-# Run tests by marker
-uv run pytest -m integration    # Integration tests (require Docker)
-uv run pytest -m llm            # Tests requiring LLM API calls
-
-# Dependency management (always use uv, not pip)
-uv add --dev <package>                    # Add dev dependency to root
-uv add <package> --package memex_core     # Add to specific package
+just setup                                  # install deps + pre-commit hooks
+just test                                   # pytest on /tests
+just prek                                   # linting/formatting (ruff + mypy)
+uv run pytest tests/test_file.py::test_name -v  # single test
+uv run pytest -m integration                # integration tests (require Docker)
+uv run pytest -m llm                        # tests requiring LLM API calls
+uv add --dev <package>                      # add dev dep to root
+uv add <package> --package memex_core       # add dep to specific package
+just dashboard-dev                          # run dashboard dev server
+just dashboard-build                        # build dashboard for production
 ```
+
+Always use `uv`, never `pip`.
 
 ## Architecture
 
-### Package Structure (Python monorepo with uv)
+Python monorepo managed by `uv`.
 
-- **`packages/core`** - Core library: storage engines, memory system (extraction/retrieval/reflection), MemexAPI, FastAPI server
-- **`packages/cli`** - Typer-based CLI (`memex` command)
-- **`packages/mcp`** - FastMCP server for LLM integration (Claude, etc.)
-- **`packages/common`** - Shared Pydantic models, config, exceptions
-- **`packages/dashboard`** - Reflex-based web UI
+- `packages/core` — core library: storage engines, memory system (extraction/retrieval/reflection), MemexAPI, FastAPI server
+- `packages/cli` — Typer CLI (`memex` command)
+- `packages/mcp` — FastMCP server for LLM integration
+- `packages/common` — shared Pydantic models, config, exceptions
+- `packages/dashboard` — React + Vite web UI
+- `packages/openclaw` — Memex memory plugin for OpenClaw (TypeScript/Node)
 
-### Three-Layer Memory Model (Hindsight Framework)
+### Memory model (Hindsight Framework)
 
-1. **Extraction** (`memex_core.memory.extraction`) - Extract facts from documents using LLM, resolve entities, generate embeddings
-2. **Retrieval** (`memex_core.memory.retrieval`) - TEMPR architecture with 5 search strategies (Temporal, Entity, Mental Model, Keyword, Semantic) + Reciprocal Rank Fusion
-3. **Reflection** (`memex_core.memory.reflect`) - Synthesize observations into mental models using LLM reasoning
+1. Extraction (`memex_core.memory.extraction`) — LLM fact extraction, entity resolution, embeddings
+2. Retrieval (`memex_core.memory.retrieval`) — TEMPR: 5 strategies (Temporal, Entity, Mental Model, Keyword, Semantic) + Reciprocal Rank Fusion
+3. Reflection (`memex_core.memory.reflect`) — synthesize observations into mental models via LLM
 
-### Key Entry Points
+### Entry points
 
-| Module | Purpose |
-|--------|---------|
-| `memex_core.api.MemexAPI` | Main API class |
-| `memex_core.server` | FastAPI REST server |
-| `memex_core.memory.engine.MemoryEngine` | Memory orchestrator |
-| `memex_cli.__init__.app` | Typer CLI app |
-| `memex_mcp.server.mcp` | MCP server instance |
+- `memex_core.api.MemexAPI` — main API class
+- `memex_core.server` — FastAPI REST server
+- `memex_core.memory.engine.MemoryEngine` — memory orchestrator
+- `memex_cli.__init__.app` — Typer CLI app
+- `memex_mcp.server.mcp` — MCP server instance
 
-## Code Style
+### Architectural decisions
 
-- **Quotes**: Single (`'`)
-- **Line length**: 100
-- **Formatter**: Ruff (not Black)
-- **Type hints**: Strict (mypy enforced)
-- **Python**: >= 3.12
-- **Async**: All I/O uses asyncio
+- Distributed reflection queue: PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming
+- Append-only design: notes are immutable, new versions create new entries
+- fsspec abstraction: storage is backend-agnostic (local, S3, GCS)
+
+## Code style
+
+- Single quotes
+- Line length: 100
+- Formatter: ruff (not black)
+- Type hints: strict, mypy enforced
+- Python >= 3.12
+- All I/O: async (asyncio)
 
 ## Testing
 
-- **Root tests** (`/tests/`) - E2E tests
-- **Unit tests** (`packages/core/tests/unit/`)
-- **Markers**: `@pytest.mark.integration`, `@pytest.mark.llm`
-- **Test DB**: PostgreSQL via `testcontainers`
+- Root tests (`/tests/`) — E2E
+- Unit tests (`packages/core/tests/unit/`)
+- Markers: `@pytest.mark.integration`, `@pytest.mark.llm`
+- Test DB: PostgreSQL via `testcontainers`
 
-### Test Best Practices
+<constraint name="test-practices">
+- Use `uuid4()` in content to prevent `idempotency_check` failures.
+- Use `skip_opinion_formation=True` in payloads to avoid LLM calls in non-LLM tests.
+- Use `patch.dict(os.environ, ...)` for config tests.
+- Ensure `ensure_db_env_vars` fixture is active for E2E tests.
+</constraint>
 
-- **Idempotency**: Use `uuid4()` in content to prevent `idempotency_check` failures
-- **LLM Bypass**: Use `skip_opinion_formation=True` in payloads to avoid external API calls in tests that don't need LLM
-- **Environment Isolation**: Use `patch.dict(os.environ, ...)` for config tests
-- **E2E Tests**: Ensure `ensure_db_env_vars` fixture is active
+## Skills
 
-## Architectural Decisions
-
-- **Distributed Reflection Queue**: Uses PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming across multiple workers
-- **Append-Only Design**: Notes are immutable; new versions create new entries
-- **fsspec Abstraction**: Storage is backend-agnostic (local, S3, GCS)
-
-## Active role
-
-Your current **active role** (if exists) is stored in @.gemini/persona/active_role.json
-
-## Active skills
-
-The following skills should be loaded by default:
-
-- Python expert: @/home/vscode/workspace/.persona/skills/expert_python_skill/SKILL.md
-
-## Planning mode
-
-Invoked by '/planning'.
-
-**CRITICAL**: In planning mode you must **strictly** follow (a) 'no changes protocol' and (b) 'planning protocol' **UNTIL** told otherwise by the user.
+Load by default: @/home/vscode/workspace/.persona/skills/expert_python_skill/SKILL.md
 
 <!-- MEMEX CLAUDE CODE INTEGRATION -->
-## Memex Memory Integration
+## Memex memory integration
 
-You have access to **Memex**, a long-term memory system, via MCP tools. Use these to
-build persistent knowledge across sessions.
+Access Memex (long-term memory) via MCP tools. Build persistent knowledge across sessions.
 
-### Proactive memory capture
+### Capture
 
-Call `memex_add_note` (with `background: true`) when you encounter:
+Call `memex_add_note` (background: true) for: architectural decisions, bug root causes, user preferences, important project context, key technical discoveries.
+Do NOT capture: trivial exchanges, routine edits, debugging noise, information already in codebase.
 
-- **Architectural decisions** or design rationale
-- **Bug root causes** and their fixes
-- **User preferences** and workflow patterns
-- **Important project context** that would be useful in future sessions
-- **Key technical discoveries** or learnings
+### Retrieval
 
-**Do NOT capture**: trivial exchanges, routine code edits, debugging noise, or
-information already in the codebase.
+Session start context is automatic via `on_session_start` hook. Do NOT redundantly search at session start.
+PROHIBITED: `memex_list_notes` for discovery (titles are often "Untitled").
 
-### Memory retrieval
+### Search tool selection
 
-**Session start context is automatic.** The `on_session_start` hook prefills recent
-memories into your context. Do NOT call `memex_search` or `memex_note_search` to
-"load context" at the start of a session — it is already present.
+`memex_search` — atomic facts, cross-vault knowledge graph (TEMPR). Use for: "What do we know about X globally?"
+`memex_note_search` — raw source notes, hybrid RRF. Supports `reason=True`, `summarize=True`. Use for: "Find the note where X is mentioned."
 
-**PROHIBITED:** Do NOT use `memex_list_notes` for discovery. Note titles are often
-"Untitled" and the listing provides no useful information.
+### Note reading
 
-### Memory search vs. Note search
-
-These are two distinct search interfaces. Choose based on what you need:
-
-**`memex_search` — Memory Search (atomic facts, cross-vault knowledge graph)**
-- Searches over atomic facts, observations, and mental models using the TEMPR
-  architecture (Temporal, Entity, Mental Model, Probabilistic Ranking).
-- Use when: you want a synthesized answer spanning the entire knowledge base,
-  exploring entity relationships, or asking general questions.
-- Think: "What do we know about X globally?"
-
-**`memex_note_search` — Note/Document Search (raw source notes, scoped)**
-- Searches raw source notes (PDFs, Markdown, web scrapes) split into semantic
-  nodes, using hybrid RRF (Semantic + Keyword + Entity Graph + Temporal).
-- Supports `reason=True` (identify relevant sections) and `summarize=True`
-  (synthesize an answer from matched sections).
-- Use when: you need a specific quote or paragraph, want original formatting/context,
-  or are searching within specific notes or vaults.
-- Think: "Find the note where X is mentioned."
-
-### Note reading protocol
-
-When you need to read note content from a Note ID:
-
-1. **Step 1:** Call `memex_get_page_index` with the Note ID to get the table of contents.
-2. **Step 2:** Call `memex_get_node` with the relevant node ID(s) to read specific sections.
-3. **Fallback only:** Use `memex_read_note` only for very short notes or when the page
-   index is unavailable. Never use it as the first step.
+1. `memex_get_page_index` (Note ID → table of contents)
+2. `memex_get_node` (node ID → section text)
+3. Fallback only: `memex_read_note` (small notes or when page index unavailable)
 
 ### Slash commands
 
-- `/remember [text]` — explicitly save something to memory
-- `/recall [query]` — search your memories
+- `/remember [text]` — save to memory
+- `/recall [query]` — search memories

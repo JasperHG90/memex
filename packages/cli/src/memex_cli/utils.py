@@ -36,6 +36,7 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'mcp': 'memex_cli.mcp:app',
     'dashboard': 'memex_cli.dashboard:app',
     'setup': 'memex_cli.setup_claude_code:app',
+    'report-bug': 'memex_cli.report_bug:app',
 }
 
 

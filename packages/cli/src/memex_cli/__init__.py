@@ -189,7 +189,7 @@ def main(
 
         # If the subcommand is 'init' or 'help', we can proceed without a valid config
         # But we still need basic logging to report errors if we crash later
-        if ctx.invoked_subcommand in ['init']:
+        if ctx.invoked_subcommand in ['init', 'report-bug']:
             # Fallback logging
             setup_logging(
                 ctx, debug, plb.Path(user_log_dir('memex', appauthor=False)) / 'memex.log'
