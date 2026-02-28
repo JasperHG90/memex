@@ -8,8 +8,7 @@ from uuid import UUID
 from functools import cached_property
 from datetime import datetime, timezone
 
-from sqlalchemy import func, cast as sa_cast, Date
-from sqlalchemy.types import UserDefinedType
+from sqlalchemy import cast as sa_cast, Date
 from sqlalchemy.exc import IntegrityError
 
 from cachetools import LRUCache, TTLCache
@@ -68,6 +67,7 @@ from memex_core.processing.batch import JobManager
 from memex_core.processing.dates import extract_document_date
 from memex_core.processing.titles import resolve_document_title
 from memex_core.llm import run_dspy_operation
+from memex_core.services.lineage import LineageService
 
 logger = logging.getLogger('memex.core.api')
 
@@ -76,13 +76,6 @@ T = TypeVar('T')
 # Shared cache for vault resolution to improve performance.
 # Cleared on vault deletion to ensure consistency.
 _VAULT_RESOLUTION_CACHE: LRUCache = LRUCache(maxsize=32)
-
-
-class JSONPath(UserDefinedType):
-    cache_ok = True
-
-    def get_col_spec(self, **kw):
-        return 'jsonpath'
 
 
 class NoteInput:
@@ -389,6 +382,13 @@ class MemexAPI:
         self.batch_manager = JobManager(self)
         self._file_processor = FileContentProcessor()
         self._reflection_lock = asyncio.Lock()
+
+        # Domain services
+        self._lineage = LineageService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
     @property
     def embedder(self) -> FastEmbedder:
@@ -1761,338 +1761,14 @@ ingested_at: {now}
         depth: int = 3,
         limit: int = 10,
     ) -> LineageResponse:
+        """Retrieve the full lineage (dependency chain) of a specific entity.
+
+        Delegates to LineageService.
         """
-        Retrieve the full lineage (dependency chain) of a specific entity.
-
-        Args:
-            entity_type: The type of the entity (mental_model, observation, memory_unit, document).
-            entity_id: The UUID of the entity.
-            direction: Direction of traversal (upstream, downstream, both).
-            depth: Maximum recursion depth.
-            limit: Maximum number of children per node.
-        """
-        # Validate entity_id
-        if isinstance(entity_id, str):
-            entity_id = UUID(entity_id)
-
-        async with self.metastore.session() as session:
-            if direction == LineageDirection.UPSTREAM:
-                return await self._get_lineage_upstream(
-                    session, entity_type, entity_id, current_depth=0, max_depth=depth, limit=limit
-                )
-            elif direction == LineageDirection.DOWNSTREAM:
-                return await self._get_lineage_downstream(
-                    session, entity_type, entity_id, current_depth=0, max_depth=depth, limit=limit
-                )
-            else:  # BOTH
-                upstream = await self._get_lineage_upstream(
-                    session, entity_type, entity_id, current_depth=0, max_depth=depth, limit=limit
-                )
-                downstream = await self._get_lineage_downstream(
-                    session, entity_type, entity_id, current_depth=0, max_depth=depth, limit=limit
-                )
-                # Combine children
-                upstream.derived_from.extend(downstream.derived_from)
-                return upstream
-
-    def _sanitize_data(self, data: Any) -> Any:
-        import numpy as np
-
-        if isinstance(data, np.ndarray):
-            return data.tolist()
-        if isinstance(data, dict):
-            return {k: self._sanitize_data(v) for k, v in data.items()}
-        if isinstance(data, list):
-            return [self._sanitize_data(i) for i in data]
-        return data
-
-    async def _get_lineage_downstream(
-        self,
-        session: Any,
-        entity_type: str,
-        entity_id: UUID,
-        current_depth: int,
-        max_depth: int,
-        limit: int,
-    ) -> LineageResponse:
-        """
-        Recursive helper for downstream lineage (Document -> Mental Model).
-        """
-        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note, Entity
-        from sqlmodel import select, col
-
-        entity_data: dict[str, Any] = {}
-        children: list[LineageResponse] = []
-        stop_recursion = current_depth >= max_depth
-
-        if entity_type == 'note':
-            obj = await session.get(Note, entity_id)
-            if not obj:
-                raise ResourceNotFoundError(f'Note {entity_id} not found.')
-            entity_data = self._sanitize_data(obj.model_dump())
-
-            if not stop_recursion:
-                # Downstream: Memory Units
-                stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == entity_id).limit(limit)
-                units = (await session.exec(stmt)).all()
-                for unit in units:
-                    child_node = await self._get_lineage_downstream(
-                        session, 'memory_unit', unit.id, current_depth + 1, max_depth, limit
-                    )
-                    children.append(child_node)
-
-        elif entity_type == 'memory_unit':
-            obj = await session.get(MemoryUnit, entity_id)
-            if not obj:
-                raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
-            entity_data = self._sanitize_data(obj.model_dump())
-
-            if not stop_recursion:
-                # Downstream: Observations citing this unit
-                stmt = select(MentalModel).where(
-                    func.jsonb_path_exists(
-                        MentalModel.observations,
-                        sa_cast(f'$[*].evidence[*].memory_id ? (@ == "{entity_id}")', JSONPath()),
-                    )
-                )
-                mms = (await session.exec(stmt)).all()
-
-                for mm in mms:
-                    for obs in mm.observations:
-                        evidence = obs.get('evidence', [])
-                        if any(e.get('memory_id') == str(entity_id) for e in evidence):
-                            obs_id = obs.get('id')
-                            if obs_id:
-                                try:
-                                    child_node = await self._get_lineage_downstream(
-                                        session,
-                                        'observation',
-                                        UUID(str(obs_id)),
-                                        current_depth + 1,
-                                        max_depth,
-                                        limit,
-                                    )
-                                    children.append(child_node)
-                                except ValueError:
-                                    pass
-
-        elif entity_type == 'observation':
-            # Observation to parent Mental Model
-            stmt = select(MentalModel).where(
-                func.jsonb_path_exists(
-                    MentalModel.observations,
-                    sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
-                )
-            )
-            parent_mm = (await session.exec(stmt)).first()
-
-            if not parent_mm:
-                raise ResourceNotFoundError(f'Observation {entity_id} not found.')
-
-            target_obs = None
-            for obs in parent_mm.observations:
-                if str(obs.get('id')) == str(entity_id):
-                    target_obs = obs
-                    break
-
-            if not target_obs:
-                raise ResourceNotFoundError(f'Observation {entity_id} not found.')
-
-            entity_data = self._sanitize_data(target_obs)
-
-            if not stop_recursion:
-                # Downstream: Mental Model
-                child_node = await self._get_lineage_downstream(
-                    session,
-                    'mental_model',
-                    parent_mm.entity_id,
-                    current_depth + 1,
-                    max_depth,
-                    limit,
-                )
-                children.append(child_node)
-
-        elif entity_type == 'mental_model':
-            stmt = select(MentalModel).where(
-                (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
-            )
-            obj = (await session.exec(stmt)).first()
-            if not obj:
-                stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
-                ent = (await session.exec(stmt_ent)).first()
-                if not ent:
-                    raise ResourceNotFoundError(f'Entity {entity_id} not found.')
-                obj = MentalModel(entity_id=entity_id, name=ent.canonical_name)
-
-            entity_data = self._sanitize_data(obj.model_dump())
-
-        else:
-            raise ValueError(f'Unknown entity type: {entity_type}')
-
-        return LineageResponse(entity_type=entity_type, entity=entity_data, derived_from=children)
-
-    async def _get_lineage_upstream(
-        self,
-        session: Any,
-        entity_type: str,
-        entity_id: UUID,
-        current_depth: int,
-        max_depth: int,
-        limit: int,
-    ) -> LineageResponse:
-        """
-        Recursive helper for upstream lineage (Mental Model -> Document).
-        """
-        from memex_core.memory.sql_models import MentalModel, MemoryUnit, Note, Entity
-        from sqlmodel import select, col
-
-        # Fetch the current entity
-        entity_data: dict[str, Any] = {}
-        children: list[LineageResponse] = []
-
-        # 1. Base Case: Max depth reached
-        # We still fetch the entity data, but we don't recurse.
-        stop_recursion = current_depth >= max_depth
-
-        if entity_type == 'mental_model':
-            # MentalModel is usually keyed by entity_id.
-            stmt = select(MentalModel).where(
-                (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
-            )
-            obj = (await session.exec(stmt)).first()
-            if not obj:
-                # If not found, check if it's an Entity, and return a stub Mental Model
-                stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
-                ent = (await session.exec(stmt_ent)).first()
-                if not ent:
-                    raise ResourceNotFoundError(f'Entity {entity_id} not found.')
-                obj = MentalModel(entity_id=entity_id, name=ent.canonical_name)
-
-            entity_data = self._sanitize_data(obj.model_dump())
-
-            if not stop_recursion:
-                # Upstream: Observations
-                # Observations are stored in the MentalModel as JSONB list.
-                observations = obj.observations or []
-                count = 0
-                for obs in observations:
-                    if count >= limit:
-                        break
-                    # obs is a dict
-                    # We inline the observation processing since it might not have an ID (if old data)
-                    # and it's more efficient than querying again.
-                    obs_children = []
-
-                    # Process evidence if we haven't reached max depth for the NEXT level (Observation -> MemoryUnit)
-                    # Current depth is MentalModel. Observation is +1. MemoryUnit is +2.
-                    if current_depth + 1 < max_depth:
-                        evidence = obs.get('evidence', [])
-                        ev_count = 0
-                        for item in evidence:
-                            if ev_count >= limit:
-                                break
-                            mem_id_str = item.get('memory_id')
-                            if mem_id_str:
-                                try:
-                                    mem_id = UUID(str(mem_id_str))
-                                    # Recurse to Memory Unit (Depth + 2)
-                                    ev_child = await self._get_lineage_upstream(
-                                        session,
-                                        'memory_unit',
-                                        mem_id,
-                                        current_depth + 2,
-                                        max_depth,
-                                        limit,
-                                    )
-                                    obs_children.append(ev_child)
-                                    ev_count += 1
-                                except (ValueError, ResourceNotFoundError):
-                                    pass
-
-                    obs_node = LineageResponse(
-                        entity_type='observation',
-                        entity=self._sanitize_data(obs),
-                        derived_from=obs_children,
-                    )
-                    children.append(obs_node)
-                    count += 1
-
-        elif entity_type == 'observation':
-            stmt = select(MentalModel).where(
-                func.jsonb_path_exists(
-                    MentalModel.observations,
-                    sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
-                )
-            )
-            parent_mm = (await session.exec(stmt)).first()
-
-            if not parent_mm:
-                raise ResourceNotFoundError(f'Observation {entity_id} not found.')
-
-            # Extract the specific observation
-            target_obs = None
-            for obs in parent_mm.observations:
-                if str(obs.get('id')) == str(entity_id):
-                    target_obs = obs
-                    break
-
-            if not target_obs:
-                raise ResourceNotFoundError(f'Observation {entity_id} not found in parent model.')
-
-            entity_data = self._sanitize_data(target_obs)
-
-            if not stop_recursion:
-                # Upstream: Memory Units (from evidence)
-                # evidence is a list of dicts: [{'memory_id': ...}, ...]
-                evidence = target_obs.get('evidence', [])
-                count = 0
-                for item in evidence:
-                    if count >= limit:
-                        break
-                    mem_id_str = item.get('memory_id')
-                    if mem_id_str:
-                        try:
-                            mem_id = UUID(mem_id_str)
-                            child_node = await self._get_lineage_upstream(
-                                session, 'memory_unit', mem_id, current_depth + 1, max_depth, limit
-                            )
-                            children.append(child_node)
-                            count += 1
-                        except (ValueError, ResourceNotFoundError):
-                            pass
-
-        elif entity_type == 'memory_unit':
-            obj = await session.get(MemoryUnit, entity_id)
-            if not obj:
-                raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
-
-            entity_data = self._sanitize_data(obj.model_dump())
-
-            if not stop_recursion:
-                # Upstream: Document
-                if obj.note_id:
-                    try:
-                        child_node = await self._get_lineage_upstream(
-                            session,
-                            'note',
-                            obj.note_id,
-                            current_depth + 1,
-                            max_depth,
-                            limit,
-                        )
-                        children.append(child_node)
-                    except ResourceNotFoundError:
-                        pass
-
-        elif entity_type == 'note':
-            obj = await session.get(Note, entity_id)
-            if not obj:
-                raise ResourceNotFoundError(f'Note {entity_id} not found.')
-
-            entity_data = self._sanitize_data(obj.model_dump())
-            # Document is a leaf (upstream-wise)
-
-        else:
-            raise ValueError(f'Unknown entity type: {entity_type}')
-
-        return LineageResponse(entity_type=entity_type, entity=entity_data, derived_from=children)
+        return await self._lineage.get_lineage(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            direction=direction,
+            depth=depth,
+            limit=limit,
+        )
