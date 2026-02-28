@@ -28,7 +28,7 @@ SERVICE = 'dashboard'
 def _get_dashboard_dir() -> Path:
     """Locate the dashboard directory."""
     # Check relative to this package (monorepo layout)
-    mono_path = Path(__file__).parent.parent.parent.parent.parent / 'dashboard'
+    mono_path = Path(__file__).parent.parent.parent.parent / 'dashboard'
     if mono_path.exists():
         return mono_path
     # Check common install location
