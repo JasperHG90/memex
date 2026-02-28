@@ -54,8 +54,13 @@ async def ingest_note(
                 content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
             )
 
-        decoded_content = base64.b64decode(request.content)
-        decoded_files = {name: base64.b64decode(content) for name, content in request.files.items()}
+        try:
+            decoded_content = base64.b64decode(request.content)
+            decoded_files = {
+                name: base64.b64decode(content) for name, content in request.files.items()
+            }
+        except binascii.Error:
+            raise HTTPException(status_code=400, detail='Invalid Base64 encoding in note content')
 
         note = NoteInput(
             name=request.name,
@@ -68,6 +73,8 @@ async def ingest_note(
         result = await api.ingest(note, vault_id=request.vault_id)
         return IngestResponse(**result)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
 

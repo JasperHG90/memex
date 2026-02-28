@@ -125,7 +125,7 @@ def ndjson_response(items: Sequence[BaseModel | dict[str, Any]]) -> StreamingRes
                         return str(o)
 
                     yield json.dumps(item, default=default_converter) + '\n'
-            except Exception as e:
+            except (TypeError, ValueError, AttributeError) as e:
                 logger.error('ndjson_response: failed to serialize item: %s', e)
                 yield json.dumps({'error': str(e), 'type': 'serialization_error'}) + '\n'
 
@@ -151,7 +151,7 @@ async def async_ndjson_response(items: AsyncIterator[BaseModel]) -> StreamingRes
         async for item in items:
             try:
                 yield item.model_dump_json() + '\n'
-            except Exception as e:
+            except (TypeError, ValueError, AttributeError) as e:
                 logger.error('async_ndjson_response: failed to serialize item: %s', e)
                 yield json.dumps({'error': str(e), 'type': 'serialization_error'}) + '\n'
 

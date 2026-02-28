@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Body, Depends
 from fastapi.responses import StreamingResponse
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
 from memex_common.types import FactTypes
 
@@ -133,7 +134,7 @@ async def search_memories(
                     context=minimal_context,
                     vault_id=target_vault_id,
                 )
-            except Exception as e:
+            except (MemexError, ValueError, RuntimeError) as e:
                 logger.warning(f'Failed to schedule background opinion formation: {e}')
 
         # Lineage Resolution

@@ -9,6 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from memex_core.api import MemexAPI
 from memex_core.config import parse_memex_config
+from memex_common.exceptions import MemexError
 from memex_common.config import (
     GLOBAL_VAULT_NAME,
     LocalYamlConfigSettingsSource,
@@ -96,7 +97,7 @@ async def lifespan(app: FastAPI):
                 'Notice: active vault overridden by local config to "%s".',
                 local_vault,
             )
-    except Exception as e:
+    except (MemexError, ValueError) as e:
         logger.warning('Could not resolve active vault info: %s', e)
 
     app.state.api = api

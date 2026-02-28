@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import CreateVaultRequest, VaultDTO
 
 from memex_core.api import MemexAPI
@@ -74,7 +75,7 @@ async def list_vaults(
                         )
                     else:
                         logger.warning('Attached vault "%s" not found, skipping', vault_name)
-                except Exception as e:
+                except (MemexError, OSError) as e:
                     logger.warning(
                         'Failed to resolve attached vault "%s", skipping: %s', vault_name, e
                     )
