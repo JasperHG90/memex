@@ -205,7 +205,7 @@ class NoteSearchEngine:
                 )
             relevant_sections = prediction.relevant_sections
             relevant_node_ids = {s.node_id for s in relevant_sections}
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             logger.warning('Skeleton-tree reasoning failed, returning unrefined results: %s', e)
             return results, ReasoningOutput()
 
@@ -282,7 +282,7 @@ class NoteSearchEngine:
                     sections='\n\n'.join(all_section_texts),
                 )
             results[0].answer = answer_pred.answer
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             logger.warning('Answer synthesis failed, returning results without answer: %s', e)
 
         return results

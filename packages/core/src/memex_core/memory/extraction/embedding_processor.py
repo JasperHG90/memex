@@ -76,9 +76,9 @@ def generate_embedding(embeddings_backend: EmbeddingsModel, text: str) -> list[f
         if hasattr(vector, 'tolist'):
             return vector.tolist()
         return list(vector)
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, TypeError) as e:
         logger.error(f'Failed to generate embedding: {str(e)}')
-        raise Exception(f'Failed to generate embedding: {str(e)}') from e
+        raise RuntimeError(f'Failed to generate embedding: {str(e)}') from e
 
 
 async def generate_embeddings_batch(
@@ -117,6 +117,6 @@ async def generate_embeddings_batch(
             else:
                 result.append(list(emb))
         return result
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, TypeError) as e:
         logger.error(f'Failed to generate batch embeddings: {str(e)}')
-        raise Exception(f'Failed to generate batch embeddings: {str(e)}') from e
+        raise RuntimeError(f'Failed to generate batch embeddings: {str(e)}') from e

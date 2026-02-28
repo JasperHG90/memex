@@ -64,7 +64,7 @@ class ModelDownloader:
                     with open(local_path, 'wb') as f:
                         async for chunk in response.aiter_bytes():
                             f.write(chunk)
-            except Exception as e:
+            except (httpx.HTTPError, OSError, RuntimeError) as e:
                 print(f'  [Error] Failed to download {filename}: {e}')
                 # Clean up partial corruption
                 if local_path.exists():
@@ -77,7 +77,7 @@ class ModelDownloader:
         print(f'Connecting to Hugging Face: {self.repo_id}...')
         try:
             files = await self._fetch_file_list(client)
-        except Exception as e:
+        except (httpx.HTTPError, OSError, ValueError) as e:
             print(f'Failed to fetch repo info: {e}')
             raise e
         print(f'Found {len(files)} files. Syncing to: {self.cache_dir}')

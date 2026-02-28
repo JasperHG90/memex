@@ -260,7 +260,7 @@ class MemoryEngine:
                     await self.extraction.queue_service.handle_retrieval_event(
                         session, eids, vault_id=vid
                     )
-            except Exception as e:
+            except (ValueError, RuntimeError, OSError) as e:
                 # Do not fail retrieval if queue update fails
                 logger.warning(f'Failed to update reflection queue resonance: {e}')
 
@@ -323,7 +323,7 @@ class MemoryEngine:
                     if model_config.api_key
                     else None,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, OSError, KeyError, AttributeError) as e:
                 logger.warning(
                     'No LM configured for reasoning (%s). Attempting to proceed, but may fail.', e
                 )
@@ -404,7 +404,7 @@ class MemoryEngine:
             await session.commit()
             return len(results)
 
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Critical failure in reflection queue processing: {e}', exc_info=True)
             # Mark all as failed if the batch exploded
             for task in tasks:

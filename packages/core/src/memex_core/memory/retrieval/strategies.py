@@ -189,7 +189,7 @@ class GraphStrategy:
                     if p_code:
                         extracted_phonetics.append(p_code)
 
-            except Exception as e:
+            except (ValueError, RuntimeError, OSError) as e:
                 logger.warning(f'NER Extraction failed: {e}. Falling back to naive search.')
 
         # 2. Build Seed Query
@@ -423,7 +423,7 @@ class NoteGraphStrategy:
                     p_code = get_phonetic_code(name)
                     if p_code:
                         extracted_phonetics.append(p_code)
-            except Exception as e:
+            except (ValueError, RuntimeError, OSError) as e:
                 logger.warning(f'NER extraction failed for doc graph: {e}. Falling back.')
 
         if extracted_names:

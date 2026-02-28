@@ -33,7 +33,7 @@ def parse_datetime(date_str: str) -> datetime | None:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-    except Exception as e:
+    except (ValueError, OverflowError, TypeError) as e:
         logger.debug('Failed to parse datetime string %r: %s', date_str, e)
         return None
 
@@ -192,7 +192,7 @@ def verify_headers(headers: list[DetectedHeader], full_text: str) -> list[Detect
                 h.verified = True
             else:
                 h.verified = False
-        except Exception as e:
+        except (regex.error, ValueError, RuntimeError) as e:
             logger.debug('Header verification failed for %r: %s', h.exact_text, e)
             h.verified = False
 

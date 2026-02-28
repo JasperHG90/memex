@@ -231,7 +231,7 @@ async def create_temporal_links_batch_per_fact(
         logger.info(f'Created {len(links_data)} temporal links')
         return len(links_data)
 
-    except Exception as e:
+    except (ValueError, OverflowError, OSError, RuntimeError) as e:
         logger.error(f'Failed to create temporal links: {e}')
         return 0
 
@@ -422,7 +422,7 @@ async def extract_entities_batch_optimized(
         logger.info(f'Resolved {len(resolved_ids)} entities, created {len(links)} links')
         return links
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.error(f'Entity extraction batch failed: {e}')
         raise
 
@@ -500,7 +500,7 @@ async def create_semantic_links_batch(
         logger.info(f'Created {len(all_links_data)} semantic links')
         return len(all_links_data)
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         logger.error(f'Semantic link batch failed: {e}')
         return 0
 
@@ -581,7 +581,7 @@ async def create_causal_links_batch(
         await _bulk_insert_memory_links(session, links_data)
         return len(links_data)
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         logger.error(f'Causal link batch failed: {e}')
         return 0
 

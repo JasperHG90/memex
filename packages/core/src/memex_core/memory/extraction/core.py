@@ -139,7 +139,7 @@ async def _extract_facts_from_chunk(
 
     except OutputTooLongException:
         raise
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, KeyError) as e:
         error_msg = str(e).lower()
         if (
             'context_length_exceeded' in error_msg
@@ -1056,9 +1056,9 @@ class AsyncMarkdownPageIndex(dspy.Module):
                         h.exact_text = match.group(0)
                         h.start_index = offset + match.start()
                         valid_headers.append(h)
-                except Exception as e:
+                except (regex_lib.error, ValueError, RuntimeError) as e:
                     self._logger.debug('Fuzzy regex match failed for header: %s', e)
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.error(f'Scanner Error at offset {offset}: {e}')
 
         return valid_headers
@@ -1127,7 +1127,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             self._total_usage += usage
             max_id = len(flat_headers) - 1
             return filter_valid_nodes(pred.toc_tree, max_id)
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.error(f'Architect Logic Failed: {e}')
             return [
                 TOCNode(
@@ -1231,7 +1231,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             )
             self._total_usage += usage
             node.summary = pred.summary
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Summary failed for '{node.title}': {e}")
 
     async def _summarize_parent_node(self, node: TOCNode) -> None:
@@ -1255,7 +1255,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             )
             self._total_usage += usage
             node.summary = pred.summary
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Parent summary failed for '{node.title}': {e}")
 
     async def _generate_block_summaries(
@@ -1297,7 +1297,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             summary = pred.block_summary
             summary.key_points = [kp.rstrip('.;:, ') for kp in summary.key_points]
             block.summary = summary
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f'Block summary failed for block {block.id}: {e}')
             block.summary = BlockSummary(
                 topic=', '.join(block.titles_included[:3]) or 'Untitled block',

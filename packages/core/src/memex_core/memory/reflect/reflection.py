@@ -15,6 +15,7 @@ import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -98,7 +99,7 @@ class ReflectionEngine:
                         if model_config.api_key
                         else None,
                     )
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError, AttributeError) as e:
             logger.warning(
                 'Could not initialize LM: %s. Reflection might fail if LM is not set.', e
             )
@@ -159,7 +160,7 @@ class ReflectionEngine:
         try:
             await self.session.commit()
             logger.info(f'Successfully committed batch of {len(all_success_models)} mental models.')
-        except Exception as e:
+        except (SQLAlchemyError, OSError, RuntimeError) as e:
             logger.error(f'Batch commit failed: {e}. Attempting rescue mode...')
             await self._batch_save_rescue(all_success_models)
 
@@ -186,7 +187,7 @@ class ReflectionEngine:
                     db_lock=db_lock,
                     vault_id=req.vault_id,
                 )
-            except Exception as e:
+            except (ValueError, RuntimeError, OSError, KeyError, SQLAlchemyError) as e:
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
                 return None
 
@@ -201,7 +202,7 @@ class ReflectionEngine:
                 flag_modified(model, 'observations')
                 await self.session.commit()
                 saved_count += 1
-            except Exception as inner_e:
+            except (SQLAlchemyError, OSError, RuntimeError) as inner_e:
                 logger.error(f'Rescue save failed for model {model.id}: {inner_e}')
                 await self.session.rollback()
         logger.info(f'Rescue mode saved {saved_count}/{len(models)} models.')

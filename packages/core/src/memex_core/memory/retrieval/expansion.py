@@ -48,6 +48,6 @@ class QueryExpander:
 
             # Limit to 1-2 variations as per strategy
             return variations[:2], usage
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError) as e:
             logger.warning(f'Query expansion failed: {e}. Falling back to original query.')
             return [], TokenUsage()
