@@ -45,6 +45,10 @@ from memex_core.memory.extraction.pipeline.diffing import (
     diff_blocks,
     diff_page_index_blocks,
 )
+from memex_core.memory.extraction.pipeline.tracking import (
+    track_document,
+    enqueue_for_reflection,
+)
 from memex_core.memory.sql_models import ContentStatus
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.confidence import ConfidenceEngine
@@ -217,9 +221,7 @@ class ExtractionEngine:
 
         if not extracted_facts:
             if note_id:
-                await self._track_document(
-                    session, note_id, contents, is_first_batch, vault_id=vault_id
-                )
+                await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
             return [], usage, set()
 
         processed_facts = await self._process_embeddings(extracted_facts)
@@ -251,9 +253,7 @@ class ExtractionEngine:
         if not final_processed_facts:
             logger.info(f'All {len(processed_facts)} facts were duplicates.')
             if note_id:
-                await self._track_document(
-                    session, note_id, contents, is_first_batch, vault_id=vault_id
-                )
+                await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
             return [], usage, set()
 
         extracted_facts = final_extracted_facts
@@ -265,7 +265,7 @@ class ExtractionEngine:
             effective_doc_id = str(UUID(int=0))
 
         if effective_doc_id:
-            await self._track_document(
+            await track_document(
                 session, effective_doc_id, contents, is_first_batch, vault_id=vault_id
             )
             chunk_map = await self._store_chunks(
@@ -288,10 +288,7 @@ class ExtractionEngine:
         await self._create_links(session, unit_ids, processed_facts, vault_id=vault_id)
 
         # Update Reflection Queue Priorities
-        if self.queue_service:
-            await self.queue_service.handle_extraction_event(
-                session, touched_entity_ids, vault_id=vault_id
-            )
+        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
         # Log aggregated token usage
         usage.session_id = get_session_id()
@@ -502,15 +499,10 @@ class ExtractionEngine:
         await storage.mark_memory_units_stale(session, removed_block_ids)
 
         # Update document tracking
-        await self._track_document(
-            session, note_id, contents, is_first_batch=False, vault_id=vault_id
-        )
+        await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
         # Update Reflection Queue
-        if self.queue_service and touched_entity_ids:
-            await self.queue_service.handle_extraction_event(
-                session, touched_entity_ids, vault_id=vault_id
-            )
+        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
         # Log usage with incremental metadata
         usage.session_id = get_session_id()
@@ -783,9 +775,7 @@ class ExtractionEngine:
                         )
 
         # 10. Update thin tree + document tracking
-        await self._track_document(
-            session, note_id, contents, is_first_batch=False, vault_id=vault_id
-        )
+        await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
         toc_id_to_hash: dict[str, str] = {}
 
@@ -822,10 +812,7 @@ class ExtractionEngine:
         await storage.update_note_title(session, note_id, resolved_title)
 
         # Update Reflection Queue
-        if self.queue_service and touched_entity_ids:
-            await self.queue_service.handle_extraction_event(
-                session, touched_entity_ids, vault_id=vault_id
-            )
+        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
         # Log usage with incremental page_index metadata
         usage.session_id = get_session_id()
@@ -894,9 +881,7 @@ class ExtractionEngine:
         if not effective_doc_id:
             effective_doc_id = str(UUID(int=0))
 
-        await self._track_document(
-            session, effective_doc_id, contents, is_first_batch, vault_id=vault_id
-        )
+        await track_document(session, effective_doc_id, contents, is_first_batch, vault_id=vault_id)
 
         # 2. Flatten TOC tree into node rows and insert
         min_tokens = ts.min_node_tokens
@@ -1039,10 +1024,7 @@ class ExtractionEngine:
         )
         await self._create_links(session, unit_ids, final_processed, vault_id=vault_id)
 
-        if self.queue_service:
-            await self.queue_service.handle_extraction_event(
-                session, touched_entity_ids, vault_id=vault_id
-            )
+        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
         # Log usage
         usage.session_id = get_session_id()
@@ -1387,46 +1369,6 @@ class ExtractionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> dict[int, str]:
         return await storage.store_chunks_batch(session, note_id, chunks, vault_id=vault_id)
-
-    async def _track_document(
-        self,
-        session: AsyncSession,
-        note_id: str,
-        contents: list[RetainContent],
-        is_first_batch: bool,
-        vault_id: UUID = GLOBAL_VAULT_ID,
-    ):
-        combined_content = '\n'.join([c.content for c in contents])
-        retain_params = {}
-        tags = []
-        assets: list[str] = []
-
-        if contents:
-            first = contents[0]
-            retain_params.update(first.payload)
-            if hasattr(first, 'tags') and first.tags:
-                from typing import cast
-
-                tags = cast(list[str], first.tags)
-
-            # Extract assets list if present in payload
-            if 'assets' in first.payload and isinstance(first.payload['assets'], list):
-                assets = first.payload['assets']
-
-        publish_date = contents[0].event_date if contents else None
-
-        await storage.handle_document_tracking(
-            session,
-            note_id,
-            combined_content,
-            is_first_batch,
-            retain_params,
-            tags,
-            vault_id=vault_id,
-            assets=assets,
-            content_fingerprint=retain_params.get('content_fingerprint'),
-            publish_date=publish_date,
-        )
 
     def _add_temporal_offsets(self, facts: list[ExtractedFact]) -> None:
         """Add slight time offsets to facts to preserve ordering."""
