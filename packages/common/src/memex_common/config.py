@@ -1,5 +1,6 @@
 """Configuration for Memex based on Persona library"""
 
+import logging
 from typing import Literal, Union, Annotated, Any, TypeAlias
 import pathlib as plb
 import os
@@ -7,6 +8,8 @@ import re
 import warnings
 import yaml
 from uuid import UUID
+
+logger = logging.getLogger('memex.common.config')
 
 from platformdirs import user_config_dir, user_data_dir, user_log_dir
 from pydantic import BaseModel, Field, SecretStr, HttpUrl, field_serializer, model_validator
@@ -54,7 +57,8 @@ class GlobalYamlConfigSettingsSource(PydanticBaseSettingsSource):
             try:
                 with open(config_path, 'r') as f:
                     return yaml.safe_load(f) or {}
-            except Exception:
+            except Exception as e:
+                logger.debug('Failed to load global config from %s: %s', config_path, e)
                 return {}
         return {}
 
@@ -77,7 +81,8 @@ class LocalYamlConfigSettingsSource(PydanticBaseSettingsSource):
                 try:
                     with open(config_path, 'r') as f:
                         return yaml.safe_load(f) or {}
-                except Exception:
+                except Exception as e:
+                    logger.debug('Failed to load config from %s: %s', config_path, e)
                     return {}
             return {}
 
@@ -96,7 +101,8 @@ class LocalYamlConfigSettingsSource(PydanticBaseSettingsSource):
                     try:
                         with open(p, 'r') as f:
                             return yaml.safe_load(f) or {}
-                    except Exception:
+                    except Exception as e:
+                        logger.debug('Failed to load local config from %s: %s', p, e)
                         return {}
 
         return {}
@@ -433,6 +439,52 @@ class RetrievalConfig(BaseModel):
         description='Default enabled search strategies for memory retrieval.',
     )
 
+    similarity_threshold: float = Field(
+        default=0.3,
+        description='Minimum pg_trgm similarity score for entity name matching in graph strategies.',
+    )
+    temporal_decay_days: float = Field(
+        default=30.0,
+        description='Half-life in days for temporal decay scoring.',
+    )
+    temporal_decay_base: float = Field(
+        default=2.0,
+        description='Base for temporal decay exponential (score = base ^ (-days / decay_days)).',
+    )
+    rrf_k: int = Field(
+        default=60,
+        description='Reciprocal Rank Fusion constant (higher = more uniform blending).',
+    )
+    candidate_pool_size: int = Field(
+        default=60,
+        description='Number of candidates per strategy in multi-strategy RRF retrieval.',
+    )
+
+
+class RateLimitConfig(BaseModel):
+    """Configuration for API rate limiting."""
+
+    enabled: bool = Field(
+        default=False,
+        description='Enable rate limiting. Disabled by default.',
+    )
+    ingestion: str = Field(
+        default='10/minute',
+        description='Rate limit for ingestion endpoints.',
+    )
+    search: str = Field(
+        default='60/minute',
+        description='Rate limit for search endpoints.',
+    )
+    batch: str = Field(
+        default='5/minute',
+        description='Rate limit for batch endpoints.',
+    )
+    default: str = Field(
+        default='120/minute',
+        description='Default rate limit for all other endpoints.',
+    )
+
 
 class LoggingConfig(BaseModel):
     """Configuration for logging."""
@@ -517,6 +569,11 @@ class ServerConfig(BaseModel):
     logging: LoggingConfig = Field(
         default_factory=LoggingConfig,
         description='Configuration for logging.',
+    )
+
+    rate_limit: RateLimitConfig = Field(
+        default_factory=RateLimitConfig,
+        description='Configuration for API rate limiting. Disabled by default.',
     )
 
     active_vault: str = Field(

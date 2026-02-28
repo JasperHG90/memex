@@ -348,9 +348,10 @@ class RemoteMemexAPI:
 
         try:
             result = response.json()
-        except Exception:
+        except Exception as e:
             # Fallback for legacy/stream response (NDJSON)
             # If the server ignores 'q' and returns a stream, we parse lines
+            logger.debug('JSON parse failed, falling back to NDJSON parsing: %s', e)
             result = []
             import json
 
@@ -358,8 +359,8 @@ class RemoteMemexAPI:
                 if line:
                     try:
                         result.append(json.loads(line))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug('Skipping unparseable NDJSON line: %s', e)
 
         # If result is not a list (e.g. single object or something else), handle it?
         # Expecting list[dict]

@@ -3,9 +3,12 @@ Entity Management Commands.
 """
 
 import json
+import logging
 from typing import Annotated, Any
 from uuid import UUID
 import typer
+
+logger = logging.getLogger('memex_cli.entities')
 from rich.console import Console
 from rich.table import Table
 
@@ -305,7 +308,8 @@ async def list_related(
                     try:
                         r_ent = await api.get_entity(rid)
                         resolved_names[str(rid)] = r_ent.name
-                    except Exception:
+                    except Exception as e:
+                        logger.debug('Failed to resolve entity %s: %s', rid, e)
                         resolved_names[str(rid)] = 'Unknown'
 
         except Exception as e:

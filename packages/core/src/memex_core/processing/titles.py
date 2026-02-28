@@ -137,8 +137,8 @@ async def extract_title_via_llm(
             context_metadata={'operation': 'title_extraction'},
             vault_id=vault_id,
         )
-    except Exception:
-        logger.warning('LLM title extraction failed', exc_info=True)
+    except Exception as e:
+        logger.warning('LLM title extraction failed: %s', e, exc_info=True)
         return None
 
     raw: str = getattr(prediction, 'title', '') or ''

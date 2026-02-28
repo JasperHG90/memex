@@ -121,7 +121,8 @@ def handle_api_error(e: Exception) -> NoReturn:
     if isinstance(e, httpx.HTTPStatusError):
         try:
             detail = e.response.json().get('detail', str(e))
-        except Exception:
+        except Exception as exc:
+            logger.debug('Failed to parse error response JSON: %s', exc)
             detail = str(e)
 
         if e.response.status_code == 404 and 'Vault' in detail:

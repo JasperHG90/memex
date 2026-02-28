@@ -205,8 +205,8 @@ class NoteSearchEngine:
                 )
             relevant_sections = prediction.relevant_sections
             relevant_node_ids = {s.node_id for s in relevant_sections}
-        except Exception:
-            logger.warning('Skeleton-tree reasoning failed, returning unrefined results.')
+        except Exception as e:
+            logger.warning('Skeleton-tree reasoning failed, returning unrefined results: %s', e)
             return results, ReasoningOutput()
 
         if not relevant_node_ids:
@@ -282,8 +282,8 @@ class NoteSearchEngine:
                     sections='\n\n'.join(all_section_texts),
                 )
             results[0].answer = answer_pred.answer
-        except Exception:
-            logger.warning('Answer synthesis failed, returning results without answer.')
+        except Exception as e:
+            logger.warning('Answer synthesis failed, returning results without answer: %s', e)
 
         return results
 

@@ -53,12 +53,14 @@ async def get_retrieval_engine(
     if reranker is None:
         try:
             reranker = await get_reranking_model()
-        except Exception:
+        except Exception as e:
+            logger.debug('Reranking model unavailable, skipping: %s', e)
             reranker = None
     if ner_model is None:
         try:
             ner_model = await get_ner_model()
-        except Exception:
+        except Exception as e:
+            logger.debug('NER model unavailable, skipping: %s', e)
             ner_model = None
 
     return RetrievalEngine(
@@ -89,9 +91,13 @@ class RetrievalEngine:
         self.embedder = embedder
         self.reranker = reranker
         self.ner_model = ner_model
-        self.retrieval_config = retrieval_config
+        self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
+
+        # Source RRF constants from config
+        self.k_rrf = self.retrieval_config.rrf_k
+        self.candidate_pool_size = self.retrieval_config.candidate_pool_size
 
         from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
@@ -101,7 +107,15 @@ class RetrievalEngine:
         self.strategies: dict[str, tuple[RetrievalStrategy, bool]] = {
             'semantic': (SemanticStrategy(), False),  # False = ASC (Distance)
             'keyword': (KeywordStrategy(), True),  # True = DESC (Score)
-            'graph': (GraphStrategy(ner_model=self.ner_model), True),  # True = DESC
+            'graph': (
+                GraphStrategy(
+                    ner_model=self.ner_model,
+                    similarity_threshold=self.retrieval_config.similarity_threshold,
+                    temporal_decay_days=self.retrieval_config.temporal_decay_days,
+                    temporal_decay_base=self.retrieval_config.temporal_decay_base,
+                ),
+                True,
+            ),  # True = DESC
             'temporal': (TemporalStrategy(), True),  # True = DESC
         }
         self.mm_strategy = MentalModelStrategy()
@@ -220,7 +234,7 @@ class RetrievalEngine:
             for rank, item in enumerate(batch):
                 key = (item.id, item.type)
                 # Weighted RRF: score = sum(weight / (K + rank + 1))
-                score = batch_weight / (K_RRF + rank + 1)
+                score = batch_weight / (self.k_rrf + rank + 1)
                 scores[key] = scores.get(key, 0.0) + score
 
         sorted_keys = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
@@ -341,7 +355,7 @@ class RetrievalEngine:
         ctes = []
 
         # Memory Strategies
-        pool_size = CANDIDATE_POOL_SIZE
+        pool_size = self.candidate_pool_size
         for name, (strategy, is_desc) in active_strategies.items():
             weight = weights.get(name, 1.0)
             stmt = strategy.get_statement(query, query_embedding, limit=pool_size, **filters)
@@ -383,7 +397,7 @@ class RetrievalEngine:
         union_query = union_all(*[select(c.c.id, c.c.type, c.c.rnk, c.c.weight) for c in ctes])
         candidates_cte = union_query.cte('all_candidates')
 
-        rrf_score = func.sum(candidates_cte.c.weight / (K_RRF + candidates_cte.c.rnk)).label(
+        rrf_score = func.sum(candidates_cte.c.weight / (self.k_rrf + candidates_cte.c.rnk)).label(
             'rrf_score'
         )
         scores_cte = (

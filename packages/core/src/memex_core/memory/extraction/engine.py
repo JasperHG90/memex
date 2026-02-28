@@ -1530,8 +1530,8 @@ class ExtractionEngine:
             from memex_core.memory.models.ner import get_ner_model
 
             ner_model = await get_ner_model()
-        except Exception:
-            logger.debug('NER model unavailable, skipping entity type enrichment')
+        except Exception as e:
+            logger.debug('NER model unavailable, skipping entity type enrichment: %s', e)
             return {}
 
         type_map: dict[str, str] = {}
@@ -1547,8 +1547,8 @@ class ExtractionEngine:
                     mapped_type = self.NER_TYPE_MAP.get(raw_type)
                     if word and mapped_type and word not in type_map:
                         type_map[word] = mapped_type
-            except Exception:
-                logger.debug('NER prediction failed for fact text', exc_info=True)
+            except Exception as e:
+                logger.debug('NER prediction failed for fact text: %s', e, exc_info=True)
 
         return type_map
 

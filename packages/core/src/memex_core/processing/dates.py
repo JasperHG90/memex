@@ -90,8 +90,8 @@ async def extract_document_date(
             context_metadata={'operation': 'date_extraction'},
             vault_id=vault_id,
         )
-    except Exception:
-        logger.warning('LLM date extraction failed', exc_info=True)
+    except Exception as e:
+        logger.warning('LLM date extraction failed: %s', e, exc_info=True)
         return None
 
     extraction: Any = prediction.extracted_date

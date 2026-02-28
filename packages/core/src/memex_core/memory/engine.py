@@ -323,9 +323,9 @@ class MemoryEngine:
                     if model_config.api_key
                     else None,
                 )
-            except Exception:
+            except Exception as e:
                 logger.warning(
-                    'No LM configured for reasoning. Attempting to proceed, but may fail.'
+                    'No LM configured for reasoning (%s). Attempting to proceed, but may fail.', e
                 )
 
         # If lm is still None, ReasoningEngine might fail if it doesn't handle it.

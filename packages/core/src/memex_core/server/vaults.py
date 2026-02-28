@@ -74,8 +74,10 @@ async def list_vaults(
                         )
                     else:
                         logger.warning('Attached vault "%s" not found, skipping', vault_name)
-                except Exception:
-                    logger.warning('Failed to resolve attached vault "%s", skipping', vault_name)
+                except Exception as e:
+                    logger.warning(
+                        'Failed to resolve attached vault "%s", skipping: %s', vault_name, e
+                    )
 
             # Return both active and attached as default vaults response
             return ndjson_response([active_dto, *attached_dtos])

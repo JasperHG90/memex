@@ -158,7 +158,20 @@ function SidebarContent({ collapsed }: { collapsed: boolean }) {
         <HelpButton collapsed={collapsed} />
         <div className={cn('mt-2 border-t border-border pt-2', collapsed && 'px-1')}>
           <ThemeToggle collapsed={collapsed} />
-          {!collapsed && (
+          {collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="flex items-center justify-center rounded-lg px-2 py-2 text-muted-foreground hover:text-foreground hover:bg-hover transition-colors w-full"
+                  aria-label={writerVaultName || 'No vault'}
+                >
+                  <Database className="h-4 w-4 shrink-0" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">{writerVaultName || 'No vault'}</TooltipContent>
+            </Tooltip>
+          ) : (
             <>
               <button
                 onClick={() => navigate('/settings')}

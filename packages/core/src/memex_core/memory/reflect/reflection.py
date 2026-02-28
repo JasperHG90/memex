@@ -98,8 +98,10 @@ class ReflectionEngine:
                         if model_config.api_key
                         else None,
                     )
-        except Exception:
-            logger.warning('Could not initialize LM. Reflection might fail if LM is not set.')
+        except Exception as e:
+            logger.warning(
+                'Could not initialize LM: %s. Reflection might fail if LM is not set.', e
+            )
             self.lm = None
 
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
