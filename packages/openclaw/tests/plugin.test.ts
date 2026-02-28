@@ -844,6 +844,34 @@ describe('capture mode', () => {
     expect(decoded).not.toContain('<relevant-memories>');
     expect(decoded).toContain('Clean assistant response');
   });
+
+  it('strips knowledge-profile from captured user text', async () => {
+    const api = registerPlugin({ sessionGrouping: false });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+    const profileBlock =
+      '<knowledge-profile>\n1. Memex (Concept) — 6 mentions\n</knowledge-profile>\n';
+
+    const hook = api.hooks.get('agent_end')![0]!;
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: profileBlock + longMsg },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(decoded).not.toContain('<knowledge-profile>');
+    expect(decoded).not.toContain('6 mentions');
+    expect(decoded).toContain(longMsg);
+  });
 });
 
 // ---------------------------------------------------------------------------

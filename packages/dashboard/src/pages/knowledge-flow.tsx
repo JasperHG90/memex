@@ -10,6 +10,9 @@ import { useSystemStats } from '@/api/hooks/use-stats';
 import { useNotes } from '@/api/hooks/use-notes';
 import { useEntities } from '@/api/hooks/use-entities';
 import { useReflectionQueue } from '@/api/hooks/use-reflections';
+import { useVaultStore } from '@/stores/vault-store';
+import { VaultBadge } from '@/components/shared/vault-badge';
+import { formatLabel } from '@/components/shared/format-label';
 import type { NoteDTO, EntityDTO, ReflectionQueueDTO } from '@/api/generated';
 
 interface PipelineStage {
@@ -21,17 +24,26 @@ interface PipelineStage {
 
 export default function KnowledgeFlow() {
   const navigate = useNavigate();
-  const stats = useSystemStats();
-  const { data: recentNotes, isLoading: notesLoading } = useNotes({ limit: 10, sort: '-created_at' });
-  const { data: topEntities, isLoading: entitiesLoading } = useEntities({ limit: 10, sort: '-mentions' });
-  const { data: reflectionQueue, isLoading: reflectionsLoading } = useReflectionQueue();
+  const writerVaultId = useVaultStore((s) => s.writerVaultId);
+  const attachedVaults = useVaultStore((s) => s.attachedVaults);
+  const vaultIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (writerVaultId) ids.add(writerVaultId);
+    for (const v of attachedVaults) ids.add(v.id);
+    return [...ids];
+  }, [writerVaultId, attachedVaults]);
+
+  const stats = useSystemStats(vaultIds);
+  const { data: recentNotes, isLoading: notesLoading } = useNotes({ limit: 10, sort: '-created_at', vaultIds });
+  const { data: topEntities, isLoading: entitiesLoading } = useEntities({ limit: 10, sort: '-mentions', vaultIds });
+  const { data: reflectionQueue, isLoading: reflectionsLoading } = useReflectionQueue(vaultIds);
 
   const stages: PipelineStage[] = useMemo(() => [
-    { icon: FileText, label: 'Notes', count: recentNotes?.length ?? null, color: '#3B82F6' },
+    { icon: FileText, label: 'Notes', count: stats.data?.notes ?? null, color: '#3B82F6' },
     { icon: Brain, label: 'Memories', count: stats.data?.memories ?? null, color: '#A855F7' },
     { icon: Users, label: 'Entities', count: stats.data?.entities ?? null, color: '#22C55E' },
     { icon: Eye, label: 'Reflections', count: stats.data?.reflection_queue ?? null, color: '#F59E0B' },
-  ], [stats.data, recentNotes]);
+  ], [stats.data]);
 
   return (
     <div className="space-y-6">
@@ -89,7 +101,7 @@ export default function KnowledgeFlow() {
             <NoteItem
               key={note.id}
               note={note}
-              onClick={() => navigate(`/notes?id=${note.id}`)}
+              onClick={() => navigate(`/lineage?id=${note.id}&type=note`)}
             />
           ))}
           {!notesLoading && (!recentNotes || recentNotes.length === 0) && (
@@ -118,7 +130,7 @@ export default function KnowledgeFlow() {
             </p>
             <button
               className="text-xs text-primary hover:underline"
-              onClick={() => navigate('/memory-search')}
+              onClick={() => navigate('/search')}
             >
               Search memories
             </button>
@@ -137,7 +149,7 @@ export default function KnowledgeFlow() {
             <EntityItem
               key={entity.id}
               entity={entity}
-              onClick={() => navigate(`/entity-graph?entity=${entity.id}`)}
+              onClick={() => navigate(`/entity?entity=${entity.id}`)}
             />
           ))}
           {!entitiesLoading && (!topEntities || topEntities.length === 0) && (
@@ -227,6 +239,7 @@ function NoteItem({ note, onClick }: { note: NoteDTO; onClick: () => void }) {
         <span className="text-[10px] text-muted-foreground">
           {new Date(note.created_at).toLocaleDateString()}
         </span>
+        <VaultBadge vaultId={note.vault_id} />
       </div>
     </button>
   );
@@ -244,9 +257,12 @@ function EntityItem({ entity, onClick }: { entity: EntityDTO; onClick: () => voi
           {entity.mention_count} mentions
         </Badge>
       </div>
-      {entity.entity_type && (
-        <span className="text-[10px] text-muted-foreground">{entity.entity_type}</span>
-      )}
+      <div className="flex items-center gap-1">
+        {entity.entity_type && (
+          <span className="text-[10px] text-muted-foreground">{formatLabel(entity.entity_type)}</span>
+        )}
+        <VaultBadge vaultId={entity.vault_id} />
+      </div>
     </button>
   );
 }

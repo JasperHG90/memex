@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ResultCardSkeleton } from '@/components/shared/result-card-skeleton';
 import { MemoryDetailDialog } from '@/components/shared/memory-detail-dialog';
+import { VaultBadge } from '@/components/shared/vault-badge';
+import { formatLabel } from '@/components/shared/format-label';
 import { useMemorySearch, useMemory } from '@/api/hooks/use-memories';
 import { useVaultStore } from '@/stores/vault-store';
 import type { MemoryUnitDTO } from '@/api/generated';
@@ -180,8 +182,9 @@ export default function Timeline() {
                               className="text-[10px]"
                               style={{ backgroundColor: color + '22', color }}
                             >
-                              {item.fact_type}
+                              {formatLabel(item.fact_type)}
                             </Badge>
+                            <VaultBadge vaultId={item.vault_id} />
                             {time && (
                               <span className="text-[10px] text-muted-foreground">{time}</span>
                             )}

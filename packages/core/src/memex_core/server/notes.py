@@ -32,7 +32,7 @@ async def list_notes(
     sort: Literal['-created_at'] | None = Query(
         None, description='Sort option: -created_at for recency'
     ),
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """
     List notes.
@@ -41,13 +41,13 @@ async def list_notes(
     - limit: Maximum number of notes to return
     - offset: Number of notes to skip
     - sort: Optional sort option. Use '-created_at' for most recent first.
-    - vault_id: Optional vault ID to filter by.
+    - vault_id: Optional vault ID(s) to filter by.
     """
     try:
         if sort == '-created_at':
-            docs = await api.get_recent_notes(limit=limit, vault_id=vault_id)
+            docs = await api.get_recent_notes(limit=limit, vault_ids=vault_id)
         else:
-            docs = await api.list_notes(limit=limit, offset=offset, vault_id=vault_id)
+            docs = await api.list_notes(limit=limit, offset=offset, vault_ids=vault_id)
         return ndjson_response([build_note_dto(d) for d in docs])
     except Exception as e:
         raise _handle_error(e, 'Failed to list notes')

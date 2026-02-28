@@ -191,6 +191,7 @@ export const BatchJobStatus = z.object({
 export type BatchJobStatus = z.infer<typeof BatchJobStatus>;
 
 export const SystemStatsCountsDTO = z.object({
+  notes: z.number().int().default(0),
   memories: z.number().int(),
   entities: z.number().int(),
   reflection_queue: z.number().int(),

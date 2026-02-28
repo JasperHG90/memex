@@ -85,7 +85,7 @@ class ReflectionQueueService:
             )
             session.add(queue_item)
 
-        await session.commit()
+        await session.flush()
 
     async def handle_retrieval_event(
         self,
@@ -132,7 +132,7 @@ class ReflectionQueueService:
             session.add(queue_item)
             session.add(entity)
 
-        await session.commit()
+        await session.flush()
 
     async def _ensure_queue_items(
         self, session: AsyncSession, entity_ids: set[UUID], vault_id: UUID
@@ -179,7 +179,7 @@ class ReflectionQueueService:
 
         await session.flush()
 
-    async def get_next_batch(self, session, limit=10, vault_id=None):
+    async def get_next_batch(self, session, limit=10, vault_id=None, vault_ids=None):
         stmt = (
             select(ReflectionQueue)
             .where(col(ReflectionQueue.status) == ReflectionStatus.PENDING)
@@ -187,8 +187,11 @@ class ReflectionQueueService:
             .order_by(desc(col(ReflectionQueue.priority_score)))
             .limit(limit)
         )
-        if vault_id:
-            stmt = stmt.where(col(ReflectionQueue.vault_id) == vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            stmt = stmt.where(col(ReflectionQueue.vault_id).in_(ids))
         results = await session.exec(stmt)
         return list(results.all())
 

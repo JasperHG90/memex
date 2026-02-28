@@ -22,6 +22,7 @@ import { SummaryCard } from '@/components/shared/summary-card';
 import { ResultCardSkeleton } from '@/components/shared/result-card-skeleton';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ErrorState } from '@/components/shared/error-state';
+import { VaultBadge } from '@/components/shared/vault-badge';
 import { AdvancedSearchPanel, type AdvancedSearchParams } from '@/components/shared/advanced-search-panel';
 import { useNoteSearch } from '@/api/hooks/use-notes';
 import { useNote, useNotePageIndex } from '@/api/hooks/use-notes';
@@ -372,6 +373,7 @@ function NoteResultCard({
           <div className="flex items-center gap-2">
             <FileText className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm font-semibold text-foreground">{title}</span>
+            <VaultBadge vaultId={result.metadata?.vault_id as string | undefined} />
           </div>
           {score > 0 && (
             <div className="flex items-center gap-2">

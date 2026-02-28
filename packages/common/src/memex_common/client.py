@@ -370,12 +370,14 @@ class RemoteMemexAPI:
         return [EntityDTO(**e) for e in result]
 
     async def list_entities_ranked(
-        self, limit: int = 100, q: str | None = None
+        self, limit: int = 100, q: str | None = None, vault_id: UUID | None = None
     ) -> AsyncGenerator[EntityDTO, None]:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
         if q:
             params['q'] = q
+        if vault_id:
+            params['vault_id'] = str(vault_id)
 
         async with self.client.stream('GET', 'entities', params=params) as response:
             response.raise_for_status()

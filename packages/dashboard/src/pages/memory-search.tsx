@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { ErrorState } from '@/components/shared/error-state';
 import { AdvancedSearchPanel, type AdvancedSearchParams } from '@/components/shared/advanced-search-panel';
 import { MemoryDetailDialog } from '@/components/shared/memory-detail-dialog';
+import { VaultBadge } from '@/components/shared/vault-badge';
 import { useMemorySearch } from '@/api/hooks/use-memories';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
@@ -337,6 +338,7 @@ function ResultCard({ result, index, onViewDetails, onViewLineage }: ResultCardP
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <TypeBadge type="memory_unit" />
           <TypeBadge type={factType} />
+          <VaultBadge vaultId={result.vault_id} />
           {score > 0 && (
             <div className="ml-auto flex items-center gap-2">
               <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">

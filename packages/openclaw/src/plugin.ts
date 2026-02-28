@@ -625,19 +625,19 @@ const memexPlugin = {
             if (userText && assistantText) break;
           }
 
-          // Strip injected <relevant-memories> block to avoid re-ingesting
-          // memories that are already stored in Memex.
+          // Strip injected context blocks to avoid re-ingesting
+          // memories and entity profiles that are already stored in Memex.
+          const stripInjected = (text: string) =>
+            text
+              .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, '')
+              .replace(/<knowledge-profile>[\s\S]*?<\/knowledge-profile>\s*/g, '')
+              .trim();
+
           if (userText) {
-            userText = userText.replace(
-              /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/,
-              '',
-            ).trim();
+            userText = stripInjected(userText);
           }
           if (assistantText) {
-            assistantText = assistantText.replace(
-              /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/,
-              '',
-            ).trim();
+            assistantText = stripInjected(assistantText);
           }
 
           if (!userText || userText.length < cfg.minCaptureLength) return;

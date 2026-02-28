@@ -1,10 +1,13 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { GitBranch, AlertCircle } from 'lucide-react';
+import { GitBranch, AlertCircle, RefreshCw } from 'lucide-react';
 import { useLineage } from '@/api/hooks/use-lineage';
+import { useTriggerReflection } from '@/api/hooks/use-reflections';
 import type { EntityDTO } from '@/api/generated';
 import { LineageGraph } from './lineage/lineage-graph';
 import { EntitySearch } from './lineage/entity-search';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 
 function flattenDict(
   obj: Record<string, unknown>,
@@ -27,6 +30,7 @@ function flattenDict(
 
 interface NodeDetail {
   id: string;
+  entityType: string;
   raw: Record<string, string>;
 }
 
@@ -41,6 +45,7 @@ export default function LineagePage() {
   const [detail, setDetail] = useState<NodeDetail | null>(null);
 
   const { data: lineage, isLoading, error } = useLineage(selectedId, entityType);
+  const triggerReflection = useTriggerReflection();
 
   // Sync URL params with selection
   useEffect(() => {
@@ -55,7 +60,7 @@ export default function LineagePage() {
     setDetail(null);
   }, []);
 
-  const handleNodeClick = useCallback((_nodeId: string, data: Record<string, unknown>) => {
+  const handleNodeClick = useCallback((_nodeId: string, nodeEntityType: string, data: Record<string, unknown>) => {
     const raw = { ...data };
     delete raw.embedding;
 
@@ -65,7 +70,7 @@ export default function LineagePage() {
       truncated[k] = v.length > 500 ? v.slice(0, 500) + '...' : v;
     }
 
-    setDetail({ id: _nodeId, raw: truncated });
+    setDetail({ id: _nodeId, entityType: nodeEntityType, raw: truncated });
   }, []);
 
   return (
@@ -115,7 +120,28 @@ export default function LineagePage() {
       {detail && (
         <div className="border border-border rounded-lg bg-card p-4 max-h-64 overflow-y-auto">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-foreground">Node Details</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground">Node Details</h3>
+              {detail.entityType === 'entity' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7"
+                  disabled={triggerReflection.isPending}
+                  onClick={async () => {
+                    try {
+                      await triggerReflection.mutateAsync(detail.id);
+                      toast.success('Reflection triggered successfully');
+                    } catch (err) {
+                      toast.error(`Failed to trigger reflection: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }}
+                >
+                  <RefreshCw className={`mr-1 h-3 w-3 ${triggerReflection.isPending ? 'animate-spin' : ''}`} />
+                  Reflect
+                </Button>
+              )}
+            </div>
             <button
               onClick={() => setDetail(null)}
               className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"

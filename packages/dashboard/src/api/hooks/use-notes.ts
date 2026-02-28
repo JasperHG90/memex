@@ -12,6 +12,7 @@ interface UseNotesOptions {
   limit?: number;
   offset?: number;
   sort?: '-created_at';
+  vaultIds?: string[];
 }
 
 export function useNotes(options: UseNotesOptions = {}) {
@@ -19,6 +20,9 @@ export function useNotes(options: UseNotesOptions = {}) {
   if (options.limit != null) params.set('limit', String(options.limit));
   if (options.offset != null) params.set('offset', String(options.offset));
   if (options.sort) params.set('sort', options.sort);
+  if (options.vaultIds?.length) {
+    for (const id of options.vaultIds) params.append('vault_id', id);
+  }
   const qs = params.toString();
 
   return useQuery({

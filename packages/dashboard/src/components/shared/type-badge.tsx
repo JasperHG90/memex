@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { formatLabel } from './format-label'
 
 const TYPE_COLORS: Record<string, string> = {
   // Entity types
@@ -39,7 +40,7 @@ export function TypeBadge({ type, className }: TypeBadgeProps) {
         className,
       )}
     >
-      {type}
+      {formatLabel(type)}
     </span>
   )
 }

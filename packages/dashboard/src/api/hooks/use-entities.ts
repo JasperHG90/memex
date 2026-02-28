@@ -6,6 +6,7 @@ interface UseEntitiesOptions {
   limit?: number;
   q?: string;
   sort?: '-mentions';
+  vaultIds?: string[];
 }
 
 export function useEntities(options: UseEntitiesOptions = {}) {
@@ -13,6 +14,9 @@ export function useEntities(options: UseEntitiesOptions = {}) {
   if (options.limit != null) params.set('limit', String(options.limit));
   if (options.q) params.set('q', options.q);
   if (options.sort) params.set('sort', options.sort);
+  if (options.vaultIds?.length) {
+    for (const id of options.vaultIds) params.append('vault_id', id);
+  }
   const qs = params.toString();
 
   return useQuery({
@@ -47,12 +51,18 @@ export function useEntityCooccurrences(entityId: string | undefined) {
   });
 }
 
-export function useBulkCooccurrences(entityIds: string[]) {
+export function useBulkCooccurrences(entityIds: string[], vaultIds?: string[]) {
   const ids = entityIds.join(',');
   return useQuery({
-    queryKey: ['cooccurrences', 'bulk', ids],
-    queryFn: () =>
-      api.get<CooccurrenceRecord[]>(`/cooccurrences?ids=${encodeURIComponent(ids)}`),
+    queryKey: ['cooccurrences', 'bulk', ids, vaultIds],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set('ids', ids);
+      if (vaultIds?.length) {
+        for (const vid of vaultIds) params.append('vault_id', vid);
+      }
+      return api.get<CooccurrenceRecord[]>(`/cooccurrences?${params}`);
+    },
     enabled: entityIds.length > 0,
   });
 }

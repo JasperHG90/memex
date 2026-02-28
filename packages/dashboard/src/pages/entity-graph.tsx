@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useEntities, useBulkCooccurrences } from '@/api/hooks/use-entities';
+import { useVaultStore } from '@/stores/vault-store';
 import { GraphCanvas } from './entity-graph/graph-canvas';
 import { FilterPanel, type GraphFilters } from './entity-graph/filter-panel';
 import { ENTITY_TYPES } from './entity-graph/entity-node';
@@ -11,6 +12,7 @@ const DEFAULT_FILTERS: GraphFilters = {
   entityTypes: [...ENTITY_TYPES],
 };
 import { EntitySidePanel } from './entity-graph/entity-side-panel';
+import { EntitySearch } from './entity-graph/entity-search';
 import {
   Dialog,
   DialogContent,
@@ -23,26 +25,44 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Maximize2, Minimize2, Loader2, Share2 } from 'lucide-react';
 import { useEntity } from '@/api/hooks/use-entities';
+import { VaultBadge } from '@/components/shared/vault-badge';
 
 export default function EntityGraph() {
+  const writerVaultId = useVaultStore((s) => s.writerVaultId);
+  const attachedVaults = useVaultStore((s) => s.attachedVaults);
+  const vaultIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (writerVaultId) ids.add(writerVaultId);
+    for (const v of attachedVaults) ids.add(v.id);
+    return [...ids];
+  }, [writerVaultId, attachedVaults]);
 
   const [filters, setFilters] = useState<GraphFilters>(DEFAULT_FILTERS);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Fetch entities sorted by mention count (top entities)
+  // Fetch entities sorted by mention count (top entities), scoped by vault
   const { data: entities, isLoading: entitiesLoading } = useEntities({
     limit: 100,
     sort: '-mentions',
+    vaultIds,
   });
 
   // Fetch co-occurrences for all loaded entities
   const entityIds = entities?.map((e) => e.id) ?? [];
   const { data: cooccurrences, isLoading: cooccurrencesLoading } =
-    useBulkCooccurrences(entityIds);
+    useBulkCooccurrences(entityIds, vaultIds);
 
   const isLoading = entitiesLoading || cooccurrencesLoading;
+
+  const handleSearchSelect = useCallback((entityId: string) => {
+    setSelectedEntityId(entityId);
+    setFocusNodeId(entityId);
+    // Clear focusNodeId after animation so re-selecting the same entity works
+    setTimeout(() => setFocusNodeId(null), 700);
+  }, []);
 
   const handleNodeSelect = useCallback((entityId: string) => {
     setSelectedEntityId(entityId);
@@ -73,23 +93,28 @@ export default function EntityGraph() {
             </Badge>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setIsFullscreen(!isFullscreen)}
-        >
+        <div className="flex items-center gap-3">
+          {entities && entities.length > 0 && (
+            <EntitySearch entities={entities} onSelect={handleSearchSelect} />
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+          >
           {isFullscreen ? (
             <Minimize2 className="h-4 w-4" />
           ) : (
             <Maximize2 className="h-4 w-4" />
           )}
         </Button>
+        </div>
       </div>
 
       {/* Body */}
       <div className="relative flex flex-1 overflow-hidden">
         {/* Graph Canvas Area */}
-        <div className="relative flex-1" style={{ backgroundColor: '#0D0D0D' }}>
+        <div className="relative flex-1" style={{ backgroundColor: 'var(--background)' }}>
           {isLoading ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex flex-col items-center gap-3">
@@ -105,6 +130,7 @@ export default function EntityGraph() {
                 cooccurrences={cooccurrences ?? []}
                 filters={filters}
                 selectedEntityId={selectedEntityId}
+                focusNodeId={focusNodeId}
                 onNodeSelect={handleNodeSelect}
                 onNodeDoubleClick={handleNodeDoubleClick}
                 onPaneClick={handlePaneClick}
@@ -164,9 +190,10 @@ function EntityDetailModal({
         ) : entity ? (
           <ScrollArea className="max-h-80">
             <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="default">{entity.name}</Badge>
                 <Badge variant="secondary">{entity.mention_count} mentions</Badge>
+                <VaultBadge vaultId={entity.vault_id} />
               </div>
               <table className="w-full text-sm">
                 <tbody>

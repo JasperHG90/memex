@@ -61,7 +61,7 @@ async def test_handle_extraction_event(service):
     assert queue_item.priority_score == 3.2
     assert queue_item.status == ReflectionStatus.PENDING
 
-    session.commit.assert_awaited_once()
+    session.flush.assert_awaited_once()
 
 
 @pytest.mark.asyncio

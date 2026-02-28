@@ -16,11 +16,11 @@ router = APIRouter(prefix='/api/v1')
 @router.get('/stats/counts', response_model=SystemStatsCountsDTO)
 async def get_stats_counts(
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
-    """Get total counts for documents, entities, and reflection queue."""
+    """Get total counts for notes, memory units, entities, and reflection queue."""
     try:
-        counts = await api.get_stats_counts(vault_id=vault_id)
+        counts = await api.get_stats_counts(vault_ids=vault_id)
         return SystemStatsCountsDTO(**counts)
     except Exception as e:
         raise _handle_error(e, 'Failed to fetch system stats')

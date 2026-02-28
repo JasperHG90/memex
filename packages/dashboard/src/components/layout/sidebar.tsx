@@ -40,7 +40,6 @@ const navItems = [
 
 const bottomItems = [
   { to: '/settings', icon: Settings, label: 'Settings' },
-  { to: '#', icon: CircleHelp, label: 'Help' },
 ]
 
 function NavItem({
@@ -100,6 +99,36 @@ function ReflectionBadge() {
   )
 }
 
+function HelpButton({ collapsed }: { collapsed: boolean }) {
+  const link = (
+    <a
+      href="https://github.com/memextech/memex"
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Help"
+      className={cn(
+        'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all duration-200',
+        'text-muted-foreground hover:bg-hover hover:text-foreground',
+        collapsed && 'justify-center px-2',
+      )}
+    >
+      <CircleHelp className="h-4 w-4 shrink-0" />
+      {!collapsed && <span>Help</span>}
+    </a>
+  )
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent side="right">Help</TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return link
+}
+
 function SidebarContent({ collapsed }: { collapsed: boolean }) {
   const navigate = useNavigate()
   const { writerVaultName } = useVaultStore()
@@ -126,6 +155,7 @@ function SidebarContent({ collapsed }: { collapsed: boolean }) {
         {bottomItems.map((item) => (
           <NavItem key={item.label} {...item} collapsed={collapsed} />
         ))}
+        <HelpButton collapsed={collapsed} />
         <div className={cn('mt-2 border-t border-border pt-2', collapsed && 'px-1')}>
           <ThemeToggle collapsed={collapsed} />
           {!collapsed && (

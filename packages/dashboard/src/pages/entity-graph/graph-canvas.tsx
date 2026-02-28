@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useCallback } from 'react';
+import React, { useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -9,6 +9,7 @@ import {
   useEdgesState,
   type Edge,
   type Node,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -141,6 +142,7 @@ interface GraphCanvasProps {
   cooccurrences: CooccurrenceRecord[];
   filters: GraphFilters;
   selectedEntityId: string | null;
+  focusNodeId: string | null;
   onNodeSelect: (entityId: string) => void;
   onNodeDoubleClick: (entityId: string) => void;
   onPaneClick: () => void;
@@ -151,6 +153,7 @@ export function GraphCanvas({
   cooccurrences,
   filters,
   selectedEntityId,
+  focusNodeId,
   onNodeSelect,
   onNodeDoubleClick,
   onPaneClick,
@@ -206,6 +209,19 @@ export function GraphCanvas({
     }));
   }, [initialNodes, initialEdges, selectedEntityId, setNodes, setEdges]);
 
+  // Viewport control for search snap-to
+  const rfInstance = useRef<ReactFlowInstance<EntityFlowNode, Edge> | null>(null);
+
+  useEffect(() => {
+    if (!focusNodeId || !rfInstance.current) return;
+    const node = nodes.find((n) => n.id === focusNodeId);
+    if (!node) return;
+    rfInstance.current.setCenter(node.position.x, node.position.y, {
+      zoom: 1.5,
+      duration: 600,
+    });
+  }, [focusNodeId, nodes]);
+
   const handleNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
       onNodeSelect(node.id);
@@ -229,6 +245,7 @@ export function GraphCanvas({
       onNodeClick={handleNodeClick}
       onNodeDoubleClick={handleNodeDoubleClick}
       onPaneClick={onPaneClick}
+      onInit={(instance) => { rfInstance.current = instance; }}
       nodeTypes={nodeTypes}
       fitView
       fitViewOptions={{ padding: 0.2 }}

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
+import { formatLabel } from '@/components/shared/format-label';
 import { useReflectionQueue, useTriggerReflection } from '@/api/hooks/use-reflections';
 import { useEntities } from '@/api/hooks/use-entities';
 
@@ -91,7 +92,7 @@ export default function Reflection() {
                       <div className="flex items-center gap-2 mt-0.5">
                         {entity?.entity_type && (
                           <Badge variant="secondary" className="text-[10px]">
-                            {entity.entity_type}
+                            {formatLabel(entity.entity_type)}
                           </Badge>
                         )}
                         <span className="text-xs text-muted-foreground">

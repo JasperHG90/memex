@@ -14,6 +14,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { TypeBadge } from '@/components/shared/type-badge';
+import { VaultBadge } from '@/components/shared/vault-badge';
 import { useAdjustBelief, useDeleteMemory } from '@/api/hooks/use-memories';
 import type { MemoryUnitDTO } from '@/api/generated';
 
@@ -142,9 +143,7 @@ export function MemoryDetailDialog({ unit, open, onOpenChange }: MemoryDetailDia
               {unit.vault_id && (
                 <>
                   <span className="text-muted-foreground">Vault</span>
-                  <span className="text-foreground truncate" title={unit.vault_id}>
-                    {unit.vault_id}
-                  </span>
+                  <VaultBadge vaultId={unit.vault_id} />
                 </>
               )}
             </div>

@@ -96,7 +96,7 @@ async def list_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: int = 10,
     status: Literal['queued'] | None = Query(None, description='Filter by status'),
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """
     List reflections.
@@ -104,11 +104,11 @@ async def list_reflections(
     Query params:
     - limit: Maximum number of items to return
     - status: Optional filter by status. Use 'queued' for queue items.
-    - vault_id: Optional vault ID to filter by.
+    - vault_id: Optional vault ID(s) to filter by.
     """
     try:
         if status == 'queued':
-            items = await api.get_reflection_queue_batch(limit=limit, vault_id=vault_id)
+            items = await api.get_reflection_queue_batch(limit=limit, vault_ids=vault_id)
             return ndjson_response(
                 [
                     ReflectionQueueDTO(

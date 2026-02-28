@@ -12,12 +12,12 @@ export interface LineageNodeData extends Record<string, unknown> {
 }
 
 const NODE_STYLES: Record<string, { bg: string; border: string; icon: LucideIcon }> = {
-  note: { bg: 'rgba(59, 130, 246, 0.12)', border: '#3B82F6', icon: FileText },
-  memory_unit: { bg: 'rgba(34, 197, 94, 0.12)', border: '#22C55E', icon: Brain },
-  observation: { bg: 'rgba(245, 158, 11, 0.12)', border: '#F59E0B', icon: Eye },
-  mental_model: { bg: 'rgba(168, 85, 247, 0.12)', border: '#A855F7', icon: Lightbulb },
-  entity: { bg: 'rgba(6, 182, 212, 0.12)', border: '#06B6D4', icon: Tag },
-  asset: { bg: 'rgba(139, 92, 246, 0.12)', border: '#8B5CF6', icon: File },
+  note: { bg: 'rgba(59, 130, 246, 0.18)', border: '#3B82F6', icon: FileText },
+  memory_unit: { bg: 'rgba(34, 197, 94, 0.18)', border: '#22C55E', icon: Brain },
+  observation: { bg: 'rgba(245, 158, 11, 0.18)', border: '#F59E0B', icon: Eye },
+  mental_model: { bg: 'rgba(168, 85, 247, 0.18)', border: '#A855F7', icon: Lightbulb },
+  entity: { bg: 'rgba(6, 182, 212, 0.18)', border: '#06B6D4', icon: Tag },
+  asset: { bg: 'rgba(139, 92, 246, 0.18)', border: '#8B5CF6', icon: File },
 };
 
 const DEFAULT_STYLE = { bg: 'rgba(161, 161, 170, 0.12)', border: '#71717A', icon: File };

@@ -17,6 +17,13 @@ import dagre from 'dagre';
 import { LineageNode, type LineageNodeData } from './lineage-node';
 import type { LineageResponse } from '@/api/hooks/use-lineage';
 
+/** Resolve a CSS custom property to its computed value. */
+function resolveCssColor(varName: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  return value || fallback;
+}
+
 const nodeTypes: NodeTypes = {
   lineage: LineageNode,
 };
@@ -106,6 +113,7 @@ function getContent(entity: Record<string, unknown>): string | undefined {
 
 function lineageToGraph(
   lineage: LineageResponse,
+  edgeColor: string,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodesMap = new Map<string, NodeEntry>();
   const edgeSet = new Set<string>();
@@ -206,8 +214,8 @@ function lineageToGraph(
     target: e.target,
     type: 'default',
     animated: false,
-    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-    style: { stroke: 'var(--muted-foreground)', strokeWidth: 1.5 },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: edgeColor },
+    style: { stroke: edgeColor, strokeWidth: 1.5 },
   }));
 
   return getLayoutedElements(nodes, edges);
@@ -224,16 +232,29 @@ const LEGEND_ITEMS = [
 
 interface LineageGraphProps {
   lineage: LineageResponse;
-  onNodeClick?: (nodeId: string, data: Record<string, unknown>) => void;
+  onNodeClick?: (nodeId: string, entityType: string, data: Record<string, unknown>) => void;
 }
 
 export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Resolve CSS variables to actual colors for SVG markers (which don't support var()).
+  // Re-resolve when the .light class toggles on <html>.
+  const [themeKey, setThemeKey] = useState(0);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setThemeKey((k) => k + 1));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- themeKey triggers re-resolve on theme change
+  const mutedFg = useMemo(() => resolveCssColor('--muted-foreground', '#A1A1AA'), [themeKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- themeKey triggers re-resolve on theme change
+  const fg = useMemo(() => resolveCssColor('--foreground', '#EDEDED'), [themeKey]);
+
   const { layoutedNodes, layoutedEdges } = useMemo(() => {
-    const result = lineageToGraph(lineage);
+    const result = lineageToGraph(lineage, mutedFg);
     return { layoutedNodes: result.nodes, layoutedEdges: result.edges };
-  }, [lineage]);
+  }, [lineage, mutedFg]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
@@ -266,7 +287,8 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
         eds.map((e) => ({
           ...e,
           animated: false,
-          style: { stroke: 'var(--muted-foreground)', strokeWidth: 1.5 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: mutedFg },
+          style: { stroke: mutedFg, strokeWidth: 1.5 },
         })),
       );
       return;
@@ -293,22 +315,28 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
         return {
           ...e,
           animated: isHighlighted,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 16,
+            height: 16,
+            color: isHighlighted ? fg : mutedFg,
+          },
           style: {
-            stroke: isHighlighted ? 'var(--foreground)' : 'var(--muted-foreground)',
+            stroke: isHighlighted ? fg : mutedFg,
             strokeWidth: isHighlighted ? 2.5 : 1.5,
             opacity: isHighlighted ? 0.8 : 0.15,
           },
         };
       }),
     );
-  }, [selectedNodeId, layoutedEdges, setNodes, setEdges]);
+  }, [selectedNodeId, layoutedEdges, setNodes, setEdges, mutedFg, fg]);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       setSelectedNodeId((prev) => (prev === node.id ? null : node.id));
       if (onNodeClick) {
         const nodeData = node.data as LineageNodeData;
-        onNodeClick(node.id, nodeData.raw ?? {});
+        onNodeClick(node.id, nodeData.entityType, nodeData.raw ?? {});
       }
     },
     [onNodeClick],

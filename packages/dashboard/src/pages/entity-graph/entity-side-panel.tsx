@@ -8,6 +8,8 @@ import {
   useEntities,
 } from '@/api/hooks/use-entities';
 import { X, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
+import { VaultBadge } from '@/components/shared/vault-badge';
+import { formatLabel } from '@/components/shared/format-label';
 import {
   Dialog,
   DialogContent,
@@ -67,10 +69,11 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="flex flex-col gap-4 p-4">
           {entity && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="text-xs">
                 {entity.mention_count} mentions
               </Badge>
+              <VaultBadge vaultId={entity.vault_id} />
               <Button
                 variant="outline"
                 size="sm"
@@ -163,17 +166,18 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
                     color: FACT_TYPE_COLORS[selectedMention.unit.fact_type] ?? '#71717A',
                   }}
                 >
-                  {selectedMention.unit.fact_type}
+                  {formatLabel(selectedMention.unit.fact_type)}
                 </Badge>
                 {selectedMention.unit.note_id && (
                   <a
-                    href={`/notes/${selectedMention.unit.note_id}`}
+                    href={`/lineage?id=${selectedMention.unit.note_id}&type=note`}
                     className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                   >
                     <ExternalLink className="h-3 w-3" />
                     View note
                   </a>
                 )}
+                <VaultBadge vaultId={selectedMention.unit.vault_id} />
               </div>
               <p className="text-sm text-foreground leading-relaxed">
                 {selectedMention.unit.text}
@@ -263,7 +267,7 @@ function MentionCard({ mention, onClick }: { mention: EntityMention; onClick: ()
           className="text-[10px]"
           style={{ backgroundColor: color + '22', color }}
         >
-          {factType}
+          {formatLabel(factType)}
         </Badge>
         <span className="text-[10px] text-muted-foreground">
           {mention.document?.name ?? mention.document?.title ?? 'Untitled'}

@@ -85,6 +85,7 @@
   --border: #262626;
   --input: #262626;
   --ring: #3B82F6;
+  --hover: rgba(255, 255, 255, 0.05);
   --chart-1: #3B82F6;
   --chart-2: #22C55E;
   --chart-3: #F59E0B;
@@ -119,6 +120,7 @@
   --border: #E5E7EB;
   --input: #E5E7EB;
   --ring: #3B82F6;
+  --hover: rgba(0, 0, 0, 0.04);
   --chart-1: #3B82F6;
   --chart-2: #22C55E;
   --chart-3: #F59E0B;
@@ -155,6 +157,11 @@ html, body, #root {
   }
 }
 
+/* React Flow: ensure node text follows theme (overrides default color: #222) */
+.react-flow__node {
+  color: var(--foreground) !important;
+}
+
 /* React Flow edge label hover reveal */
 .react-flow__edge:hover .react-flow__edge-textwrapper text,
 .react-flow__edge:hover .react-flow__edge-textwrapper rect {
@@ -172,6 +179,14 @@ html, body, #root {
   stroke: var(--foreground) !important;
   opacity: 0.5;
   transition: stroke 150ms ease-in-out, opacity 150ms ease-in-out;
+}
+
+/* React Flow SVG markers: force theme colors via CSS (SVG attributes don't support var()) */
+.react-flow__container svg defs marker polyline,
+.react-flow__container svg defs marker polygon,
+.react-flow__container svg defs marker path {
+  fill: var(--muted-foreground);
+  stroke: var(--muted-foreground);
 }
 
 /* Invert dark logo for dark background, no-op in light mode */

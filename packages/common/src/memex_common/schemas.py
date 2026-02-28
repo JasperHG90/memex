@@ -616,7 +616,8 @@ class BatchJobStatus(BaseModel):
 class SystemStatsCountsDTO(BaseModel):
     """Counts for system entities."""
 
-    memories: int = Field(description='Total number of memories (Documents).')
+    notes: int = Field(default=0, description='Total number of notes (documents).')
+    memories: int = Field(description='Total number of memory units.')
     entities: int = Field(description='Total number of entities.')
     reflection_queue: int = Field(description='Number of items in the reflection queue.')
 

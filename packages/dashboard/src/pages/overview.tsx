@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Brain, FileText, Users, RefreshCw } from 'lucide-react'
+import { Brain, FileText, Users, RefreshCw, StickyNote } from 'lucide-react'
+import { useVaultStore } from '@/stores/vault-store'
 import {
   BarChart,
   Bar,
@@ -27,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { useSystemStats, useTokenUsage, useMetrics } from '@/api/hooks/use-stats'
 import { useNotes } from '@/api/hooks/use-notes'
+import { VaultBadge } from '@/components/shared/vault-badge'
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -74,10 +76,19 @@ interface NoteItem {
 }
 
 export default function Overview() {
-  const stats = useSystemStats()
+  const writerVaultId = useVaultStore((s) => s.writerVaultId)
+  const attachedVaults = useVaultStore((s) => s.attachedVaults)
+  const vaultIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (writerVaultId) ids.add(writerVaultId)
+    for (const v of attachedVaults) ids.add(v.id)
+    return [...ids]
+  }, [writerVaultId, attachedVaults])
+
+  const stats = useSystemStats(vaultIds)
   const tokenUsage = useTokenUsage()
   const metrics = useMetrics()
-  const recentNotes = useNotes({ limit: 10, sort: '-created_at' })
+  const recentNotes = useNotes({ limit: 10, sort: '-created_at', vaultIds })
 
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
   const [tokenRange, setTokenRange] = useState<'7d' | '30d' | '90d' | 'all'>('30d')
@@ -138,9 +149,10 @@ export default function Overview() {
       <PageHeader title="Overview" />
 
       {/* Top row: Metric Cards */}
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.isLoading ? (
           <>
+            <MetricCardSkeleton />
             <MetricCardSkeleton />
             <MetricCardSkeleton />
             <MetricCardSkeleton />
@@ -148,20 +160,24 @@ export default function Overview() {
         ) : (
           <>
             <MetricCard
+              icon={StickyNote}
+              label="Notes"
+              value={stats.data?.notes ?? 0}
+            />
+            <MetricCard
               icon={Brain}
-              label="Total Memories"
+              label="Memories"
               value={stats.data?.memories ?? 0}
+            />
+            <MetricCard
+              icon={Users}
+              label="Entities"
+              value={stats.data?.entities ?? 0}
             />
             <MetricCard
               icon={RefreshCw}
               label="Reflection Queue"
               value={stats.data?.reflection_queue ?? 0}
-              description="Pending reflections"
-            />
-            <MetricCard
-              icon={Users}
-              label="Total Entities"
-              value={stats.data?.entities ?? 0}
             />
           </>
         )}
@@ -210,30 +226,30 @@ export default function Overview() {
                     </defs>
                     <CartesianGrid
                       strokeDasharray="3 3"
-                      stroke="#262626"
+                      stroke="var(--border)"
                       vertical={false}
                     />
                     <XAxis
                       dataKey="date"
-                      tick={{ fill: '#A1A1AA', fontSize: 12 }}
-                      axisLine={{ stroke: '#262626' }}
+                      tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }}
+                      axisLine={{ stroke: 'var(--border)' }}
                       tickLine={false}
                     />
                     <YAxis
-                      tick={{ fill: '#A1A1AA', fontSize: 12 }}
-                      axisLine={{ stroke: '#262626' }}
+                      tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }}
+                      axisLine={{ stroke: 'var(--border)' }}
                       tickLine={false}
                       tickFormatter={formatNumber}
                     />
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: '#1A1A1A',
-                        border: '1px solid #262626',
+                        backgroundColor: 'var(--card)',
+                        border: '1px solid var(--border)',
                         borderRadius: '8px',
-                        color: '#EDEDED',
+                        color: 'var(--foreground)',
                       }}
-                      labelStyle={{ color: '#A1A1AA' }}
-                      cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                      labelStyle={{ color: 'var(--muted-foreground)' }}
+                      cursor={{ fill: 'var(--hover)' }}
                       formatter={(value: number | undefined) => [formatNumber(value ?? 0), 'Tokens']}
                     />
                     <Bar dataKey="tokens" fill="url(#tokenGradient)" radius={[4, 4, 0, 0]} />
@@ -342,6 +358,7 @@ export default function Overview() {
                           {item.preview}
                         </p>
                       </div>
+                      <VaultBadge vaultId={item.metadata.vault_id as string | undefined} className="shrink-0" />
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {item.date}
                       </span>
@@ -383,7 +400,7 @@ function NoteContentModal({ noteId, onClose }: { noteId: string | null; onClose:
               <Skeleton className="h-4 w-3/5" />
             </div>
           ) : note?.original_text ? (
-            <div className="prose prose-invert prose-sm max-w-none pr-4">
+            <div className="prose prose-sm max-w-none pr-4 text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-a:text-primary">
               <ReactMarkdown>{note.original_text}</ReactMarkdown>
             </div>
           ) : (
