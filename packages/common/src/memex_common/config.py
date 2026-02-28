@@ -479,6 +479,14 @@ class AuthConfig(BaseModel):
         default_factory=lambda: ['/api/v1/health', '/api/v1/ready', '/api/v1/metrics'],
         description='Paths that do not require authentication.',
     )
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        description=(
+            'Shared secret for HMAC-SHA256 webhook signature validation. '
+            'Callers must send X-Webhook-Signature header with '
+            'hex(HMAC-SHA256(secret, request_body)).'
+        ),
+    )
 
 
 class RateLimitConfig(BaseModel):

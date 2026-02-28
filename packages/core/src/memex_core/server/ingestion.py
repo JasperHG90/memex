@@ -3,7 +3,10 @@
 import asyncio
 import base64
 import binascii
+import hashlib
+import hmac
 import json
+import logging
 import os
 import pathlib as plb
 import shutil
@@ -11,7 +14,17 @@ import tempfile
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Header,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
 
 from memex_common.exceptions import ResourceNotFoundError
@@ -23,10 +36,13 @@ from memex_common.schemas import (
     IngestResponse,
     IngestURLRequest,
     NoteCreateDTO,
+    WebhookPayload,
 )
 
 from memex_core.api import MemexAPI, NoteInput
 from memex_core.server.common import _handle_error, get_api
+
+logger = logging.getLogger('memex.core.server.ingestion')
 
 router = APIRouter(prefix='/api/v1')
 
@@ -236,6 +252,87 @@ async def ingest_upload(
 
     except Exception as e:
         raise _handle_error(e, 'File upload failed')
+
+
+def _generate_webhook_note_key(source: str, content: str) -> str:
+    """Generate an idempotent note_key from source + content hash."""
+    digest = hashlib.sha256(f'{source}:{content}'.encode('utf-8')).hexdigest()
+    return f'webhook:{source}:{digest}'
+
+
+def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
+    """Verify HMAC-SHA256 signature of the raw request body."""
+    expected = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@router.post(
+    '/ingestions/webhook',
+    status_code=202,
+    response_model=IngestResponse,
+)
+async def ingest_webhook(
+    request: Request,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    x_webhook_signature: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    """Ingest a note from an external webhook.
+
+    Accepts a plain JSON payload (no Base64 encoding required).
+    When a webhook secret is configured, the ``X-Webhook-Signature`` header
+    must contain ``hex(HMAC-SHA256(secret, raw_body))``.
+
+    Returns 202 Accepted with the ingestion result.
+    """
+    # Read raw body for HMAC validation (must happen before Pydantic parsing)
+    raw_body = await request.body()
+
+    # Validate HMAC signature if webhook secret is configured
+    auth_config = getattr(request.app.state, 'auth_config', None)
+    webhook_secret = (
+        auth_config.webhook_secret.get_secret_value()
+        if auth_config and auth_config.webhook_secret
+        else None
+    )
+
+    if webhook_secret:
+        if not x_webhook_signature:
+            raise HTTPException(
+                status_code=401,
+                detail='Missing X-Webhook-Signature header.',
+            )
+        if not _verify_webhook_signature(raw_body, x_webhook_signature, webhook_secret):
+            raise HTTPException(
+                status_code=403,
+                detail='Invalid webhook signature.',
+            )
+    else:
+        logger.debug('Webhook secret not configured; skipping signature validation.')
+
+    # Parse and validate payload
+    try:
+        payload = WebhookPayload.model_validate_json(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid webhook payload.')
+
+    # Build NoteInput with auto-generated idempotent note_key
+    note_key = _generate_webhook_note_key(payload.source, payload.content)
+    note = NoteInput(
+        name=payload.title,
+        description=payload.description or payload.title,
+        content=payload.content.encode('utf-8'),
+        tags=payload.tags,
+        note_key=note_key,
+    )
+
+    try:
+        result = await api.ingest(note, vault_id=payload.vault_id)
+        return JSONResponse(
+            status_code=202,
+            content=IngestResponse(**result).model_dump(mode='json'),
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Webhook ingestion failed')
 
 
 @router.post('/ingestions/batch', response_model=BatchJobStatus, status_code=202)
