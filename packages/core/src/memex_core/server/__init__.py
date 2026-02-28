@@ -22,6 +22,7 @@ from memex_core.server.reflection import router as reflection_router
 from memex_core.server.resources import router as resources_router
 from memex_core.server.retrieval import router as retrieval_router
 from memex_core.server.stats import router as stats_router
+from memex_core.server.health import router as health_router
 from memex_core.server.summary import router as summary_router
 from memex_core.server.vaults import router as vaults_router
 from memex_core.scheduler import run_scheduler_with_leader_election
@@ -133,4 +134,5 @@ app.include_router(stats_router)
 app.include_router(entities_router)
 app.include_router(memories_router)
 app.include_router(resources_router)
+app.include_router(health_router)
 app.include_router(summary_router)
