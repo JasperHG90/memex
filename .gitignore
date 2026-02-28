@@ -187,3 +187,6 @@ packages/openclaw/dist/
 .tmp
 
 .vite
+
+# Benchmark results (machine-specific)
+.benchmarks/
