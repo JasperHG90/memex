@@ -215,7 +215,7 @@ class WebhookService:
                 )
                 return
 
-            except Exception as exc:
+            except (httpx.HTTPError, OSError, ValueError, RuntimeError) as exc:
                 last_error = f'{type(exc).__name__}: {exc}'
                 logger.warning(
                     'Webhook delivery failed: webhook=%s event=%s attempt=%d error=%s',

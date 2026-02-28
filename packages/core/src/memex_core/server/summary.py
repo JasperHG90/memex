@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import SummaryRequest, SummaryResponse
 from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api
@@ -31,5 +32,5 @@ async def summarize_memories(
             texts=request.texts,
         )
         return SummaryResponse(summary=summary)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summary generation failed')

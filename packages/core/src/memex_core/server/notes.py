@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import NoteDTO, NoteSearchRequest, NoteSearchResult, NodeDTO
 
 from memex_core.api import MemexAPI
@@ -49,7 +50,7 @@ async def list_notes(
         else:
             docs = await api.list_notes(limit=limit, offset=offset, vault_ids=vault_id)
         return ndjson_response([build_note_dto(d) for d in docs])
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list notes')
 
 
@@ -76,7 +77,7 @@ async def search_notes(
             summarize=request.summarize,
         )
         return ndjson_response(results)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note search failed')
 
 
@@ -86,7 +87,7 @@ async def get_note_page_index(note_id: UUID, api: Annotated[MemexAPI, Depends(ge
     try:
         page_index = await api.get_note_page_index(note_id)
         return {'note_id': note_id, 'page_index': page_index}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get page index')
 
 
@@ -96,7 +97,7 @@ async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     try:
         doc = await api.get_note(note_id)
         return build_note_dto(doc)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get note')
 
 
@@ -110,7 +111,7 @@ async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) ->
         return node
     except HTTPException:
         raise
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get node')
 
 
@@ -120,5 +121,5 @@ async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)])
     try:
         await api.delete_note(note_id)
         return {'status': 'success'}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note deletion failed')

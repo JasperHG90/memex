@@ -148,7 +148,7 @@ async def run_dspy_operation(
 
                     session.add(token_usage)
                     # Note: The caller is expected to commit the session later.
-                except Exception as db_err:
+                except (ValueError, RuntimeError, OSError, KeyError) as db_err:
                     logger.warning(f'Failed to stage token usage log: {db_err}')
 
         # Clear LM history to prevent memory accumulation
@@ -157,7 +157,7 @@ async def run_dspy_operation(
 
         return result, token_usage
 
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, KeyError) as e:
         # Record failure with circuit breaker
         await _circuit_breaker.record_failure()
 

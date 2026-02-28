@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Qu
 from fastapi.responses import StreamingResponse
 
 from memex_common.config import GLOBAL_VAULT_ID
+from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     DeadLetterItemDTO,
     ReflectionQueueDTO,
@@ -47,7 +48,7 @@ async def reflect(
             new_observations=[],
             status='queued',
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reflection failed')
 
 
@@ -84,7 +85,7 @@ async def reflect_batch(
                 for req in internal_reqs
             ]
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch reflection failed')
 
 
@@ -122,7 +123,7 @@ async def list_reflections(
             )
         # Add other status filters if needed in the future
         return ndjson_response([])
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list reflections')
 
 
@@ -145,7 +146,7 @@ async def claim_reflections(api: Annotated[MemexAPI, Depends(get_api)], limit: i
                 for item in items
             ]
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to claim reflection tasks')
 
 
@@ -181,7 +182,7 @@ async def list_dead_letter_items(
             )
             for item in items
         ]
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list dead letter items')
 
 
@@ -210,5 +211,5 @@ async def retry_dead_letter_item(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to retry dead letter item')

@@ -27,7 +27,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
-from memex_common.exceptions import ResourceNotFoundError
+from memex_common.exceptions import MemexError, ResourceNotFoundError
 from memex_common.schemas import (
     BatchIngestRequest,
     BatchIngestResponse,
@@ -91,7 +91,7 @@ async def ingest_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
 
 
@@ -133,7 +133,7 @@ async def ingest_url(
             assets=assets_bytes,
         )
         return IngestResponse(**result)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
 
 
@@ -149,7 +149,7 @@ async def ingest_file(
             reflect_after=request.reflect_after,
         )
         return IngestResponse(**result)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File ingestion failed')
 
 
@@ -250,7 +250,7 @@ async def ingest_upload(
         result = await api.ingest(note, vault_id=parsed_metadata.get('vault_id'))
         return IngestResponse(**result)
 
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
 
 
@@ -312,7 +312,7 @@ async def ingest_webhook(
     # Parse and validate payload
     try:
         payload = WebhookPayload.model_validate_json(raw_body)
-    except Exception:
+    except (ValueError, KeyError):
         raise HTTPException(status_code=400, detail='Invalid webhook payload.')
 
     # Build NoteInput with auto-generated idempotent note_key
@@ -331,7 +331,7 @@ async def ingest_webhook(
             status_code=202,
             content=IngestResponse(**result).model_dump(mode='json'),
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')
 
 
@@ -349,7 +349,7 @@ async def ingest_batch(
             notes=request.notes, vault_id=request.vault_id, batch_size=request.batch_size
         )
         return BatchJobStatus(job_id=job_id, status='pending')
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 
 
@@ -374,5 +374,5 @@ async def get_batch_job_status(job_id: UUID, api: Annotated[MemexAPI, Depends(ge
         return BatchJobStatus(
             job_id=job.id, status=job.status, progress=job.progress, result=result_dto
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to retrieve batch job status')

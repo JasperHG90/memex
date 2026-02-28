@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import EntityDTO, LineageResponse, MemoryUnitDTO
 
 from memex_core.api import MemexAPI
@@ -51,7 +52,7 @@ async def list_entities(
         try:
             entities = await api.search_entities(query=q, limit=limit, vault_ids=vault_ids)
             return ndjson_response([build_entity_dto(e) for e in entities])
-        except Exception as e:
+        except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             raise _handle_error(e, 'Entity search failed')
 
     if sort == '-mentions':
@@ -90,7 +91,7 @@ async def get_bulk_cooccurrences(
             for c in cos
         ]
         return ndjson_response(items)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to fetch bulk co-occurrences')
 
 
@@ -127,7 +128,7 @@ async def get_entity_mentions(
             for r in results
         ]
         return ndjson_response(items)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to fetch mentions for entity {id}')
 
 
@@ -139,7 +140,7 @@ async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         if not entity:
             raise HTTPException(status_code=404, detail=f'Entity {id} not found')
         return build_entity_dto(entity)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get entity {id}')
 
 
@@ -167,7 +168,7 @@ async def get_entity_cooccurrences(
             for c in cos
         ]
         return ndjson_response(items)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to fetch co-occurrences for entity {id}')
 
 
@@ -190,7 +191,7 @@ async def get_entity_lineage(
             depth=depth,
             limit=limit,
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to retrieve lineage for entity {id}')
 
 
@@ -200,7 +201,7 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
     try:
         await api.delete_entity(entity_id)
         return {'status': 'success'}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Entity deletion failed')
 
 
@@ -217,5 +218,5 @@ async def delete_mental_model(
         )
         await api.delete_mental_model(entity_id, resolved_vault_id)
         return {'status': 'success'}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Mental model deletion failed')

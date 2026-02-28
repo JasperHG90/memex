@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import LineageDirection, LineageResponse
 
 from memex_core.api import MemexAPI
@@ -26,7 +27,7 @@ async def get_resource(path: str, api: Annotated[MemexAPI, Depends(get_api)]):
         return Response(content=content, media_type=media_type or 'application/octet-stream')
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f'Resource not found: {path}')
-    except Exception as e:
+    except (MemexError, ValueError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to retrieve resource')
 
 
@@ -47,7 +48,7 @@ async def get_note_lineage(
             depth=depth,
             limit=limit,
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to retrieve lineage for note {id}')
 
 
@@ -81,5 +82,5 @@ async def get_lineage(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to retrieve lineage for {entity_type} {id}')

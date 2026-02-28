@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import SystemStatsCountsDTO, TokenUsageResponse
 
 from memex_core.api import MemexAPI
@@ -22,7 +23,7 @@ async def get_stats_counts(
     try:
         counts = await api.get_stats_counts(vault_ids=vault_id)
         return SystemStatsCountsDTO(**counts)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to fetch system stats')
 
 
@@ -32,5 +33,5 @@ async def get_token_usage(api: Annotated[MemexAPI, Depends(get_api)]):
     try:
         usage = await api.get_daily_token_usage()
         return TokenUsageResponse(usage=usage)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to fetch token usage stats')

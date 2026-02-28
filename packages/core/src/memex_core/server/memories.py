@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     AdjustBeliefRequest,
     MemoryUnitDTO,
@@ -41,7 +42,7 @@ async def summarize_memories(
             texts=request.texts,
         )
         return SummaryResponse(summary=summary)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summary generation failed')
 
 
@@ -59,7 +60,7 @@ async def adjust_memory_belief(
             description=request.description,
         )
         return {'status': 'success'}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Belief adjustment failed')
 
 
@@ -82,7 +83,7 @@ async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
             occurred_start=unit.occurred_start,
             occurred_end=unit.occurred_end,
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get memory unit {id}')
 
 
@@ -92,5 +93,5 @@ async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)
     try:
         await api.delete_memory_unit(id)
         return {'status': 'success'}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Memory unit deletion failed')

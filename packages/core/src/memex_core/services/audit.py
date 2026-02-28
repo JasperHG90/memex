@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, desc
+from sqlalchemy.exc import SQLAlchemyError
 
 from memex_core.memory.sql_models import AuditLog
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -58,7 +59,7 @@ class AuditService:
             async with self._metastore.session() as session:
                 session.add(entry)
                 await session.commit()
-        except Exception:
+        except (SQLAlchemyError, OSError, RuntimeError):
             logger.exception('Failed to write audit log entry: action=%s', entry.action)
 
     # ------------------------------------------------------------------

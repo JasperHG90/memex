@@ -88,7 +88,7 @@ async def list_vaults(
         return ndjson_response(
             [VaultDTO(id=v.id, name=v.name, description=v.description) for v in vaults]
         )
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list vaults')
 
 
@@ -100,7 +100,7 @@ async def create_vault(
     try:
         vault = await api.create_vault(name=request.name, description=request.description)
         return VaultDTO(id=vault.id, name=vault.name, description=vault.description)
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to create vault')
 
 
@@ -127,7 +127,7 @@ async def get_or_resolve_vault(identifier: str, api: Annotated[MemexAPI, Depends
             return {'id': vault_id}
     except HTTPException:
         raise
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Vault lookup failed')
 
 
@@ -139,7 +139,7 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         if success:
             return {'status': 'success'}
         raise HTTPException(status_code=404, detail='Vault not found or could not be deleted')
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Vault deletion failed')
 
 
@@ -153,7 +153,7 @@ async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get
         vault_id = await api.resolve_vault_identifier(identifier)
         api.config.server.active_vault = identifier
         return {'status': 'success', 'active_vault': str(vault_id)}
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to set writer vault')
 
 
@@ -183,5 +183,5 @@ async def toggle_attached_vault(
             'status': 'success',
             'attached_vaults': api.config.server.attached_vaults,
         }
-    except Exception as e:
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to toggle attached vault')
