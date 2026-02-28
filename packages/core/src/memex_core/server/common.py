@@ -18,6 +18,7 @@ from memex_common.exceptions import (
 from memex_common.schemas import NoteDTO, EntityDTO
 
 from memex_core.api import MemexAPI
+from memex_core.context import get_session_id
 
 logger = logging.getLogger('memex.core.server')
 
@@ -43,7 +44,11 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     if isinstance(e, MemexError):
         return HTTPException(status_code=400, detail=str(e))
 
-    return HTTPException(status_code=500, detail='Internal server error')
+    correlation_id = get_session_id()
+    return HTTPException(
+        status_code=500,
+        detail={'error': 'Internal server error', 'correlation_id': correlation_id},
+    )
 
 
 def _resolve_doc_name(metadata: dict[str, Any]) -> str | None:

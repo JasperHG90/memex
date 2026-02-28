@@ -30,6 +30,6 @@ async def ready(request: Request) -> JSONResponse:
         async with api.metastore.session() as session:
             await session.execute(text('SELECT 1'))
         return JSONResponse(content={'status': 'ok'}, status_code=200)
-    except Exception:
-        logger.warning('Readiness check failed: database unreachable', exc_info=True)
+    except Exception as e:
+        logger.warning('Readiness check failed: database unreachable: %s', e, exc_info=True)
         return JSONResponse(content={'status': 'unavailable'}, status_code=503)
