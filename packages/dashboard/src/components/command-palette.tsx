@@ -92,17 +92,6 @@ export function CommandPalette() {
     }
   }
 
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setOpen(!isOpen)
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, setOpen])
-
   function handleSelect(callback: () => void) {
     setOpen(false)
     callback()

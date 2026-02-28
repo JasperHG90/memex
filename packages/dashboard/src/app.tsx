@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from '@/components/layout/sidebar'
 import { ConnectionBanner } from '@/components/shared/connection-banner'
+import { ErrorBoundary } from '@/components/shared/error-boundary'
 import { QuickNoteModal } from '@/components/quick-note-modal'
 import { CommandPalette } from '@/components/command-palette'
 import { WelcomeModal } from '@/components/onboarding/welcome-modal'
@@ -26,7 +27,9 @@ export default function App() {
       <ConnectionBanner isError={!isConnected} />
       <Sidebar />
       <main className="flex-1 overflow-auto p-4 md:p-6 pt-14 lg:pt-6">
-        <Outlet />
+        <ErrorBoundary>
+          <Outlet />
+        </ErrorBoundary>
       </main>
       <QuickNoteModal />
       <CommandPalette />
