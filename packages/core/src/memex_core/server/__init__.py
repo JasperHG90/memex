@@ -3,6 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -13,7 +14,9 @@ from memex_common.config import (
     LocalYamlConfigSettingsSource,
     MemexConfig,
 )
-from memex_core.context import get_session_id, set_session_id
+from memex_core.context import set_session_id
+from memex_core.logging_config import configure_logging
+from memex_core.server.auth import setup_auth
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
@@ -34,31 +37,24 @@ from memex_core.memory.models import get_embedding_model, get_reranking_model, g
 logger = logging.getLogger('memex.core.server')
 
 
-class SessionIdFilter(logging.Filter):
-    """Inject the current session ID into every log record."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.session_id = get_session_id()  # type: ignore[attr-defined]
-        return True
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle management for the Memex API."""
-    # Configure application-level logging from env var set by CLI before execvp
-    log_level = os.getenv('MEMEX_LOG_LEVEL', 'WARNING')
-    memex_logger = logging.getLogger('memex')
-    memex_logger.setLevel(getattr(logging, log_level, logging.WARNING))
-    if not memex_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.addFilter(SessionIdFilter())
-        handler.setFormatter(
-            logging.Formatter('%(asctime)s %(name)s %(levelname)s [%(session_id)s] %(message)s')
-        )
-        memex_logger.addHandler(handler)
-
     config = parse_memex_config()
+
+    # Configure structured logging via structlog
+    log_level = os.getenv('MEMEX_LOG_LEVEL', config.server.logging.level)
+    configure_logging(level=log_level, json_output=config.server.logging.json_output)
     setup_rate_limiting(app, config.server.rate_limit)
+    setup_auth(app, config.server.auth)
+
+    # Warn when binding to a non-localhost address without authentication
+    if config.server.host != '127.0.0.1' and not config.server.auth.enabled:
+        logger.warning(
+            'Server is binding to %s without authentication enabled. '
+            'Set server.auth.enabled=true and configure API keys for production.',
+            config.server.host,
+        )
 
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
@@ -130,9 +126,12 @@ async def set_request_session_id(request: Request, call_next):
     Middleware to ensure every request has a session ID.
     If 'X-Session-ID' header is present, uses it.
     Otherwise, generates a new one.
+    Binds session_id to structlog contextvars for automatic inclusion in log entries.
     """
     session_id = request.headers.get('X-Session-ID')
     sid = set_session_id(session_id)
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(session_id=sid)
     response = await call_next(request)
     response.headers['X-Session-ID'] = sid
     return response

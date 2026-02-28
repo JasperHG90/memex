@@ -461,6 +461,26 @@ class RetrievalConfig(BaseModel):
     )
 
 
+class AuthConfig(BaseModel):
+    """Authentication configuration for API key-based auth."""
+
+    enabled: bool = Field(
+        default=False,
+        description='Enable API key authentication. Disabled by default for localhost.',
+    )
+    api_keys: list[SecretStr] = Field(
+        default_factory=list,
+        description=(
+            'List of valid API keys. '
+            'Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        ),
+    )
+    exempt_paths: list[str] = Field(
+        default_factory=lambda: ['/api/v1/health', '/api/v1/ready', '/api/v1/metrics'],
+        description='Paths that do not require authentication.',
+    )
+
+
 class RateLimitConfig(BaseModel):
     """Configuration for API rate limiting."""
 
@@ -497,6 +517,29 @@ class LoggingConfig(BaseModel):
         default='WARNING',
         description='Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).',
     )
+    json_output: bool = Field(
+        default=False,
+        description='Output logs as JSON (for production log aggregators).',
+    )
+
+
+class CircuitBreakerConfig(BaseModel):
+    """Configuration for the LLM call circuit breaker."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Whether the circuit breaker is enabled.',
+    )
+    failure_threshold: int = Field(
+        default=5,
+        description='Number of consecutive failures before opening the circuit.',
+        ge=1,
+    )
+    reset_timeout_seconds: float = Field(
+        default=60.0,
+        description='Seconds to stay open before allowing a probe request.',
+        gt=0,
+    )
 
 
 class MemoryConfig(BaseModel):
@@ -519,6 +562,11 @@ class MemoryConfig(BaseModel):
     opinion_formation: OpinionFormationConfig = Field(
         default_factory=OpinionFormationConfig,
         description='Configuration for opinion formation settings.',
+    )
+
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default_factory=CircuitBreakerConfig,
+        description='Configuration for the LLM call circuit breaker.',
     )
 
 
@@ -569,6 +617,11 @@ class ServerConfig(BaseModel):
     logging: LoggingConfig = Field(
         default_factory=LoggingConfig,
         description='Configuration for logging.',
+    )
+
+    auth: AuthConfig = Field(
+        default_factory=AuthConfig,
+        description='API key authentication. Disabled by default.',
     )
 
     rate_limit: RateLimitConfig = Field(
@@ -721,6 +774,7 @@ def parse_memex_config(data: dict | None = None) -> MemexConfig:
 
 
 __all__ = [
+    'AuthConfig',
     'ConfigWithRoot',
     'FileStoreConfig',
     'LocalFileStoreConfig',
