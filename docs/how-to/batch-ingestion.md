@@ -1,154 +1,139 @@
-# Batch Ingestion
+# How to Ingest Documents in Batch
 
-Batch ingestion allows you to import many documents at once. Memex provides two primary ways to do this: via the CLI for local files, and via the Python API for programmatic ingestion.
+This guide shows you how to import many documents into Memex at once, using either the CLI or the REST API.
 
-## 1. CLI Directory Ingestion (Synchronous)
+## Prerequisites
 
-The easiest way to import a folder of notes (e.g., from Obsidian) is using `memex memory add`.
+* A running Memex server (`memex server start`)
+* Documents to import (Markdown, PDF, text files)
+* For API usage: Python 3.12+ with `httpx` installed
+
+## Instructions
+
+### Option A: CLI Directory Ingestion
+
+1. **Run the CLI import command**
+
+   Point `memex memory add` at a directory. Memex recursively scans and ingests all supported files.
+
+   ```bash
+   memex memory add --file ./my-notes/ --vault project-x
+   ```
+
+   This processes files synchronously — the CLI waits for each file to be summarized before moving to the next.
+
+2. **Import with assets**
+
+   To attach supporting files (images, PDFs) to a note, use `--asset` alongside `--file`:
+
+   ```bash
+   memex memory add --file ./report.md --asset ./diagram.png --vault project-x
+   ```
+
+   > **Note:** `--asset` cannot be used with a directory `--file`. Point `--file` to a single file when using `--asset`.
+
+### Option B: REST API Batch Jobs (Asynchronous)
+
+For large-scale imports (hundreds of documents), use the `/ingestions/batch` endpoint. This queues work in the background so your client is never blocked.
+
+1. **Prepare your notes**
+
+   Each note requires `name`, `content` (base64-encoded), and optional `description`, `tags`, and `files`:
+
+   ```python
+   import base64
+
+   note = {
+       'name': 'Meeting Notes 2025-01',
+       'content': base64.b64encode(b'# Meeting Notes\n\nKey decisions...').decode(),
+       'description': 'January planning meeting notes',
+       'tags': ['meetings', 'planning'],
+       'files': {}  # filename -> base64 string for attachments
+   }
+   ```
+
+2. **Submit the batch job**
+
+   ```python
+   import httpx
+
+   async with httpx.AsyncClient(timeout=60.0) as client:
+       response = await client.post(
+           'http://localhost:8000/api/v1/ingestions/batch',
+           json={
+               'notes': [note],
+               'vault_id': 'global',
+               'batch_size': 10
+           }
+       )
+       job_id = response.json()['job_id']
+   ```
+
+3. **Poll for completion**
+
+   ```python
+   import asyncio
+
+   while True:
+       status_res = await client.get(f'http://localhost:8000/api/v1/ingestions/{job_id}')
+       data = status_res.json()
+       if data['status'] in ('completed', 'failed'):
+           break
+       await asyncio.sleep(1.0)
+   ```
+
+4. **Handle errors in the results**
+
+   Check `failed_count` and `error_info` in the response:
+
+   ```python
+   if data['status'] == 'completed':
+       result = data.get('result', {})
+       print(f'Created {len(result.get("note_ids", []))} notes.')
+       if result.get('failed_count', 0) > 0:
+           print(f'Failed: {result["failed_count"]}')
+           print(f'Errors: {result.get("errors")}')
+   else:
+       print(f'Job failed: {data.get("error")}')
+   ```
+
+   A complete, runnable example is available in [`docs/examples/batch_ingestion_full.py`](../examples/batch_ingestion_full.py).
+
+### Option C: Single-Note Background Ingestion
+
+For one-off imports that should not block the client, append `?background=true` to any single-note ingestion endpoint. The server returns `202 Accepted` immediately with a `job_id` you can poll.
+
+## Error Handling
+
+| Error | Cause | Fix |
+| :--- | :--- | :--- |
+| `409 Conflict` | Duplicate content hash | Note already exists — safe to skip |
+| `413 Payload Too Large` | File exceeds server limit | Split into smaller files or increase `max_content_size` in config |
+| `429 Too Many Requests` | Rate limit hit | Reduce `batch_size` or wait between submissions |
+| `500 Internal Server Error` | Server-side failure | Check server logs; retry the failed notes |
+
+## Verification
+
+To verify that batch ingestion was successful, list recent notes in the target vault:
 
 ```bash
-# Recursively scan and ingest all files in a directory
-memex memory add --file ./my-vault/ --vault project-x
+memex note list --vault project-x
 ```
 
-- **Behavior**: The CLI recursively scans the directory, uploads files to the server, and waits for the server to summarize each one.
-- **Assets**: If a directory contains images or PDFs, the CLI will automatically detect them if they are referenced or if you use the `--asset` flag for specific files.
+Or poll the job status via the API:
 
-## 2. API Batch Jobs (Asynchronous)
-
-For large-scale imports or integrations, use the `/ingestions/batch` endpoint. This is the recommended method for processing hundreds of documents without blocking the client.
-
-### Workflow
-1.  **Submit**: POST a list of notes to `/api/v1/ingestions/batch`.
-2.  **Poll**: The server returns a `job_id`. Use this to poll `/api/v1/ingestions/{job_id}` for progress.
-3.  **Finish**: Once the status is `completed`, you will receive a list of the generated `document_ids`.
-
-### Python Example
-
-A complete, runnable example is available in `docs/examples/batch_ingestion_full.py`.
-
-Here is a full example:
-
-```python
-import asyncio
-import base64
-import json
-import os
-import random
-from typing import Any, TypedDict
-import httpx
-
-# --- Configuration ---
-MEMEX_API_URL = os.getenv("MEMEX_API_URL", "http://localhost:8000")
-VAULT_ID = "global"  # Target vault (use 'global' or a specific UUID)
-BATCH_SIZE = 50      # Number of notes to generate for this example
-
-
-class NotePayload(TypedDict):
-    name: str
-    content: str
-    description: str | None
-    tags: list[str]
-    files: dict[str, str]  # filename -> base64_content
-
-
-async def main():
-    print(f"🚀 Starting batch ingestion example against {MEMEX_API_URL}")
-
-    # 1. Generate Dummy Data
-    print(f"📦 Generating {BATCH_SIZE} dummy notes...")
-    notes: list[NotePayload] = []
-
-    for i in range(BATCH_SIZE):
-        # In a real app, you would read these from files
-        raw_content = f"# Note {i}\n\nThis is the content for note {i}. It mentions entity-{i%10}."
-
-        # Content must be base64 encoded
-        b64_content = base64.b64encode(raw_content.encode("utf-8")).decode("utf-8")
-
-        notes.append({
-            "name": f"Batch Note {i}",
-            "content": b64_content,
-            "description": f"Automatically generated note {i}",
-            "tags": ["batch-example", f"group-{i%5}"],
-            "files": {} # Attachments would go here (filename: base64_string)
-        })
-
-    # 2. Submit Batch Job
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            print("📤 Submitting batch job...")
-            response = await client.post(
-                f"{MEMEX_API_URL}/api/v1/ingestions/batch",
-                json={
-                    "notes": notes,
-                    "vault_id": VAULT_ID,
-                    "batch_size": 10  # Process in chunks of 10 internally
-                }
-            )
-            response.raise_for_status()
-
-            job_data = response.json()
-            job_id = job_data["job_id"]
-            print(f"✅ Job submitted! ID: {job_id}")
-
-        except httpx.HTTPStatusError as e:
-            print(f"❌ Failed to submit job: {e.response.text}")
-            return
-        except Exception as e:
-            print(f"❌ Connection error: {e}")
-            return
-
-        # 3. Poll for Completion
-        print("⏳ Polling for status...")
-        while True:
-            try:
-                status_res = await client.get(f"{MEMEX_API_URL}/api/v1/ingestions/{job_id}")
-                status_res.raise_for_status()
-                status_data = status_res.json()
-
-                status = status_data["status"]
-                processed = status_data.get("processed_count", 0)
-                total = status_data.get("notes_count", BATCH_SIZE)
-                progress = (processed / total) * 100 if total > 0 else 0
-
-                # Clear line and update status
-                print(f"Status: {status.upper()} | Progress: {processed}/{total} ({progress:.1f}%)", end="\r")
-
-                if status in ["completed", "failed"]:
-                    print("\n")  # New line after loop finishes
-                    break
-
-                await asyncio.sleep(1.0)
-
-            except Exception as e:
-                print(f"\n❌ Error polling status: {e}")
-                break
-
-        # 4. Report Results
-        if status_data["status"] == "completed":
-            print("🎉 Batch ingestion completed successfully!")
-            print(f"Created {len(status_data.get('document_ids', []))} documents.")
-            if status_data.get("failed_count", 0) > 0:
-                print(f"⚠️ Warning: {status_data['failed_count']} documents failed to process.")
-                if status_data.get("error_info"):
-                    print("Errors:", json.dumps(status_data["error_info"], indent=2))
-        else:
-            print("💀 Batch job failed.")
-            print("Error:", status_data.get("error"))
-
-if __name__ == "__main__":
-    asyncio.run(main())
+```bash
+curl http://localhost:8000/api/v1/ingestions/<job_id>
 ```
 
-## 3. Single-Note Background Ingestion
+## Tips
 
-For a lighter-weight alternative to batch jobs, any single-note ingestion endpoint accepts `?background=true`. The server queues the work and returns `202 Accepted` immediately, so your client is never blocked waiting for extraction to complete.
+- **Idempotency**: Memex checks for existing content using a hash. Re-ingesting the same folder skips duplicates.
+- **Rate limiting**: Batch jobs are processed by background workers. Configure the number of workers in `config.yaml` to tune throughput.
+- **Vaults**: Always specify a `--vault` to keep project data organized.
 
-To track progress, use the returned `job_id` with `GET /api/v1/ingestions/{job_id}`.
+## See Also
 
-## Considerations
-
-- **Idempotency**: Memex checks for existing content using a hash of the content and metadata. Re-ingesting the same folder will skip existing documents.
-- **Rate Limiting**: Batch jobs are processed in the background by workers. You can configure the number of workers in your `config.yaml` to speed up large imports.
-- **Vaults**: Always specify a `vault_id` to keep your project data organized and isolated from other projects.
+* [Organizing with Vaults](organize-with-vaults.md) — vault isolation
+* [Configuring Memex](configure-memex.md) — worker and rate limit settings
+* [REST API Reference](../reference/rest-api.md) — full endpoint documentation

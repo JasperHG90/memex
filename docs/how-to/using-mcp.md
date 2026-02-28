@@ -1,35 +1,53 @@
-# Using the MCP Server
+# How to Use the MCP Server
 
-Memex implements the Model Context Protocol (MCP), allowing AI assistants (like Claude Desktop or IDE agents) to interact with your knowledge base.
+This guide shows you how to connect Memex to AI assistants via the Model Context Protocol (MCP), including Claude Desktop, Claude Code, Cursor, and other MCP-compatible clients.
 
-## Capabilities
+## Prerequisites
 
-The MCP server exposes tools that allow an LLM to:
+* Memex installed with the MCP extra (`uv pip install memex-cli[mcp]`)
+* A running Memex server (`memex server start`)
+* An MCP-compatible AI client
 
-1.  **Search**: `memex_search` (Search memories and documents).
-2.  **Read**: `memex_read_note` (Read full note content).
-3.  **Explore**: `memex_get_lineage` (Trace the origin of facts).
-4.  **Assets**: `memex_list_assets` & `memex_get_resource` (Retrieve images, PDFs).
-5.  **Templates**: `memex_get_template` (Standardized note formats like ADR or Tech Brief).
-6.  **Reflect**: `memex_reflect` (Manually trigger consolidation).
-7.  **Save**: `memex_add_note` (Capture new information).
-8.  **Batch**: `memex_batch_ingest` & `memex_get_batch_status` (Background ingestion).
+## Available MCP Tools
 
-## Configuration (Claude Desktop)
+The Memex MCP server exposes these tools to connected AI clients:
+
+| Tool | Purpose |
+| :--- | :--- |
+| `memex_search` | Search memory units (facts, opinions, observations) via TEMPR |
+| `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
+| `memex_add_note` | Save new knowledge to Memex |
+| `memex_read_note` | Read full note content (fallback — prefer `get_page_index` + `get_node`) |
+| `memex_get_page_index` | Get the table of contents for a note |
+| `memex_get_node` | Retrieve a specific section of a note by node ID |
+| `memex_get_lineage` | Trace provenance of a memory unit back to its source |
+| `memex_reflect` | Manually trigger reflection on an entity |
+| `memex_list_assets` / `memex_get_resource` | Retrieve attached files (images, PDFs) |
+| `memex_get_template` | Get markdown templates for structured notes |
+| `memex_batch_ingest` / `memex_get_batch_status` | Bulk file ingestion |
+| `memex_ingest_url` | Ingest content from a URL |
+| `memex_list_vaults` / `memex_active_vault` | Vault management |
+| `memex_list_entities` / `memex_get_entity` | Browse the entity graph |
+| `memex_get_entity_mentions` / `memex_get_entity_cooccurrences` | Entity relationships |
+| `memex_list_notes` | List notes (not recommended for discovery) |
+| `memex_get_memory_unit` | Retrieve a specific memory unit by UUID |
+
+## Instructions
+
+### Configure for Claude Desktop
 
 Add the following to your `claude_desktop_config.json`:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "memex": {
       "command": "uv",
-      "args": [
-        "run",
-        "memex",
-        "mcp",
-        "run"
-      ],
+      "args": ["run", "memex", "mcp", "run"],
       "env": {
         "MEMEX_SERVER__ACTIVE_VAULT": "global"
       }
@@ -38,12 +56,99 @@ Add the following to your `claude_desktop_config.json`:
 }
 ```
 
-## Best Practices for Agents
+### Configure for Claude Code
 
-When using Memex via an Agent:
+Run the automated setup command:
 
-- **Ground Truth First**: Before answering a query, always use `memex_search` to find relevant context.
-- **Traceability**: If the user asks for sources, use `memex_get_lineage` to show the path from raw Document to extracted Fact.
-- **Structured Notes**: When saving new knowledge, use `memex_get_template` to ensure the note follows project standards.
-- **Asset Awareness**: If a search result indicates attached files, use `memex_list_assets` and `memex_get_resource` to "see" images or read PDFs.
-- **Idempotency**: Use `memex_active_vault` to verify which vault you are currently writing to.
+```bash
+memex setup claude-code
+```
+
+This generates the MCP configuration, CLAUDE.md integration instructions, and lifecycle hooks (session start, compaction, commit) in your project directory.
+
+To manually configure, add to your `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "mcp", "run"],
+      "env": {
+        "MEMEX_SERVER__ACTIVE_VAULT": "my-project"
+      }
+    }
+  }
+}
+```
+
+### Configure for Cursor
+
+Add to your Cursor MCP settings (`.cursor/mcp.json` in your project root):
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "mcp", "run"],
+      "env": {
+        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+      }
+    }
+  }
+}
+```
+
+### Use SSE Transport (Remote Server)
+
+For remote or shared deployments, run the MCP server in SSE mode instead of stdio:
+
+```bash
+memex mcp run --transport sse --host 0.0.0.0 --port 8000
+```
+
+Then configure your client to connect via SSE instead of spawning a subprocess:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "url": "http://your-server:8000/sse"
+    }
+  }
+}
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| "memex_mcp is not installed" | Missing MCP extra | Run `uv pip install memex-cli[mcp]` |
+| Tools not appearing in client | Config file in wrong location | Check the path for your OS (see above) |
+| "Connection refused" errors | Memex server not running | Start with `memex server start` |
+| Wrong vault in results | `MEMEX_SERVER__ACTIVE_VAULT` not set | Add the env var to your MCP config |
+| Slow tool responses | Large result sets | Reduce `limit` parameter or set `token_budget` |
+| "No results found" | Empty vault or unprocessed notes | Check `memex note list` and wait for extraction to complete |
+
+## Verification
+
+After configuring, verify the connection by asking your AI assistant:
+
+> "List all available vaults in Memex"
+
+The assistant should call `memex_list_vaults` and return your vault names. If this works, all MCP tools are accessible.
+
+## Best Practices for AI Agents
+
+- **Search before answering**: Use `memex_search` to ground responses in stored knowledge.
+- **Use lineage for sources**: When asked for citations, call `memex_get_lineage` to trace facts back to source documents.
+- **Use templates for consistency**: Call `memex_get_template` before saving structured notes (ADRs, tech briefs).
+- **Check the active vault**: Call `memex_active_vault` before writing to confirm the target vault.
+- **Prefer page index over full reads**: Use `memex_get_page_index` then `memex_get_node` instead of `memex_read_note` for large notes.
+
+## See Also
+
+* [Configuring Memex](configure-memex.md) — environment variables and YAML settings
+* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for each tool
+* [Document Search vs. Memory Search](doc-search-vs-memory-search.md) — choosing between `memex_search` and `memex_note_search`
