@@ -158,8 +158,17 @@ class GraphStrategy:
     - Weighted Context
     """
 
-    def __init__(self, ner_model: FastNERModel | None = None):
+    def __init__(
+        self,
+        ner_model: FastNERModel | None = None,
+        similarity_threshold: float = 0.3,
+        temporal_decay_days: float = 30.0,
+        temporal_decay_base: float = 2.0,
+    ):
         self.ner_model = ner_model
+        self.similarity_threshold = similarity_threshold
+        self.temporal_decay_days = temporal_decay_days
+        self.temporal_decay_base = temporal_decay_base
 
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
@@ -195,7 +204,9 @@ class GraphStrategy:
                 conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
             for name in extracted_names:
                 conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
-                conds_canonical.append(func.similarity(col(Entity.canonical_name), name) > 0.3)
+                conds_canonical.append(
+                    func.similarity(col(Entity.canonical_name), name) > self.similarity_threshold
+                )
 
             seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
 
@@ -206,7 +217,9 @@ class GraphStrategy:
                 conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
             for name in extracted_names:
                 conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
-                conds_alias.append(func.similarity(col(EntityAlias.name), name) > 0.3)
+                conds_alias.append(
+                    func.similarity(col(EntityAlias.name), name) > self.similarity_threshold
+                )
 
             seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
                 or_(*conds_alias)
@@ -218,14 +231,14 @@ class GraphStrategy:
             seed_from_canonical = select(col(Entity.id).label('id')).where(
                 or_(
                     col(Entity.canonical_name).ilike(f'%{query}%'),
-                    func.similarity(col(Entity.canonical_name), query) > 0.3,
+                    func.similarity(col(Entity.canonical_name), query) > self.similarity_threshold,
                 )
             )
 
             seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
                 or_(
                     col(EntityAlias.name).ilike(f'%{query}%'),
-                    func.similarity(col(EntityAlias.name), query) > 0.3,
+                    func.similarity(col(EntityAlias.name), query) > self.similarity_threshold,
                 )
             )
 
@@ -265,7 +278,9 @@ class GraphStrategy:
         # In SQL, we can just use the raw value, exponential of negative is > 1.
         # But let's stick to simple decay for now.
 
-        temporal_score = func.power(2.0, -(days_diff / 30.0))
+        temporal_score = func.power(
+            self.temporal_decay_base, -(days_diff / self.temporal_decay_days)
+        )
 
         first_order = (
             select_first.add_columns((literal(1.0) + temporal_score).label('score'))
@@ -383,8 +398,17 @@ class NoteGraphStrategy:
     Returns Chunk.id + score (higher is better).
     """
 
-    def __init__(self, ner_model: 'FastNERModel | None' = None):
+    def __init__(
+        self,
+        ner_model: 'FastNERModel | None' = None,
+        similarity_threshold: float = 0.3,
+        temporal_decay_days: float = 30.0,
+        temporal_decay_base: float = 2.0,
+    ):
         self.ner_model = ner_model
+        self.similarity_threshold = similarity_threshold
+        self.temporal_decay_days = temporal_decay_days
+        self.temporal_decay_base = temporal_decay_base
 
     def _build_seed_entities(self, query: str) -> Select | CompoundSelect:
         """Build the seed entity query using NER extraction or fallback similarity."""
@@ -408,7 +432,9 @@ class NoteGraphStrategy:
                 conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
             for name in extracted_names:
                 conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
-                conds_canonical.append(func.similarity(col(Entity.canonical_name), name) > 0.3)
+                conds_canonical.append(
+                    func.similarity(col(Entity.canonical_name), name) > self.similarity_threshold
+                )
 
             seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
 
@@ -417,7 +443,9 @@ class NoteGraphStrategy:
                 conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
             for name in extracted_names:
                 conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
-                conds_alias.append(func.similarity(col(EntityAlias.name), name) > 0.3)
+                conds_alias.append(
+                    func.similarity(col(EntityAlias.name), name) > self.similarity_threshold
+                )
 
             seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
                 or_(*conds_alias)
@@ -427,13 +455,13 @@ class NoteGraphStrategy:
             seed_from_canonical = select(col(Entity.id).label('id')).where(
                 or_(
                     col(Entity.canonical_name).ilike(f'%{query}%'),
-                    func.similarity(col(Entity.canonical_name), query) > 0.3,
+                    func.similarity(col(Entity.canonical_name), query) > self.similarity_threshold,
                 )
             )
             seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
                 or_(
                     col(EntityAlias.name).ilike(f'%{query}%'),
-                    func.similarity(col(EntityAlias.name), query) > 0.3,
+                    func.similarity(col(EntityAlias.name), query) > self.similarity_threshold,
                 )
             )
 
@@ -455,7 +483,9 @@ class NoteGraphStrategy:
         days_diff = (
             func.extract('epoch', func.now()) - func.extract('epoch', col(MemoryUnit.event_date))
         ) / 86400.0
-        temporal_score = func.power(2.0, -(days_diff / 30.0))
+        temporal_score = func.power(
+            self.temporal_decay_base, -(days_diff / self.temporal_decay_days)
+        )
 
         include_stale = kwargs.get('include_stale', False)
 

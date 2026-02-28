@@ -44,6 +44,7 @@ dependencies = [
     "regex>=2025.11.3",
     "pymupdf4llm>=0.3.4",
     "cloudscraper>=1.2.71",
+    "slowapi>=0.1.9",
 ]
 
 [build-system]

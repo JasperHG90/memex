@@ -14,6 +14,7 @@ from memex_common.config import (
     MemexConfig,
 )
 from memex_core.context import get_session_id, set_session_id
+from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
@@ -57,6 +58,8 @@ async def lifespan(app: FastAPI):
         memex_logger.addHandler(handler)
 
     config = parse_memex_config()
+    setup_rate_limiting(app, config.server.rate_limit)
+
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
 

@@ -155,3 +155,45 @@ async def test_min_score_filtering(mock_embedder, mock_reranker):
     # Filter with min_score=0.999 (Drop all)
     filtered_none = engine._rerank_results('query', units, min_score=0.999)
     assert len(filtered_none) == 0
+
+
+def test_custom_retrieval_config_propagation():
+    """Test that custom RetrievalConfig values propagate to engine and strategies."""
+    from memex_common.config import RetrievalConfig
+    from memex_core.memory.retrieval.strategies import GraphStrategy
+
+    config = RetrievalConfig(
+        similarity_threshold=0.5,
+        temporal_decay_days=15.0,
+        temporal_decay_base=3.0,
+        rrf_k=40,
+        candidate_pool_size=100,
+    )
+
+    engine = RetrievalEngine(
+        embedder=MagicMock(),
+        retrieval_config=config,
+    )
+
+    # Verify engine-level constants from config
+    assert engine.k_rrf == 40
+    assert engine.candidate_pool_size == 100
+
+    # Verify graph strategy received config values
+    graph_strategy, _ = engine.strategies['graph']
+    assert isinstance(graph_strategy, GraphStrategy)
+    assert graph_strategy.similarity_threshold == 0.5
+    assert graph_strategy.temporal_decay_days == 15.0
+    assert graph_strategy.temporal_decay_base == 3.0
+
+
+def test_default_retrieval_config_when_none():
+    """Test that default config is created when retrieval_config is None."""
+    engine = RetrievalEngine(embedder=MagicMock())
+
+    # Should use defaults from RetrievalConfig
+    assert engine.k_rrf == 60
+    assert engine.candidate_pool_size == 60
+    assert engine.retrieval_config.similarity_threshold == 0.3
+    assert engine.retrieval_config.temporal_decay_days == 30.0
+    assert engine.retrieval_config.temporal_decay_base == 2.0
