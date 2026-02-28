@@ -54,7 +54,7 @@ class DuckDBManager:
                 self.conn.execute(f"ATTACH '{conn_str}' AS postgres (TYPE POSTGRES)")
                 logger.info('Successfully attached Postgres to DuckDB')
 
-        except Exception as e:
+        except (duckdb.Error, OSError, RuntimeError) as e:
             logger.error(f'Failed to attach Postgres to DuckDB: {e}')
             self.conn = None
 

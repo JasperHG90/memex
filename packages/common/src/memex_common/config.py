@@ -57,7 +57,7 @@ class GlobalYamlConfigSettingsSource(PydanticBaseSettingsSource):
             try:
                 with open(config_path, 'r') as f:
                     return yaml.safe_load(f) or {}
-            except Exception as e:
+            except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
                 logger.debug('Failed to load global config from %s: %s', config_path, e)
                 return {}
         return {}
@@ -81,7 +81,7 @@ class LocalYamlConfigSettingsSource(PydanticBaseSettingsSource):
                 try:
                     with open(config_path, 'r') as f:
                         return yaml.safe_load(f) or {}
-                except Exception as e:
+                except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
                     logger.debug('Failed to load config from %s: %s', config_path, e)
                     return {}
             return {}
@@ -101,7 +101,7 @@ class LocalYamlConfigSettingsSource(PydanticBaseSettingsSource):
                     try:
                         with open(p, 'r') as f:
                             return yaml.safe_load(f) or {}
-                    except Exception as e:
+                    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
                         logger.debug('Failed to load local config from %s: %s', p, e)
                         return {}
 

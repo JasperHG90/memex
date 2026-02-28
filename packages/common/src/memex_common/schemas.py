@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 import base64
+import binascii
 
 from memex_common.types import MemexTypes, FactTypes
 from memex_common.mixins import VaultMixin
@@ -30,7 +31,7 @@ def decode_base64(v: Any) -> bytes:
             # We don't return the decoded value, we return the original v
             base64.b64decode(v, validate=True)
             return v
-        except Exception as e:
+        except binascii.Error as e:
             raise ValueError(f'Value is not valid Base64 encoded data: {e}')
     return v
 

@@ -42,7 +42,7 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
         logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
         await api.reflect_batch(requests)
 
-    except Exception as e:
+    except (OSError, RuntimeError, ValueError) as e:
         logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
 
 
@@ -120,7 +120,7 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
             if conn and not conn.is_closed():
                 await conn.close()
             return
-        except Exception as e:
+        except (OSError, asyncpg.PostgresError, RuntimeError) as e:
             logger.error(f'Scheduler: Error: {e}')
             if conn and not conn.is_closed():
                 await conn.close()

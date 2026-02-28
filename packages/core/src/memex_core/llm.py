@@ -5,12 +5,29 @@ from typing import Any, TypeVar
 import dspy
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_core.circuit_breaker import CircuitBreaker
 from memex_core.context import get_session_id
 from memex_core.memory.sql_models import TokenUsage
 
 logger = logging.getLogger('memex.core.llm')
 
 T = TypeVar('T')
+
+# Module-level circuit breaker instance shared across all LLM calls.
+# Initialised with default config; call configure_circuit_breaker() to
+# override from the application's CircuitBreakerConfig.
+_circuit_breaker = CircuitBreaker()
+
+
+def configure_circuit_breaker(breaker: CircuitBreaker) -> None:
+    """Replace the module-level circuit breaker (called during app startup)."""
+    global _circuit_breaker
+    _circuit_breaker = breaker
+
+
+def get_circuit_breaker() -> CircuitBreaker:
+    """Return the module-level circuit breaker (useful for health checks)."""
+    return _circuit_breaker
 
 
 async def run_dspy_operation(
@@ -41,6 +58,9 @@ async def run_dspy_operation(
         tuple(result, TokenUsage)
     """
 
+    # Check circuit breaker before attempting the LLM call
+    await _circuit_breaker.pre_call()
+
     # Shallow copy to isolate history for this specific call
     lm_ = lm.copy()
 
@@ -59,6 +79,9 @@ async def run_dspy_operation(
                 result = await _execute()
         else:
             result = await _execute()
+
+        # Record success with circuit breaker
+        await _circuit_breaker.record_success()
 
         # Extract Usage
         token_usage = TokenUsage()
@@ -111,5 +134,7 @@ async def run_dspy_operation(
         return result, token_usage
 
     except Exception as e:
+        # Record failure with circuit breaker
+        await _circuit_breaker.record_failure()
         logger.error(f'DSPy operation failed: {e}')
         raise
