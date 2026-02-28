@@ -186,7 +186,7 @@ class TestExtractFactsFromChunk:
         expected_exception: type[Exception],
     ) -> None:
         """Test that specific error messages raise OutputTooLongException."""
-        mock_predictor.acall.side_effect = Exception(error_message)
+        mock_predictor.acall.side_effect = RuntimeError(error_message)
 
         with pytest.raises(expected_exception):
             await _extract_facts_from_chunk(
@@ -204,7 +204,7 @@ class TestExtractFactsFromChunk:
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
         """Test that generic errors return empty list and do not crash."""
-        mock_predictor.acall.side_effect = Exception('Some random API error')
+        mock_predictor.acall.side_effect = RuntimeError('Some random API error')
 
         facts, usage = await _extract_facts_from_chunk(
             chunk='test chunk',

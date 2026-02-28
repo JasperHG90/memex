@@ -16,6 +16,7 @@ from memex_core.memory.extraction.models import (
 )
 from memex_core.memory.sql_models import TokenUsage
 from memex_core.api import MemexAPI
+from memex_core.services.ingestion import IngestionService
 
 nest_asyncio.apply()
 runner = CliRunner()
@@ -29,7 +30,6 @@ class MockAsyncClientContext:
         from memex_core.config import parse_memex_config
         from memex_core.storage.metastore import get_metastore
         from memex_core.storage.filestore import get_filestore
-        from memex_core.api import MemexAPI
 
         config = parse_memex_config()
         config.server.memory.extraction.model.model = 'mock-model'
@@ -122,7 +122,9 @@ async def test_cli_memory_add_url_with_vault_name(db_session: AsyncSession, setu
         patch(
             'memex_core.memory.extraction.core.run_dspy_operation', new_callable=AsyncMock
         ) as mock_run_dspy_core,
-        patch('memex_core.api.extract_document_date', new_callable=AsyncMock) as mock_date,
+        patch(
+            'memex_core.services.ingestion.extract_document_date', new_callable=AsyncMock
+        ) as mock_date,
     ):
         mock_fetch.return_value = mock_extracted
         mock_date.return_value = None
@@ -137,10 +139,10 @@ async def test_cli_memory_add_url_with_vault_name(db_session: AsyncSession, setu
         mock_core_prediction.block_summary = BlockSummary(topic='Mock topic', key_points=[])
         mock_run_dspy_core.return_value = (mock_core_prediction, mock_usage)
 
-        # Wrap api.ingest to spy on it
-        original_ingest = MemexAPI.ingest
+        # Wrap IngestionService.ingest to spy on it
+        original_ingest = IngestionService.ingest
         with patch.object(
-            MemexAPI, 'ingest', side_effect=original_ingest, autospec=True
+            IngestionService, 'ingest', side_effect=original_ingest, autospec=True
         ) as mock_ingest:
             # Run CLI
             result = runner.invoke(

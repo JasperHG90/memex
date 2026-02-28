@@ -1,4 +1,4 @@
-"""Tests for document date -> event_date resolution in api.py ingest methods.
+"""Tests for document date -> event_date resolution in ingestion methods.
 
 Verifies the three-strategy chain:
 1. document_date from extraction metadata (web date / file mtime)
@@ -12,8 +12,9 @@ from uuid import uuid4
 
 import pytest
 
-from memex_core.api import MemexAPI, NoteInput
+from memex_core.api import NoteInput
 from memex_core.processing.models import ExtractedContent
+from memex_core.services.ingestion import IngestionService
 
 
 def _make_extracted(document_date: datetime | None = None) -> ExtractedContent:
@@ -44,16 +45,21 @@ class TestIngestFromUrlEventDate:
 
         with (
             patch(
-                'memex_core.api.WebContentProcessor.fetch_and_extract',
+                'memex_core.services.ingestion.WebContentProcessor.fetch_and_extract',
                 new_callable=AsyncMock,
                 return_value=extracted,
             ),
             patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
-            ),
-            patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ) as mock_ingest,
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
+            ),
         ):
             await api.ingest_from_url('https://example.com/article')
 
@@ -69,20 +75,25 @@ class TestIngestFromUrlEventDate:
 
         with (
             patch(
-                'memex_core.api.WebContentProcessor.fetch_and_extract',
+                'memex_core.services.ingestion.WebContentProcessor.fetch_and_extract',
                 new_callable=AsyncMock,
                 return_value=extracted,
             ),
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
             patch(
-                'memex_core.api.extract_document_date',
+                'memex_core.services.ingestion.extract_document_date',
                 new_callable=AsyncMock,
                 return_value=llm_date,
             ) as mock_extract_date,
             patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ) as mock_ingest,
         ):
             await api.ingest_from_url('https://example.com/article')
@@ -98,20 +109,25 @@ class TestIngestFromUrlEventDate:
 
         with (
             patch(
-                'memex_core.api.WebContentProcessor.fetch_and_extract',
+                'memex_core.services.ingestion.WebContentProcessor.fetch_and_extract',
                 new_callable=AsyncMock,
                 return_value=extracted,
             ),
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
             patch(
-                'memex_core.api.extract_document_date',
+                'memex_core.services.ingestion.extract_document_date',
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ) as mock_ingest,
         ):
             await api.ingest_from_url('https://example.com/article')
@@ -128,19 +144,24 @@ class TestIngestFromUrlEventDate:
 
         with (
             patch(
-                'memex_core.api.WebContentProcessor.fetch_and_extract',
+                'memex_core.services.ingestion.WebContentProcessor.fetch_and_extract',
                 new_callable=AsyncMock,
                 return_value=extracted,
             ),
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
             patch(
-                'memex_core.api.extract_document_date',
+                'memex_core.services.ingestion.extract_document_date',
                 new_callable=AsyncMock,
             ) as mock_extract_date,
             patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ),
         ):
             await api.ingest_from_url('https://example.com/article')
@@ -166,15 +187,20 @@ class TestIngestFromFileEventDate:
         )
 
         with (
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
             patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ) as mock_ingest,
         ):
-            api._file_processor = MagicMock()
-            api._file_processor.extract = AsyncMock(return_value=extracted)
+            api._ingestion._file_processor = MagicMock()
+            api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
             await api.ingest_from_file(test_file)
 
@@ -198,20 +224,25 @@ class TestIngestFromFileEventDate:
         llm_date = datetime(2021, 8, 20, tzinfo=timezone.utc)
 
         with (
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
             patch(
-                'memex_core.api.extract_document_date',
+                'memex_core.services.ingestion.extract_document_date',
                 new_callable=AsyncMock,
                 return_value=llm_date,
             ) as mock_extract_date,
             patch.object(
-                MemexAPI, 'ingest', new_callable=AsyncMock, return_value={'status': 'success'}
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
             ) as mock_ingest,
         ):
-            api._file_processor = MagicMock()
-            api._file_processor.extract = AsyncMock(return_value=extracted)
+            api._ingestion._file_processor = MagicMock()
+            api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
             await api.ingest_from_file(test_file)
 
@@ -239,10 +270,12 @@ class TestIngestEventDateToRetainContent:
         mock_memory.retain.return_value = {'unit_ids': ['abc']}
 
         with (
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
-            patch('memex_core.api.AsyncTransaction') as mock_txn_class,
+            patch('memex_core.services.ingestion.AsyncTransaction') as mock_txn_class,
         ):
             mock_txn = AsyncMock()
             mock_txn.__aenter__ = AsyncMock(return_value=mock_txn)
@@ -250,7 +283,7 @@ class TestIngestEventDateToRetainContent:
             mock_txn.db_session = AsyncMock()
             mock_txn_class.return_value = mock_txn
 
-            api.memory = mock_memory
+            api._ingestion.memory = mock_memory
 
             await api.ingest(note, event_date=custom_date)
 
@@ -273,10 +306,12 @@ class TestIngestEventDateToRetainContent:
         mock_memory.retain.return_value = {'unit_ids': ['abc']}
 
         with (
-            patch.object(
-                MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock, return_value=uuid4()
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
             ),
-            patch('memex_core.api.AsyncTransaction') as mock_txn_class,
+            patch('memex_core.services.ingestion.AsyncTransaction') as mock_txn_class,
         ):
             mock_txn = AsyncMock()
             mock_txn.__aenter__ = AsyncMock(return_value=mock_txn)
@@ -284,7 +319,7 @@ class TestIngestEventDateToRetainContent:
             mock_txn.db_session = AsyncMock()
             mock_txn_class.return_value = mock_txn
 
-            api.memory = mock_memory
+            api._ingestion.memory = mock_memory
 
             before = datetime.now(timezone.utc)
             await api.ingest(note, event_date=None)

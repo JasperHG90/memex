@@ -32,7 +32,7 @@ async def test_reranking_failure_fallback(mock_embedder, mock_session):
     """Test that engine falls back to RRF order if reranking fails."""
     # Setup Reranker that raises Exception
     mock_reranker = MagicMock()
-    mock_reranker.score.side_effect = Exception('Reranking Service Down')
+    mock_reranker.score.side_effect = RuntimeError('Reranking Service Down')
 
     engine = RetrievalEngine(embedder=mock_embedder, reranker=mock_reranker)
 

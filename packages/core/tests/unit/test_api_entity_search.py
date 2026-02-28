@@ -36,6 +36,10 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_config = MagicMock()
     mock_config.server.memory.extraction.model.model = 'test-model'
     mock_config.server.active_vault = 'global'
+    mock_config.server.attached_vaults = []
+    mock_config.server.logging.level = 'WARNING'
+    mock_config.server.logging.json_output = False
+    mock_config.server.host = '127.0.0.1'
 
     # Configure mock_metastore to support lifespan initialization
     mock_metastore.connect = AsyncMock()
@@ -50,11 +54,20 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
 
     app.dependency_overrides[get_api] = lambda: api
 
-    # Patch lifespan dependencies
+    # Patch lifespan dependencies (including MemexAPI to avoid real construction,
+    # setup_auth/setup_rate_limiting to avoid "Cannot add middleware" errors)
     with (
         patch('memex_core.server.get_metastore', return_value=mock_metastore),
         patch('memex_core.server.get_filestore', return_value=mock_filestore),
         patch('memex_core.server.parse_memex_config', return_value=mock_config),
+        patch('memex_core.server.setup_auth'),
+        patch('memex_core.server.setup_rate_limiting'),
+        patch('memex_core.server.configure_logging'),
+        patch('memex_core.server.MemexAPI', return_value=api),
+        patch('memex_core.server.get_embedding_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_reranking_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_ner_model', new_callable=AsyncMock),
+        patch('memex_core.server.run_scheduler_with_leader_election', new_callable=AsyncMock),
     ):
         with TestClient(app) as client:
             response = client.get('/api/v1/entities?q=match')

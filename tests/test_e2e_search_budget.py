@@ -48,8 +48,8 @@ async def test_api_search_propagates_budget(mock_deps):
         api._retrieval = mock_retrieval
         api.memory.retrieval = mock_retrieval
 
-        # Mock vault resolution
-        api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+        # Mock vault resolution on the VaultService used by SearchService
+        api._vaults.resolve_vault_identifier = AsyncMock(return_value=uuid4())
 
         # Test 1: No budget passed -> Should pass None (Engine handles default)
         await api.search('query')

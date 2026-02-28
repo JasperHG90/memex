@@ -353,7 +353,10 @@ class TestShortCircuit:
             patch.object(
                 extractor, '_persist_page_index_nodes_and_blocks', new_callable=AsyncMock
             ) as mock_persist,
-            patch.object(extractor, '_track_document', new_callable=AsyncMock),
+            patch(
+                'memex_core.memory.extraction.engine.track_document',
+                new_callable=AsyncMock,
+            ),
         ):
             mock_persist.return_value = ([], {})
 

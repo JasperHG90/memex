@@ -48,6 +48,7 @@ async def test_phase_0_update_logic_happy_path():
     # Ensure config.server.memory.extraction.max_concurrency and model_name are safe if accessed
     mock_config.server.memory.extraction.max_concurrency = 5
     mock_config.server.memory.extraction.model.model = 'test-model'
+    mock_config.server.memory.reflection.model.model = 'test-model'
 
     engine = ReflectionEngine(session=AsyncMock(), config=mock_config, embedder=MagicMock())
     engine.lm = MagicMock()  # Mock LM presence
@@ -105,6 +106,7 @@ async def test_phase_0_contradiction_handling():
     memories = [MemoryUnit(id=uuid4(), content='Sky is green')]
 
     mock_config = MagicMock()
+    mock_config.server.memory.reflection.model.model = 'test-model'
     engine = ReflectionEngine(session=AsyncMock(), config=mock_config, embedder=MagicMock())
     engine.lm = MagicMock()
 
@@ -139,6 +141,7 @@ async def test_phase_0_none_id_handling():
     memories = [MemoryUnit(id=uuid4(), content='Something')]
 
     mock_config = MagicMock()
+    mock_config.server.memory.reflection.model.model = 'test-model'
     engine = ReflectionEngine(session=AsyncMock(), config=mock_config, embedder=MagicMock())
     engine.lm = MagicMock()
 
@@ -181,6 +184,7 @@ async def test_phase_0_out_of_bounds_handling():
     memories = [MemoryUnit(id=uuid4(), content='X')]  # Length 1
 
     mock_config = MagicMock()
+    mock_config.server.memory.reflection.model.model = 'test-model'
     engine = ReflectionEngine(session=AsyncMock(), config=mock_config, embedder=MagicMock())
     engine.lm = MagicMock()
 

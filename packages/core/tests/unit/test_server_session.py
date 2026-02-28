@@ -12,6 +12,8 @@ def mock_lifespan_dependencies():
         patch('memex_core.server.get_filestore'),
         patch('memex_core.server.run_scheduler_with_leader_election'),
         patch('memex_core.server.parse_memex_config') as mock_conf,
+        patch('memex_core.server.setup_auth'),
+        patch('memex_core.server.setup_rate_limiting'),
     ):
         # Configure metastore mock
         mock_metastore = MagicMock()

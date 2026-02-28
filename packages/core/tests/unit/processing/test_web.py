@@ -1,4 +1,5 @@
 import pytest
+import requests  # type: ignore[import-untyped]
 from unittest.mock import patch, MagicMock
 from memex_core.processing.web import WebContentProcessor, _parse_document_date
 
@@ -64,7 +65,7 @@ async def test_fetch_and_extract_failure_download():
     with patch('memex_core.processing.web.cloudscraper.create_scraper') as mock_create_scraper:
         mock_scraper = MagicMock()
         # Mock get to raise exception
-        mock_scraper.get.side_effect = Exception('Download error')
+        mock_scraper.get.side_effect = requests.RequestException('Download error')
         mock_create_scraper.return_value = mock_scraper
 
         with pytest.raises(ValueError, match='Failed to fetch'):

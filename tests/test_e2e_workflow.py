@@ -1,6 +1,6 @@
 import base64
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from uuid import UUID
@@ -78,7 +78,11 @@ def test_workflow_ingest_retrieve(client: TestClient):
         note_content = b'Alice is a software engineer who lives in Wonderland.'
         b64_content = base64.b64encode(note_content).decode('utf-8')
 
-        with patch('memex_core.api.MemexAPI.resolve_vault_identifier', return_value=vault_id):
+        with patch(
+            'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+            new_callable=AsyncMock,
+            return_value=vault_id,
+        ):
             payload = {
                 'name': 'Alice Bio',
                 'description': 'Bio of Alice',

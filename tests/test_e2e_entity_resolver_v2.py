@@ -44,7 +44,11 @@ def test_entity_type_partitioning_e2e(client: TestClient):
     with (
         patch(extract_path, new_callable=AsyncMock) as mock_extract,
         patch(embed_path, return_value=[[0.1] * 384]),
-        patch('memex_core.api.MemexAPI.resolve_vault_identifier', return_value=vault_id),
+        patch(
+            'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+            new_callable=AsyncMock,
+            return_value=vault_id,
+        ),
     ):
         mock_extract.return_value = (
             [fact_org],
@@ -77,7 +81,11 @@ def test_entity_type_partitioning_e2e(client: TestClient):
     with (
         patch(extract_path, new_callable=AsyncMock) as mock_extract,
         patch(embed_path, return_value=[[-0.1] * 384]),
-        patch('memex_core.api.MemexAPI.resolve_vault_identifier', return_value=vault_id),
+        patch(
+            'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+            new_callable=AsyncMock,
+            return_value=vault_id,
+        ),
     ):
         mock_extract.return_value = (
             [fact_tech],

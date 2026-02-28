@@ -144,7 +144,9 @@ async def test_cli_memory_search(db_session: AsyncSession, setup_cli_e2e):
         patch(
             'memex_core.memory.retrieval.engine.get_embedding_model', return_value=MockEmbedder()
         ),
-        patch('memex_core.api.run_dspy_operation', new_callable=AsyncMock) as mock_run_dspy,
+        patch(
+            'memex_core.services.search.run_dspy_operation', new_callable=AsyncMock
+        ) as mock_run_dspy,
     ):
         mock_run_dspy.return_value = (mock_prediction, mock_usage)
         result = runner.invoke(

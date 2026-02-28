@@ -51,7 +51,7 @@ async def test_extract_pdf_failure(file_processor):
     with patch('memex_core.processing.files.Path.exists', return_value=True):
         with patch(
             'memex_core.processing.files.pymupdf4llm.to_markdown',
-            side_effect=Exception('PDF error'),
+            side_effect=RuntimeError('PDF error'),
         ):
             with pytest.raises(ValueError, match='PDF extraction failed'):
                 await file_processor.extract('bad.pdf')
@@ -69,7 +69,7 @@ async def test_extract_markitdown_failure(file_processor):
     with patch('memex_core.processing.files.Path.exists', return_value=True):
         with patch(
             'memex_core.processing.files.MarkItDown.convert',
-            side_effect=Exception('Conversion error'),
+            side_effect=RuntimeError('Conversion error'),
         ):
             with pytest.raises(ValueError, match='Extraction failed'):
                 await file_processor.extract('corrupt.pptx')

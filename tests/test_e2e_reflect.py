@@ -56,15 +56,7 @@ async def test_cli_reflect_e2e(db_session: AsyncSession, setup_cli_e2e):
     db_session.add(queue_item)
     await db_session.commit()
 
-    # 2. Mock API Response
-    from memex_common.schemas import ReflectionResultDTO, ObservationDTO
-
-    mock_result = ReflectionResultDTO(
-        entity_id=entity_id,
-        new_observations=[ObservationDTO(title='New Insight', content='Alice is actually a cat.')],
-        status='success',
-    )
-
+    # 2. Run reflection through the server
     async with lifespan(server_app):
         with (
             patch('memex_cli.utils.httpx.AsyncClient') as mock_client_class,
@@ -75,10 +67,8 @@ async def test_cli_reflect_e2e(db_session: AsyncSession, setup_cli_e2e):
             mock_client_class.return_value = mock_client
 
             with patch.object(
-                server_app.state.api, 'reflect_batch', new_callable=AsyncMock
+                server_app.state.api, 'background_reflect_batch', new_callable=AsyncMock
             ) as mock_reflect:
-                mock_reflect.return_value = [mock_result]
-
                 # 3. Run CLI
                 result = runner.invoke(app, ['memory', 'reflect', str(entity_id)], env=os.environ)
 
