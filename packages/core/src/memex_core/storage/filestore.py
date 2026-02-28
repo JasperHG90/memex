@@ -50,10 +50,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         """
         if not self.config.root:
             raise ValueError('Root path is not set.')
-        if os.path.isabs(key):
-            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
         root_real = os.path.realpath(self.config.root)
-        joined = os.path.realpath(os.path.join(root_real, key))
+        joined = os.path.realpath(os.path.join(root_real, key.lstrip('/')))
         if not joined.startswith(root_real + os.sep) and joined != root_real:
             raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
         return joined

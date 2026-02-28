@@ -10,6 +10,13 @@ def store(tmp_path: Path) -> LocalAsyncFileStore:
     return LocalAsyncFileStore(config)
 
 
+@pytest.fixture
+def fresh_store(tmp_path: Path) -> LocalAsyncFileStore:
+    """Store without LRU cache interference for path traversal tests."""
+    config = LocalFileStoreConfig(root=str(tmp_path))
+    return LocalAsyncFileStore(config)
+
+
 @pytest.mark.parametrize(
     ('key', 'expected_suffix'),
     [
@@ -157,3 +164,49 @@ async def test_deferred_delete(store: LocalAsyncFileStore) -> None:
 
     # Now should be gone
     assert await store.exists(key) is False
+
+
+class TestPathTraversalPrevention:
+    """Tests for path traversal vulnerability fix in join_path()."""
+
+    def test_normal_path(self, fresh_store: LocalAsyncFileStore, tmp_path: Path) -> None:
+        result = fresh_store.join_path('notes/test.txt')
+        assert result == str(tmp_path / 'notes' / 'test.txt')
+
+    def test_nested_path(self, fresh_store: LocalAsyncFileStore, tmp_path: Path) -> None:
+        result = fresh_store.join_path('a/b/c/file.md')
+        assert result == str(tmp_path / 'a' / 'b' / 'c' / 'file.md')
+
+    def test_root_path(self, fresh_store: LocalAsyncFileStore, tmp_path: Path) -> None:
+        result = fresh_store.join_path('')
+        assert result == str(tmp_path)
+
+    def test_traversal_dotdot(self, fresh_store: LocalAsyncFileStore) -> None:
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            fresh_store.join_path('../../etc/passwd')
+
+    def test_traversal_single_dotdot(self, fresh_store: LocalAsyncFileStore) -> None:
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            fresh_store.join_path('..')
+
+    def test_traversal_nested_dotdot(self, fresh_store: LocalAsyncFileStore) -> None:
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            fresh_store.join_path('foo/../../../etc/shadow')
+
+    def test_leading_slash_stays_under_root(
+        self, fresh_store: LocalAsyncFileStore, tmp_path: Path
+    ) -> None:
+        """Leading slashes are stripped, so /etc/passwd resolves under root."""
+        result = fresh_store.join_path('/etc/passwd')
+        assert result == str(tmp_path / 'etc' / 'passwd')
+
+    def test_traversal_dotdot_at_end(self, fresh_store: LocalAsyncFileStore) -> None:
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            fresh_store.join_path('subdir/../../..')
+
+    def test_safe_dotdot_within_root(
+        self, fresh_store: LocalAsyncFileStore, tmp_path: Path
+    ) -> None:
+        """A .. that still resolves under root is allowed."""
+        result = fresh_store.join_path('a/b/../c.txt')
+        assert result == str(tmp_path / 'a' / 'c.txt')
