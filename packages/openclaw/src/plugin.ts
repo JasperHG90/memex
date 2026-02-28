@@ -66,16 +66,12 @@ const memexPlugin = {
             limit?: number;
             token_budget?: number;
           };
-          const origLimit = cfg.searchLimit;
-          const origTokenBudget = cfg.tokenBudget;
-          if (limit != null) cfg.searchLimit = limit;
-          if (token_budget != null) cfg.tokenBudget = token_budget;
 
           const effectiveLimit = limit ?? cfg.searchLimit;
           try {
-            const memories = (await client.searchMemories(query)).slice(0, effectiveLimit);
-            cfg.searchLimit = origLimit;
-            cfg.tokenBudget = origTokenBudget;
+            const memories = (
+              await client.searchMemories(query, undefined, { limit: effectiveLimit, token_budget })
+            ).slice(0, effectiveLimit);
 
             if (memories.length === 0) {
               return {
@@ -93,8 +89,6 @@ const memexPlugin = {
               details: { count: memories.length },
             };
           } catch (err) {
-            cfg.searchLimit = origLimit;
-            cfg.tokenBudget = origTokenBudget;
             return {
               content: [{ type: 'text', text: `Memex search failed: ${String(err)}` }],
               details: { error: String(err) },
@@ -532,10 +526,10 @@ const memexPlugin = {
           .option('--limit <n>', 'Max results', '8')
           .action(async (query: string, opts: { limit: string }) => {
             const limit = parseInt(opts.limit, 10) || 8;
-            const origLimit = cfg.searchLimit;
-            cfg.searchLimit = limit;
             try {
-              const memories = (await client.searchMemories(query)).slice(0, limit);
+              const memories = (
+                await client.searchMemories(query, undefined, { limit })
+              ).slice(0, limit);
               for (const m of memories) {
                 console.log(`[${m.fact_type}] ${m.text}`);
               }
@@ -543,7 +537,6 @@ const memexPlugin = {
             } catch (err) {
               console.error(`Search failed: ${String(err)}`);
             }
-            cfg.searchLimit = origLimit;
           });
       },
       { commands: ['memex'] },

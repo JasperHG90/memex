@@ -86,15 +86,23 @@ export class MemexClient {
    * POST /api/v1/memories/search
    * Returns a stream of MemoryUnitDTO via NDJSON.
    */
-  async searchMemories(query: string, signal?: AbortSignal): Promise<MemoryUnitDTO[]> {
+  async searchMemories(
+    query: string,
+    signal?: AbortSignal,
+    overrides?: { limit?: number; token_budget?: number | null },
+  ): Promise<MemoryUnitDTO[]> {
     await this.ensureVault();
     const vaultIdentifier = this.config.vaultId ?? this.config.vaultName;
+    const effectiveLimit = overrides?.limit ?? this.config.searchLimit;
+    const effectiveTokenBudget = overrides?.token_budget !== undefined
+      ? overrides.token_budget
+      : this.config.tokenBudget;
     const request: MemorySearchRequest = {
       query,
-      limit: this.config.searchLimit,
+      limit: effectiveLimit,
       skip_opinion_formation: true,
       vault_ids: [vaultIdentifier],
-      ...(this.config.tokenBudget != null && { token_budget: this.config.tokenBudget }),
+      ...(effectiveTokenBudget != null && { token_budget: effectiveTokenBudget }),
     };
 
     const response = await fetch(`${this.baseUrl}/api/v1/memories/search`, {

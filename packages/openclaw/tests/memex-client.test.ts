@@ -161,6 +161,55 @@ describe('MemexClient', () => {
         'http://localhost:8000/api/v1/memories/search',
       );
     });
+
+    it('uses overrides.limit instead of config.searchLimit', async () => {
+      const config = makeConfig({ searchLimit: 8 });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query', undefined, { limit: 3 });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.limit).toBe(3);
+    });
+
+    it('uses overrides.token_budget instead of config.tokenBudget', async () => {
+      const config = makeConfig({ tokenBudget: null });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query', undefined, { token_budget: 5000 });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.token_budget).toBe(5000);
+    });
+
+    it('does not mutate config when overrides are provided', async () => {
+      const config = makeConfig({ searchLimit: 8, tokenBudget: null });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query', undefined, { limit: 3, token_budget: 5000 });
+
+      expect(config.searchLimit).toBe(8);
+      expect(config.tokenBudget).toBeNull();
+    });
+
+    it('falls back to config values when overrides are not provided', async () => {
+      const config = makeConfig({ searchLimit: 12, tokenBudget: 2000 });
+      const client = new MemexClient(config);
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('query', undefined, {});
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.limit).toBe(12);
+      expect(body.token_budget).toBe(2000);
+    });
   });
 
   // -----------------------------------------------------------------------
