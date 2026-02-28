@@ -26,17 +26,17 @@ SERVICE = 'dashboard'
 
 
 def _get_dashboard_dir() -> Path:
-    """Locate the dashboard-ui directory."""
+    """Locate the dashboard directory."""
     # Check relative to this package (monorepo layout)
-    mono_path = Path(__file__).parent.parent.parent.parent.parent / 'dashboard-ui'
+    mono_path = Path(__file__).parent.parent.parent.parent.parent / 'dashboard'
     if mono_path.exists():
         return mono_path
     # Check common install location
-    return Path(user_data_dir('memex')) / 'dashboard-ui'
+    return Path(user_data_dir('memex')) / 'dashboard'
 
 
 def check_dashboard_installed() -> None:
-    """Verify Node.js is available and dashboard-ui exists."""
+    """Verify Node.js is available and dashboard exists."""
     if not shutil.which('node'):
         console.print('[bold red]Error:[/bold red] Node.js is not installed or not on PATH.')
         console.print('Install Node.js from: [cyan]https://nodejs.org/[/cyan]')
@@ -45,7 +45,7 @@ def check_dashboard_installed() -> None:
     dashboard_dir = _get_dashboard_dir()
     if not dashboard_dir.exists():
         console.print(f'[bold red]Error:[/bold red] Dashboard UI not found at {dashboard_dir}')
-        console.print('Run: [cyan]cd packages/dashboard-ui && npm install[/cyan]')
+        console.print('Run: [cyan]cd packages/dashboard && npm install[/cyan]')
         raise typer.Exit(1)
 
 
@@ -93,7 +93,7 @@ def start(
         if not dist_dir.exists():
             console.print(
                 '[bold red]Error:[/bold red] Production build not found. '
-                'Run [cyan]npm run build[/cyan] in the dashboard-ui directory first.'
+                'Run [cyan]npm run build[/cyan] in the dashboard directory first.'
             )
             raise typer.Exit(1)
         cmd = ['npx', 'serve', 'dist', '-l', f'tcp://{host}:{port}']

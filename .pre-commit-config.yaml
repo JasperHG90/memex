@@ -41,15 +41,15 @@ repos:
 
   - repo: local
     hooks:
-      - id: dashboard-ui-eslint
-        name: eslint (dashboard-ui)
-        entry: bash -c 'cd packages/dashboard-ui && npx eslint --max-warnings=0 src'
+      - id: dashboard-eslint
+        name: eslint (dashboard)
+        entry: bash -c 'cd packages/dashboard && npx eslint --max-warnings=0 src'
         language: system
-        files: ^packages/dashboard-ui/src/.*\.(ts|tsx)$
+        files: ^packages/dashboard/src/.*\.(ts|tsx)$
         pass_filenames: false
-      - id: dashboard-ui-typecheck
-        name: tsc (dashboard-ui)
-        entry: bash -c 'cd packages/dashboard-ui && npx tsc --noEmit -p tsconfig.app.json'
+      - id: dashboard-typecheck
+        name: tsc (dashboard)
+        entry: bash -c 'cd packages/dashboard && npx tsc --noEmit -p tsconfig.app.json'
         language: system
-        files: ^packages/dashboard-ui/.*\.(ts|tsx)$
+        files: ^packages/dashboard/.*\.(ts|tsx)$
         pass_filenames: false

@@ -15,7 +15,7 @@
 **Status:** [x]
 **Priority:** P0 (blocking everything)
 
-Initialize `packages/dashboard-ui/` with:
+Initialize `packages/dashboard/` with:
 ```bash
 npm create vite@latest . -- --template react-ts
 ```
@@ -374,16 +374,16 @@ Port from `components/sidebar.py`. Build `src/components/layout/sidebar.tsx`:
 Add to root `justfile`:
 ```
 # Start new dashboard in dev mode
-dashboard-ui-dev:
-  cd packages/dashboard-ui && npm run dev
+dashboard-dev:
+  cd packages/dashboard && npm run dev
 
 # Build new dashboard for production
-dashboard-ui-build:
-  cd packages/dashboard-ui && npm run build
+dashboard-build:
+  cd packages/dashboard && npm run build
 
 # Generate API types from OpenAPI spec
-dashboard-ui-generate-api:
-  cd packages/dashboard-ui && npm run generate-api
+dashboard-generate-api:
+  cd packages/dashboard && npm run generate-api
 ```
 
 **package.json** scripts:
@@ -401,7 +401,7 @@ dashboard-ui-generate-api:
 }
 ```
 
-**Acceptance:** `just dashboard-ui-dev` works, `just dashboard-ui-build` produces dist/.
+**Acceptance:** `just dashboard-dev` works, `just dashboard-build` produces dist/.
 
 ---
 
@@ -586,13 +586,13 @@ Rewrite `packages/cli/src/memex_cli/dashboard.py`:
 
 **`check_dashboard_installed()`**:
 - Check for `node` and `npm` on PATH using `shutil.which()`
-- Locate dashboard-ui directory: check sibling `packages/dashboard-ui/` or installed location
+- Locate dashboard directory: check sibling `packages/dashboard/` or installed location
 - Verify `package.json` exists
 
 **Remove** `_get_dashboard_pkg_root()` and `_setup_runtime_cwd()` entirely.
 
 **`start` command**:
-- `--dev` mode: `npm run dev -- --host {host} --port {port}` in dashboard-ui dir
+- `--dev` mode: `npm run dev -- --host {host} --port {port}` in dashboard dir
 - Production mode: `npx serve dist -l tcp://{host}:{port}` (requires `npm run build` first)
 - `--daemon` mode: same `subprocess.Popen` pattern with npm commands
 - Keep port check, PID management, log file logic
@@ -615,7 +615,7 @@ Rewrite `packages/cli/src/memex_cli/dashboard.py`:
 ```python
 elif cmd_name == 'dashboard':
     console.print('[bold red]Error:[/bold red] Dashboard requires Node.js.')
-    console.print('Install Node.js and run: [cyan]cd packages/dashboard-ui && npm install[/cyan]')
+    console.print('Install Node.js and run: [cyan]cd packages/dashboard && npm install[/cyan]')
     raise typer.Exit(code=1)
 ```
 
@@ -656,7 +656,7 @@ This allows the frontend to call `/api/v1/...` without CORS issues during develo
 **Priority:** P3
 
 - Remove old `packages/dashboard/` references if any
-- Ensure `just dashboard-ui-dev` and `just dashboard-ui-build` are the canonical commands
+- Ensure `just dashboard-dev` and `just dashboard-build` are the canonical commands
 
 ---
 
