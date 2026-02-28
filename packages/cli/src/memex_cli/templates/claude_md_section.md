@@ -5,26 +5,55 @@
 Access Memex (long-term memory) via MCP tools. Build persistent knowledge across sessions.
 
 <constraint name="proactive-memory-capture" priority="critical">
-### Capture
+### Capture — MANDATORY
 
-You MUST call `memex_add_note` (with `background: true`) at these trigger points:
+You MUST call `memex_add_note` (with `background: true`, `author: "claude-code"`) at these trigger points. This is not optional — failing to save important context means future sessions lose valuable knowledge.
 
-1. **After completing a multi-step task** — summarize what was done, key decisions, and outcome
-2. **After diagnosing a bug root cause** — record the symptom, root cause, and fix
-3. **After making an architectural decision** — capture the decision, alternatives considered, and rationale
-4. **After learning a user preference** — record workflow preferences, tool choices, or communication style
+**Trigger checklist (run this mentally before finishing any substantive turn):**
+
+1. **Completed a multi-step task?** → Save what was done, key decisions, and outcome
+2. **Diagnosed a bug root cause?** → Save the symptom, root cause, and fix
+3. **Made or discovered an architectural decision?** → Save the decision, alternatives, and rationale
+4. **Learned a user preference or workflow pattern?** → Save it for future sessions
+5. **Resolved a tricky configuration or environment issue?** → Save the solution
+
+If ANY of the above apply, call `memex_add_note` IMMEDIATELY — do not wait until later.
+
+A Stop hook will remind you at the end of each turn. When you see the "MEMORY CHECK" message, evaluate the checklist and act.
+
+#### Example of a good memory note
+
+```
+title: "Fix: connection pool exhaustion under concurrent reflection"
+tags: ["bugfix", "postgresql", "reflection", "connection-pool"]
+description: "Root cause and fix for connection pool exhaustion during concurrent reflection tasks."
+markdown_content: |
+  ## Problem
+  Reflection tasks running concurrently exhaust the PostgreSQL connection pool,
+  causing asyncpg.exceptions.TooManyConnectionsError.
+
+  ## Root Cause
+  Each reflection task called asyncpg.connect() directly instead of using the shared pool.
+
+  ## Fix
+  Changed ReflectionWorker to accept a connection pool in its constructor
+  and use pool.acquire() for each task.
+```
 
 #### What NOT to capture
 
-- Trivial exchanges or routine code edits
-- Debugging noise (intermediate failed attempts)
+- Trivial exchanges or routine code edits (formatting, typos)
+- Intermediate debugging attempts that did not lead to a solution
 - Information already in the codebase (README, CLAUDE.md, docstrings)
+- Routine file reads or searches with no novel findings
 
 #### How to capture
 
-- Use a **descriptive title** (not "Untitled" or "Note")
+- Use a **descriptive title** — include the type: "Fix:", "Decision:", "Pattern:", "Config:"
 - Include **context**: what project, what problem, what was decided
 - Add **tags** for retrieval (e.g., `["architecture", "auth", "decision"]`)
+- Always set `background: true` to avoid blocking the conversation
+- Always set `author: "claude-code"`
 </constraint>
 
 ### Retrieval

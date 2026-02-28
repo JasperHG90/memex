@@ -23,6 +23,13 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Maximize2, Minimize2, Loader2, Share2 } from 'lucide-react';
 import { useEntity } from '@/api/hooks/use-entities';
 import { VaultBadge } from '@/components/shared/vault-badge';
@@ -42,10 +49,11 @@ export default function EntityGraph() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [detailEntityId, setDetailEntityId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [entityLimit, setEntityLimit] = useState(100);
 
   // Fetch entities sorted by mention count (top entities), scoped by vault
   const { data: entities, isLoading: entitiesLoading } = useEntities({
-    limit: 100,
+    limit: entityLimit,
     sort: '-mentions',
     vaultIds,
   });
@@ -94,6 +102,20 @@ export default function EntityGraph() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          <Select
+            value={String(entityLimit)}
+            onValueChange={(v) => setEntityLimit(Number(v))}
+          >
+            <SelectTrigger className="h-8 w-[100px] text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="50">50</SelectItem>
+              <SelectItem value="100">100</SelectItem>
+              <SelectItem value="200">200</SelectItem>
+              <SelectItem value="500">500</SelectItem>
+            </SelectContent>
+          </Select>
           {entities && entities.length > 0 && (
             <EntitySearch entities={entities} onSelect={handleSearchSelect} />
           )}

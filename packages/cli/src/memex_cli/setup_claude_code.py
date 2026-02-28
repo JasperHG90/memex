@@ -46,6 +46,8 @@ _HOOK_TEMPLATES: list[tuple[str, str]] = [
     ('on_pre_compact.sh', 'hooks/on_pre_compact.sh'),
     ('on_session_end.sh', 'hooks/on_session_end.sh'),
     ('on_post_commit.sh', 'hooks/on_post_commit.sh'),
+    ('on_stop.sh', 'hooks/on_stop.sh'),
+    ('on_post_write.sh', 'hooks/on_post_write.sh'),
 ]
 
 _PROJECT_DIR_PLACEHOLDER = '__PROJECT_DIR__'
@@ -109,6 +111,16 @@ def _build_hooks_config(
                 ],
             },
         ],
+        'Stop': [
+            {
+                'hooks': [
+                    {
+                        'type': 'command',
+                        'command': str(hooks_dir / 'on_stop.sh'),
+                    },
+                ],
+            },
+        ],
     }
 
     hooks['PostToolUse'] = [
@@ -118,6 +130,15 @@ def _build_hooks_config(
                 {
                     'type': 'command',
                     'command': str(hooks_dir / 'on_post_commit.sh'),
+                },
+            ],
+        },
+        {
+            'matcher': 'Write|Edit',
+            'hooks': [
+                {
+                    'type': 'command',
+                    'command': str(hooks_dir / 'on_post_write.sh'),
                 },
             ],
         },
@@ -331,6 +352,8 @@ async def setup_claude_code(
             ('on_session_start.sh', True),
             ('on_pre_compact.sh', True),
             ('on_post_commit.sh', True),
+            ('on_stop.sh', True),
+            ('on_post_write.sh', True),
             ('on_session_end.sh', with_session_tracking),
         ]
 
@@ -366,7 +389,7 @@ async def setup_claude_code(
 
     # --- Summary --------------------------------------------------------------
     if hooks_enabled:
-        hook_names = 'SessionStart + PreCompact + PostToolUse'
+        hook_names = 'SessionStart + PreCompact + PostToolUse + Stop'
         if with_session_tracking:
             hook_names += ' + SessionEnd'
         hooks_status = f'Hooks: Enabled ({hook_names})'

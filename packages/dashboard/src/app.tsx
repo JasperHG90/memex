@@ -6,11 +6,14 @@ import { CommandPalette } from '@/components/command-palette'
 import { WelcomeModal } from '@/components/onboarding/welcome-modal'
 import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useConnectionStatus } from '@/hooks/use-connection-status'
+import { useVaultInit } from '@/hooks/use-vault-init'
 import { useUIStore } from '@/stores/ui-store'
 
 export default function App() {
   const { isConnected } = useConnectionStatus()
   const { toggleCommandPalette, toggleQuickNote, setCommandPaletteOpen } = useUIStore()
+
+  useVaultInit()
 
   useKeyboardShortcuts({
     onCommandPalette: toggleCommandPalette,

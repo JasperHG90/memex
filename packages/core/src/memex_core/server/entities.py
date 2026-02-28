@@ -35,7 +35,7 @@ async def list_entities(
     sort: Literal['-mentions'] | None = Query(
         None, description='Sort option: -mentions for top by mention count'
     ),
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """
     List entities.
@@ -44,21 +44,22 @@ async def list_entities(
     - limit: Maximum number of entities to return
     - q: Optional search query for name-based search
     - sort: Optional sort option. Use '-mentions' for top entities by mention count.
-    - vault_id: Optional vault ID to filter by.
+    - vault_id: Optional vault ID(s) to filter by. Repeat for multiple vaults.
     """
+    vault_ids = vault_id if vault_id else None
     if q:
         try:
-            entities = await api.search_entities(query=q, limit=limit, vault_id=vault_id)
+            entities = await api.search_entities(query=q, limit=limit, vault_ids=vault_ids)
             return ndjson_response([build_entity_dto(e) for e in entities])
         except Exception as e:
             raise _handle_error(e, 'Entity search failed')
 
     if sort == '-mentions':
-        entities = await api.get_top_entities(limit=limit, vault_id=vault_id)
+        entities = await api.get_top_entities(limit=limit, vault_ids=vault_ids)
         return ndjson_response([build_entity_dto(e) for e in entities])
 
     async def ranked_stream():
-        async for entity in api.list_entities_ranked(limit=limit, vault_id=vault_id):
+        async for entity in api.list_entities_ranked(limit=limit, vault_ids=vault_ids):
             yield build_entity_dto(entity)
 
     return await async_ndjson_response(ranked_stream())
@@ -72,12 +73,13 @@ async def list_entities(
 async def get_bulk_cooccurrences(
     ids: str,
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """Get co-occurrences for a set of entity IDs."""
     try:
         id_list = [UUID(i.strip()) for i in ids.split(',') if i.strip()]
-        cos = await api.get_bulk_cooccurrences(id_list, vault_id=vault_id)
+        vault_ids = vault_id if vault_id else None
+        cos = await api.get_bulk_cooccurrences(id_list, vault_ids=vault_ids)
         items = [
             {
                 'entity_id_1': c.entity_id_1,
@@ -101,11 +103,12 @@ async def get_entity_mentions(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: int = 20,
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """Get mentions for an entity."""
     try:
-        results = await api.get_entity_mentions(id, limit=limit, vault_id=vault_id)
+        vault_ids = vault_id if vault_id else None
+        results = await api.get_entity_mentions(id, limit=limit, vault_ids=vault_ids)
         items = [
             {
                 'unit': MemoryUnitDTO(
@@ -148,11 +151,12 @@ async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
 async def get_entity_cooccurrences(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
 ):
     """Get co-occurrence edges for an entity."""
     try:
-        cos = await api.get_entity_cooccurrences(id, vault_id=vault_id)
+        vault_ids = vault_id if vault_id else None
+        cos = await api.get_entity_cooccurrences(id, vault_ids=vault_ids)
         items = [
             {
                 'entity_id_1': c.entity_id_1,

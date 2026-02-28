@@ -1046,7 +1046,7 @@ ingested_at: {now}
             return list((await session.exec(stmt)).all())
 
     async def list_entities_ranked(
-        self, limit: int = 100, vault_id: UUID | None = None
+        self, limit: int = 100, vault_ids: list[UUID] | None = None
     ) -> AsyncGenerator[Any, None]:
         """
         Stream entities ranked by hybrid score.
@@ -1073,25 +1073,22 @@ ingested_at: {now}
             .group_by(Entity.id)
         ).subquery()
 
-        stmt = (
-            select(Entity)
-            .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
-            .order_by(
-                desc(
-                    0.4 * Entity.mention_count
-                    + 0.4 * Entity.retrieval_count
-                    + 0.2 * centrality_stmt.c.centrality
-                )
-            )
-            .limit(limit)
-        )
+        stmt = select(Entity).join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
 
-        if vault_id:
+        if vault_ids:
             stmt = (
                 stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                .where(col(UnitEntity.vault_id) == vault_id)
+                .where(col(UnitEntity.vault_id).in_(vault_ids))
                 .distinct()
             )
+
+        stmt = stmt.order_by(
+            desc(
+                0.4 * Entity.mention_count
+                + 0.4 * Entity.retrieval_count
+                + 0.2 * centrality_stmt.c.centrality
+            )
+        ).limit(limit)
 
         async with self.metastore.session() as session:
             stream = await session.stream(stmt)
@@ -1099,7 +1096,7 @@ ingested_at: {now}
                 yield row[0]
 
     async def get_entity_cooccurrences(
-        self, entity_id: UUID | str, vault_id: UUID | None = None
+        self, entity_id: UUID | str, vault_ids: list[UUID] | None = None
     ) -> list[Any]:
         """
         Get co-occurrence edges for an entity.
@@ -1112,12 +1109,12 @@ ingested_at: {now}
             stmt = select(EntityCooccurrence).where(
                 or_(EntityCooccurrence.entity_id_1 == eid, EntityCooccurrence.entity_id_2 == eid)
             )
-            if vault_id:
-                stmt = stmt.where(col(EntityCooccurrence.vault_id) == vault_id)
+            if vault_ids:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
             return list((await session.exec(stmt)).all())
 
     async def get_bulk_cooccurrences(
-        self, entity_ids: list[UUID], vault_id: UUID | None = None
+        self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
     ) -> list[Any]:
         """
         Get co-occurrences between a set of entities.
@@ -1130,12 +1127,12 @@ ingested_at: {now}
                 (col(EntityCooccurrence.entity_id_1).in_(entity_ids))
                 & (col(EntityCooccurrence.entity_id_2).in_(entity_ids))
             )
-            if vault_id:
-                stmt = stmt.where(col(EntityCooccurrence.vault_id) == vault_id)
+            if vault_ids:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
             return list((await session.exec(stmt)).all())
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20, vault_id: UUID | None = None
+        self, entity_id: UUID | str, limit: int = 20, vault_ids: list[UUID] | None = None
     ) -> list[dict[str, Any]]:
         """
         Get memory units and source documents where this entity is mentioned.
@@ -1151,8 +1148,8 @@ ingested_at: {now}
                 .join(Note, MemoryUnit.note_id == Note.id)
                 .where(UnitEntity.entity_id == eid)
             )
-            if vault_id:
-                stmt = stmt.where(col(MemoryUnit.vault_id) == vault_id)
+            if vault_ids:
+                stmt = stmt.where(col(MemoryUnit.vault_id).in_(vault_ids))
             stmt = stmt.order_by(desc(MemoryUnit.created_at)).limit(limit)
             results = (await session.exec(stmt)).all()
             return [{'unit': unit, 'document': doc} for unit, doc in results]
@@ -1712,23 +1709,26 @@ ingested_at: {now}
                 session, limit=limit, vault_id=vault_id
             )
 
-    async def get_top_entities(self, limit: int = 5, vault_id: UUID | None = None) -> list[Any]:
+    async def get_top_entities(
+        self, limit: int = 5, vault_ids: list[UUID] | None = None
+    ) -> list[Any]:
         """Get top entities by mention count."""
         from memex_core.memory.sql_models import Entity, UnitEntity
         from sqlmodel import select, desc, col
 
         async with self.metastore.session() as session:
-            stmt = select(Entity).order_by(desc(Entity.mention_count)).limit(limit)
-            if vault_id:
+            stmt = select(Entity)
+            if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                    .where(col(UnitEntity.vault_id) == vault_id)
+                    .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def search_entities(
-        self, query: str, limit: int = 10, vault_id: UUID | None = None
+        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
     ) -> list[Any]:
         """
         Search for entities by canonical name using trigram similarity or ILIKE.
@@ -1738,18 +1738,14 @@ ingested_at: {now}
 
         async with self.metastore.session() as session:
             # Use ILIKE for broad matching
-            stmt = (
-                select(Entity)
-                .where(col(Entity.canonical_name).ilike(f'%{query}%'))
-                .order_by(col(Entity.mention_count).desc())
-                .limit(limit)
-            )
-            if vault_id:
+            stmt = select(Entity).where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                    .where(col(UnitEntity.vault_id) == vault_id)
+                    .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def get_lineage(

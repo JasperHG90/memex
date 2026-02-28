@@ -34,7 +34,7 @@ import { Separator } from '@/components/ui/separator';
 import { Plus, PenLine, Trash2, Sun, Moon } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
 import { api } from '@/api/client';
-import { useVaults, useDefaultVaults, useCreateVault, useDeleteVault } from '@/api/hooks/use-vaults';
+import { useVaults, useCreateVault, useDeleteVault } from '@/api/hooks/use-vaults';
 import { useVaultStore } from '@/stores/vault-store';
 import { usePreferencesStore } from '@/stores/preferences-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -241,18 +241,7 @@ function VaultActions({ vault }: { vault: VaultDTO }) {
 }
 
 function VaultsTab() {
-  const { data: vaults, isLoading: vaultsLoading } = useVaults();
-  const { data: defaults, isLoading: defaultsLoading } = useDefaultVaults();
-  const store = useVaultStore();
-
-  // Initialize vault store from defaults on first load
-  if (defaults && !store.isInitialized && defaults.length > 0) {
-    const writer = defaults[0];
-    const attached = defaults.slice(1).map((v) => ({ id: v.id, name: v.name }));
-    store.initialize({ id: writer.id, name: writer.name }, attached);
-  }
-
-  const isLoading = vaultsLoading || defaultsLoading;
+  const { data: vaults, isLoading } = useVaults();
 
   return (
     <div className="space-y-4">
