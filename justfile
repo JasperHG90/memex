@@ -3,6 +3,31 @@ alias t := test
 alias p := prek
 alias uc := update_collections
 
+# Release: bump versions, commit, and tag (e.g., just release 0.1.0)
+release version:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  # Validate semver format
+  if ! echo "{{version}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "Error: version must be semver (e.g., 0.1.0)" >&2
+    exit 1
+  fi
+  # Update Python package versions
+  for f in pyproject.toml packages/core/pyproject.toml packages/cli/pyproject.toml packages/mcp/pyproject.toml packages/common/pyproject.toml; do
+    sed -i 's/^version = ".*"/version = "{{version}}"/' "$f"
+  done
+  # Update TypeScript package versions
+  for f in packages/dashboard/package.json packages/openclaw/package.json; do
+    sed -i 's/"version": ".*"/"version": "{{version}}"/' "$f"
+  done
+  # Sync lock file
+  uv lock
+  # Stage, commit, tag
+  git add pyproject.toml uv.lock packages/*/pyproject.toml packages/dashboard/package.json packages/openclaw/package.json
+  git commit -m "chore(release): v{{version}}"
+  git tag "v{{version}}"
+  echo "Tagged v{{version}}. Push with: git push && git push --tags"
+
 # Install python dependencies
 install:
   uv sync --all-groups --all-extras
@@ -83,3 +108,34 @@ db-revision message:
 # Stamp database at head (for existing DBs)
 db-stamp:
   uv run memex database stamp
+
+# Install recording dependencies (VHS, ffmpeg, Playwright)
+recording-setup:
+    @echo "Checking VHS..."
+    which vhs || echo "Install VHS: go install github.com/charmbracelet/vhs@latest"
+    @echo "Checking ffmpeg..."
+    which ffmpeg || echo "Install ffmpeg: apt install ffmpeg / brew install ffmpeg"
+    cd recordings/dashboard && npm install && npx playwright install chromium
+
+# Seed demo database for recordings (requires running server)
+recording-seed:
+    uv run python recordings/seed-data/seed_demo_db.py
+
+# Record CLI GIFs via VHS
+record-cli:
+    vhs recordings/cli/memory-search.tape
+    vhs recordings/cli/memory-search-answer.tape
+    vhs recordings/cli/note-search-reason.tape
+    vhs recordings/cli/entity-list.tape
+    vhs recordings/cli/stats-system.tape
+    vhs recordings/cli/memory-add-url.tape
+
+# Record dashboard GIFs via Playwright
+record-dashboard:
+    cd recordings/dashboard && npx tsx scripts/record-overview.ts
+    cd recordings/dashboard && npx tsx scripts/record-entity-graph.ts
+    cd recordings/dashboard && npx tsx scripts/record-memory-search.ts
+    cd recordings/dashboard && npx tsx scripts/record-knowledge-flow.ts
+
+# Record all GIFs (server + dashboard must be running)
+record-all: recording-seed record-cli record-dashboard

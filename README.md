@@ -63,21 +63,45 @@ memex memory search "How does Python handle memory management?"
 
 ## See it in action
 
-### Searching notes
+### Memory Search
+Search across your knowledge base with TEMPR multi-strategy retrieval.
 
-![](assets/memex_cli_docs.gif)
+![Memory search showing results for Python memory management](assets/memex_cli_memory.gif)
 
-### Searching memory
+### Memory Search with AI Answer
+Get synthesized answers from your memories using `--answer`.
 
-![](assets/memex_cli_memory.gif)
+![Memory search with AI-generated answer](assets/memex_cli_memory_answer.gif)
 
-### Entity management
+### Note Search with Reasoning
+Find relevant documents with LLM-powered relevance reasoning using `--reason`.
 
-![](assets/memex_cli_entities.gif)
+![Note search with reasoning annotations](assets/memex_cli_docs.gif)
+
+### Entity Explorer
+Browse and explore entities extracted from your knowledge base.
+
+![Entity list and related entity exploration](assets/memex_cli_entities.gif)
+
+### System Stats
+Monitor your Memex instance at a glance.
+
+![System statistics overview](assets/memex_cli_stats.gif)
+
+### URL Ingestion
+Capture web content directly into your knowledge base.
+
+![Ingesting a URL into Memex](assets/memex_cli_ingest.gif)
 
 ### Dashboard
+Explore your knowledge graph through the web UI.
 
-![](assets/memex_dashboard.gif)
+![Dashboard overview with stats and recent activity](assets/memex_dashboard.gif)
+
+### Entity Graph
+Visualize entity relationships and co-occurrences.
+
+![Interactive entity graph visualization](assets/memex_dashboard_entity_graph.gif)
 
 ## 📚 Documentation
 
@@ -114,6 +138,35 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [OpenClaw Plugin](./docs/explanation/openclaw-plugin.md): Plugin lifecycle and circuit breaker.
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
+
+## Releasing
+
+Memex uses [semver](https://semver.org/) with unified versions across all Python packages. TypeScript packages are bumped alongside.
+
+### How to determine the version bump
+
+Look at the conventional commits since the last tag:
+
+| Commit type | Bump | Example |
+|---|---|---|
+| `fix:` | **patch** (0.0.x) | `fix(core): handle null embeddings` |
+| `feat:` | **minor** (0.x.0) | `feat(dashboard): add entity graph` |
+| `feat!:` or `BREAKING CHANGE:` | **major** (x.0.0) | `feat!: change API response format` |
+
+### Release workflow
+
+```bash
+# 1. Check what changed since last tag
+git log --oneline $(git describe --tags --abbrev=0 2>/dev/null || echo HEAD~10)..HEAD
+
+# 2. Bump all versions, commit, and tag
+just release 0.1.0
+
+# 3. Push (triggers the release workflow)
+git push && git push --tags
+```
+
+The `release.yaml` GitHub Action automatically builds all artifacts (Python, dashboard, OpenClaw) and creates a GitHub Release with auto-generated release notes.
 
 ## 🏗️ Architecture
 
