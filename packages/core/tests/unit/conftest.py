@@ -1,7 +1,13 @@
 import os
 import pytest
 import tempfile
+from typing import Any
 from unittest.mock import MagicMock, AsyncMock, patch
+
+import dspy
+from dspy.utils.dummies import DummyLM
+
+from memex_core.memory.sql_models import TokenUsage
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
 
@@ -172,3 +178,80 @@ def patch_api_engines():
         m6.return_value = AsyncMock()
         m7.return_value = AsyncMock()
         yield
+
+
+# ---------------------------------------------------------------------------
+# LLM mocking infrastructure (P2-07)
+# ---------------------------------------------------------------------------
+
+# Default golden token usage returned when no custom usage is provided.
+_DEFAULT_MOCK_USAGE = TokenUsage(
+    input_tokens=150,
+    output_tokens=80,
+    total_tokens=230,
+    is_cached=False,
+    models=['test-model/mock'],
+)
+
+
+class MockDspyLM:
+    """Deterministic mock for ``run_dspy_operation`` in unit tests.
+
+    Usage::
+
+        def test_something(mock_dspy_lm):
+            mock_dspy_lm.set_responses([(result_obj, token_usage)])
+            # ... call code that invokes run_dspy_operation ...
+            assert mock_dspy_lm.call_count == 1
+    """
+
+    def __init__(self) -> None:
+        self.dummy_lm: dspy.LM = DummyLM(
+            [{'response': 'mocked'}],
+        )
+        self._responses: list[tuple[Any, TokenUsage]] = []
+        self.call_count: int = 0
+
+    # -- public helpers --------------------------------------------------
+
+    def set_responses(self, responses: list[tuple[Any, TokenUsage]]) -> None:
+        """Replace the response queue."""
+        self._responses = list(responses)
+        self.call_count = 0
+
+    def add_response(self, result: Any, usage: TokenUsage | None = None) -> None:
+        """Append a single response (uses default usage when omitted)."""
+        self._responses.append((result, usage or _DEFAULT_MOCK_USAGE))
+
+    # -- async side-effect used by the patch ----------------------------
+
+    async def _mock_run_dspy(self, *args: Any, **kwargs: Any) -> tuple[Any, TokenUsage]:
+        if not self._responses:
+            raise RuntimeError(
+                'MockDspyLM: no responses queued — call set_responses() or add_response() first'
+            )
+        result, usage = self._responses.pop(0)
+        self.call_count += 1
+        return result, usage
+
+
+@pytest.fixture
+def mock_dspy_lm():
+    """Fixture providing a ``MockDspyLM`` with ``run_dspy_operation`` patched.
+
+    Patches both the definition site and the most common import site so that
+    code using ``from memex_core.llm import run_dspy_operation`` is also
+    intercepted.
+    """
+    mock = MockDspyLM()
+    with (
+        patch(
+            'memex_core.llm.run_dspy_operation',
+            side_effect=mock._mock_run_dspy,
+        ),
+        patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=mock._mock_run_dspy,
+        ),
+    ):
+        yield mock

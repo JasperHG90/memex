@@ -45,6 +45,8 @@ def mock_lifespan_dependencies():
         config_mock.server.memory.opinion_formation.confidence.similarity_threshold = 0.8
         config_mock.server.active_vault = 'global'
         config_mock.server.attached_vaults = []
+        config_mock.server.logging.level = 'WARNING'
+        config_mock.server.logging.json_output = False
 
         config_mock.server.meta_store = MagicMock()
         config_mock.server.file_store = MagicMock()
