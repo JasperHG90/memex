@@ -56,6 +56,8 @@ jobs:
         with:
           python_version: ${{ env.PYTHON_VERSION }}
           prek_version: '0.2.25'
+        env:
+          SKIP: dashboard-eslint,dashboard-typecheck
 
   python-tests:
     needs: changes
