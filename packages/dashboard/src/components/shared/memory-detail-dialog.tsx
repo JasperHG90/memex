@@ -170,53 +170,58 @@ export function MemoryDetailDialog({ unit, open, onOpenChange }: MemoryDetailDia
           <Separator className="my-4" />
 
           {/* Belief adjustment and delete actions — keyed on unit.id to auto-reset state */}
-          <MemoryActions key={unit.id} unitId={unit.id} onDeleted={() => onOpenChange(false)} />
+          <MemoryActions key={unit.id} unitId={unit.id} factType={factType} onDeleted={() => onOpenChange(false)} />
         </ScrollArea>
       </DialogContent>
     </Dialog>
   );
 }
 
-function MemoryActions({ unitId, onDeleted }: { unitId: string; onDeleted: () => void }) {
+function MemoryActions({ unitId, factType, onDeleted }: { unitId: string; factType: string; onDeleted: () => void }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const adjustBelief = useAdjustBelief();
   const deleteMemory = useDeleteMemory();
+  const isOpinion = factType === 'opinion';
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">Belief:</span>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={adjustBelief.isPending}
-        onClick={async () => {
-          try {
-            await adjustBelief.mutateAsync({ unitId, adjustment: 'confirm' });
-            toast.success('Memory confirmed');
-          } catch (err) {
-            toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }}
-      >
-        <ThumbsUp className="mr-1 h-3 w-3" />
-        Confirm
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={adjustBelief.isPending}
-        onClick={async () => {
-          try {
-            await adjustBelief.mutateAsync({ unitId, adjustment: 'contradict' });
-            toast.success('Memory contradicted');
-          } catch (err) {
-            toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }}
-      >
-        <ThumbsDown className="mr-1 h-3 w-3" />
-        Contradict
-      </Button>
+      {isOpinion && (
+        <>
+          <span className="text-xs text-muted-foreground">Belief:</span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={adjustBelief.isPending}
+            onClick={async () => {
+              try {
+                await adjustBelief.mutateAsync({ unitId, adjustment: 'confirm' });
+                toast.success('Memory confirmed');
+              } catch (err) {
+                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }}
+          >
+            <ThumbsUp className="mr-1 h-3 w-3" />
+            Confirm
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={adjustBelief.isPending}
+            onClick={async () => {
+              try {
+                await adjustBelief.mutateAsync({ unitId, adjustment: 'contradict' });
+                toast.success('Memory contradicted');
+              } catch (err) {
+                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }}
+          >
+            <ThumbsDown className="mr-1 h-3 w-3" />
+            Contradict
+          </Button>
+        </>
+      )}
       {!showDeleteConfirm ? (
         <Button
           variant="outline"

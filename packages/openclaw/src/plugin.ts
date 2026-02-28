@@ -647,7 +647,7 @@ const memexPlugin = {
           if (cfg.sessionGrouping) {
             sessionBuffer.push({
               userMessage: userText,
-              assistantMessage: assistantText ?? '',
+              assistantMessage: cfg.captureMode === 'full' ? (assistantText ?? '') : '',
               timestamp: now,
             });
 

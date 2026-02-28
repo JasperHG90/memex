@@ -10,8 +10,8 @@ The plugin occupies OpenClaw's exclusive `memory` slot (replacing the default `m
 
 | Hook | Phase | Behaviour |
 |------|-------|-----------|
-| `before_agent_start` | **Auto-recall** | Searches Memex for memories relevant to the user's prompt. Results are escaped, wrapped in `<relevant-memories>` tags, and injected via `prependContext` so the LLM sees them as context — not instructions. |
-| `agent_end` | **Auto-capture** | Extracts the last user message and assistant response, formats them as a Markdown note with YAML frontmatter, Base64-encodes the content, and sends it to `POST /api/v1/ingestions?background=true`. The request is **fire-and-forget**: the `fetch` promise is `void`-ed so the agent is never blocked. |
+| `before_agent_start` | **Auto-recall + profile injection** | Searches Memex for memories relevant to the user's prompt. Results are escaped, wrapped in `<relevant-memories>` tags, and injected via `prependContext` so the LLM sees them as context — not instructions. Every Nth turn (controlled by `profileFrequency`), entity context from the knowledge graph is also injected. |
+| `agent_end` | **Auto-capture** | Extracts conversation text (user-only in `'filtered'` mode, or user + assistant in `'full'` mode), formats it as a Markdown note with YAML frontmatter, Base64-encodes the content, and sends it to `POST /api/v1/ingestions?background=true`. When `sessionGrouping` is enabled, turns are grouped into a single session document (updated each turn via `note_key`). The request is **fire-and-forget**: the `fetch` promise is `void`-ed so the agent is never blocked. |
 
 Both hooks are guarded by a **circuit breaker** (3 consecutive failures open the breaker for 60 seconds, then a single probe is allowed through).
 
@@ -98,7 +98,10 @@ The plugin reads configuration from two sources (plugin config takes precedence 
           "timeoutMs": 5000,
           "minCaptureLength": 50,
           "autoRecall": true,
-          "autoCapture": true
+          "autoCapture": true,
+          "profileFrequency": 20,
+          "captureMode": "filtered",
+          "sessionGrouping": true
         }
       }
     }
@@ -116,6 +119,9 @@ The plugin reads configuration from two sources (plugin config takes precedence 
 | `MEMEX_VAULT_ID` | *(none)* | Restrict search/capture to a specific vault |
 | `MEMEX_BEFORE_TURN_TIMEOUT_MS` | `5000` | Timeout (ms) for the recall search step |
 | `MEMEX_MIN_CAPTURE_LENGTH` | `50` | Minimum user message length to trigger capture |
+| `MEMEX_PROFILE_FREQUENCY` | `20` | Inject entity context every N turns (1-500) |
+| `MEMEX_CAPTURE_MODE` | `filtered` | Capture mode: 'filtered' (user only) or 'full' (user + assistant) |
+| `MEMEX_SESSION_GROUPING` | `true` | Group turns into a single session document |
 
 ### Config reference
 
@@ -129,6 +135,9 @@ The plugin reads configuration from two sources (plugin config takes precedence 
 | `minCaptureLength` | `number` | `50` | User messages shorter than this are not captured. Prevents storing trivial exchanges like "hi" or "ok". Range: 1--1000. |
 | `autoRecall` | `boolean` | `true` | Enable/disable the `before_agent_start` hook. |
 | `autoCapture` | `boolean` | `true` | Enable/disable the `agent_end` hook. |
+| `profileFrequency` | `number` | `20` | Inject entity/knowledge-graph context every N turns. Lower values give more context but use more tokens. Range: 1-500. |
+| `captureMode` | `string` | `filtered` | `'filtered'` captures only user messages. `'full'` captures both user and assistant messages. |
+| `sessionGrouping` | `boolean` | `true` | When enabled, groups conversation turns into a single session document (updated each turn via `note_key`). When disabled, creates one note per turn. |
 
 ## Setup Guide
 
@@ -264,6 +273,7 @@ User message arrives
 ┌──────────────────┐
 │ before_agent_start│  Memex POST /api/v1/memories/search (NDJSON)
 │                  │  → parse results → escape → prependContext()
+│                  │  Every Nth turn: inject entity profile context
 └────────┬─────────┘
          │
          ▼
@@ -274,6 +284,7 @@ User message arrives
 │    agent_end     │  Format turn as Markdown + YAML frontmatter
 │                  │  → Base64-encode → POST /api/v1/ingestions?background=true
 │                  │  (fire-and-forget, never blocks)
+│                  │  Session grouping: updates a single doc via note_key
 └──────────────────┘
 
 Agent tool invocation (any of 9 tools)
@@ -329,7 +340,7 @@ Recalled memories are treated as **untrusted data**:
 
 1. All HTML/XML special characters are escaped (`<`, `>`, `&`, `"`, `'`)
 2. Memories are wrapped in `<relevant-memories>` tags with a preamble instructing the LLM to treat them as historical context only
-3. The `agent_end` hook only captures user messages (not injected context) to avoid self-poisoning
+3. In `'filtered'` capture mode (default), only user messages are captured. In `'full'` mode, both user and assistant text are captured with `<relevant-memories>` blocks stripped.
 
 ### Background ingestion
 

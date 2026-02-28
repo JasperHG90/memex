@@ -275,7 +275,7 @@ export class MemexClient {
     if (!response.ok) {
       throw new Error(`Memex listEntities failed: ${response.status} ${response.statusText}`);
     }
-    return response.json() as Promise<EntityDTO[]>;
+    return this._parseNdjsonStream<EntityDTO>(response);
   }
 
   /** GET /api/v1/entities/{id} */

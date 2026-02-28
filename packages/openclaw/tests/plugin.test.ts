@@ -563,7 +563,7 @@ describe('memex_list_entities tool', () => {
   it('returns formatted entity list', async () => {
     const api = registerPlugin();
     fetchSpy.mockResolvedValueOnce(
-      jsonResponse([
+      ndjsonResponse([
         { id: 'e1', name: 'TypeScript', entity_type: 'technology', mention_count: 42 },
         { id: 'e2', name: 'React', entity_type: 'framework', mention_count: 15 },
       ]),
@@ -582,7 +582,7 @@ describe('memex_list_entities tool', () => {
 
   it('returns empty message when no entities found', async () => {
     const api = registerPlugin();
-    fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
     const tool = api.tools.get('memex_list_entities')!;
     const result = await tool.execute('call-1', {}) as {
@@ -722,10 +722,10 @@ describe('profile frequency', () => {
     const entities = [
       { id: 'e1', name: 'TypeScript', entity_type: 'technology', mention_count: 42 },
     ];
-    // Turn 1: vault check + memory search + entity list
+    // Turn 1: vault check + memory search + entity list (all NDJSON)
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1]));
-    fetchSpy.mockResolvedValueOnce(jsonResponse(entities));
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse(entities));
 
     const hook = api.hooks.get('before_agent_start')![0]!;
     const result = await hook({ prompt: longPrompt });
@@ -989,6 +989,32 @@ describe('session grouping', () => {
     expect(body.note_key).not.toMatch(/^session_/);
     expect(body.name).toMatch(/^Conversation —/);
     expect(api.logger.info).toHaveBeenCalledWith('memory-memex: user message captured');
+  });
+
+  it('filtered mode with session grouping excludes assistant text', async () => {
+    const api = registerPlugin({ sessionGrouping: true, captureMode: 'filtered' });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'this should not appear' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(body.note_key).toMatch(/^session_/);
+    expect(decoded).toContain(longMsg);
+    expect(decoded).not.toContain('this should not appear');
   });
 
   it('session grouping works with full capture mode', async () => {

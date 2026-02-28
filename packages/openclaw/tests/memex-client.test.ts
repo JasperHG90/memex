@@ -584,7 +584,7 @@ describe('MemexClient', () => {
   describe('listEntities', () => {
     it('sends query and limit as URL params', async () => {
       const client = new MemexClient(makeConfig());
-      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.listEntities('python', 10);
 
@@ -595,7 +595,7 @@ describe('MemexClient', () => {
 
     it('works without query param', async () => {
       const client = new MemexClient(makeConfig());
-      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
       await client.listEntities();
 
@@ -604,10 +604,10 @@ describe('MemexClient', () => {
       expect(url).toContain('limit=20');
     });
 
-    it('returns parsed JSON array', async () => {
+    it('returns parsed NDJSON entities', async () => {
       const client = new MemexClient(makeConfig());
       const entities = [{ id: 'e1', name: 'Python', entity_type: 'technology' }];
-      fetchSpy.mockResolvedValueOnce(jsonResponse(entities));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse(entities));
 
       const result = await client.listEntities('Python');
 
