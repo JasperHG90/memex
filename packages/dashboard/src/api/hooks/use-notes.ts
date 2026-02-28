@@ -1,12 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../client.ts';
-import type {
+import {
   NoteDTO,
   NoteSearchResult,
-  NoteSearchRequest,
-  NoteCreateDTO,
   IngestResponse,
+  type NoteSearchRequest,
+  type NoteCreateDTO,
 } from '../generated.ts';
+import { validateResponse } from '../validate.ts';
+
+const NoteArraySchema = z.array(NoteDTO);
+const NoteSearchResultArraySchema = z.array(NoteSearchResult);
 
 interface UseNotesOptions {
   limit?: number;
@@ -27,14 +32,20 @@ export function useNotes(options: UseNotesOptions = {}) {
 
   return useQuery({
     queryKey: ['notes', options],
-    queryFn: () => api.get<NoteDTO[]>(`/notes${qs ? `?${qs}` : ''}`),
+    queryFn: async () => {
+      const data = await api.get<NoteDTO[]>(`/notes${qs ? `?${qs}` : ''}`);
+      return validateResponse(NoteArraySchema, data);
+    },
   });
 }
 
 export function useNote(noteId: string | undefined) {
   return useQuery({
     queryKey: ['notes', noteId],
-    queryFn: () => api.get<NoteDTO>(`/notes/${noteId}`),
+    queryFn: async () => {
+      const data = await api.get<NoteDTO>(`/notes/${noteId}`);
+      return validateResponse(NoteDTO, data);
+    },
     enabled: !!noteId,
   });
 }
@@ -50,16 +61,20 @@ export function useNotePageIndex(noteId: string | undefined) {
 
 export function useNoteSearch() {
   return useMutation({
-    mutationFn: (request: NoteSearchRequest) =>
-      api.post<NoteSearchResult[]>('/notes/search', request),
+    mutationFn: async (request: NoteSearchRequest) => {
+      const data = await api.post<NoteSearchResult[]>('/notes/search', request);
+      return validateResponse(NoteSearchResultArraySchema, data);
+    },
   });
 }
 
 export function useIngestNote() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (request: NoteCreateDTO) =>
-      api.post<IngestResponse>('/ingestions', request),
+    mutationFn: async (request: NoteCreateDTO) => {
+      const data = await api.post<IngestResponse>('/ingestions', request);
+      return validateResponse(IngestResponse, data);
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['notes'] });
       void queryClient.invalidateQueries({ queryKey: ['stats'] });

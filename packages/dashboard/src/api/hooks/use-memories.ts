@@ -1,23 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../client.ts';
-import type {
+import {
   MemoryUnitDTO,
-  RetrievalRequest,
   LineageResponse,
+  type RetrievalRequest,
 } from '../generated.ts';
+import { validateResponse } from '../validate.ts';
+
+const MemoryUnitArraySchema = z.array(MemoryUnitDTO);
 
 export function useMemory(unitId: string | undefined) {
   return useQuery({
     queryKey: ['memories', unitId],
-    queryFn: () => api.get<MemoryUnitDTO>(`/memories/${unitId}`),
+    queryFn: async () => {
+      const data = await api.get<MemoryUnitDTO>(`/memories/${unitId}`);
+      return validateResponse(MemoryUnitDTO, data);
+    },
     enabled: !!unitId,
   });
 }
 
 export function useMemorySearch() {
   return useMutation({
-    mutationFn: (request: RetrievalRequest) =>
-      api.post<MemoryUnitDTO[]>('/memories/search', request),
+    mutationFn: async (request: RetrievalRequest) => {
+      const data = await api.post<MemoryUnitDTO[]>('/memories/search', request);
+      return validateResponse(MemoryUnitArraySchema, data);
+    },
   });
 }
 

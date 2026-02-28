@@ -1,25 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../client.ts';
-import type { VaultDTO, CreateVaultRequest } from '../generated.ts';
+import { VaultDTO, type CreateVaultRequest } from '../generated.ts';
+import { validateResponse } from '../validate.ts';
+
+const VaultArraySchema = z.array(VaultDTO);
 
 export function useVaults() {
   return useQuery({
     queryKey: ['vaults'],
-    queryFn: () => api.get<VaultDTO[]>('/vaults'),
+    queryFn: async () => {
+      const data = await api.get<VaultDTO[]>('/vaults');
+      return validateResponse(VaultArraySchema, data);
+    },
   });
 }
 
 export function useDefaultVaults() {
   return useQuery({
     queryKey: ['vaults', 'defaults'],
-    queryFn: () => api.get<VaultDTO[]>('/vaults?is_default=true'),
+    queryFn: async () => {
+      const data = await api.get<VaultDTO[]>('/vaults?is_default=true');
+      return validateResponse(VaultArraySchema, data);
+    },
   });
 }
 
 export function useActiveVault() {
   return useQuery({
     queryKey: ['vaults', 'active'],
-    queryFn: () => api.get<VaultDTO[]>('/vaults?state=active'),
+    queryFn: async () => {
+      const data = await api.get<VaultDTO[]>('/vaults?state=active');
+      return validateResponse(VaultArraySchema, data);
+    },
     select: (data) => data[0],
   });
 }
@@ -27,8 +40,10 @@ export function useActiveVault() {
 export function useCreateVault() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (request: CreateVaultRequest) =>
-      api.post<VaultDTO>('/vaults', request),
+    mutationFn: async (request: CreateVaultRequest) => {
+      const data = await api.post<VaultDTO>('/vaults', request);
+      return validateResponse(VaultDTO, data);
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['vaults'] });
     },

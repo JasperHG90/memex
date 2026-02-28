@@ -1,6 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../client.ts';
-import type { EntityDTO, EntityMention, CooccurrenceRecord } from '../generated.ts';
+import { EntityDTO, EntityMention, CooccurrenceRecord } from '../generated.ts';
+import { validateResponse } from '../validate.ts';
+
+const EntityArraySchema = z.array(EntityDTO);
+const EntityMentionArraySchema = z.array(EntityMention);
+const CooccurrenceArraySchema = z.array(CooccurrenceRecord);
 
 interface UseEntitiesOptions {
   limit?: number;
@@ -21,14 +27,20 @@ export function useEntities(options: UseEntitiesOptions = {}) {
 
   return useQuery({
     queryKey: ['entities', options],
-    queryFn: () => api.get<EntityDTO[]>(`/entities${qs ? `?${qs}` : ''}`),
+    queryFn: async () => {
+      const data = await api.get<EntityDTO[]>(`/entities${qs ? `?${qs}` : ''}`);
+      return validateResponse(EntityArraySchema, data);
+    },
   });
 }
 
 export function useEntity(entityId: string | undefined) {
   return useQuery({
     queryKey: ['entities', entityId],
-    queryFn: () => api.get<EntityDTO>(`/entities/${entityId}`),
+    queryFn: async () => {
+      const data = await api.get<EntityDTO>(`/entities/${entityId}`);
+      return validateResponse(EntityDTO, data);
+    },
     enabled: !!entityId,
   });
 }
@@ -36,8 +48,10 @@ export function useEntity(entityId: string | undefined) {
 export function useEntityMentions(entityId: string | undefined, limit = 20) {
   return useQuery({
     queryKey: ['entities', entityId, 'mentions', { limit }],
-    queryFn: () =>
-      api.get<EntityMention[]>(`/entities/${entityId}/mentions?limit=${limit}`),
+    queryFn: async () => {
+      const data = await api.get<EntityMention[]>(`/entities/${entityId}/mentions?limit=${limit}`);
+      return validateResponse(EntityMentionArraySchema, data);
+    },
     enabled: !!entityId,
   });
 }
@@ -45,8 +59,10 @@ export function useEntityMentions(entityId: string | undefined, limit = 20) {
 export function useEntityCooccurrences(entityId: string | undefined) {
   return useQuery({
     queryKey: ['entities', entityId, 'cooccurrences'],
-    queryFn: () =>
-      api.get<CooccurrenceRecord[]>(`/entities/${entityId}/cooccurrences`),
+    queryFn: async () => {
+      const data = await api.get<CooccurrenceRecord[]>(`/entities/${entityId}/cooccurrences`);
+      return validateResponse(CooccurrenceArraySchema, data);
+    },
     enabled: !!entityId,
   });
 }
@@ -55,13 +71,14 @@ export function useBulkCooccurrences(entityIds: string[], vaultIds?: string[]) {
   const ids = entityIds.join(',');
   return useQuery({
     queryKey: ['cooccurrences', 'bulk', ids, vaultIds],
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams();
       params.set('ids', ids);
       if (vaultIds?.length) {
         for (const vid of vaultIds) params.append('vault_id', vid);
       }
-      return api.get<CooccurrenceRecord[]>(`/cooccurrences?${params}`);
+      const data = await api.get<CooccurrenceRecord[]>(`/cooccurrences?${params}`);
+      return validateResponse(CooccurrenceArraySchema, data);
     },
     enabled: entityIds.length > 0,
   });

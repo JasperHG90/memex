@@ -1,7 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
+import { z } from 'zod';
 import { api } from '../client.ts';
-import type { EntityDTO, LineageResponse } from '../generated.ts';
-export type { LineageResponse, EntityDTO };
+import { EntityDTO, LineageResponse } from '../generated.ts';
+import { validateResponse } from '../validate.ts';
+export type { LineageResponse };
+export type { EntityDTO };
+
+const EntityArraySchema = z.array(EntityDTO);
 
 export function useLineage(
   id: string | null,
@@ -10,10 +15,12 @@ export function useLineage(
 ) {
   return useQuery({
     queryKey: ['lineage', type, id, depth],
-    queryFn: () =>
-      api.get<LineageResponse>(
+    queryFn: async () => {
+      const data = await api.get<z.infer<typeof LineageResponse>>(
         `/lineage/${type}/${id}?direction=upstream&depth=${depth}&limit=10`,
-      ),
+      );
+      return validateResponse(LineageResponse, data);
+    },
     enabled: !!id,
   });
 }
@@ -21,7 +28,7 @@ export function useLineage(
 export function useEntitySearch(query: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ['entities', 'search', query],
-    queryFn: async (): Promise<EntityDTO[]> => {
+    queryFn: async (): Promise<z.infer<typeof EntityDTO>[]> => {
       const params = new URLSearchParams({ limit: '10' });
       if (query && query.length >= 2) {
         params.set('q', query);
@@ -30,7 +37,8 @@ export function useEntitySearch(query: string, enabled: boolean = true) {
         params.set('sort', '-mentions');
       }
 
-      const items = await api.get<EntityDTO[]>(`/entities?${params}`);
+      const raw = await api.get<z.infer<typeof EntityDTO>[]>(`/entities?${params}`);
+      const items = validateResponse(EntityArraySchema, raw);
 
       // Client-side filter if query provided (server may not filter precisely)
       if (query && query.length >= 2) {
