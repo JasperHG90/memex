@@ -81,32 +81,37 @@ memex memory search "How does Python handle memory management?"
 
 ## 📚 Documentation
 
-Comprehensive guides and references are available in [`docs/`](./docs).
+Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 
-### Basics
-- [Getting Started](./docs/tutorials/getting-started.md)
-- [Configuration](./docs/how-to/configure-memex.md)
-- [Using the Dashboard](./docs/tutorials/using-the-dashboard.md)
+### Tutorials
+- [Getting Started](./docs/tutorials/getting-started.md): Install, configure, ingest, and search.
+- [Using the Dashboard](./docs/tutorials/using-the-dashboard.md): Explore the web UI.
+- [AI Agent Memory](./docs/tutorials/ai-agent-memory.md): Build a Python agent with persistent memory.
 
-### Key Features
-- [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
-- [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Understanding fact extraction.
-- [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): The TEMPR system — five search strategies fused via RRF.
-- [Doc Search vs Memory Search](./docs/how-to/doc-search-vs-memory-search.md): Choosing the right retrieval strategy.
-- [Claude Code Integration](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory.
-- [MCP Integration](./docs/how-to/using-mcp.md): Connecting Memex to Claude Desktop, Cursor, and other MCP clients.
-- [Batch Ingestion](./docs/how-to/batch-ingestion.md): Importing your existing notes.
-- [Vaults](./docs/how-to/organize-with-vaults.md): Isolating project knowledge.
-- [Database Migrations](./docs/how-to/database-migrations.md): Managing schema migrations with `memex db`.
+### How-To Guides
+- [Set Up Claude Code](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory with one command.
+- [Configure Memex](./docs/how-to/configure-memex.md): YAML config, environment variables, model providers.
+- [Using MCP](./docs/how-to/using-mcp.md): Connect to Claude Desktop, Cursor, and other MCP clients.
+- [Organize with Vaults](./docs/how-to/organize-with-vaults.md): Isolate project knowledge.
+- [Batch Ingestion](./docs/how-to/batch-ingestion.md): Import existing documents and notes.
+- [Doc Search vs Memory Search](./docs/how-to/doc-search-vs-memory-search.md): Choose the right retrieval strategy.
+- [Database Migrations](./docs/how-to/database-migrations.md): Manage schema with `memex db`.
+- [OpenClaw Integration](./docs/how-to/openclaw-integration.md): Memex memory plugin for OpenClaw agents.
+- [Delete and Archival](./docs/how-to/delete-archival.md): Manage data lifecycle.
 
 ### Reference
 - [CLI Commands](./docs/reference/cli-commands.md)
-- [Configuration Schema](./docs/reference/configuration.md)
-- [MCP Tools](./docs/reference/mcp-tools.md)
 - [REST API](./docs/reference/rest-api.md)
+- [MCP Tools](./docs/reference/mcp-tools.md)
+- [Configuration](./docs/reference/configuration.md)
 
-### Management
-- [Deleting and Archiving](./docs/how-to/delete-archival.md): Managing your knowledge base.
+### Explanation
+- [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
+- [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Fact extraction and entity resolution.
+- [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): TEMPR — five strategies fused via RRF.
+- [Reflection and Mental Models](./docs/explanation/reflection-and-mental-models.md): Background synthesis of observations.
+- [Dashboard Architecture](./docs/explanation/dashboard-architecture.md): React+Vite design and data flow.
+- [OpenClaw Plugin](./docs/explanation/openclaw-plugin.md): Plugin lifecycle and circuit breaker.
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
 
