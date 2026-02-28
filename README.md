@@ -103,6 +103,21 @@ Visualize entity relationships and co-occurrences.
 
 ![Interactive entity graph visualization](assets/memex_dashboard_entity_graph.gif)
 
+### Lineage
+Trace the provenance chain from notes to memories, observations, and mental models.
+
+![Entity lineage showing provenance graph](assets/memex_dashboard_lineage.gif)
+
+### Knowledge Flow
+Monitor live ingestion activity across the knowledge pipeline.
+
+![Knowledge flow pipeline with activity columns](assets/memex_dashboard_knowledge_flow.gif)
+
+### Memory Search (Dashboard)
+Search memories with multi-strategy retrieval and AI summaries.
+
+![Dashboard memory search with results](assets/memex_dashboard_memory_search.gif)
+
 ## 📚 Documentation
 
 Comprehensive guides and references are available in [`docs/`](./docs/index.md).

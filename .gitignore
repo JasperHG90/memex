@@ -191,3 +191,8 @@ packages/openclaw/dist/
 
 # Benchmark results (machine-specific)
 .benchmarks/
+
+# Recording dependencies and temp files
+recordings/dashboard/node_modules/
+recordings/dashboard/.tmp-recordings/
+recordings/cli/.casts/

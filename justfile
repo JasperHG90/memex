@@ -109,10 +109,12 @@ db-revision message:
 db-stamp:
   uv run memex database stamp
 
-# Install recording dependencies (VHS, ffmpeg, Playwright)
+# Install recording dependencies (asciinema, agg, ffmpeg, Playwright)
 recording-setup:
-    @echo "Checking VHS..."
-    which vhs || echo "Install VHS: go install github.com/charmbracelet/vhs@latest"
+    @echo "Checking asciinema..."
+    which asciinema || uv tool install asciinema
+    @echo "Checking agg..."
+    which agg || echo "Install agg: https://github.com/asciinema/agg/releases"
     @echo "Checking ffmpeg..."
     which ffmpeg || echo "Install ffmpeg: apt install ffmpeg / brew install ffmpeg"
     cd recordings/dashboard && npm install && npx playwright install chromium
@@ -121,14 +123,9 @@ recording-setup:
 recording-seed:
     uv run python recordings/seed-data/seed_demo_db.py
 
-# Record CLI GIFs via VHS
+# Record CLI GIFs via asciinema + agg
 record-cli:
-    vhs recordings/cli/memory-search.tape
-    vhs recordings/cli/memory-search-answer.tape
-    vhs recordings/cli/note-search-reason.tape
-    vhs recordings/cli/entity-list.tape
-    vhs recordings/cli/stats-system.tape
-    vhs recordings/cli/memory-add-url.tape
+    bash recordings/cli/record-cli.sh
 
 # Record dashboard GIFs via Playwright
 record-dashboard:
@@ -136,6 +133,7 @@ record-dashboard:
     cd recordings/dashboard && npx tsx scripts/record-entity-graph.ts
     cd recordings/dashboard && npx tsx scripts/record-memory-search.ts
     cd recordings/dashboard && npx tsx scripts/record-knowledge-flow.ts
+    cd recordings/dashboard && npx tsx scripts/record-lineage.ts
 
 # Record all GIFs (server + dashboard must be running)
 record-all: recording-seed record-cli record-dashboard
