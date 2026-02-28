@@ -169,6 +169,7 @@ logs
 
 # LLM
 .gemini
+!.gemini/prompts/
 .persona
 .serena
 .claude
