@@ -358,24 +358,25 @@ This means the agent is never blocked waiting for a write to complete.
 ```
 packages/openclaw/
 ├── src/
-│   ├── index.ts              # Barrel re-export of all modules
-│   ├── types.ts              # TypeScript interfaces (Memex DTOs, config, tool schemas)
-│   ├── config.ts             # Typed config with plugin-config-first + env var fallback
-│   ├── memex-client.ts       # HTTP client for the Memex REST API (12 methods)
-│   ├── formatting.ts         # Escape, format, and extract utilities for recall/capture
-│   ├── plugin.ts             # OpenClaw plugin definition (tools, commands, hooks, service)
-│   └── circuit-breaker.ts    # Circuit breaker (3 failures → 60s cooldown)
+│   ├── index.ts                  # Barrel re-export of all modules
+│   ├── types.ts                  # TypeScript interfaces (Memex DTOs, config, tool schemas)
+│   ├── config.ts                 # Typed config with plugin-config-first + env var fallback
+│   ├── memex-client.ts           # HTTP client for the Memex REST API (12 methods)
+│   ├── formatting.ts             # Escape, format, and extract utilities for recall/capture
+│   ├── plugin.ts                 # OpenClaw plugin definition (tools, commands, hooks, service)
+│   ├── circuit-breaker.ts        # Circuit breaker (3 failures → 60s cooldown)
+│   └── openclaw-plugin-sdk.d.ts  # Type declarations for the OpenClaw plugin SDK
 ├── tests/
-│   ├── helpers.ts            # Test factories (makeConfig, makeMemoryUnit, makeOpenClawPluginApi)
+│   ├── helpers.ts                # Test factories (makeConfig, makeMemoryUnit, makeOpenClawPluginApi)
 │   ├── circuit-breaker.test.ts
 │   ├── config.test.ts
 │   ├── formatting.test.ts
 │   ├── memex-client.test.ts
 │   └── plugin.test.ts
-├── openclaw.plugin.json      # Plugin manifest (id, kind, configSchema, uiHints)
-├── package.json              # npm metadata + openclaw.extensions declaration
-├── tsconfig.json             # TypeScript config (ESNext modules)
-└── vitest.config.ts          # Test runner configuration
+├── openclaw.plugin.json          # Plugin manifest (id, kind, configSchema, uiHints)
+├── package.json                  # npm metadata + openclaw.extensions declaration
+├── tsconfig.json                 # TypeScript config (ESNext modules)
+└── vitest.config.ts              # Test runner configuration
 ```
 
 ### Plugin manifest (`openclaw.plugin.json`)
