@@ -1,0 +1,87 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { renderHook, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useMemory, useMemorySearch, useDeleteMemory } from './use-memories'
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
+
+let fetchSpy: ReturnType<typeof vi.fn>
+
+beforeEach(() => {
+  fetchSpy = vi.fn()
+  vi.stubGlobal('fetch', fetchSpy)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+describe('useMemory', () => {
+  it('fetches a memory unit by id', async () => {
+    const mockMemory = { id: 'mem-1', content: 'Test fact' }
+    fetchSpy.mockResolvedValue(jsonResponse(mockMemory))
+
+    const { result } = renderHook(() => useMemory('mem-1'), { wrapper: createWrapper() })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockMemory)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/memories/mem-1'),
+      expect.anything(),
+    )
+  })
+
+  it('is disabled when unitId is undefined', () => {
+    const { result } = renderHook(() => useMemory(undefined), { wrapper: createWrapper() })
+
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('useMemorySearch', () => {
+  it('sends POST to search memories', async () => {
+    const mockResults = [{ id: 'mem-1', content: 'Test' }]
+    fetchSpy.mockResolvedValue(jsonResponse(mockResults))
+
+    const { result } = renderHook(() => useMemorySearch(), { wrapper: createWrapper() })
+
+    result.current.mutate({ query: 'test query' } as never)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockResults)
+  })
+})
+
+describe('useDeleteMemory', () => {
+  it('sends DELETE request for memory', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, { status: 204, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const { result } = renderHook(() => useDeleteMemory(), { wrapper: createWrapper() })
+
+    result.current.mutate('mem-1')
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/memories/mem-1'),
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+})
