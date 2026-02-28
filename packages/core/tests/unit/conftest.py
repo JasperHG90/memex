@@ -97,6 +97,8 @@ def mock_config():
     config.server.memory.extraction.model.model = 'test-model'
     config.server.memory.opinion_formation.confidence.similarity_threshold = 0.8
     config.server.attached_vaults = []
+    config.server.logging.level = 'WARNING'
+    config.server.logging.json_output = False
     return config
 
 
