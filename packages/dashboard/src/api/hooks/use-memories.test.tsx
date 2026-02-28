@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useMemory, useMemorySearch, useDeleteMemory } from './use-memories'
+import {
+  useMemory,
+  useMemorySearch,
+  useDeleteMemory,
+  useAdjustBelief,
+  useMemoryLineage,
+} from './use-memories'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -68,6 +74,39 @@ describe('useMemorySearch', () => {
   })
 })
 
+describe('useAdjustBelief', () => {
+  it('sends PATCH to confirm a memory', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, { status: 204, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const { result } = renderHook(() => useAdjustBelief(), { wrapper: createWrapper() })
+
+    result.current.mutate({ unitId: 'mem-1', adjustment: 'confirm' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toContain('/memories/mem-1/belief')
+    expect(options.method).toBe('PATCH')
+    const body = JSON.parse(options.body)
+    expect(body.evidence_type_key).toBe('user_validation')
+  })
+
+  it('sends PATCH to contradict a memory', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, { status: 204, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const { result } = renderHook(() => useAdjustBelief(), { wrapper: createWrapper() })
+
+    result.current.mutate({ unitId: 'mem-1', adjustment: 'contradict' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.evidence_type_key).toBe('user_rejection')
+  })
+})
+
 describe('useDeleteMemory', () => {
   it('sends DELETE request for memory', async () => {
     fetchSpy.mockResolvedValue(
@@ -83,5 +122,31 @@ describe('useDeleteMemory', () => {
       expect.stringContaining('/memories/mem-1'),
       expect.objectContaining({ method: 'DELETE' }),
     )
+  })
+})
+
+describe('useMemoryLineage', () => {
+  it('fetches lineage for a memory unit', async () => {
+    const mockLineage = { nodes: [], edges: [] }
+    fetchSpy.mockResolvedValue(jsonResponse(mockLineage))
+
+    const { result } = renderHook(
+      () => useMemoryLineage('mem-1', { direction: 'upstream', depth: 3 }),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockLineage)
+    const url = fetchSpy.mock.calls[0][0] as string
+    expect(url).toContain('direction=upstream')
+    expect(url).toContain('depth=3')
+  })
+
+  it('is disabled when unitId is undefined', () => {
+    const { result } = renderHook(
+      () => useMemoryLineage(undefined),
+      { wrapper: createWrapper() },
+    )
+    expect(result.current.fetchStatus).toBe('idle')
   })
 })

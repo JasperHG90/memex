@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useEntities, useEntity, useEntityMentions, useEntityCooccurrences } from './use-entities'
+import {
+  useEntities,
+  useEntity,
+  useEntityMentions,
+  useEntityCooccurrences,
+  useBulkCooccurrences,
+  useEntityLineage,
+} from './use-entities'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -121,6 +128,72 @@ describe('useEntityCooccurrences', () => {
   it('is disabled when entityId is undefined', () => {
     const { result } = renderHook(
       () => useEntityCooccurrences(undefined),
+      { wrapper: createWrapper() },
+    )
+    expect(result.current.fetchStatus).toBe('idle')
+  })
+})
+
+describe('useBulkCooccurrences', () => {
+  it('fetches bulk cooccurrences', async () => {
+    const mockData = [{ entity_id: 'e2', name: 'Bob', count: 3 }]
+    fetchSpy.mockResolvedValue(jsonResponse(mockData))
+
+    const { result } = renderHook(
+      () => useBulkCooccurrences(['e1', 'e2']),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockData)
+    const url = fetchSpy.mock.calls[0][0] as string
+    expect(url).toContain('ids=e1%2Ce2')
+  })
+
+  it('includes vault_id params', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([]))
+
+    renderHook(
+      () => useBulkCooccurrences(['e1'], ['v1']),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    const url = fetchSpy.mock.calls[0][0] as string
+    expect(url).toContain('vault_id=v1')
+  })
+
+  it('is disabled when entityIds is empty', () => {
+    const { result } = renderHook(
+      () => useBulkCooccurrences([]),
+      { wrapper: createWrapper() },
+    )
+    expect(result.current.fetchStatus).toBe('idle')
+  })
+})
+
+describe('useEntityLineage', () => {
+  it('fetches entity lineage', async () => {
+    const mockLineage = { nodes: [], edges: [] }
+    fetchSpy.mockResolvedValue(jsonResponse(mockLineage))
+
+    const { result } = renderHook(
+      () => useEntityLineage('e1', { direction: 'upstream', depth: 3, limit: 5 }),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockLineage)
+    const url = fetchSpy.mock.calls[0][0] as string
+    expect(url).toContain('/entities/e1/lineage')
+    expect(url).toContain('direction=upstream')
+    expect(url).toContain('depth=3')
+    expect(url).toContain('limit=5')
+  })
+
+  it('is disabled when entityId is undefined', () => {
+    const { result } = renderHook(
+      () => useEntityLineage(undefined),
       { wrapper: createWrapper() },
     )
     expect(result.current.fetchStatus).toBe('idle')

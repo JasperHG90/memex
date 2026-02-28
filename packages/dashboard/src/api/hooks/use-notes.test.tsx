@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useNotes, useNote, useNoteSearch, useIngestNote, useDeleteNote } from './use-notes'
+import { useNotes, useNote, useNotePageIndex, useNoteSearch, useIngestNote, useDeleteNote } from './use-notes'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -75,6 +75,27 @@ describe('useNote', () => {
 
     expect(result.current.fetchStatus).toBe('idle')
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('useNotePageIndex', () => {
+  it('fetches page index for a note', async () => {
+    const mockPageIndex = { note_id: 'n1', page_index: [{ title: 'Intro', id: 'node-1' }] }
+    fetchSpy.mockResolvedValue(jsonResponse(mockPageIndex))
+
+    const { result } = renderHook(() => useNotePageIndex('n1'), { wrapper: createWrapper() })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockPageIndex)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/notes/n1/page-index'),
+      expect.anything(),
+    )
+  })
+
+  it('is disabled when noteId is undefined', () => {
+    const { result } = renderHook(() => useNotePageIndex(undefined), { wrapper: createWrapper() })
+    expect(result.current.fetchStatus).toBe('idle')
   })
 })
 
