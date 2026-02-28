@@ -93,13 +93,6 @@ async def test_extract_and_persist_flow(extractor, mock_session):
     extractor._extract_facts = AsyncMock(
         return_value=([extracted_fact], [chunk_meta], TokenUsage(total_tokens=10))
     )
-    extractor._process_embeddings = AsyncMock(
-        return_value=[ProcessedFact.from_extracted_fact(extracted_fact, [0.1] * 384)]
-    )
-    extractor._store_chunks = AsyncMock(return_value={0: str(uuid4())})
-    extractor._store_facts = AsyncMock(
-        return_value=[str(uuid4())]
-    )  # Assuming this logic was in storage.insert_facts_batch
     extractor._resolve_entities = AsyncMock(return_value={uuid4()})
     # Patch deduplication to avoid actual DB calls and force no-duplicate result
     with patch(
@@ -112,7 +105,7 @@ async def test_extract_and_persist_flow(extractor, mock_session):
         mock_result.all.return_value = []
         mock_session.exec.return_value = mock_result
 
-        # Mock storage.insert_facts_batch since it's called directly
+        # Mock storage and pipeline functions
         with (
             patch(
                 'memex_core.memory.extraction.storage.insert_facts_batch',
@@ -126,8 +119,20 @@ async def test_extract_and_persist_flow(extractor, mock_session):
                 'memex_core.memory.extraction.engine.create_links',
                 new_callable=AsyncMock,
             ) as mock_create_links,
+            patch(
+                'memex_core.memory.extraction.engine.process_embeddings',
+                new_callable=AsyncMock,
+            ) as mock_proc_emb,
+            patch(
+                'memex_core.memory.extraction.storage.store_chunks_batch',
+                new_callable=AsyncMock,
+            ) as mock_store_chunks,
         ):
             mock_insert.return_value = [str(uuid4())]
+            mock_proc_emb.return_value = [
+                ProcessedFact.from_extracted_fact(extracted_fact, [0.1] * 384)
+            ]
+            mock_store_chunks.return_value = {0: str(uuid4())}
 
             contents = [RetainContent(content='Test Content')]
             ids, usage, touched = await extractor.extract_and_persist(
@@ -138,11 +143,9 @@ async def test_extract_and_persist_flow(extractor, mock_session):
             assert usage.total_tokens == 10
             assert len(touched) == 1
             extractor._extract_facts.assert_called_once()
-            # It seems it might be called twice in some execution paths or test setups,
-            # but for now let's just assert it was called.
-            assert extractor._process_embeddings.call_count >= 1
+            assert mock_proc_emb.call_count >= 1
             mock_track.assert_called_once()
-            extractor._store_chunks.assert_called_once()
+            mock_store_chunks.assert_called_once()
             mock_insert.assert_called_once()
             extractor._resolve_entities.assert_called_once()
             mock_create_links.assert_called_once()

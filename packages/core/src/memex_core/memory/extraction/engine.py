@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 import dspy
@@ -48,6 +48,10 @@ from memex_core.memory.extraction.pipeline.tracking import (
     enqueue_for_reflection,
 )
 from memex_core.memory.extraction.pipeline.linking import create_links
+from memex_core.memory.extraction.pipeline.fact_processing import (
+    add_temporal_offsets,
+    process_embeddings,
+)
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.confidence import ConfidenceEngine
 from memex_core.memory.sql_models import TokenUsage
@@ -222,7 +226,7 @@ class ExtractionEngine:
                 await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
             return [], usage, set()
 
-        processed_facts = await self._process_embeddings(extracted_facts)
+        processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
 
         # NB: Initialize informative priors for opinions
         for fact in processed_facts:
@@ -266,7 +270,7 @@ class ExtractionEngine:
             await track_document(
                 session, effective_doc_id, contents, is_first_batch, vault_id=vault_id
             )
-            chunk_map = await self._store_chunks(
+            chunk_map = await storage.store_chunks_batch(
                 session, effective_doc_id, chunks, vault_id=vault_id
             )
 
@@ -423,8 +427,10 @@ class ExtractionEngine:
             usage = total_usage
 
             if all_extracted_facts:
-                self._add_temporal_offsets(all_extracted_facts)
-                processed_facts = await self._process_embeddings(all_extracted_facts)
+                add_temporal_offsets(all_extracted_facts, self.SECONDS_PER_FACT)
+                processed_facts = await process_embeddings(
+                    self.embedding_model, all_extracted_facts
+                )
 
                 for fact in processed_facts:
                     if fact.fact_type == 'opinion':
@@ -457,7 +463,7 @@ class ExtractionEngine:
                             cm.embedding = emb
 
                     # Store new chunks for ADDED blocks
-                    chunk_map = await self._store_chunks(
+                    chunk_map = await storage.store_chunks_batch(
                         session, note_id, all_chunk_metadata, vault_id=vault_id
                     )
 
@@ -729,8 +735,10 @@ class ExtractionEngine:
                         global_fact_idx += 1
 
                 if extracted_facts:
-                    self._add_temporal_offsets(extracted_facts)
-                    processed_facts = await self._process_embeddings(extracted_facts)
+                    add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
+                    processed_facts = await process_embeddings(
+                        self.embedding_model, extracted_facts
+                    )
 
                     for fact in processed_facts:
                         if fact.fact_type == 'opinion':
@@ -939,8 +947,8 @@ class ExtractionEngine:
         if not extracted_facts:
             return [], usage, set()
 
-        self._add_temporal_offsets(extracted_facts)
-        processed_facts = await self._process_embeddings(extracted_facts)
+        add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
+        processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
 
         for fact in processed_facts:
             if fact.fact_type == 'opinion':
@@ -1058,7 +1066,7 @@ class ExtractionEngine:
             for cm, emb in zip(block_chunk_metadata, chunk_embeddings):
                 cm.embedding = emb
 
-        block_chunk_map = await self._store_chunks(
+        block_chunk_map = await storage.store_chunks_batch(
             session, note_id, block_chunk_metadata, vault_id=vault_id
         )
 
@@ -1190,51 +1198,8 @@ class ExtractionEngine:
 
                 global_chunk_idx += 1
 
-        self._add_temporal_offsets(extracted_facts)
+        add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
         return extracted_facts, chunk_metadata, total_usage
-
-    async def _process_embeddings(self, facts: list[ExtractedFact]) -> list[ProcessedFact]:
-        """Augment text with dates and generate embeddings."""
-        formatted_texts = embedding_processor.format_facts_for_embedding(facts)
-        embeddings = await embedding_processor.generate_embeddings_batch(
-            self.embedding_model, formatted_texts
-        )
-
-        processed = []
-        for fact, emb in zip(facts, embeddings):
-            pf = ProcessedFact.from_extracted_fact(fact, emb)
-            pf.vault_id = fact.vault_id
-            processed.append(pf)
-        return processed
-
-    async def _store_chunks(
-        self,
-        session: AsyncSession,
-        note_id: str,
-        chunks: list[ChunkMetadata],
-        vault_id: UUID = GLOBAL_VAULT_ID,
-    ) -> dict[int, str]:
-        return await storage.store_chunks_batch(session, note_id, chunks, vault_id=vault_id)
-
-    def _add_temporal_offsets(self, facts: list[ExtractedFact]) -> None:
-        """Add slight time offsets to facts to preserve ordering."""
-        current_content_idx = 0
-        content_fact_start = 0
-
-        for i, fact in enumerate(facts):
-            if fact.content_index != current_content_idx:
-                current_content_idx = fact.content_index
-                content_fact_start = i
-
-            fact_position = i - content_fact_start
-            offset = timedelta(seconds=fact_position * self.SECONDS_PER_FACT)
-
-            if fact.occurred_start:
-                fact.occurred_start += offset
-            if fact.occurred_end:
-                fact.occurred_end += offset
-            if fact.mentioned_at:
-                fact.mentioned_at += offset
 
     async def _resolve_entities(
         self,
