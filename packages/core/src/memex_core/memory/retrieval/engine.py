@@ -1,4 +1,7 @@
 import logging
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
 from uuid import UUID
 import asyncio
 from datetime import datetime, timezone
@@ -37,6 +40,27 @@ K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
 
 
+@dataclass
+class StrategyContribution:
+    """Tracks a single strategy's contribution to a result."""
+
+    strategy_name: str
+    rank: int  # 1-based rank within strategy
+    rrf_score: float
+    raw_score: float | None = None
+    timing_ms: float | None = None
+
+
+@dataclass
+class DebugContext:
+    """Collects debug info across the retrieval pipeline."""
+
+    strategy_timings: dict[str, float] = field(default_factory=dict)
+    per_result: dict[UUID, list[StrategyContribution]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+
+
 async def get_retrieval_engine(
     embedder: FastEmbedder | None = None,
     reranker: FastReranker | None = None,
@@ -53,13 +77,13 @@ async def get_retrieval_engine(
     if reranker is None:
         try:
             reranker = await get_reranking_model()
-        except Exception as e:
+        except (ImportError, ValueError, RuntimeError, OSError) as e:
             logger.debug('Reranking model unavailable, skipping: %s', e)
             reranker = None
     if ner_model is None:
         try:
             ner_model = await get_ner_model()
-        except Exception as e:
+        except (ImportError, ValueError, RuntimeError, OSError) as e:
             logger.debug('NER model unavailable, skipping: %s', e)
             ner_model = None
 
@@ -166,6 +190,8 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        debug_ctx: DebugContext | None = DebugContext() if request.debug else None
+
         all_ranked_items = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
             items = await self._perform_rrf_retrieval(
@@ -176,6 +202,7 @@ class RetrievalEngine:
                 filters,
                 strategies=request.strategies,
                 strategy_weights=request.strategy_weights,
+                debug_ctx=debug_ctx,
             )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
@@ -215,6 +242,13 @@ class RetrievalEngine:
         # 10. Update Resonance
         if final_results:
             await self._update_resonance(session, final_results, vault_id=primary_vault_id)
+
+        # 10b. Attach debug info to results
+        if debug_ctx is not None:
+            for unit in final_results:
+                info = debug_ctx.per_result.get(unit.id)
+                if info:
+                    object.__setattr__(unit, '_debug_info', info)
 
         # 11. Apply Token Budget Filtering
         if token_budget is not None:
@@ -315,14 +349,15 @@ class RetrievalEngine:
         filters: dict[str, Any],
         strategies: list[str] | None = None,
         strategy_weights: dict[str, float] | None = None,
+        debug_ctx: DebugContext | None = None,
     ) -> Sequence[Any]:
         """Executes the Reciprocal Rank Fusion query with optional strategy filtering."""
         active_strategies, include_mm = self._resolve_active_strategies(strategies)
 
         total_active = len(active_strategies) + (1 if include_mm else 0)
 
-        # Single-strategy fast path: skip RRF entirely
-        if total_active == 1:
+        # Single-strategy fast path: skip RRF entirely (disabled when debug is on)
+        if total_active == 1 and debug_ctx is None:
             if active_strategies:
                 name, (strategy, is_desc) = next(iter(active_strategies.items()))
                 return await self._perform_single_strategy_retrieval(
@@ -349,6 +384,21 @@ class RetrievalEngine:
                     False,
                     'model',
                 )
+
+        # Debug path: run strategies individually to capture per-result attribution
+        if debug_ctx is not None:
+            weights = strategy_weights or {}
+            return await self._perform_rrf_retrieval_debug(
+                session,
+                query,
+                query_embedding,
+                limit,
+                filters,
+                active_strategies,
+                include_mm,
+                weights,
+                debug_ctx,
+            )
 
         # Multi-strategy path: build CTEs with weighted RRF
         weights = strategy_weights or {}
@@ -415,6 +465,99 @@ class RetrievalEngine:
 
         result = await session.exec(final_stmt)
         return result.all()
+
+    async def _perform_rrf_retrieval_debug(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        filters: dict[str, Any],
+        active_strategies: dict[str, tuple[RetrievalStrategy, bool]],
+        include_mm: bool,
+        weights: dict[str, float],
+        debug_ctx: DebugContext,
+    ) -> Sequence[Any]:
+        """
+        Debug variant of RRF retrieval: runs strategies individually to capture
+        per-strategy timing and per-result rank attribution. Produces the same
+        RRF-fused ranking as the SQL CTE path.
+        """
+        from collections import namedtuple
+
+        Item = namedtuple('Item', ['id', 'type'])
+
+        pool_size = self.candidate_pool_size
+        all_strategy_rows: list[tuple[str, float, str, list[tuple[UUID, int, float | None]]]] = []
+
+        for name, (strategy, is_desc) in active_strategies.items():
+            weight = weights.get(name, 1.0)
+            stmt = strategy.get_statement(query, query_embedding, limit=pool_size, **filters)
+            subq = stmt.subquery(name=f'sq_{name}')
+            rank_order = subq.c.score.desc() if is_desc else subq.c.score.asc()
+
+            timed_stmt = select(
+                subq.c.id,
+                subq.c.score,
+                func.rank().over(order_by=rank_order).label('rnk'),
+            ).select_from(subq)
+
+            t0 = time.monotonic()
+            result = await session.exec(timed_stmt)
+            rows = result.all()
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            debug_ctx.strategy_timings[name] = elapsed_ms
+
+            parsed = [
+                (r.id, int(r.rnk), float(r.score) if r.score is not None else None) for r in rows
+            ]
+            all_strategy_rows.append((name, weight, 'unit', parsed))
+
+        if include_mm:
+            mm_weight = weights.get('mental_model', 1.0)
+            mm_stmt = self.mm_strategy.get_statement(
+                query, query_embedding, limit=pool_size, **filters
+            )
+            mm_subq = mm_stmt.subquery(name='sq_mental_model')
+
+            timed_stmt = select(
+                mm_subq.c.id,
+                mm_subq.c.score,
+                func.rank().over(order_by=mm_subq.c.score.asc()).label('rnk'),
+            ).select_from(mm_subq)
+
+            t0 = time.monotonic()
+            result = await session.exec(timed_stmt)
+            rows = result.all()
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            debug_ctx.strategy_timings['mental_model'] = elapsed_ms
+
+            parsed = [
+                (r.id, int(r.rnk), float(r.score) if r.score is not None else None) for r in rows
+            ]
+            all_strategy_rows.append(('mental_model', mm_weight, 'model', parsed))
+
+        rrf_scores: dict[tuple[UUID, str], float] = {}
+
+        for strategy_name, weight, result_type, rows in all_strategy_rows:
+            timing = debug_ctx.strategy_timings.get(strategy_name)
+            for uid, rank, raw_score in rows:
+                key = (uid, result_type)
+                rrf_contribution = weight / (self.k_rrf + rank)
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + rrf_contribution
+
+                debug_ctx.per_result[uid].append(
+                    StrategyContribution(
+                        strategy_name=strategy_name,
+                        rank=rank,
+                        rrf_score=round(rrf_contribution, 6),
+                        raw_score=(round(raw_score, 6) if raw_score is not None else None),
+                        timing_ms=(round(timing, 2) if timing is not None else None),
+                    )
+                )
+
+        sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
 
     async def _hydrate_results(
         self, session: AsyncSession, ranked_items: Sequence[Any]
@@ -492,7 +635,7 @@ class RetrievalEngine:
 
             scored_results.sort(key=lambda x: x[1], reverse=True)
             return [item[0] for item in scored_results]
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
             return results
 
@@ -515,7 +658,7 @@ class RetrievalEngine:
                 await self.queue_service.handle_retrieval_event(
                     session, active_entity_ids, vault_id=vault_id
                 )
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Failed to update resonance priorities: {e}')
 
     @staticmethod

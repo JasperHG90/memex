@@ -3,11 +3,12 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.schemas import (
+    DeadLetterItemDTO,
     ReflectionQueueDTO,
     ReflectionRequest as ReflectionDTO,
     ReflectionResultDTO,
@@ -146,3 +147,68 @@ async def claim_reflections(api: Annotated[MemexAPI, Depends(get_api)], limit: i
         )
     except Exception as e:
         raise _handle_error(e, 'Failed to claim reflection tasks')
+
+
+# ---------------------------------------------------------------------------
+# Dead Letter Queue (DLQ) admin endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get('/admin/reflection/dlq', response_model=list[DeadLetterItemDTO])
+async def list_dead_letter_items(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    vault_id: Annotated[UUID | None, Query(description='Filter by vault ID.')] = None,
+) -> list[DeadLetterItemDTO]:
+    """List dead-lettered reflection tasks that exhausted their retries."""
+    try:
+        items = await api.get_dead_letter_items(
+            limit=limit,
+            offset=offset,
+            vault_id=vault_id,
+        )
+        return [
+            DeadLetterItemDTO(
+                id=item.id,
+                entity_id=item.entity_id,
+                vault_id=item.vault_id,
+                priority_score=item.priority_score,
+                retry_count=item.retry_count,
+                max_retries=item.max_retries,
+                last_error=item.last_error,
+                status=item.status.value if hasattr(item.status, 'value') else item.status,
+            )
+            for item in items
+        ]
+    except Exception as e:
+        raise _handle_error(e, 'Failed to list dead letter items')
+
+
+@router.post('/admin/reflection/dlq/{item_id}/retry', response_model=DeadLetterItemDTO)
+async def retry_dead_letter_item(
+    item_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> DeadLetterItemDTO:
+    """Reset a dead-lettered item back to pending for re-processing."""
+    try:
+        item = await api.retry_dead_letter_item(item_id)
+        if item is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f'Dead letter item {item_id} not found or not in dead_letter status.',
+            )
+        return DeadLetterItemDTO(
+            id=item.id,
+            entity_id=item.entity_id,
+            vault_id=item.vault_id,
+            priority_score=item.priority_score,
+            retry_count=item.retry_count,
+            max_retries=item.max_retries,
+            last_error=item.last_error,
+            status=item.status.value if hasattr(item.status, 'value') else item.status,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _handle_error(e, 'Failed to retry dead letter item')

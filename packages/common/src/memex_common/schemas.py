@@ -207,6 +207,26 @@ class RetrievalRequest(BaseModel):
     skip_opinion_formation: bool = Field(
         default=False, description='Whether to skip the automated opinion formation loop.'
     )
+    debug: bool = Field(
+        default=False,
+        description=(
+            'When True, include per-result strategy attribution (name, rank, RRF score, timing).'
+        ),
+    )
+
+
+class StrategyDebugInfo(BaseModel):
+    """Per-strategy attribution for a single retrieval result."""
+
+    strategy_name: str = Field(description='Name of the strategy that contributed this result.')
+    rank: int = Field(description='Rank of this result within the strategy (1-based).')
+    rrf_score: float = Field(description='RRF contribution score from this strategy.')
+    raw_score: float | None = Field(
+        default=None, description='Raw score from the strategy (distance, BM25, etc.).'
+    )
+    timing_ms: float | None = Field(
+        default=None, description='Time taken by this strategy in milliseconds.'
+    )
 
 
 class ReflectionRequest(VaultMixin):
@@ -336,6 +356,11 @@ class MemoryUnitDTO(MemoryUnitBase):
     confidence_beta: float | None = Field(
         default=None,
         description='Beta parameter of Beta distribution (negative evidence).',
+    )
+
+    debug_info: list[StrategyDebugInfo] | None = Field(
+        default=None,
+        description='Per-strategy attribution when debug=True. None when debug is off.',
     )
 
     @property
@@ -539,6 +564,40 @@ class IngestResponse(BaseModel):
     )
 
 
+class WebhookPayload(BaseModel):
+    """Payload accepted by the webhook ingestion endpoint."""
+
+    title: str = Field(
+        description='Title of the note to ingest.',
+        examples=['Daily standup notes'],
+    )
+    content: str = Field(
+        description='Plain-text or Markdown content of the note.',
+        examples=['## Summary\nWe discussed the roadmap.'],
+    )
+    source: str = Field(
+        description='Identifier for the sending system (used for idempotent note_key generation).',
+        examples=['slack-bot', 'github-webhook', 'zapier'],
+    )
+    description: str | None = Field(
+        default=None,
+        description='Optional description or summary of the note.',
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description='Optional tags to associate with the note.',
+        examples=[['meeting', 'standup']],
+    )
+    vault_id: str | UUID | None = Field(
+        default=None,
+        description='Optional target vault ID or name.',
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Arbitrary metadata from the webhook source.',
+    )
+
+
 class ReflectionResultDTO(BaseModel):
     """DTO for reflection results."""
 
@@ -574,6 +633,19 @@ class ReflectionQueueDTO(BaseModel):
         description='Priority score for processing.',
         examples=[0.85],
     )
+
+
+class DeadLetterItemDTO(BaseModel):
+    """DTO for a dead-lettered reflection queue item."""
+
+    id: UUID = Field(description='Queue item ID.')
+    entity_id: UUID = Field(description='Entity that failed reflection.')
+    vault_id: UUID = Field(description='Vault of the entity.')
+    priority_score: float = Field(default=0.0, description='Priority score.')
+    retry_count: int = Field(default=0, description='Number of retries attempted.')
+    max_retries: int = Field(default=3, description='Maximum retries before dead letter.')
+    last_error: str | None = Field(default=None, description='Last error message.')
+    status: str = Field(default='dead_letter', description='Current status.')
 
 
 class BatchIngestRequest(BaseModel):

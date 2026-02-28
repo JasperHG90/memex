@@ -182,7 +182,9 @@ class ReflectionQueueService:
     async def get_next_batch(self, session, limit=10, vault_id=None, vault_ids=None):
         stmt = (
             select(ReflectionQueue)
-            .where(col(ReflectionQueue.status) == ReflectionStatus.PENDING)
+            .where(
+                col(ReflectionQueue.status).in_([ReflectionStatus.PENDING, ReflectionStatus.FAILED])
+            )
             .where(col(ReflectionQueue.priority_score) >= self.config.min_priority)
             .order_by(desc(col(ReflectionQueue.priority_score)))
             .limit(limit)
@@ -202,13 +204,15 @@ class ReflectionQueueService:
         vault_id: UUID | None = None,
     ) -> list[ReflectionQueue]:
         """
-        Fetch and lock the next batch of pending reflection tasks.
+        Fetch and lock the next batch of pending/failed reflection tasks.
         Uses SELECT ... FOR UPDATE SKIP LOCKED to ensure safe concurrency.
         Marks tasks as PROCESSING.
         """
         stmt = (
             select(ReflectionQueue)
-            .where(col(ReflectionQueue.status) == ReflectionStatus.PENDING)
+            .where(
+                col(ReflectionQueue.status).in_([ReflectionStatus.PENDING, ReflectionStatus.FAILED])
+            )
             .where(col(ReflectionQueue.priority_score) >= self.config.min_priority)
             .order_by(desc(col(ReflectionQueue.priority_score)))
             .limit(limit)
@@ -250,3 +254,83 @@ class ReflectionQueueService:
         for item in items:
             await session.delete(item)
         await session.commit()
+
+    async def mark_failed(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+        error: str = '',
+    ) -> None:
+        """Record a failure for a queue item, moving to DEAD_LETTER when retries exhausted."""
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.entity_id) == entity_id)
+            .where(col(ReflectionQueue.vault_id) == vault_id)
+        )
+        result = await session.exec(stmt)
+        item = result.first()
+        if item is None:
+            return
+
+        item.retry_count += 1
+        item.last_error = error[:2000] if error else None
+
+        if item.retry_count >= item.max_retries:
+            item.status = ReflectionStatus.DEAD_LETTER
+            logger.info(
+                'Reflection task for entity %s moved to dead letter after %d retries',
+                entity_id,
+                item.retry_count,
+            )
+        else:
+            item.status = ReflectionStatus.FAILED
+            logger.info(
+                'Reflection task for entity %s failed (retry %d/%d)',
+                entity_id,
+                item.retry_count,
+                item.max_retries,
+            )
+
+        session.add(item)
+        await session.commit()
+
+    async def get_dead_letter_items(
+        self,
+        session: AsyncSession,
+        limit: int = 50,
+        offset: int = 0,
+        vault_id: UUID | None = None,
+    ) -> list[ReflectionQueue]:
+        """Retrieve dead-lettered reflection tasks."""
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.status) == ReflectionStatus.DEAD_LETTER)
+            .order_by(desc(col(ReflectionQueue.last_queued_at)))
+            .limit(limit)
+            .offset(offset)
+        )
+        if vault_id is not None:
+            stmt = stmt.where(col(ReflectionQueue.vault_id) == vault_id)
+
+        results = await session.exec(stmt)
+        return list(results.all())
+
+    async def retry_dead_letter(
+        self,
+        session: AsyncSession,
+        item_id: UUID,
+    ) -> ReflectionQueue | None:
+        """Reset a dead-lettered item back to pending for re-processing."""
+        item = await session.get(ReflectionQueue, item_id)
+        if item is None or item.status != ReflectionStatus.DEAD_LETTER:
+            return None
+
+        item.status = ReflectionStatus.PENDING
+        item.retry_count = 0
+        item.last_error = None
+        item.last_queued_at = datetime.now(timezone.utc)
+        session.add(item)
+        await session.commit()
+        await session.refresh(item)
+        return item

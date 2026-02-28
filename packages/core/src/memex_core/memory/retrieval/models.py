@@ -56,6 +56,12 @@ class RetrievalRequest(SQLModel):
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )
+    debug: bool = Field(
+        default=False,
+        description=(
+            'When True, collect per-strategy attribution (name, rank, RRF score, timing).'
+        ),
+    )
 
     @model_validator(mode='after')
     def validate_strategies(self) -> Self:

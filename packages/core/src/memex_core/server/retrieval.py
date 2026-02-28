@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
+from memex_common.schemas import MemoryUnitDTO, RetrievalRequest, StrategyDebugInfo
 from memex_common.types import FactTypes
 
 from memex_core.api import MemexAPI
@@ -42,6 +42,7 @@ def _collect_evidence_ids(units: list[Any]) -> set[UUID]:
 def _build_retrieval_dtos(
     units: list[Any],
     evidence_doc_map: dict[UUID, UUID],
+    debug: bool = False,
 ) -> list[MemoryUnitDTO]:
     """Convert memory units to DTOs with resolved source document lineage."""
     dtos = []
@@ -68,6 +69,22 @@ def _build_retrieval_dtos(
         # Deduplicate source docs
         source_docs = list(set(source_docs))
 
+        # Build debug_info from engine-attached data
+        debug_info: list[StrategyDebugInfo] | None = None
+        if debug:
+            raw_debug = getattr(u, '_debug_info', None)
+            if raw_debug:
+                debug_info = [
+                    StrategyDebugInfo(
+                        strategy_name=c.strategy_name,
+                        rank=c.rank,
+                        rrf_score=c.rrf_score,
+                        raw_score=c.raw_score,
+                        timing_ms=c.timing_ms,
+                    )
+                    for c in raw_debug
+                ]
+
         dtos.append(
             MemoryUnitDTO(
                 id=u.id,
@@ -84,6 +101,7 @@ def _build_retrieval_dtos(
                 score=getattr(u, 'score', None),
                 confidence_alpha=getattr(u, 'confidence_alpha', None),
                 confidence_beta=getattr(u, 'confidence_beta', None),
+                debug_info=debug_info,
             )
         )
     return dtos
@@ -109,6 +127,7 @@ async def search_memories(
             token_budget=request.token_budget,
             strategies=request.strategies,
             include_stale=request.include_stale,
+            debug=request.debug,
         )
 
         if not request.skip_opinion_formation and request.strategies is None and units:
@@ -144,6 +163,6 @@ async def search_memories(
         if evidence_to_resolve:
             evidence_doc_map = await api.resolve_source_notes(list(evidence_to_resolve))
 
-        return ndjson_response(_build_retrieval_dtos(units, evidence_doc_map))
+        return ndjson_response(_build_retrieval_dtos(units, evidence_doc_map, debug=request.debug))
     except Exception as e:
         raise _handle_error(e, 'Retrieval failed')

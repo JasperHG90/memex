@@ -966,6 +966,7 @@ class ReflectionStatus(str, Enum):
     PENDING = 'pending'
     PROCESSING = 'processing'
     FAILED = 'failed'
+    DEAD_LETTER = 'dead_letter'
 
 
 class BatchJobStatus(str, Enum):
@@ -1108,6 +1109,24 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
         description='Timestamp when the entity was last added to or updated in the queue.',
     )
 
+    retry_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Number of times this task has been retried after failure.',
+    )
+
+    max_retries: int = Field(
+        default=3,
+        sa_column=Column(Integer, nullable=False, server_default='3'),
+        description='Maximum retry attempts before moving to dead letter.',
+    )
+
+    last_error: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Error message from the most recent failure.',
+    )
+
     # Relationships
 
     entity: 'Entity' = Relationship()
@@ -1119,7 +1138,7 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
             postgresql_ops={'priority_score': 'DESC'},
         ),
         Index('idx_reflection_queue_status', 'status'),
-        CheckConstraint("status IN ('pending', 'processing', 'failed')"),
+        CheckConstraint("status IN ('pending', 'processing', 'failed', 'dead_letter')"),
         # Ensure only one pending/processing task per entity per vault
         # Note: Standard SQL UNIQUE considers NULLs distinct.
         # We rely on the application layer (ReflectionQueueService) to handle the logic for global (NULL) vault uniqueness,
@@ -1327,4 +1346,116 @@ class AuditLog(SQLModel, table=True):  # type: ignore
         Index('idx_audit_logs_actor', 'actor'),
         Index('idx_audit_logs_action', 'action'),
         Index('idx_audit_logs_resource', 'resource_type', 'resource_id'),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Webhooks
+# ---------------------------------------------------------------------------
+
+
+class WebhookEvent(str, Enum):
+    """Supported webhook event types."""
+
+    INGESTION_COMPLETED = 'ingestion.completed'
+    REFLECTION_COMPLETED = 'reflection.completed'
+
+
+class DeliveryStatus(str, Enum):
+    """Status of a webhook delivery attempt."""
+
+    PENDING = 'pending'
+    SUCCESS = 'success'
+    FAILED = 'failed'
+
+
+class WebhookRegistration(SQLModel, table=True):  # type: ignore
+    """A registered webhook endpoint that receives event notifications."""
+
+    __tablename__ = 'webhook_registrations'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        primary_key=True,
+        description='Unique identifier for the webhook.',
+    )
+    url: str = Field(
+        max_length=2048,
+        description='The HTTPS URL to deliver events to.',
+    )
+    secret: str = Field(
+        max_length=255,
+        description='Shared secret for HMAC-SHA256 payload signing.',
+    )
+    events: list[str] = Field(
+        sa_column=Column(ARRAY(Text), nullable=False),
+        description='List of event types this webhook subscribes to.',
+    )
+    active: bool = Field(
+        default=True,
+        description='Whether this webhook is currently enabled.',
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
+        description='When the webhook was registered.',
+    )
+
+    deliveries: list['WebhookDelivery'] = Relationship(back_populates='webhook')
+
+    __table_args__ = (Index('idx_webhook_registrations_active', 'active'),)
+
+
+class WebhookDelivery(SQLModel, table=True):  # type: ignore
+    """Record of a single webhook delivery attempt."""
+
+    __tablename__ = 'webhook_deliveries'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        primary_key=True,
+        description='Unique identifier for the delivery.',
+    )
+    webhook_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('webhook_registrations.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
+        description='The webhook this delivery belongs to.',
+    )
+    event: str = Field(
+        max_length=100,
+        description='The event type that triggered this delivery.',
+    )
+    payload: dict[str, Any] = Field(
+        sa_column=Column(JSONB, nullable=False),
+        description='The JSON payload sent to the webhook URL.',
+    )
+    status: str = Field(
+        default=DeliveryStatus.PENDING,
+        max_length=20,
+        description='Current delivery status.',
+    )
+    attempts: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Number of delivery attempts made.',
+    )
+    last_error: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Error message from the last failed attempt.',
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
+        description='When the delivery was created.',
+    )
+
+    webhook: WebhookRegistration | None = Relationship(back_populates='deliveries')
+
+    __table_args__ = (
+        Index('idx_webhook_deliveries_webhook_id', 'webhook_id'),
+        Index('idx_webhook_deliveries_status', 'status'),
     )
