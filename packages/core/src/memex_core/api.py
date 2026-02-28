@@ -8,21 +8,16 @@ from uuid import UUID
 from functools import cached_property
 from datetime import datetime, timezone
 
-from sqlalchemy import cast as sa_cast, Date
 from sqlalchemy.exc import IntegrityError
 
-from cachetools import LRUCache, TTLCache
-from cachetools_async import cached as cached_async
 import dspy
 from sqlmodel import col
 
 from memex_common.exceptions import (
     VaultNotFoundError,
-    AmbiguousResourceError,
     ResourceNotFoundError,
     NoteNotFoundError,
     EntityNotFoundError,
-    MemoryUnitNotFoundError,
 )
 from memex_common.schemas import (
     LineageResponse,
@@ -68,14 +63,12 @@ from memex_core.processing.dates import extract_document_date
 from memex_core.processing.titles import resolve_document_title
 from memex_core.llm import run_dspy_operation
 from memex_core.services.lineage import LineageService
+from memex_core.services.stats import StatsService
+from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
 logger = logging.getLogger('memex.core.api')
 
 T = TypeVar('T')
-
-# Shared cache for vault resolution to improve performance.
-# Cleared on vault deletion to ensure consistency.
-_VAULT_RESOLUTION_CACHE: LRUCache = LRUCache(maxsize=32)
 
 
 class NoteInput:
@@ -384,6 +377,16 @@ class MemexAPI:
         self._reflection_lock = asyncio.Lock()
 
         # Domain services
+        self._vaults = VaultService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._stats = StatsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
         self._lineage = LineageService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -491,54 +494,12 @@ class MemexAPI:
             logger.warning(f'Failed to reconcile batch jobs during initialization: {e}')
 
     async def validate_vault_exists(self, vault_id: UUID) -> bool:
-        """Check if a vault exists in the metastore."""
-        from memex_core.memory.sql_models import Vault
+        """Check if a vault exists. Delegates to VaultService."""
+        return await self._vaults.validate_vault_exists(vault_id)
 
-        async with self.metastore.session() as session:
-            vault = await session.get(Vault, vault_id)
-            return vault is not None
-
-    @cached_async(cache=_VAULT_RESOLUTION_CACHE)
     async def resolve_vault_identifier(self, identifier: UUID | str) -> UUID:
-        """
-        Resolves a vault name or string UUID into a UUID object.
-        Uses a local cache for performance.
-        """
-        from sqlmodel import select
-        from memex_core.memory.sql_models import Vault
-
-        parsed_uuid = None
-        if isinstance(identifier, UUID):
-            parsed_uuid = identifier
-        else:
-            try:
-                parsed_uuid = UUID(str(identifier))
-            except (ValueError, AttributeError):
-                pass
-
-        async with self.metastore.session() as session:
-            if parsed_uuid:
-                # Validate existence if it's a UUID
-                vault = await session.get(Vault, parsed_uuid)
-                if vault:
-                    return vault.id
-
-            # Try to resolve by name
-            stmt = select(Vault).where(col(Vault.name) == str(identifier))
-            vaults = (await session.exec(stmt)).all()
-
-            if not vaults:
-                raise VaultNotFoundError(
-                    f"Vault '{identifier}' not found (searched by ID and Name)."
-                )
-
-            if len(vaults) > 1:
-                ids = ', '.join([str(v.id) for v in vaults])
-                raise AmbiguousResourceError(
-                    f"Multiple vaults found with name '{identifier}': {ids}. Please use UUID."
-                )
-
-            return vaults[0].id
+        """Resolves a vault name or UUID string. Delegates to VaultService."""
+        return await self._vaults.resolve_vault_identifier(identifier)
 
     async def ingest_from_url(
         self,
@@ -993,39 +954,8 @@ ingested_at: {now}
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
     ) -> dict[str, int]:
-        """
-        Get total counts for notes, memory units, entities, and reflection queue.
-        """
-        from memex_core.memory.sql_models import Entity, MemoryUnit, Note, ReflectionQueue
-        from sqlmodel import func, select
-
-        # Merge single vault_id with list for backwards compat
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-
-        async with self.metastore.session() as session:
-            note_stmt = select(func.count(Note.id))
-            memory_stmt = select(func.count(MemoryUnit.id))
-            entity_stmt = select(func.count(Entity.id))
-            queue_stmt = select(func.count(ReflectionQueue.id))
-
-            if ids:
-                note_stmt = note_stmt.where(col(Note.vault_id).in_(ids))
-                memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(ids))
-                queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(ids))
-
-            note_count = (await session.exec(note_stmt)).one()
-            memory_count = (await session.exec(memory_stmt)).one()
-            entity_count = (await session.exec(entity_stmt)).one()
-            queue_count = (await session.exec(queue_stmt)).one()
-
-            return {
-                'notes': note_count,
-                'memories': memory_count,
-                'entities': entity_count,
-                'reflection_queue': queue_count,
-            }
+        """Get total counts. Delegates to StatsService."""
+        return await self._stats.get_stats_counts(vault_id=vault_id, vault_ids=vault_ids)
 
     async def get_recent_notes(
         self,
@@ -1170,53 +1100,16 @@ ingested_at: {now}
             return await session.get(Entity, eid)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
-        """
-        Get a memory unit by ID.
-        """
-        from memex_core.memory.sql_models import MemoryUnit
-
-        uid = UUID(str(unit_id))
-        async with self.metastore.session() as session:
-            return await session.get(MemoryUnit, uid)
+        """Get a memory unit by ID. Delegates to StatsService."""
+        return await self._stats.get_memory_unit(unit_id)
 
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
-        """
-        Delete a memory unit and all associated data.
+        """Delete a memory unit. Delegates to StatsService."""
+        return await self._stats.delete_memory_unit(unit_id)
 
-        ORM cascades handle: unit_entities, outgoing_links, incoming_links.
-        DB FK cascade handles: evidence_log.
-        """
-        from memex_core.memory.sql_models import MemoryUnit
-
-        async with self.metastore.session() as session:
-            unit = await session.get(MemoryUnit, unit_id)
-            if not unit:
-                raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
-
-            await session.delete(unit)
-            await session.commit()
-
-        return True
-
-    @cached_async(TTLCache(maxsize=1, ttl=300), key=lambda self: 'token_usage')
     async def get_daily_token_usage(self) -> list[dict[str, Any]]:
-        """
-        Get daily aggregated token usage. Cached for 5 minutes.
-        """
-        from memex_core.memory.sql_models import TokenUsage
-        from sqlmodel import select, func
-
-        async with self.metastore.session() as session:
-            stmt = (
-                select(
-                    sa_cast(TokenUsage.timestamp, Date).label('date'),
-                    func.sum(TokenUsage.total_tokens).label('total_tokens'),
-                )
-                .group_by(sa_cast(TokenUsage.timestamp, Date))
-                .order_by(sa_cast(TokenUsage.timestamp, Date))
-            )
-            results = (await session.exec(stmt)).all()
-            return [{'date': r.date, 'total_tokens': r.total_tokens} for r in results]
+        """Get daily aggregated token usage. Delegates to StatsService."""
+        return await self._stats.get_daily_token_usage()
 
     async def retrieve(self, request: RetrievalRequest) -> list[MemoryUnit]:
         """
@@ -1234,6 +1127,7 @@ ingested_at: {now}
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
+        debug: bool = False,
     ) -> list[MemoryUnit]:
         """
         Convenience method for search with reranking.
@@ -1247,6 +1141,7 @@ ingested_at: {now}
             token_budget: Optional token budget override.
             strategies: Optional inclusion list of strategies to run.
             include_stale: Whether to include stale memory units.
+            debug: When True, attach per-strategy attribution to results.
         """
         vaults = []
 
@@ -1264,6 +1159,7 @@ ingested_at: {now}
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
+            debug=debug,
         )
 
         async with self.metastore.session() as session:
@@ -1559,36 +1455,12 @@ ingested_at: {now}
             await session.commit()
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
-        """Create a new vault."""
-        from memex_core.memory.sql_models import Vault
-        from sqlmodel import select
-
-        async with self.metastore.session() as session:
-            # Check for existing vault with same name
-            stmt = select(Vault).where(col(Vault.name) == name)
-            existing = (await session.exec(stmt)).first()
-            if existing:
-                raise ValueError(f"Vault with name '{name}' already exists.")
-
-            vault = Vault(name=name, description=description)
-            session.add(vault)
-            await session.commit()
-            await session.refresh(vault)
-            return vault
+        """Create a new vault. Delegates to VaultService."""
+        return await self._vaults.create_vault(name, description)
 
     async def delete_vault(self, vault_id: UUID) -> bool:
-        """Delete a vault and its contents."""
-        from memex_core.memory.sql_models import Vault
-
-        async with self.metastore.session() as session:
-            vault = await session.get(Vault, vault_id)
-            if not vault:
-                return False
-            await session.delete(vault)
-            await session.commit()
-            # Clear resolution cache to prevent stale lookups
-            _VAULT_RESOLUTION_CACHE.clear()
-            return True
+        """Delete a vault. Delegates to VaultService."""
+        return await self._vaults.delete_vault(vault_id)
 
     async def delete_note(self, note_id: UUID) -> bool:
         """
@@ -1671,22 +1543,12 @@ ingested_at: {now}
         return True
 
     async def list_vaults(self) -> list[Any]:
-        """List all vaults."""
-        from memex_core.memory.sql_models import Vault
-        from sqlmodel import select
-
-        async with self.metastore.session() as session:
-            stmt = select(Vault)
-            return list((await session.exec(stmt)).all())
+        """List all vaults. Delegates to VaultService."""
+        return await self._vaults.list_vaults()
 
     async def get_vault_by_name(self, name: str) -> Any | None:
-        """Get a single vault by exact name match."""
-        from memex_core.memory.sql_models import Vault
-        from sqlmodel import select
-
-        async with self.metastore.session() as session:
-            stmt = select(Vault).where(Vault.name == name)
-            return (await session.exec(stmt)).first()
+        """Get a vault by name. Delegates to VaultService."""
+        return await self._vaults.get_vault_by_name(name)
 
     async def get_reflection_queue_batch(
         self,

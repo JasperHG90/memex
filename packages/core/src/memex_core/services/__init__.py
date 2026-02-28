@@ -6,5 +6,7 @@ backward-compatible facade that delegates to them.
 
 from memex_core.services.base import BaseService
 from memex_core.services.lineage import LineageService
+from memex_core.services.stats import StatsService
+from memex_core.services.vaults import VaultService
 
-__all__ = ['BaseService', 'LineageService']
+__all__ = ['BaseService', 'LineageService', 'StatsService', 'VaultService']
