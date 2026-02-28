@@ -1270,3 +1270,61 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
             postgresql_ops={'weight': 'DESC'},
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Audit logging
+# ---------------------------------------------------------------------------
+
+
+class AuditLog(SQLModel, table=True):  # type: ignore
+    """Append-only audit trail for security-relevant events."""
+
+    __tablename__ = 'audit_logs'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        primary_key=True,
+        description='Unique identifier for the audit entry.',
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
+        description='When the event occurred.',
+    )
+    actor: str | None = Field(
+        default=None,
+        max_length=255,
+        description='API key identifier or "anonymous" when auth is disabled.',
+    )
+    action: str = Field(
+        max_length=100,
+        description='Event type, e.g. auth.success, auth.failure, note.create.',
+    )
+    resource_type: str | None = Field(
+        default=None,
+        max_length=100,
+        description='Type of resource affected (note, entity, vault, etc.).',
+    )
+    resource_id: str | None = Field(
+        default=None,
+        max_length=255,
+        description='ID of the affected resource.',
+    )
+    session_id: str | None = Field(
+        default=None,
+        max_length=255,
+        description='Request session ID for correlation.',
+    )
+    details: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='Arbitrary event details (IP, user-agent, etc.).',
+    )
+
+    __table_args__ = (
+        Index('idx_audit_logs_timestamp', 'timestamp'),
+        Index('idx_audit_logs_actor', 'actor'),
+        Index('idx_audit_logs_action', 'action'),
+        Index('idx_audit_logs_resource', 'resource_type', 'resource_id'),
+    )

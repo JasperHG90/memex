@@ -1,5 +1,8 @@
 """Tests for API key authentication middleware."""
 
+import importlib.util
+import pathlib as plb
+
 import pytest
 
 from fastapi import FastAPI
@@ -7,7 +10,18 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from memex_common.config import AuthConfig
-from memex_core.server.auth import setup_auth, _validate_key
+
+# Import auth module directly to avoid triggering server/__init__.py
+# (which imports the full MemexAPI → retrieval chain).
+import memex_core
+
+_auth_path = plb.Path(memex_core.__file__).resolve().parent / 'server' / 'auth.py'
+_spec = importlib.util.spec_from_file_location('_auth', _auth_path)
+assert _spec is not None and _spec.loader is not None
+_auth_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_auth_mod)
+setup_auth = _auth_mod.setup_auth
+_validate_key = _auth_mod._validate_key
 
 
 # ---------------------------------------------------------------------------
