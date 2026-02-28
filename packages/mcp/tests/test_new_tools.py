@@ -69,7 +69,7 @@ async def test_list_notes_returns_formatted_list(mock_api, mcp_client):
     assert 'Found 1 note(s)' in text
     assert '**First Note**' in text
     assert str(n1.id) in text
-    mock_api.list_notes.assert_called_once_with(limit=10, offset=0)
+    mock_api.list_notes.assert_called_once_with(limit=10, offset=0, vault_id=None)
 
 
 @pytest.mark.asyncio
