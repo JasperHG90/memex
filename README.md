@@ -13,11 +13,12 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 Requires Python 3.12+ and `uv`.
 
 ```bash
-# Clone and sync
-uv tool install git+https://github.com/JasperHG90/memex.git[mcp,dashboard,server]
+uv tool install git+https://github.com/JasperHG90/memex.git[mcp,server]
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
+
+> The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
 
 ### 2. Initialize
 Sets up your local storage and configuration.
@@ -42,7 +43,7 @@ Feed it knowledge.
 memex vault create notes --description "Notes about things"
 
 # Inline note
-memex memory add -v notes "Memex provides long-term mmemory that evolves."
+memex memory add -v notes "Memex provides long-term memory that evolves."
 
 # Capture a webpage
 # Goes to the 'global' vault
@@ -57,7 +58,7 @@ memex memory add --file /path/to/file.md --vault notes
 Ask questions.
 
 ```bash
-uv run memex memory search "How does Python handle memory management?"
+memex memory search "How does Python handle memory management?"
 ```
 
 ## See it in action
@@ -90,10 +91,13 @@ Comprehensive guides and references are available in [`docs/`](./docs).
 ### Key Features
 - [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
 - [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Understanding fact extraction.
+- [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): The TEMPR system — five search strategies fused via RRF.
 - [Doc Search vs Memory Search](./docs/how-to/doc-search-vs-memory-search.md): Choosing the right retrieval strategy.
+- [Claude Code Integration](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory.
+- [MCP Integration](./docs/how-to/using-mcp.md): Connecting Memex to Claude Desktop, Cursor, and other MCP clients.
 - [Batch Ingestion](./docs/how-to/batch-ingestion.md): Importing your existing notes.
-- [MCP Integration](./docs/how-to/using-mcp.md): Connecting Memex to Claude/IDEs.
 - [Vaults](./docs/how-to/organize-with-vaults.md): Isolating project knowledge.
+- [Database Migrations](./docs/how-to/database-migrations.md): Managing schema migrations with `memex db`.
 
 ### Reference
 - [CLI Commands](./docs/reference/cli-commands.md)
@@ -104,13 +108,17 @@ Comprehensive guides and references are available in [`docs/`](./docs).
 ### Management
 - [Deleting and Archiving](./docs/how-to/delete-archival.md): Managing your knowledge base.
 
+> **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
+
 ## 🏗️ Architecture
 
-Memex is built as a Python monorepo:
-- **`packages/core`**: The brain. Extraction, Retrieval (TEMPR), Reflection, utilities, PageIndex.
-- **`packages/cli`**: The interface. Management commands.
-- **`packages/mcp`**: The bridge. Connects to AI agents.
-- **`packages/dashboard`**: The view. Visual knowledge graph.
+Memex is built as a monorepo:
+- **`packages/core`**: The brain. Extraction, Retrieval (TEMPR), Reflection, services, FastAPI server.
+- **`packages/cli`**: The interface. Typer CLI commands.
+- **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
+- **`packages/common`**: The foundation. Shared models, config, and exceptions.
+- **`packages/dashboard`**: The view. React + Vite web UI for exploring your knowledge graph.
+- **`packages/openclaw`**: The plugin. Memex memory integration for OpenClaw agents.
 
 ## License
 
