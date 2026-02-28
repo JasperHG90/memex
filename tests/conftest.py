@@ -115,22 +115,27 @@ def tmp_env(tmp_path) -> Generator[None, None, None]:
 
     yield
 
-    # Restore Environment
-    os.environ.clear()
-    os.environ.update(old_env)
+    try:
+        # Close and remove the temp file handler before restoring state
+        file_handler.close()
+        root_logger.removeHandler(file_handler)
 
-    # Close and remove the temp file handler before restoring state
-    file_handler.close()
-    root_logger.removeHandler(file_handler)
+        # Restore root logger
+        root_logger.handlers = original_root_handlers
+        root_logger.setLevel(original_root_level)
 
-    # Restore root logger
-    root_logger.handlers = original_root_handlers
-    root_logger.setLevel(original_root_level)
-
-    # Restore 'memex' logger
-    memex_logger.handlers = original_memex_handlers
-    memex_logger.setLevel(original_memex_level)
-    memex_logger.propagate = original_memex_propagate
+        # Restore 'memex' logger
+        memex_logger.handlers = original_memex_handlers
+        memex_logger.setLevel(original_memex_level)
+        memex_logger.propagate = original_memex_propagate
+    finally:
+        # Restore environment atomically: remove keys added during test,
+        # then restore original values. Never call os.environ.clear()
+        # because a mid-teardown failure would leave the env empty.
+        added_keys = set(os.environ) - set(old_env)
+        for key in added_keys:
+            del os.environ[key]
+        os.environ.update(old_env)
 
 
 @pytest_asyncio.fixture(scope='session', autouse=True)
