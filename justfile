@@ -59,3 +59,7 @@ dashboard-build:
 # Generate API types from OpenAPI spec
 dashboard-generate-api:
   cd packages/dashboard && npm run generate-api
+
+# Run performance benchmarks
+benchmark:
+  uv run pytest packages/core/tests/benchmarks --benchmark-only -v
