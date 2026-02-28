@@ -2,7 +2,7 @@ import pytest
 import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from memex_core.api import MemexAPI
+from memex_core.services.ingestion import IngestionService
 
 
 @pytest.mark.asyncio
@@ -22,16 +22,18 @@ async def test_uuid_idempotency_same_file(
     mock_vault.name = 'global'
     mock_session.exec.return_value.all.return_value = [mock_vault]
 
-    with patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest:
-        api._file_processor = MagicMock()
+    with patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest:
+        api._ingestion._file_processor = MagicMock()
         extracted = MagicMock()
         extracted.content = 'This is the raw content'
         extracted.content_type = 'pdf'
         extracted.document_date = None
         extracted.images = {}
-        api._file_processor.extract = AsyncMock(return_value=extracted)
+        api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
-        with patch('memex_core.api.extract_document_date', new_callable=AsyncMock) as mock_date:
+        with patch(
+            'memex_core.services.ingestion.extract_document_date', new_callable=AsyncMock
+        ) as mock_date:
             mock_date.return_value = None
             mock_ingest.return_value = {'status': 'success'}
             await api.ingest_from_file(pdf_file)

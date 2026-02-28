@@ -1,26 +1,21 @@
-from typing import TypeVar, cast, Self, Any, AsyncGenerator
+from typing import cast, Self, Any, AsyncGenerator
 import hashlib
 import pathlib as plb
 import logging
-import base64
 from uuid import UUID
 from functools import cached_property
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
 
 import dspy
-from sqlmodel import col
 
 from memex_common.exceptions import (
     VaultNotFoundError,
-    ResourceNotFoundError,
-    NoteNotFoundError,
 )
 from memex_common.schemas import (
     LineageResponse,
     LineageDirection,
-    NoteSearchRequest,
     NoteSearchResult,
     NodeDTO,
 )
@@ -30,7 +25,6 @@ from memex_core.storage import (
     calculate_deep_hash,
     Manifest,
 )
-from memex_core.storage.transaction import AsyncTransaction
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.templates import MemexTemplateFromFile
@@ -38,7 +32,6 @@ from memex_core.templates import MemexTemplateFromFile
 # Engines and Models
 from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.engine import ExtractionEngine
-from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
@@ -54,21 +47,18 @@ from memex_core.memory.models.reranking import FastReranker
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.extraction.core import ExtractSemanticFacts
-from memex_core.processing.web import WebContentProcessor
 from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
-from memex_core.processing.dates import extract_document_date
-from memex_core.processing.titles import resolve_document_title
-from memex_core.llm import run_dspy_operation
 from memex_core.services.entities import EntityService
+from memex_core.services.ingestion import IngestionService
 from memex_core.services.lineage import LineageService
+from memex_core.services.notes import NoteService
 from memex_core.services.reflection import ReflectionService
+from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
 from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
 logger = logging.getLogger('memex.core.api')
-
-T = TypeVar('T')
 
 
 class NoteInput:
@@ -404,6 +394,29 @@ class MemexAPI:
             queue_service=self.queue_service,
             embedding_model=self.embedding_model,
         )
+        self._search = SearchService(
+            metastore=self.metastore,
+            config=self.config,
+            lm=self.lm,
+            memory=self.memory,
+            doc_search=self._doc_search,
+            vaults=self._vaults,
+        )
+        self._notes = NoteService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+            vaults=self._vaults,
+        )
+        self._ingestion = IngestionService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+            lm=self.lm,
+            memory=self.memory,
+            file_processor=self._file_processor,
+            vaults=self._vaults,
+        )
 
     @property
     def embedder(self) -> FastEmbedder:
@@ -520,60 +533,10 @@ class MemexAPI:
         reflect_after: bool = True,
         assets: dict[str, bytes] | None = None,
     ) -> dict[str, Any]:
-        """Ingest content from a URL and store it as a NoteInput."""
-
-        try:
-            extracted = await WebContentProcessor.fetch_and_extract(url)
-        except ValueError as e:
-            logger.error(f'Failed to fetch {url}: {e}')
-            raise
-
-        target_vault_id = await self.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+        """Ingest from URL. Delegates to IngestionService."""
+        return await self._ingestion.ingest_from_url(
+            url, vault_id=vault_id, reflect_after=reflect_after, assets=assets
         )
-
-        title = extracted.metadata.get('title') or None  # None triggers title resolution
-        now = datetime.now().isoformat()
-
-        note_content = f"""---
-source_url: {extracted.source}
-hostname: {extracted.metadata.get('hostname')}
-ingested_at: {now}
-publish_date: {extracted.metadata.get('date')}
----
-{extracted.content}
-"""
-
-        original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
-
-        decoded_assets = {}
-        if assets:
-            for k, v in assets.items():
-                try:
-                    decoded_assets[k] = base64.b64decode(v)
-                except Exception as e:
-                    logger.debug('Base64 decode failed for asset %r, using raw value: %s', k, e)
-                    decoded_assets[k] = v
-
-        note = NoteInput(
-            name=title,
-            description=f'Content from {extracted.metadata.get("hostname", url)}',
-            content=note_content.encode('utf-8'),
-            source_uri=url,
-            original_content_hash=original_hash,
-            files=decoded_assets,
-        )
-
-        # Resolve document date: web metadata -> LLM fallback -> now()
-        event_date = extracted.document_date
-        if event_date is None:
-            async with self.metastore.session() as date_session:
-                event_date = await extract_document_date(
-                    extracted.content, self.lm, date_session, target_vault_id
-                )
-                await date_session.commit()
-
-        return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
 
     async def ingest_from_file(
         self,
@@ -581,60 +544,10 @@ publish_date: {extracted.metadata.get('date')}
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
     ) -> dict[str, Any]:
-        """
-        Ingest content from a path.
-        - If it's a directory or a .md file, it's treated as a native NoteInput (preserving structure/assets).
-        - Otherwise, it uses MarkItDown for extraction and summarizes it into a new NoteInput.
-        """
-        path = plb.Path(file_path)
-
-        if path.is_dir() or path.suffix.lower() == '.md':
-            logger.info(f'Ingesting {path} as a native NoteInput.')
-            note = await NoteInput.from_file(path)
-            return await self.ingest(note)
-
-        try:
-            extracted = await self._file_processor.extract(path)
-        except Exception as e:
-            logger.error(f'Failed to extract {path}: {e}')
-            raise
-
-        target_vault_id = await self.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+        """Ingest from file. Delegates to IngestionService."""
+        return await self._ingestion.ingest_from_file(
+            file_path, vault_id=vault_id, reflect_after=reflect_after
         )
-
-        now = datetime.now().isoformat()
-
-        note_content = f"""---
-source_file: {path.name}
-type: {extracted.content_type}
-ingested_at: {now}
----
-{extracted.content}
-"""
-
-        original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
-
-        note = NoteInput(
-            name=path.stem,
-            description=f'Content from {path.name}',
-            content=note_content.encode('utf-8'),
-            tags=['file-import'],
-            source_uri=str(path.absolute()),
-            original_content_hash=original_hash,
-            files=extracted.images,
-        )
-
-        # Resolve document date: file mtime -> LLM fallback -> now()
-        event_date = extracted.document_date
-        if event_date is None:
-            async with self.metastore.session() as date_session:
-                event_date = await extract_document_date(
-                    extracted.content, self.lm, date_session, target_vault_id
-                )
-                await date_session.commit()
-
-        return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
 
     async def ingest(
         self,
@@ -642,111 +555,8 @@ ingested_at: {now}
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
     ) -> dict[str, Any]:
-        """
-        Transactional ingestion of a note into Memex.
-
-        Workflow:
-        1. Calculate ID (NoteInput.uuid).
-        2. Idempotency Check: Skip if exists in MetaStore.
-        3. Transaction: Open AsyncTransaction.
-        4. Stage Files: Save to FileStore.
-        5. Extract Facts: Run MemoryEngine.retain in DB session.
-        6. Commit: 2PC via AsyncTransaction.
-
-        Args:
-            note: The NoteInput object to ingest.
-            vault_id: Optional target vault identifier. If None, uses active_vault.
-            event_date: Optional document date for temporal anchoring. Falls back to now().
-
-        Returns:
-            Dict containing extraction results (unit_ids, etc.) or status.
-        """
-        note_uuid = note.uuid
-        logger.info(f'Ingesting note: {note._metadata.name} (UUID: {note_uuid})')
-
-        # Determine Target Vault
-        target_vault_id = await self.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
-        )
-
-        # 2. Two-Gate Idempotency Check
-        async with self.metastore.session() as session:
-            # Fetch vault name for path organization
-            from memex_core.memory.sql_models import Vault, Note
-
-            vault = await session.get(Vault, target_vault_id)
-            vault_name = vault.name if vault else str(target_vault_id)
-
-            # Gate 1: Does note_key exist?
-            from sqlmodel import select
-
-            stmt = select(Note.content_hash).where(col(Note.id) == note_uuid)
-            stored_hash = (await session.exec(stmt)).first()
-            if stored_hash is not None:
-                # Gate 2: Has content_fingerprint changed?
-                if stored_hash == note.content_fingerprint:
-                    logger.info(f'Document {note_uuid} unchanged. Skipping ingestion.')
-                    return {'status': 'skipped', 'reason': 'idempotency_check'}
-                logger.info(f'Document {note_uuid} exists but content changed. Incremental update.')
-
-        # 3. Open Transaction
-        async with AsyncTransaction(self.metastore, self.filestore, note_uuid) as txn:
-            # 4. Stage Files (FS)
-            # We save ONLY auxiliary files (assets)
-            # Path structure: assets/{vault_name}/{uuid}/filename
-            asset_path = f'assets/{vault_name}/{note_uuid}'
-            asset_files_list = []
-
-            # Save auxiliary files
-            for filename, content in note._files.items():
-                full_asset_key = f'{asset_path}/{filename}'
-                await self.filestore.save(full_asset_key, content)
-                asset_files_list.append(full_asset_key)
-
-            # 5. Extract Facts (MS)
-            content_text = note._content.decode('utf-8')
-
-            # Resolve the best available title before building the payload.
-            resolved_title = await resolve_document_title(
-                content_text,
-                note._metadata.name,
-                self.lm,
-                session=txn.db_session,
-                vault_id=target_vault_id,
-            )
-
-            retain_content = RetainContent(
-                content=content_text,
-                event_date=event_date or datetime.now(timezone.utc),
-                payload={
-                    'source': 'note',
-                    'note_name': resolved_title,
-                    'note_description': note._metadata.description,
-                    'uuid': note_uuid,
-                    # We pass the asset path if assets exist
-                    'filestore_path': asset_path if asset_files_list else None,
-                    'assets': asset_files_list,
-                    'source_uri': note.source_uri,
-                    'content_fingerprint': note.content_fingerprint,
-                },
-                vault_id=target_vault_id,
-            )
-
-            # Use the transaction's DB session
-            result = await self.memory.retain(
-                session=txn.db_session,
-                contents=[retain_content],
-                note_id=note_uuid,
-                reflect_after=False,
-                agent_name='user',
-            )
-
-            # Inject note_id into result for clients
-            result['note_id'] = note_uuid
-            result['status'] = 'success'
-
-            # Transaction commit happens on exit
-            return result
+        """Ingest a note. Delegates to IngestionService."""
+        return await self._ingestion.ingest(note, vault_id=vault_id, event_date=event_date)
 
     async def ingest_batch_internal(
         self,
@@ -754,181 +564,27 @@ ingested_at: {now}
         vault_id: UUID | str | None = None,
         batch_size: int = 32,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Internal high-performance batch ingestion logic.
-        Orchestrates idempotency checks, asset staging, and batched memory retention.
-        Yields progress updates.
-
-        Args:
-            notes: List of NoteDTO objects.
-            vault_id: Optional target vault identifier.
-            batch_size: Processing chunk size.
-
-        Yields:
-            Aggregated results (processed, skipped, failed counts and document IDs).
-        """
-        from memex_core.memory.sql_models import Vault, Note
-        from sqlmodel import select
-
-        target_vault_id = await self.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
-        )
-
-        # 1. Resolve Vault Name for path organization
-        async with self.metastore.session() as session:
-            vault = await session.get(Vault, target_vault_id)
-            vault_name = vault.name if vault else str(target_vault_id)
-
-        # 2. Two-Gate Idempotency Check
-        # Gate 1: Does note_key exist? Gate 2: Has content_fingerprint changed?
-        note_uuids = [UUID(NoteInput.calculate_uuid_from_dto(n)) for n in notes]
-        note_fingerprints = [NoteInput.calculate_fingerprint_from_dto(n) for n in notes]
-        async with self.metastore.session() as session:
-            stmt = select(Note.id, Note.content_hash).where(col(Note.id).in_(note_uuids))
-            db_result = await session.exec(stmt)
-            # Map note_key -> stored content_hash
-            existing_docs: dict[UUID, str | None] = {row[0]: row[1] for row in db_result.all()}
-
-        results: dict[str, Any] = {
-            'processed_count': 0,
-            'skipped_count': 0,
-            'failed_count': 0,
-            'note_ids': [],
-            'errors': [],
-        }
-
-        # Filter: skip only if note_key exists AND content_fingerprint matches
-        to_process = []
-        for i, (note_dto, note_uuid, fingerprint) in enumerate(
-            zip(notes, note_uuids, note_fingerprints)
+        """Batch ingestion. Delegates to IngestionService."""
+        async for result in self._ingestion.ingest_batch_internal(
+            notes, vault_id=vault_id, batch_size=batch_size
         ):
-            if note_uuid in existing_docs:
-                stored_hash = existing_docs[note_uuid]
-                if stored_hash == fingerprint:
-                    # Gate 2 match: exact same content, skip
-                    results['skipped_count'] += 1
-                    continue
-                # Gate 2 mismatch: content changed, needs incremental update
-            to_process.append((i, note_dto, note_uuid))
-
-        # Initial yield for skipped items
-        yield results
-
-        # 3. Batch Processing Loop
-        for i in range(0, len(to_process), batch_size):
-            chunk = to_process[i : i + batch_size]
-
-            # Chunk Atomicity via AsyncTransaction
-            # We process one transaction per chunk
-            try:
-                # We use the UUID of the first note in the chunk as a placeholder for the txn ID
-                # since AsyncTransaction expects a single UUID for its lineage.
-                # TODO: Revisit if AsyncTransaction needs a multi-UUID mode.
-                chunk_txn_id = chunk[0][2]
-
-                async with AsyncTransaction(self.metastore, self.filestore, chunk_txn_id) as txn:
-                    chunk_doc_ids = []
-
-                    for original_idx, note_dto, note_uuid in chunk:
-                        # Decode and Stage Assets
-                        asset_path = f'assets/{vault_name}/{note_uuid}'
-                        asset_files_list = []
-
-                        # Content is already bytes
-                        decoded_content = note_dto.content_decoded
-
-                        for filename, content in note_dto.files.items():
-                            # content is Base64 encoded bytes in NoteDTO.
-                            # We must decode it to store raw files (e.g. images)
-                            try:
-                                raw_content = base64.b64decode(content)
-                            except Exception as e:
-                                logger.debug(
-                                    'Base64 decode failed for file %r, using raw: %s', filename, e
-                                )
-                                raw_content = content
-
-                            full_asset_key = f'{asset_path}/{filename}'
-                            await self.filestore.save(full_asset_key, raw_content)
-                            asset_files_list.append(full_asset_key)
-
-                        # Prepare RetainContent
-                        retain_content = RetainContent(
-                            content=decoded_content,
-                            event_date=datetime.now(timezone.utc),
-                            payload={
-                                'source': 'batch_note',
-                                'note_name': note_dto.name,
-                                'note_description': note_dto.description,
-                                'uuid': str(note_uuid),
-                                'filestore_path': asset_path if asset_files_list else None,
-                                'assets': asset_files_list,
-                                'content_fingerprint': note_fingerprints[original_idx],
-                            },
-                            vault_id=target_vault_id,
-                        )
-
-                        # Retain in MetaStore per note to ensure document tracking
-                        await self.memory.retain(
-                            session=txn.db_session,
-                            contents=[retain_content],
-                            note_id=str(note_uuid),
-                            reflect_after=False,
-                            agent_name='user',
-                        )
-                        chunk_doc_ids.append(note_uuid)
-
-                    # Update aggregate results
-                    results['processed_count'] += len(chunk)
-                    results['note_ids'].extend([str(uid) for uid in chunk_doc_ids])
-
-            except Exception as e:
-                logger.error(f'Failed to process ingestion chunk: {e}', exc_info=True)
-                results['failed_count'] += len(chunk)
-                results['errors'].append({'chunk_start': i, 'error': str(e)})
-                # Continue with next chunk
-
-            # Yield progress after each chunk
-            yield results
+            yield result
 
     async def get_resource(self, path: str) -> bytes:
-        """
-        Direct access to stored assets in the file store.
-        """
-        return await self.filestore.load(path)
+        """Direct access to stored assets. Delegates to NoteService."""
+        return await self._notes.get_resource(path)
 
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
-        """
-        Retrieve a single document by ID.
-        """
-        from memex_core.memory.sql_models import Note
-
-        async with self.metastore.session() as session:
-            doc = await session.get(Note, note_id)
-            if not doc:
-                raise ResourceNotFoundError(f'Document {note_id} not found.')
-
-            return doc.model_dump()
+        """Retrieve a single document by ID. Delegates to NoteService."""
+        return await self._notes.get_note(note_id)
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
-        """Retrieve the page index (slim tree) for a document, or None if not indexed."""
-        from memex_core.memory.sql_models import Note
-
-        async with self.metastore.session() as session:
-            doc = await session.get(Note, note_id)
-            if not doc:
-                raise ResourceNotFoundError(f'Document {note_id} not found.')
-            return doc.page_index
+        """Retrieve the page index. Delegates to NoteService."""
+        return await self._notes.get_note_page_index(note_id)
 
     async def get_node(self, node_id: UUID) -> NodeDTO | None:
-        """Retrieve a specific document node by its ID."""
-        from memex_core.memory.sql_models import Node
-
-        async with self.metastore.session() as session:
-            node = await session.get(Node, node_id)
-            if node is None:
-                return None
-            return NodeDTO.model_validate(node)
+        """Retrieve a specific document node. Delegates to NoteService."""
+        return await self._notes.get_node(node_id)
 
     async def list_notes(
         self,
@@ -937,29 +593,10 @@ ingested_at: {now}
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
     ) -> list[Any]:
-        """
-        List ingested documents.
-        Filters by the given vault_id(s), or the active vault (write target) if not provided.
-        """
-        from memex_core.memory.sql_models import Note
-        from sqlmodel import select
-
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-
-        async with self.metastore.session() as session:
-            stmt = select(Note)
-            if ids:
-                stmt = stmt.where(col(Note.vault_id).in_(ids))
-            else:
-                target_vault_id = await self.resolve_vault_identifier(
-                    self.config.server.active_vault
-                )
-                stmt = stmt.where(col(Note.vault_id) == target_vault_id)
-
-            stmt = stmt.offset(offset).limit(limit)
-            return list((await session.exec(stmt)).all())
+        """List ingested documents. Delegates to NoteService."""
+        return await self._notes.list_notes(
+            limit=limit, offset=offset, vault_id=vault_id, vault_ids=vault_ids
+        )
 
     async def get_stats_counts(
         self,
@@ -975,22 +612,10 @@ ingested_at: {now}
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
     ) -> list[Any]:
-        """
-        Get the most recent notes.
-        """
-        from memex_core.memory.sql_models import Note
-        from sqlmodel import desc, select
-
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-
-        async with self.metastore.session() as session:
-            stmt = select(Note).order_by(desc(Note.created_at))
-            if ids:
-                stmt = stmt.where(col(Note.vault_id).in_(ids))
-            stmt = stmt.limit(limit)
-            return list((await session.exec(stmt)).all())
+        """Get the most recent notes. Delegates to NoteService."""
+        return await self._notes.get_recent_notes(
+            limit=limit, vault_id=vault_id, vault_ids=vault_ids
+        )
 
     async def list_entities_ranked(
         self, limit: int = 100, vault_ids: list[UUID] | None = None
@@ -1034,11 +659,8 @@ ingested_at: {now}
         return await self._stats.get_daily_token_usage()
 
     async def retrieve(self, request: RetrievalRequest) -> list[MemoryUnit]:
-        """
-        Retrieve memories and synthesized observations using TEMPR Recall.
-        """
-        async with self.metastore.session() as session:
-            return await self.memory.recall(session, request)
+        """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
+        return await self._search.retrieve(request)
 
     async def search(
         self,
@@ -1051,67 +673,21 @@ ingested_at: {now}
         include_stale: bool = False,
         debug: bool = False,
     ) -> list[MemoryUnit]:
-        """
-        Convenience method for search with reranking.
-        Scopes to active vault + attached vaults if vault_ids is not provided.
-
-        Args:
-            query: User search query.
-            limit: Number of results.
-            skip_opinion_formation: If True, skips the automated opinion formation loop.
-            vault_ids: Optional list of vault IDs to search in.
-            token_budget: Optional token budget override.
-            strategies: Optional inclusion list of strategies to run.
-            include_stale: Whether to include stale memory units.
-            debug: When True, attach per-strategy attribution to results.
-        """
-        vaults = []
-
-        if vault_ids:
-            for v in vault_ids:
-                vaults.append(await self.resolve_vault_identifier(str(v)))
-        else:
-            # 1. Active Vault (Write Target) - always included
-            vaults.append(await self.resolve_vault_identifier(self.config.server.active_vault))
-
-        request = RetrievalRequest(
+        """Search with reranking. Delegates to SearchService."""
+        return await self._search.search(
             query=query,
             limit=limit,
-            vault_ids=vaults,
+            skip_opinion_formation=skip_opinion_formation,
+            vault_ids=vault_ids,
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
             debug=debug,
         )
 
-        async with self.metastore.session() as session:
-            return await self.memory.recall(session, request)
-
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
-        """Synthesize search results into a concise answer with citations.
-
-        Args:
-            query: The original search query.
-            texts: List of search result texts to summarize.
-
-        Returns:
-            AI-generated summary string with bracket citations.
-        """
-        from memex_core.memory.retrieval.prompts import SearchSummarySignature
-
-        predictor = dspy.Predict(SearchSummarySignature)
-
-        async with self.metastore.session() as session:
-            prediction, _ = await run_dspy_operation(
-                lm=self.lm,
-                predictor=predictor,
-                input_kwargs={'query': query, 'search_results': texts},
-                session=session,
-                context_metadata={'operation': 'search_summary'},
-            )
-            await session.commit()
-
-        return prediction.summary
+        """Summarize search results. Delegates to SearchService."""
+        return await self._search.summarize_search_results(query, texts)
 
     async def search_notes(
         self,
@@ -1126,59 +702,23 @@ ingested_at: {now}
         summarize: bool = False,
         mmr_lambda: float | None = None,
     ) -> list[NoteSearchResult]:
-        """
-        Search for documents containing relevant information using raw chunks.
-        """
-        vaults = []
-        if vault_ids:
-            for v in vault_ids:
-                vaults.append(await self.resolve_vault_identifier(str(v)))
-        else:
-            vaults.append(await self.resolve_vault_identifier(self.config.server.active_vault))
-
-        kwargs: dict[str, Any] = {}
-        if strategies is not None:
-            kwargs['strategies'] = strategies
-        if strategy_weights is not None:
-            kwargs['strategy_weights'] = strategy_weights
-
-        # Resolve effective mmr_lambda: per-request override, else config default
-        effective_mmr_lambda = mmr_lambda
-        if effective_mmr_lambda is None:
-            effective_mmr_lambda = self.config.server.document.mmr_lambda
-        if effective_mmr_lambda is not None:
-            kwargs['mmr_lambda'] = effective_mmr_lambda
-
-        request = NoteSearchRequest(
+        """Search notes. Delegates to SearchService."""
+        return await self._search.search_notes(
             query=query,
             limit=limit,
-            vault_ids=vaults,
+            vault_ids=vault_ids,
             expand_query=expand_query,
             fusion_strategy=fusion_strategy,
+            strategies=strategies,
+            strategy_weights=strategy_weights,
             reason=reason,
             summarize=summarize,
-            **kwargs,
+            mmr_lambda=mmr_lambda,
         )
 
-        async with self.metastore.session() as session:
-            return await self._doc_search.search(session, request)
-
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
-        """
-        Resolve the source note ID for a list of Memory Unit IDs.
-        Returns a map of {unit_id: note_id}.
-        """
-        from memex_core.memory.sql_models import MemoryUnit
-        from sqlmodel import select
-
-        if not unit_ids:
-            return {}
-
-        async with self.metastore.session() as session:
-            stmt = select(MemoryUnit.id, MemoryUnit.note_id).where(col(MemoryUnit.id).in_(unit_ids))
-            results = (await session.exec(stmt)).all()
-
-            return {row[0]: row[1] for row in results if row[1] is not None}
+        """Resolve source note IDs. Delegates to SearchService."""
+        return await self._search.resolve_source_notes(unit_ids)
 
     async def process_opinion_formation(
         self, query: str, context: list[MemoryUnit], vault_id: UUID
@@ -1230,31 +770,8 @@ ingested_at: {now}
         return await self._vaults.delete_vault(vault_id)
 
     async def delete_note(self, note_id: UUID) -> bool:
-        """
-        Delete a document and all associated data.
-
-        Uses AsyncTransaction for atomicity across metastore + filestore.
-        ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
-        FileStore cleanup handles: assets and filestore_path.
-        """
-        from memex_core.memory.sql_models import Note
-
-        async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
-            doc = await txn.db_session.get(Note, note_id)
-            if not doc:
-                raise NoteNotFoundError(f'Note {note_id} not found.')
-
-            # Stage filestore deletes (deferred until commit)
-            if doc.assets:
-                for asset_path in doc.assets:
-                    await self.filestore.delete(asset_path)
-            if doc.filestore_path:
-                await self.filestore.delete(doc.filestore_path, recursive=True)
-
-            # ORM cascades handle memory_units, chunks, and their children
-            await txn.db_session.delete(doc)
-
-        return True
+        """Delete a document and all associated data. Delegates to NoteService."""
+        return await self._notes.delete_note(note_id)
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """Delete an entity. Delegates to EntityService."""

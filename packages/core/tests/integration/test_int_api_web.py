@@ -9,7 +9,7 @@ async def test_ingest_from_url(api, metastore, fake_retain_factory):
     api.memory.retain.side_effect = fake_retain_factory
 
     # Mock WebContentProcessor
-    with patch('memex_core.api.WebContentProcessor.fetch_and_extract') as mock_fetch:
+    with patch('memex_core.services.ingestion.WebContentProcessor.fetch_and_extract') as mock_fetch:
         from memex_core.processing.models import ExtractedContent
 
         mock_fetch.return_value = ExtractedContent(

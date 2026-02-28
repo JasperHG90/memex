@@ -20,11 +20,14 @@ async def test_note_from_file_source_uri(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ingest_payload_source_uri(api, mock_metastore, mock_session):
+    from uuid import UUID
+
     # Verify ingest puts source_uri into payload
     api.memory.retain = AsyncMock(return_value={'status': 'success'})
 
-    # Mock resolve_vault_identifier
-    api.resolve_vault_identifier = AsyncMock(return_value='123e4567-e89b-12d3-a456-426614174000')
+    # Mock resolve_vault_identifier on the ingestion service's vault service
+    vault_uuid = UUID('123e4567-e89b-12d3-a456-426614174000')
+    api._ingestion._vaults.resolve_vault_identifier = AsyncMock(return_value=vault_uuid)
 
     # Mock document existence check: return None (not found)
     mock_result = MagicMock()
@@ -36,7 +39,7 @@ async def test_ingest_payload_source_uri(api, mock_metastore, mock_session):
     mock_txn.db_session = mock_session
     mock_txn.__aenter__.return_value = mock_txn
     # We need to mock the AsyncTransaction context manager
-    with patch('memex_core.api.AsyncTransaction', return_value=mock_txn):
+    with patch('memex_core.services.ingestion.AsyncTransaction', return_value=mock_txn):
         note = NoteInput('name', 'desc', b'content', source_uri='http://source.com')
         await api.ingest(note)
 

@@ -10,7 +10,7 @@ async def test_ingest_batch_internal_success(api, mock_metastore, mock_filestore
     """Test successful batch ingestion internal logic."""
     # Setup
     vault_id = uuid4()
-    api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    api._ingestion._vaults.resolve_vault_identifier = AsyncMock(return_value=vault_id)
 
     note_dto = NoteCreateDTO(
         name='Test NoteInput',
@@ -23,7 +23,7 @@ async def test_ingest_batch_internal_success(api, mock_metastore, mock_filestore
     mock_txn = AsyncMock()
     mock_txn.db_session = MagicMock()
     mock_txn.__aenter__.return_value = mock_txn
-    with patch('memex_core.api.AsyncTransaction', return_value=mock_txn):
+    with patch('memex_core.services.ingestion.AsyncTransaction', return_value=mock_txn):
         # Mock MemoryEngine.retain
         api.memory.retain = AsyncMock(return_value={'unit_ids': [uuid4()]})
 

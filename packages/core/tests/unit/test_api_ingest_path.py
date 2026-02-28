@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from memex_core.api import MemexAPI, NoteInput
+from memex_core.api import NoteInput
+from memex_core.services.ingestion import IngestionService
 
 
 @pytest.mark.asyncio
@@ -11,9 +12,11 @@ async def test_ingest_from_file_markdown(api, tmp_path):
     md_file.write_text('# Test Content')
 
     with (
-        patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
+        patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest,
         patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
-        patch.object(MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock) as mock_resolve,
+        patch.object(
+            api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
+        ) as mock_resolve,
     ):
         mock_resolve.return_value = uuid4()
         mock_note = MagicMock(spec=NoteInput)
@@ -35,7 +38,7 @@ async def test_ingest_from_file_directory(api, tmp_path):
     (note_dir / 'NOTE.md').write_text('# NoteInput')
 
     with (
-        patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
+        patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest,
         patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
     ):
         mock_note = MagicMock(spec=NoteInput)
@@ -56,29 +59,33 @@ async def test_ingest_from_file_markitdown(api, tmp_path):
     docx_file.write_text('dummy binary content')
 
     with (
-        patch.object(MemexAPI, 'ingest', new_callable=AsyncMock) as mock_ingest,
+        patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest,
         patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
-        patch.object(MemexAPI, 'resolve_vault_identifier', new_callable=AsyncMock) as mock_resolve,
+        patch.object(
+            api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
+        ) as mock_resolve,
     ):
         mock_resolve.return_value = uuid4()
-        # Mock _file_processor.extract
-        api._file_processor = MagicMock()
+        # Mock _file_processor.extract on the ingestion service
+        api._ingestion._file_processor = MagicMock()
         extracted = MagicMock()
         extracted.content = 'Extracted Text'
         extracted.content_type = 'docx'
         extracted.source = str(docx_file)
         extracted.document_date = None
         extracted.images = {}
-        api._file_processor.extract = AsyncMock(return_value=extracted)
+        api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
-        with patch('memex_core.api.extract_document_date', new_callable=AsyncMock) as mock_date:
+        with patch(
+            'memex_core.services.ingestion.extract_document_date', new_callable=AsyncMock
+        ) as mock_date:
             mock_date.return_value = None
             mock_ingest.return_value = {'status': 'success'}
             result = await api.ingest_from_file(docx_file)
 
         assert result['status'] == 'success'
         mock_from_file.assert_not_called()
-        api._file_processor.extract.assert_called_once_with(docx_file)
+        api._ingestion._file_processor.extract.assert_called_once_with(docx_file)
         assert mock_ingest.call_count == 1
         # The note name should be the file stem
         called_note = mock_ingest.call_args[0][0]

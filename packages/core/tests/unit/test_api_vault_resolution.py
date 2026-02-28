@@ -112,7 +112,7 @@ async def test_ingest_resolves_vault_from_config(api, mock_session):
     txn.__aenter__.return_value = txn
     txn.db_session = mock_session  # pass through
 
-    with patch('memex_core.api.AsyncTransaction', return_value=txn):
+    with patch('memex_core.services.ingestion.AsyncTransaction', return_value=txn):
         await api.ingest(note)
 
     # Verify retain was called with the resolved vault_id

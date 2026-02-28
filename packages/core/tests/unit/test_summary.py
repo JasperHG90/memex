@@ -10,7 +10,7 @@ async def test_summarize_search_results(api, mock_session):
     mock_prediction = MagicMock()
     mock_prediction.summary = 'Result [0] says X and [1] says Y.'
 
-    with patch('memex_core.api.run_dspy_operation', new_callable=AsyncMock) as mock_run:
+    with patch('memex_core.services.search.run_dspy_operation', new_callable=AsyncMock) as mock_run:
         mock_run.return_value = (mock_prediction, {'tokens': 100})
 
         result = await api.summarize_search_results(
@@ -35,7 +35,7 @@ async def test_summarize_search_results(api, mock_session):
 @pytest.mark.asyncio
 async def test_summarize_search_results_propagates_errors(api):
     """Verify exceptions from run_dspy_operation propagate to caller."""
-    with patch('memex_core.api.run_dspy_operation', new_callable=AsyncMock) as mock_run:
+    with patch('memex_core.services.search.run_dspy_operation', new_callable=AsyncMock) as mock_run:
         mock_run.side_effect = RuntimeError('LLM call failed')
 
         with pytest.raises(RuntimeError, match='LLM call failed'):
