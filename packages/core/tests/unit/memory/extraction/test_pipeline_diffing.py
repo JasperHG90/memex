@@ -11,16 +11,20 @@ from memex_core.memory.extraction.models import (
     StableBlock,
     TOCNode,
 )
+from memex_core.memory.extraction.models import content_hash_md5
 from memex_core.memory.extraction.pipeline.diffing import (
     BlockDiffResult,
     PageIndexDiffResult,
+    _walk_nodes,
     build_thin_tree,
     collect_toc_hashes,
     diff_blocks,
     diff_page_index_blocks,
+    find_node_hash,
+    flatten_toc_to_node_rows,
     replace_tree_ids,
-    _walk_nodes,
 )
+from memex_core.memory.sql_models import ContentStatus
 
 
 # ---------------------------------------------------------------------------
@@ -549,3 +553,214 @@ class TestBuildThinTree:
         child_entries = result[0].get('children', [])
         if child_entries:
             assert child_entries[0]['id'] == child.content_hash
+
+
+# ===========================================================================
+# flatten_toc_to_node_rows tests
+# ===========================================================================
+
+
+class TestFlattenTocToNodeRows:
+    """Tests for flatten_toc_to_node_rows."""
+
+    def test_basic_flatten(self) -> None:
+        """Flatten a simple TOC tree into node rows."""
+        node = _make_toc_node('n1', content='Hello world')
+        node.token_estimate = 100
+        pio = PageIndexOutput(
+            toc=[node],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'n1': 'block1'},
+        )
+        vault_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+
+        rows = flatten_toc_to_node_rows([node], pio, vault_id, note_id)
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row['vault_id'] == vault_id
+        assert row['note_id'] == note_id
+        assert row['title'] == 'Test'
+        assert row['text'] == 'Hello world'
+        assert row['level'] == 1
+        assert row['seq'] == 0
+        assert row['token_estimate'] == 100
+        assert row['status'] == ContentStatus.ACTIVE
+
+    def test_deduplicates_by_node_hash(self) -> None:
+        """Duplicate node hashes are deduplicated."""
+        # Two nodes with same content => same hash
+        n1 = _make_toc_node('a', content='same content')
+        n1.token_estimate = 50
+        n2 = _make_toc_node('b', content='same content')
+        n2.token_estimate = 50
+        pio = PageIndexOutput(
+            toc=[n1, n2],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'a': 'block1', 'b': 'block1'},
+        )
+        vault_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+
+        rows = flatten_toc_to_node_rows([n1, n2], pio, vault_id, note_id)
+
+        assert len(rows) == 1
+
+    def test_min_node_tokens_skips_small_nodes(self) -> None:
+        """Nodes below min_node_tokens are skipped."""
+        big = _make_toc_node('big', content='big content')
+        big.token_estimate = 100
+        small = _make_toc_node('small', content='x')
+        small.token_estimate = 5
+        pio = PageIndexOutput(
+            toc=[big, small],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'big': 'block1', 'small': 'block1'},
+        )
+        vault_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+
+        rows = flatten_toc_to_node_rows([big, small], pio, vault_id, note_id, min_node_tokens=10)
+
+        assert len(rows) == 1
+        assert rows[0]['text'] == 'big content'
+
+    def test_min_node_tokens_promotes_children(self) -> None:
+        """Small parent nodes promote their children when skipped."""
+        child = _make_toc_node('child', content='child content')
+        child.token_estimate = 100
+        parent = _make_toc_node('parent', content='p', children=[child])
+        parent.token_estimate = 5  # Below threshold
+        pio = PageIndexOutput(
+            toc=[parent],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'parent': 'block1', 'child': 'block1'},
+        )
+        vault_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+
+        rows = flatten_toc_to_node_rows([parent], pio, vault_id, note_id, min_node_tokens=10)
+
+        assert len(rows) == 1
+        assert rows[0]['text'] == 'child content'
+
+    def test_nested_children_flattened(self) -> None:
+        """Children are recursively flattened."""
+        child = _make_toc_node('c', content='child')
+        child.token_estimate = 50
+        parent = _make_toc_node('p', content='parent', children=[child])
+        parent.token_estimate = 100
+        pio = PageIndexOutput(
+            toc=[parent],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'p': 'block1', 'c': 'block1'},
+        )
+        vault_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+
+        rows = flatten_toc_to_node_rows([parent], pio, vault_id, note_id)
+
+        assert len(rows) == 2
+        assert rows[0]['text'] == 'parent'
+        assert rows[0]['seq'] == 0
+        assert rows[1]['text'] == 'child'
+        assert rows[1]['seq'] == 1
+
+    def test_node_hash_uses_content_hash_property(self) -> None:
+        """Nodes with content use content_hash property."""
+        node = _make_toc_node('n', content='some text')
+        node.token_estimate = 50
+        pio = PageIndexOutput(
+            toc=[node],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'n': 'block1'},
+        )
+
+        rows = flatten_toc_to_node_rows([node], pio, uuid.uuid4(), uuid.uuid4())
+
+        assert rows[0]['node_hash'] == content_hash_md5('some text')
+
+    def test_node_without_content_uses_title(self) -> None:
+        """Nodes without content compute hash from title."""
+        node = _make_toc_node('n', content=None)
+        node.token_estimate = 50
+        pio = PageIndexOutput(
+            toc=[node],
+            blocks=[_make_page_index_block('block1', 0)],
+            node_to_block_map={'n': 'block1'},
+        )
+
+        rows = flatten_toc_to_node_rows([node], pio, uuid.uuid4(), uuid.uuid4())
+
+        expected_hash = content_hash_md5(node.title)
+        assert rows[0]['node_hash'] == expected_hash
+
+    def test_empty_toc(self) -> None:
+        """Empty TOC returns empty list."""
+        pio = PageIndexOutput(
+            toc=[],
+            blocks=[],
+            node_to_block_map={},
+        )
+
+        rows = flatten_toc_to_node_rows([], pio, uuid.uuid4(), uuid.uuid4())
+
+        assert rows == []
+
+
+# ===========================================================================
+# find_node_hash tests
+# ===========================================================================
+
+
+class TestFindNodeHash:
+    """Tests for find_node_hash."""
+
+    def test_finds_top_level_node(self) -> None:
+        """Find a node at the top level."""
+        node = _make_toc_node('target', content='content')
+
+        result = find_node_hash([node], 'target')
+
+        assert result == content_hash_md5('content')
+
+    def test_finds_nested_node(self) -> None:
+        """Find a deeply nested node."""
+        grandchild = _make_toc_node('gc', content='gc text')
+        child = _make_toc_node('c', content='c text', children=[grandchild])
+        parent = _make_toc_node('p', content='p text', children=[child])
+
+        result = find_node_hash([parent], 'gc')
+
+        assert result == content_hash_md5('gc text')
+
+    def test_returns_none_for_missing_node(self) -> None:
+        """Return None when node ID is not found."""
+        node = _make_toc_node('other', content='text')
+
+        result = find_node_hash([node], 'nonexistent')
+
+        assert result is None
+
+    def test_computes_hash_from_content(self) -> None:
+        """Content hash is computed from content via property."""
+        node = _make_toc_node('n', content='some text')
+
+        result = find_node_hash([node], 'n')
+
+        expected = content_hash_md5('some text')
+        assert result == expected
+
+    def test_uses_title_when_no_content(self) -> None:
+        """Fall back to title when content is None."""
+        node = _make_toc_node('n', content=None)
+
+        result = find_node_hash([node], 'n')
+
+        expected = content_hash_md5(node.title)
+        assert result == expected
+
+    def test_empty_toc(self) -> None:
+        """Empty TOC returns None."""
+        assert find_node_hash([], 'any') is None

@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-
 from typing import Any
+from uuid import UUID
 
 from memex_core.memory.extraction.models import (
     PageIndexOutput,
@@ -24,6 +24,7 @@ from memex_core.memory.extraction.models import (
     TOCNode,
     content_hash_md5,
 )
+from memex_core.memory.sql_models import ContentStatus
 
 logger = logging.getLogger('memex.core.memory.extraction.pipeline.diffing')
 
@@ -250,3 +251,103 @@ def build_thin_tree(
         for n in toc
         if min_node_tokens <= 0 or (n.token_estimate or 0) > min_node_tokens
     ]
+
+
+# ---------------------------------------------------------------------------
+# TOC tree flattening and lookup helpers
+# ---------------------------------------------------------------------------
+
+
+def flatten_toc_to_node_rows(
+    toc: list[TOCNode],
+    page_index_output: PageIndexOutput,
+    vault_id: UUID,
+    note_id: UUID,
+    min_node_tokens: int = 0,
+) -> list[dict[str, object]]:
+    """Flatten a TOC tree into a list of node row dicts for DB insertion.
+
+    Walks the tree depth-first, skipping nodes below *min_node_tokens*
+    (promoting their children).  Deduplicates by ``node_hash`` to avoid
+    PostgreSQL ``CardinalityViolationError`` on batch upsert.
+
+    Args:
+        toc: Root-level TOC nodes.
+        page_index_output: PageIndexOutput (for ``node_to_block_map``).
+        vault_id: Vault scope UUID.
+        note_id: Document UUID.
+        min_node_tokens: Skip nodes with fewer tokens than this.
+
+    Returns:
+        Deduplicated list of node row dicts ready for
+        ``storage.insert_nodes_batch``.
+    """
+    node_rows: list[dict[str, object]] = []
+    seq_counter = 0
+
+    def _flatten(nodes: list[TOCNode], parent_block_id: str | None = None) -> None:
+        nonlocal seq_counter
+        for node in nodes:
+            if min_node_tokens > 0 and (node.token_estimate or 0) <= min_node_tokens:
+                if node.children:
+                    _flatten(node.children, parent_block_id)
+                continue
+            block_id_str = page_index_output.node_to_block_map.get(node.id)
+            node_hash = node.content_hash or content_hash_md5(node.content or node.title)
+
+            summary_dict = None
+            summary_fmt = None
+            if node.summary:
+                summary_dict = node.summary.model_dump()
+                summary_fmt = node.summary.formatted
+
+            node_rows.append(
+                {
+                    'vault_id': vault_id,
+                    'note_id': note_id,
+                    'node_hash': node_hash,
+                    'title': node.title,
+                    'text': node.content or '',
+                    'summary': summary_dict,
+                    'summary_formatted': summary_fmt,
+                    'level': node.level,
+                    'seq': seq_counter,
+                    'token_estimate': node.token_estimate or 0,
+                    'status': ContentStatus.ACTIVE,
+                }
+            )
+            seq_counter += 1
+
+            if node.children:
+                _flatten(node.children, block_id_str)
+
+    _flatten(toc)
+
+    # Deduplicate by node_hash
+    seen_hashes: set[str] = set()
+    deduped: list[dict[str, object]] = []
+    for row in node_rows:
+        h = str(row['node_hash'])
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            deduped.append(row)
+    return deduped
+
+
+def find_node_hash(toc: list[TOCNode], target_id: str) -> str | None:
+    """Recursively find a TOC node by ID and return its content hash.
+
+    Args:
+        toc: Root-level TOC nodes to search.
+        target_id: The node ID to look up.
+
+    Returns:
+        The content hash of the matching node, or ``None`` if not found.
+    """
+    for node in toc:
+        if node.id == target_id:
+            return node.content_hash or content_hash_md5(node.content or node.title)
+        result = find_node_hash(node.children, target_id)
+        if result is not None:
+            return result
+    return None

@@ -24,9 +24,7 @@ from memex_core.memory.extraction.models import (
     ChunkMetadata,
     ProcessedFact,
     StableBlock,
-    TOCNode,
     PageIndexOutput,
-    content_hash_md5,
 )
 from memex_core.memory.extraction.core import (
     extract_facts_from_text,
@@ -44,12 +42,13 @@ from memex_core.memory.extraction.pipeline.diffing import (
     build_thin_tree,
     diff_blocks,
     diff_page_index_blocks,
+    find_node_hash,
+    flatten_toc_to_node_rows,
 )
 from memex_core.memory.extraction.pipeline.tracking import (
     track_document,
     enqueue_for_reflection,
 )
-from memex_core.memory.sql_models import ContentStatus
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.confidence import ConfidenceEngine
 from memex_core.memory.sql_models import MemoryLink, TokenUsage
@@ -1025,60 +1024,14 @@ class ExtractionEngine:
         """
         doc_uuid = UUID(note_id)
 
-        # Flatten TOC tree into node rows
-        node_rows: list[dict[str, object]] = []
-        seq_counter = 0
-
-        def flatten_nodes(nodes: list[TOCNode], parent_block_id: str | None = None) -> None:
-            nonlocal seq_counter
-            for node in nodes:
-                # Skip trivially short nodes but still recurse into children
-                if min_node_tokens > 0 and (node.token_estimate or 0) <= min_node_tokens:
-                    if node.children:
-                        flatten_nodes(node.children, parent_block_id)
-                    continue
-                block_id_str = page_index_output.node_to_block_map.get(node.id)
-                node_hash = node.content_hash or content_hash_md5(node.content or node.title)
-
-                summary_dict = None
-                summary_fmt = None
-                if node.summary:
-                    summary_dict = node.summary.model_dump()
-                    summary_fmt = node.summary.formatted
-
-                node_rows.append(
-                    {
-                        'vault_id': vault_id,
-                        'note_id': doc_uuid,
-                        'node_hash': node_hash,
-                        'title': node.title,
-                        'text': node.content or '',
-                        'summary': summary_dict,
-                        'summary_formatted': summary_fmt,
-                        'level': node.level,
-                        'seq': seq_counter,
-                        'token_estimate': node.token_estimate or 0,
-                        'status': ContentStatus.ACTIVE,
-                    }
-                )
-                seq_counter += 1
-
-                if node.children:
-                    flatten_nodes(node.children, block_id_str)
-
-        flatten_nodes(page_index_output.toc)
-
-        # Deduplicate by node_hash before the batch upsert. PostgreSQL raises
-        # CardinalityViolationError if the same (note_id, node_hash) appears
-        # twice in one INSERT ... ON CONFLICT DO UPDATE batch.
-        seen_hashes: set[str] = set()
-        deduped: list[dict[str, object]] = []
-        for row in node_rows:
-            h = str(row['node_hash'])
-            if h not in seen_hashes:
-                seen_hashes.add(h)
-                deduped.append(row)
-        node_rows = deduped
+        # Flatten TOC tree into deduplicated node rows
+        node_rows = flatten_toc_to_node_rows(
+            page_index_output.toc,
+            page_index_output,
+            vault_id,
+            doc_uuid,
+            min_node_tokens,
+        )
 
         # Insert nodes (block_id will be backfilled after blocks are created)
         node_ids = await storage.insert_nodes_batch(session, node_rows)
@@ -1128,24 +1081,13 @@ class ExtractionEngine:
             if chunk_uuid_str is None:
                 continue
             # Find the TOC node to get its content_hash (used as DB node_hash)
-            node_hash = self._find_node_hash(page_index_output.toc, node_id)
+            node_hash = find_node_hash(page_index_output.toc, node_id)
             if node_hash:
                 node_hash_to_block_id[node_hash] = UUID(chunk_uuid_str)
 
         await storage.backfill_node_block_ids(session, note_id, node_hash_to_block_id)
 
         return node_ids, block_chunk_map
-
-    @staticmethod
-    def _find_node_hash(toc: list[TOCNode], target_id: str) -> str | None:
-        """Recursively find a TOC node by ID and return its content hash."""
-        for node in toc:
-            if node.id == target_id:
-                return node.content_hash or content_hash_md5(node.content or node.title)
-            result = ExtractionEngine._find_node_hash(node.children, target_id)
-            if result is not None:
-                return result
-        return None
 
     def _assemble_llm_chunks(
         self,
