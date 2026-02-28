@@ -127,7 +127,11 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
         return self._session_factory
 
     async def _check_schema_version(self) -> None:
-        """Verify the database schema matches the expected Alembic head revision."""
+        """Verify the database schema matches the expected Alembic head revision.
+
+        For new databases (no alembic_version table), automatically bootstrap
+        the schema using SQLModel.metadata.create_all and stamp the version.
+        """
         from memex_core.migration import get_expected_head
 
         expected = get_expected_head()
@@ -145,10 +149,9 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
             has_table = result.scalar()
 
             if not has_table:
-                raise RuntimeError(
-                    'Database schema not initialized (alembic_version table missing). '
-                    'Run: memex database upgrade'
-                )
+                self._logger.info('New database detected — bootstrapping schema.')
+                await self._bootstrap_schema(conn, expected)
+                return
 
             result = await conn.execute(text('SELECT version_num FROM alembic_version'))
             row = result.first()
@@ -168,6 +171,29 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
                 )
 
         self._logger.debug('Schema version check passed (revision %s).', expected)
+
+    async def _bootstrap_schema(self, conn, head_revision: str) -> None:
+        """Create all tables + stamp alembic_version for a new database."""
+        import memex_core.memory.sql_models  # noqa: F401
+        from sqlmodel import SQLModel
+
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+        # Create + stamp alembic_version so future checks pass
+        await conn.execute(
+            text(
+                'CREATE TABLE IF NOT EXISTS alembic_version ('
+                '  version_num VARCHAR(32) NOT NULL, '
+                '  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))'
+            )
+        )
+        await conn.execute(
+            text('INSERT INTO alembic_version (version_num) VALUES (:rev)'),
+            {'rev': head_revision},
+        )
+        self._logger.info('Schema bootstrapped at revision %s.', head_revision)
 
 
 def get_metastore(config: PostgresMetaStoreConfig) -> AsyncBaseMetaStoreEngine:

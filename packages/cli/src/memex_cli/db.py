@@ -2,7 +2,6 @@
 
 import logging
 import os
-import pathlib as plb
 from typing import Annotated
 
 import typer
@@ -16,23 +15,24 @@ logger = logging.getLogger('memex_cli.db')
 app = typer.Typer(name='database', help='Database schema migration commands.', no_args_is_help=True)
 
 
-def _alembic_cfg(config: MemexConfig):
-    """Build an Alembic Config and set the DB URL from the resolved MemexConfig."""
-    from alembic.config import Config
-
-    # Locate alembic.ini shipped with memex-core.
-    import memex_core
-
-    core_root = plb.Path(memex_core.__file__).resolve().parent.parent.parent
-    ini_path = core_root / 'alembic.ini'
-
-    if not ini_path.exists():
-        console.print(f'[red]alembic.ini not found at {ini_path}[/red]')
+def _check_core_installed():
+    """Verify memex-core is available (required for database commands)."""
+    try:
+        import memex_core  # noqa: F401
+    except ImportError:
+        console.print("[bold red]Error:[/bold red] Missing dependency 'memex-core'.")
+        console.print('Database commands require memex-core:')
+        console.print("  [cyan]uv pip install 'memex-cli[server]'[/cyan]")
         raise typer.Exit(1)
 
-    cfg = Config(str(ini_path))
-    # Ensure script_location is absolute so Alembic finds the versions dir.
-    cfg.set_main_option('script_location', str(core_root / 'alembic'))
+
+def _alembic_cfg(config: MemexConfig):
+    """Build an Alembic Config and set the DB URL from the resolved MemexConfig."""
+    _check_core_installed()
+
+    from memex_core.migration import _alembic_cfg as core_alembic_cfg
+
+    cfg = core_alembic_cfg()
 
     # Pass the DB URL from the resolved config so env.py can find it via
     # get_database_url() (which reads MEMEX_DATABASE_URL first).

@@ -9,55 +9,49 @@ import pytest
 
 
 @pytest.fixture()
-def core_root():
+def package_dir():
     import memex_core
 
-    return plb.Path(memex_core.__file__).resolve().parent.parent.parent
+    return plb.Path(memex_core.__file__).resolve().parent
 
 
 class TestAlembicStructure:
     """Verify the Alembic directory structure exists and is valid."""
 
-    def test_alembic_ini_exists(self, core_root):
-        assert (core_root / 'alembic.ini').is_file()
+    def test_alembic_ini_exists(self, package_dir):
+        assert (package_dir / 'alembic.ini').is_file()
 
-    def test_env_py_exists(self, core_root):
-        assert (core_root / 'alembic' / 'env.py').is_file()
+    def test_env_py_exists(self, package_dir):
+        assert (package_dir / 'alembic' / 'env.py').is_file()
 
-    def test_versions_dir_exists(self, core_root):
-        assert (core_root / 'alembic' / 'versions').is_dir()
+    def test_versions_dir_exists(self, package_dir):
+        assert (package_dir / 'alembic' / 'versions').is_dir()
 
-    def test_script_mako_exists(self, core_root):
-        assert (core_root / 'alembic' / 'script.py.mako').is_file()
+    def test_script_mako_exists(self, package_dir):
+        assert (package_dir / 'alembic' / 'script.py.mako').is_file()
 
-    def test_baseline_migration_exists(self, core_root):
-        versions = list((core_root / 'alembic' / 'versions').glob('001_*.py'))
+    def test_baseline_migration_exists(self, package_dir):
+        versions = list((package_dir / 'alembic' / 'versions').glob('001_*.py'))
         assert len(versions) == 1, f'Expected 1 baseline migration, found {len(versions)}'
 
     def test_single_head(self):
         """Verify ScriptDirectory.get_heads() returns exactly 1 head."""
-        from alembic.config import Config
+        from memex_core.migration import _alembic_cfg
+
+        cfg = _alembic_cfg()
         from alembic.script import ScriptDirectory
 
-        import memex_core
-
-        core_root = plb.Path(memex_core.__file__).resolve().parent.parent.parent
-        cfg = Config(str(core_root / 'alembic.ini'))
-        cfg.set_main_option('script_location', str(core_root / 'alembic'))
         script = ScriptDirectory.from_config(cfg)
         heads = script.get_heads()
         assert len(heads) == 1, f'Expected 1 head, found {len(heads)}: {heads}'
 
     def test_revision_chain_valid(self):
         """Walk the chain from head to base with no gaps."""
-        from alembic.config import Config
+        from memex_core.migration import _alembic_cfg
+
+        cfg = _alembic_cfg()
         from alembic.script import ScriptDirectory
 
-        import memex_core
-
-        core_root = plb.Path(memex_core.__file__).resolve().parent.parent.parent
-        cfg = Config(str(core_root / 'alembic.ini'))
-        cfg.set_main_option('script_location', str(core_root / 'alembic'))
         script = ScriptDirectory.from_config(cfg)
 
         revisions = list(script.walk_revisions())
@@ -114,8 +108,8 @@ class TestGetDatabaseUrl:
 class TestBaselineMigration:
     """Tests for the baseline migration script content."""
 
-    def test_baseline_has_extension_creation(self, core_root):
-        migration_path = core_root / 'alembic' / 'versions' / '001_full_baseline.py'
+    def test_baseline_has_extension_creation(self, package_dir):
+        migration_path = package_dir / 'alembic' / 'versions' / '001_full_baseline.py'
 
         spec = importlib.util.spec_from_file_location('baseline', migration_path)
         assert spec is not None and spec.loader is not None
@@ -125,10 +119,11 @@ class TestBaselineMigration:
         assert module.revision == '001_full_baseline'
         assert module.down_revision is None
 
-    def test_alembic_config_loads(self, core_root):
+    def test_alembic_config_loads(self, package_dir):
         """Verify alembic.ini can be parsed by Alembic."""
         from alembic.config import Config
 
-        ini_path = core_root / 'alembic.ini'
+        ini_path = package_dir / 'alembic.ini'
         cfg = Config(str(ini_path))
-        assert cfg.get_main_option('script_location') == 'alembic'
+        # %(here)s is resolved to the ini file's directory at parse time
+        assert cfg.get_main_option('script_location') == str(package_dir / 'alembic')

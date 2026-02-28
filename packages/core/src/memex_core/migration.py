@@ -5,13 +5,14 @@ import pathlib as plb
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+_PACKAGE_DIR = plb.Path(__file__).resolve().parent
+
 
 def _alembic_cfg() -> Config:
     """Build an Alembic Config pointing at the memex_core alembic directory."""
-    core_root = plb.Path(__file__).resolve().parent.parent.parent
-    ini_path = core_root / 'alembic.ini'
+    ini_path = _PACKAGE_DIR / 'alembic.ini'
     cfg = Config(str(ini_path))
-    cfg.set_main_option('script_location', str(core_root / 'alembic'))
+    cfg.set_main_option('script_location', str(_PACKAGE_DIR / 'alembic'))
     return cfg
 
 
