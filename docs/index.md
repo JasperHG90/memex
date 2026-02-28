@@ -24,11 +24,13 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 
 | Guide | Description |
 |:------|:------------|
+| [Set Up Claude Code](how-to/setup-claude-code.md) | Configure Claude Code to use Memex as long-term memory with one command. |
 | [Configure Memex](how-to/configure-memex.md) | Set up YAML config files, environment variables, and model providers. |
 | [Organize with Vaults](how-to/organize-with-vaults.md) | Create vaults, set the active writer vault, and attach read-only vaults for multi-project workflows. |
 | [Using MCP](how-to/using-mcp.md) | Connect Memex to Claude Desktop, Claude Code, and other MCP-compatible AI assistants. |
 | [Batch Ingestion](how-to/batch-ingestion.md) | Ingest folders of documents, URLs, and file batches efficiently. |
 | [Doc Search vs Memory Search](how-to/doc-search-vs-memory-search.md) | Choose between note search (raw documents) and memory search (extracted facts). |
+| [Database Migrations](how-to/database-migrations.md) | Manage PostgreSQL schema migrations with `memex db` (Alembic). |
 | [Delete and Archival](how-to/delete-archival.md) | Delete notes, entities, and memory units; manage data lifecycle. |
 | [OpenClaw Integration](how-to/openclaw-integration.md) | Install and configure the Memex memory plugin for OpenClaw agents. |
 
@@ -68,6 +70,12 @@ Each package in the monorepo has its own README with package-specific details.
 
 | Package | Description |
 |:--------|:------------|
+---
+
+> **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.
+
+---
+
 | [packages/core](../packages/core/README.md) | Storage engines, memory system, services, and FastAPI server. |
 | [packages/cli](../packages/cli/README.md) | Typer CLI (`memex` command). |
 | [packages/mcp](../packages/mcp/README.md) | FastMCP server for LLM integration. |

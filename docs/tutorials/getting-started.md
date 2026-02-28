@@ -142,6 +142,9 @@ We have successfully installed Memex, configured the database, started the serve
 
 * [Using the Dashboard](using-the-dashboard.md) — explore your knowledge visually
 * [Configure Memex](../how-to/configure-memex.md) — customize models, storage backends, and more
+* [Set Up Claude Code Integration](../how-to/setup-claude-code.md) — give Claude Code long-term memory with one command
 * [Organize with Vaults](../how-to/organize-with-vaults.md) — manage multiple knowledge domains
 * [Batch Ingestion](../how-to/batch-ingestion.md) — import existing documents and notes
-* [Using MCP](../how-to/using-mcp.md) — connect Memex to Claude and other AI agents
+* [Using MCP](../how-to/using-mcp.md) — connect Memex to Claude Desktop, Cursor, and other MCP clients
+
+> **Something not working?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info attached.
