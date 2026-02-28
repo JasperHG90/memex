@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useUIStore } from '@/stores/ui-store'
 import { useVaultStore } from '@/stores/vault-store'
+import { encodeBase64 } from '@/lib/utils'
 import { useIngestNote } from '@/api/hooks/use-notes'
 import { toast } from 'sonner'
 import { Eye, EyeOff, X } from 'lucide-react'
@@ -60,7 +61,7 @@ export function QuickNoteModal() {
       await ingestNote.mutateAsync({
         name: title.trim() || 'Quick Note',
         description: 'Note captured from dashboard',
-        content: btoa(content),
+        content: encodeBase64(content),
         tags,
         vault_id: writerVaultId || undefined,
       })

@@ -159,17 +159,44 @@ async def async_ndjson_response(items: AsyncIterator[BaseModel]) -> StreamingRes
 
 
 def ndjson_openapi(model: type[BaseModel], description: str) -> dict[int | str, dict[str, Any]]:
-    """Generate OpenAPI response schema for an NDJSON streaming endpoint."""
+    """Generate OpenAPI response schema for an NDJSON streaming endpoint.
+
+    Produces a schema where each line is a JSON object matching ``model``.
+    On serialization errors an error line ``{"error": "...", "type": "serialization_error"}``
+    may appear in the stream.
+    """
+    try:
+        item_schema: dict[str, Any] = model.model_json_schema()
+    except AttributeError:
+        item_schema = {'type': 'object', 'description': f'{model.__name__} object'}
+    error_schema: dict[str, Any] = {
+        'type': 'object',
+        'properties': {
+            'error': {'type': 'string'},
+            'type': {'type': 'string', 'enum': ['serialization_error']},
+        },
+        'required': ['error', 'type'],
+    }
     return {
         200: {
-            'description': description,
+            'description': (
+                f'{description} '
+                f'Each line is a JSON-encoded `{model.__name__}` object. '
+                'On serialization failure a line with `"type": "serialization_error"` is emitted.'
+            ),
             'content': {
                 'application/x-ndjson': {
                     'schema': {
                         'type': 'string',
                         'description': (
-                            f'Newline-delimited JSON. Each line is a {model.__name__} object.'
+                            'Newline-delimited JSON stream. Each line is one of the schemas below.'
                         ),
+                        'x-ndjson-line-schema': {
+                            'oneOf': [
+                                item_schema,
+                                error_schema,
+                            ]
+                        },
                     }
                 }
             },
