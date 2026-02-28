@@ -2452,6 +2452,9 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "memex-mcp"
 version = "0.0.0"

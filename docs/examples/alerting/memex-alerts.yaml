@@ -1,0 +1,80 @@
+# Prometheus Alertmanager rules for Memex
+# Copy to your Prometheus rules directory and adjust thresholds as needed.
+
+groups:
+  - name: memex.rules
+    rules:
+      # ------------------------------------------------------------------
+      # LLM provider health
+      # ------------------------------------------------------------------
+      - alert: MemexLLMHighErrorRate
+        expr: |
+          rate(memex_llm_calls_total{status="error"}[5m])
+          / (rate(memex_llm_calls_total{status="success"}[5m]) + rate(memex_llm_calls_total{status="error"}[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM error rate above 10% for 5 minutes"
+          description: >-
+            More than 10% of LLM calls are failing. Check provider status
+            and API keys. Circuit breaker may open soon.
+
+      - alert: MemexCircuitBreakerOpen
+        expr: memex_circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker is OPEN — all LLM calls are being rejected"
+          description: >-
+            The LLM circuit breaker has tripped. All extraction, reflection,
+            and retrieval expansion calls are being rejected. Check the LLM
+            provider and review memex_llm_calls_total{status="error"} for
+            root cause.
+
+      # ------------------------------------------------------------------
+      # Ingestion health
+      # ------------------------------------------------------------------
+      - alert: MemexIngestionSlowP95
+        expr: |
+          histogram_quantile(0.95, rate(memex_ingestion_duration_seconds_bucket[10m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 ingestion latency exceeds 30 seconds"
+          description: >-
+            Note ingestion is taking longer than expected. This may indicate
+            LLM throttling or database contention.
+
+      # ------------------------------------------------------------------
+      # Reflection queue
+      # ------------------------------------------------------------------
+      - alert: MemexReflectionQueueBacklog
+        expr: memex_reflection_queue_size > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reflection queue has over 100 pending tasks for 15+ minutes"
+          description: >-
+            The reflection queue is growing faster than the scheduler can
+            process. Consider increasing background_reflection_batch_size
+            or checking for stuck tasks.
+
+      # ------------------------------------------------------------------
+      # Retrieval performance
+      # ------------------------------------------------------------------
+      - alert: MemexRetrievalSlowP95
+        expr: |
+          histogram_quantile(0.95, rate(memex_retrieval_duration_seconds_bucket[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 retrieval latency exceeds 5 seconds"
+          description: >-
+            Memory retrieval is slow. Check vector index health and database
+            connection pool usage.

@@ -1,13 +1,20 @@
 import logging
 import asyncio
+import time
 from typing import Any, TypeVar
 
 import dspy
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.circuit_breaker import CircuitBreaker
+from memex_core.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from memex_core.context import get_session_id
 from memex_core.memory.sql_models import TokenUsage
+from memex_core.metrics import (
+    LLM_CALLS_TOTAL,
+    LLM_CALL_DURATION_SECONDS,
+    CIRCUIT_BREAKER_REJECTIONS_TOTAL,
+    CIRCUIT_BREAKER_STATE,
+)
 
 logger = logging.getLogger('memex.core.llm')
 
@@ -17,6 +24,9 @@ T = TypeVar('T')
 # Initialised with default config; call configure_circuit_breaker() to
 # override from the application's CircuitBreakerConfig.
 _circuit_breaker = CircuitBreaker()
+
+# Circuit breaker state encoding for Prometheus gauge
+_STATE_VALUES = {'closed': 0, 'open': 1, 'half-open': 2}
 
 
 def configure_circuit_breaker(breaker: CircuitBreaker) -> None:
@@ -59,7 +69,16 @@ async def run_dspy_operation(
     """
 
     # Check circuit breaker before attempting the LLM call
-    await _circuit_breaker.pre_call()
+    try:
+        await _circuit_breaker.pre_call()
+    except CircuitBreakerOpen:
+        CIRCUIT_BREAKER_REJECTIONS_TOTAL.inc()
+        LLM_CALLS_TOTAL.labels(status='rejected').inc()
+        raise
+
+    CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
+
+    start = time.monotonic()
 
     # Shallow copy to isolate history for this specific call
     lm_ = lm.copy()
@@ -82,6 +101,11 @@ async def run_dspy_operation(
 
         # Record success with circuit breaker
         await _circuit_breaker.record_success()
+
+        elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='success').inc()
+        LLM_CALL_DURATION_SECONDS.observe(elapsed)
+        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
         # Extract Usage
         token_usage = TokenUsage()
@@ -136,5 +160,11 @@ async def run_dspy_operation(
     except Exception as e:
         # Record failure with circuit breaker
         await _circuit_breaker.record_failure()
+
+        elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='error').inc()
+        LLM_CALL_DURATION_SECONDS.observe(elapsed)
+        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
+
         logger.error(f'DSPy operation failed: {e}')
         raise

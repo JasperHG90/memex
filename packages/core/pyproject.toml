@@ -55,3 +55,6 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 memex-common = { workspace = true }
+
+[dependency-groups]
+dev = []
