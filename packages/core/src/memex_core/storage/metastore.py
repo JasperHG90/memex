@@ -97,7 +97,10 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
             pool_recycle=3600,  # Recycle connections after 1 hour
             pool_timeout=30,  # Wait up to 30s for a connection
             connect_args={
-                'server_settings': {'timezone': 'UTC'},
+                'server_settings': {
+                    'timezone': 'UTC',
+                    'statement_timeout': str(self._config.statement_timeout_ms),
+                },
             },
         )
 

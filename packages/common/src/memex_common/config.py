@@ -188,6 +188,10 @@ class PostgresMetaStoreConfig(BaseModel):
         default=20,
         description='The maximum overflow size of the connection pool. Defaults to 20.',
     )
+    statement_timeout_ms: int = Field(
+        default=30000,
+        description='Statement timeout in milliseconds for queries. Defaults to 30000 (30s).',
+    )
 
 
 MetaStoreBackend = Annotated[PostgresMetaStoreConfig, Field(discriminator='type')]
