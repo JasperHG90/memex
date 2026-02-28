@@ -12,7 +12,6 @@ dependencies = [
     "memex_cli",
     "memex_mcp",
     "memex_common",
-    "memex_dashboard",
 ]
 
 [tool.uv.sources]
@@ -20,7 +19,6 @@ memex_core = { workspace = true }
 memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
-memex_dashboard = { workspace = true }
 
 [tool.uv.workspace]
 members = [
@@ -28,7 +26,6 @@ members = [
     "packages/common",
     "packages/core",
     "packages/mcp",
-    "packages/dashboard",
 ]
 
 [tool.uv]

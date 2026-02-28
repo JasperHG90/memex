@@ -28,7 +28,7 @@ test:
 
 # Create qmd collections
 collections:
-  qmd collection add . --name memex_test --mask "**/*.{py,toml,yaml}"
+  qmd collection add . --name memex_test --mask "**/*.{py,toml,yaml,tsx,ts,svg,json}"
   qmd collection add . --name memex_src --mask "**/test_*.py"
   qmd collection add . --name memex_md --mask "**/*.md"
 

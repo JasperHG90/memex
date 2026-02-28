@@ -38,3 +38,18 @@ repos:
         additional_dependencies: [pydantic, pytest-mypy, types-PyYAML, types-aiofiles, types-cachetools, types-python-dateutil, types-Markdown]
         args: [--ignore-missing-imports, --check-untyped-defs]
         exclude: ^tests/integration/test_app\.py$
+
+  - repo: local
+    hooks:
+      - id: dashboard-ui-eslint
+        name: eslint (dashboard-ui)
+        entry: bash -c 'cd packages/dashboard-ui && npx eslint --max-warnings=0 src'
+        language: system
+        files: ^packages/dashboard-ui/src/.*\.(ts|tsx)$
+        pass_filenames: false
+      - id: dashboard-ui-typecheck
+        name: tsc (dashboard-ui)
+        entry: bash -c 'cd packages/dashboard-ui && npx tsc --noEmit -p tsconfig.app.json'
+        language: system
+        files: ^packages/dashboard-ui/.*\.(ts|tsx)$
+        pass_filenames: false
