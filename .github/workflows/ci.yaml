@@ -142,7 +142,7 @@ jobs:
           markers: "llm"
 
   build-python:
-    needs: [pre-commit, python-tests]
+    needs: [changes, pre-commit, python-tests]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -159,7 +159,7 @@ jobs:
           retention-days: 7
 
   build-dashboard:
-    needs: [dashboard-lint-test]
+    needs: [changes, dashboard-lint-test]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
     steps:
@@ -183,7 +183,7 @@ jobs:
           retention-days: 7
 
   build-openclaw:
-    needs: [openclaw-lint-test]
+    needs: [changes, openclaw-lint-test]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.openclaw == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
     steps:
