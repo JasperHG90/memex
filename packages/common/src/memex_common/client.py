@@ -220,9 +220,14 @@ class RemoteMemexAPI:
         result = await self._post('memories/summary', request)
         return SummaryResponse(**result)
 
-    async def list_notes(self, limit: int = 100, offset: int = 0) -> list[NoteDTO]:
+    async def list_notes(
+        self, limit: int = 100, offset: int = 0, vault_id: UUID | None = None
+    ) -> list[NoteDTO]:
         """List all notes."""
-        result = await self._get('notes', params={'limit': limit, 'offset': offset})
+        params: dict[str, Any] = {'limit': limit, 'offset': offset}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
     async def search_notes(
@@ -310,9 +315,12 @@ class RemoteMemexAPI:
             raise
 
     # --- Stats & Overview ---
-    async def get_stats_counts(self) -> SystemStatsCountsDTO:
+    async def get_stats_counts(self, vault_id: UUID | None = None) -> SystemStatsCountsDTO:
         """Get total counts for notes, entities, and reflection queue."""
-        result = await self._get('stats/counts')
+        params: dict[str, Any] = {}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('stats/counts', params=params or None)
         return SystemStatsCountsDTO(**result)
 
     async def get_token_usage(self) -> TokenUsageResponse:
@@ -320,14 +328,22 @@ class RemoteMemexAPI:
         result = await self._get('stats/token-usage')
         return TokenUsageResponse(**result)
 
-    async def get_recent_notes(self, limit: int = 5) -> list[NoteDTO]:
+    async def get_recent_notes(self, limit: int = 5, vault_id: UUID | None = None) -> list[NoteDTO]:
         """Get the most recent notes."""
-        result = await self._get('notes', params={'limit': limit, 'sort': '-created_at'})
+        params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
-    async def search_entities(self, query: str, limit: int = 20) -> list[EntityDTO]:
+    async def search_entities(
+        self, query: str, limit: int = 20, vault_id: UUID | None = None
+    ) -> list[EntityDTO]:
         """Search for entities by name."""
-        response = await self.client.get('entities', params={'q': query, 'limit': limit})
+        params: dict[str, Any] = {'q': query, 'limit': limit}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        response = await self.client.get('entities', params=params)
         response.raise_for_status()
 
         try:
@@ -375,11 +391,14 @@ class RemoteMemexAPI:
         return EntityDTO(**result)
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20
+        self, entity_id: UUID | str, limit: int = 20, vault_id: UUID | None = None
     ) -> list[dict[str, Any]]:
         """Get mentions for an entity."""
         # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
-        result = await self._get(f'entities/{entity_id}/mentions', params={'limit': limit})
+        params: dict[str, Any] = {'limit': limit}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get(f'entities/{entity_id}/mentions', params=params)
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
         # To be safe and helpful, let's convert the inner dicts to DTOs
@@ -393,14 +412,24 @@ class RemoteMemexAPI:
             parsed.append(item)
         return parsed
 
-    async def get_bulk_cooccurrences(self, ids: list[UUID]) -> list[dict[str, Any]]:
+    async def get_bulk_cooccurrences(
+        self, ids: list[UUID], vault_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
         """Get co-occurrences for a set of entity IDs."""
         ids_str = ','.join(str(i) for i in ids)
-        return await self._get('cooccurrences', params={'ids': ids_str})
+        params: dict[str, Any] = {'ids': ids_str}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        return await self._get('cooccurrences', params=params)
 
-    async def get_entity_cooccurrences(self, entity_id: UUID | str) -> list[dict[str, Any]]:
+    async def get_entity_cooccurrences(
+        self, entity_id: UUID | str, vault_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
         """Get co-occurrence edges for an entity."""
-        return await self._get(f'entities/{entity_id}/cooccurrences')
+        params: dict[str, Any] = {}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        return await self._get(f'entities/{entity_id}/cooccurrences', params=params or None)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
         """Get memory unit details."""
@@ -436,9 +465,14 @@ class RemoteMemexAPI:
         result = await self._get('reflections', params={'limit': limit, 'status': 'queued'})
         return [ReflectionQueueDTO(**u) for u in result]
 
-    async def get_top_entities(self, limit: int = 5) -> list[EntityDTO]:
+    async def get_top_entities(
+        self, limit: int = 5, vault_id: UUID | None = None
+    ) -> list[EntityDTO]:
         """Get top entities by mention count."""
-        result = await self._get('entities', params={'limit': limit, 'sort': '-mentions'})
+        params: dict[str, Any] = {'limit': limit, 'sort': '-mentions'}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
 
     async def adjust_belief(

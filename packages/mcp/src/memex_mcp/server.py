@@ -621,12 +621,21 @@ async def memex_note_search(
             description='Synthesize an answer from the retrieved sections (implies reason=True).'
         ),
     ] = False,
+    vault_ids: Annotated[
+        list[str] | None,
+        Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
+    ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
         results = await api.search_notes(
-            query=query, limit=limit, expand_query=expand_query, reason=reason, summarize=summarize
+            query=query,
+            limit=limit,
+            expand_query=expand_query,
+            reason=reason,
+            summarize=summarize,
+            vault_ids=vault_ids,
         )
 
         if not results:
@@ -894,11 +903,17 @@ async def memex_list_notes(
     ctx: Context,
     limit: Annotated[int, Field(description='Max notes to return.')] = 20,
     offset: Annotated[int, Field(description='Pagination offset.')] = 0,
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+    ] = None,
 ) -> str:
     """List notes in the active vault."""
     try:
         api = get_api(ctx)
-        notes = await api.list_notes(limit=limit, offset=offset)
+        resolved_vault_id = None
+        if vault_id:
+            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+        notes = await api.list_notes(limit=limit, offset=offset, vault_id=resolved_vault_id)
 
         if not notes:
             return 'No notes found.'
@@ -925,15 +940,23 @@ async def memex_list_entities(
         str | None, Field(default=None, description='Optional search term to filter by name.')
     ] = None,
     limit: Annotated[int, Field(description='Max entities to return.')] = 20,
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+    ] = None,
 ) -> str:
     """List or search entities."""
     try:
         api = get_api(ctx)
+        resolved_vault_id = None
+        if vault_id:
+            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
 
         if query:
-            entities = await api.search_entities(query, limit=limit)
+            entities = await api.search_entities(query, limit=limit, vault_id=resolved_vault_id)
         else:
-            entities = [e async for e in api.list_entities_ranked(limit=limit)]
+            entities = [
+                e async for e in api.list_entities_ranked(limit=limit, vault_id=resolved_vault_id)
+            ]
 
         if not entities:
             return 'No entities found.'

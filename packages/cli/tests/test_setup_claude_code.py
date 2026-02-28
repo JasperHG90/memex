@@ -10,8 +10,11 @@ from typer.testing import CliRunner
 
 from memex_cli.setup_claude_code import (
     CLAUDE_MD_MARKER,
+    _build_hooks_config,
+    _load_hook_template,
     _load_template,
     _mcp_server_entry,
+    _merge_settings_local,
     app,
 )
 
@@ -535,6 +538,345 @@ class TestOutputMessages:
         assert 'setup complete' in result.output.lower()
         assert '/remember' in result.output
         assert '/recall' in result.output
+
+    def test_summary_shows_hooks_enabled(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path))
+        assert 'Hooks: Enabled' in result.output
+        assert 'SessionStart' in result.output
+
+    def test_summary_shows_hooks_disabled(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path), '--no-hooks')
+        assert 'Hooks: Disabled' in result.output
+
+    def test_summary_shows_session_end_when_tracking(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
+        assert 'SessionEnd' in result.output
+
+
+# ===========================================================================
+# Unit tests — hook template content
+# ===========================================================================
+
+
+class TestHookTemplateContent:
+    """Validate that hook templates exist and contain expected markers."""
+
+    def test_session_start_exists_and_has_shebang(self):
+        content = _load_template('hooks/on_session_start.sh')
+        assert content.startswith('#!/usr/bin/env bash')
+
+    def test_session_start_references_memex_cli(self):
+        content = _load_template('hooks/on_session_start.sh')
+        assert 'memex' in content
+        assert 'note recent' in content
+
+    def test_session_start_checks_uv(self):
+        content = _load_template('hooks/on_session_start.sh')
+        assert 'command -v uv' in content
+
+    def test_session_start_checks_jq(self):
+        content = _load_template('hooks/on_session_start.sh')
+        assert 'command -v jq' in content
+
+    def test_pre_compact_exists_and_has_shebang(self):
+        content = _load_template('hooks/on_pre_compact.sh')
+        assert content.startswith('#!/usr/bin/env bash')
+
+    def test_pre_compact_references_state_dir(self):
+        content = _load_template('hooks/on_pre_compact.sh')
+        assert 'compact_pending.json' in content
+
+    def test_pre_compact_has_project_dir_placeholder(self):
+        content = _load_template('hooks/on_pre_compact.sh')
+        assert '__PROJECT_DIR__' in content
+
+    def test_session_end_exists_and_has_shebang(self):
+        content = _load_template('hooks/on_session_end.sh')
+        assert content.startswith('#!/usr/bin/env bash')
+
+    def test_session_end_references_memex_cli(self):
+        content = _load_template('hooks/on_session_end.sh')
+        assert 'memex' in content
+        assert 'memory add' in content
+
+    def test_session_end_has_project_dir_placeholder(self):
+        content = _load_template('hooks/on_session_end.sh')
+        assert '__PROJECT_DIR__' in content
+
+    def test_session_end_checks_uv(self):
+        content = _load_template('hooks/on_session_end.sh')
+        assert 'command -v uv' in content
+
+
+# ===========================================================================
+# Unit tests — _build_hooks_config
+# ===========================================================================
+
+
+class TestBuildHooksConfig:
+    """Verify the hooks config structure for settings.local.json."""
+
+    def test_default_includes_session_start_and_pre_compact(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        assert 'SessionStart' in config
+        assert 'PreCompact' in config
+        assert 'SessionEnd' not in config
+
+    def test_session_end_included_when_requested(self, tmp_path):
+        config = _build_hooks_config(tmp_path, include_session_end=True)
+        assert 'SessionEnd' in config
+
+    def test_session_start_has_startup_matcher(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        entry = config['SessionStart'][0]
+        assert entry['matcher'] == 'startup'
+
+    def test_hooks_reference_correct_script_paths(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+
+        start_cmd = config['SessionStart'][0]['hooks'][0]['command']
+        assert start_cmd == str(hooks_dir / 'on_session_start.sh')
+
+        compact_cmd = config['PreCompact'][0]['hooks'][0]['command']
+        assert compact_cmd == str(hooks_dir / 'on_pre_compact.sh')
+
+    def test_session_end_references_correct_script(self, tmp_path):
+        config = _build_hooks_config(tmp_path, include_session_end=True)
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        end_cmd = config['SessionEnd'][0]['hooks'][0]['command']
+        assert end_cmd == str(hooks_dir / 'on_session_end.sh')
+
+    def test_hook_entries_have_command_type(self, tmp_path):
+        config = _build_hooks_config(tmp_path, include_session_end=True)
+        for event_hooks in config.values():
+            for entry in event_hooks:
+                for hook in entry['hooks']:
+                    assert hook['type'] == 'command'
+
+
+# ===========================================================================
+# Unit tests — _merge_settings_local
+# ===========================================================================
+
+
+class TestMergeSettingsLocal:
+    """Verify settings.local.json merge behaviour."""
+
+    def test_creates_fresh_when_no_file(self, tmp_path):
+        settings_path = tmp_path / 'settings.local.json'
+        hooks: dict[str, list] = {'SessionStart': []}
+        result = _merge_settings_local(settings_path, hooks)
+        assert result == {'hooks': {'SessionStart': []}}
+
+    def test_preserves_existing_keys(self, tmp_path):
+        settings_path = tmp_path / 'settings.local.json'
+        settings_path.write_text(
+            json.dumps(
+                {
+                    'permissions': {'allow': ['Bash']},
+                    'enableAllProjectMcpServers': True,
+                }
+            )
+        )
+        hooks: dict[str, list] = {'SessionStart': []}
+        result = _merge_settings_local(settings_path, hooks)
+        assert result['permissions'] == {'allow': ['Bash']}
+        assert result['enableAllProjectMcpServers'] is True
+        assert result['hooks'] == {'SessionStart': []}
+
+    def test_replaces_existing_hooks(self, tmp_path):
+        settings_path = tmp_path / 'settings.local.json'
+        settings_path.write_text(json.dumps({'hooks': {'OldHook': []}}))
+        new_hooks = {'SessionStart': [{'matcher': 'startup', 'hooks': []}]}
+        result = _merge_settings_local(settings_path, new_hooks)
+        assert result['hooks'] == new_hooks
+        assert 'OldHook' not in result['hooks']
+
+    def test_handles_malformed_json(self, tmp_path):
+        settings_path = tmp_path / 'settings.local.json'
+        settings_path.write_text('not valid json {{{')
+        hooks: dict[str, list] = {'SessionStart': []}
+        result = _merge_settings_local(settings_path, hooks)
+        assert result == {'hooks': {'SessionStart': []}}
+
+
+# ===========================================================================
+# Unit tests — _load_hook_template
+# ===========================================================================
+
+
+class TestLoadHookTemplate:
+    """Verify hook template loading and placeholder replacement."""
+
+    def test_replaces_project_dir_placeholder(self, tmp_path):
+        content = _load_hook_template('on_pre_compact.sh', tmp_path)
+        assert '__PROJECT_DIR__' not in content
+        assert str(tmp_path) in content
+
+    def test_session_start_has_no_placeholder(self):
+        """on_session_start.sh has no __PROJECT_DIR__ placeholder."""
+        import pathlib
+
+        content = _load_hook_template('on_session_start.sh', pathlib.Path('/fake'))
+        # Should still be valid — just no replacement needed
+        assert '#!/usr/bin/env bash' in content
+
+    def test_session_end_replaces_placeholder(self, tmp_path):
+        content = _load_hook_template('on_session_end.sh', tmp_path)
+        assert '__PROJECT_DIR__' not in content
+        assert str(tmp_path) in content
+
+
+# ===========================================================================
+# CLI integration tests — hook file creation
+# ===========================================================================
+
+
+class TestSetupCreatesHooks:
+    """Verify that the setup command creates hook files correctly."""
+
+    def test_creates_hook_scripts(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path))
+        assert result.exit_code == 0
+
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        assert (hooks_dir / 'on_session_start.sh').exists()
+        assert (hooks_dir / 'on_pre_compact.sh').exists()
+        # SessionEnd not created by default
+        assert not (hooks_dir / 'on_session_end.sh').exists()
+
+    def test_creates_state_directory(self, tmp_path):
+        _invoke('--project-dir', str(tmp_path))
+        state_dir = tmp_path / '.claude' / 'hooks' / 'memex' / '.state'
+        assert state_dir.is_dir()
+
+    def test_hook_scripts_are_executable(self, tmp_path):
+        import os
+
+        _invoke('--project-dir', str(tmp_path))
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        for script in ('on_session_start.sh', 'on_pre_compact.sh'):
+            assert os.access(hooks_dir / script, os.X_OK)
+
+    def test_placeholder_replaced_in_scripts(self, tmp_path):
+        _invoke('--project-dir', str(tmp_path))
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        for script in ('on_pre_compact.sh',):
+            content = (hooks_dir / script).read_text()
+            assert '__PROJECT_DIR__' not in content
+            assert str(tmp_path) in content
+
+    def test_settings_local_json_created(self, tmp_path):
+        _invoke('--project-dir', str(tmp_path))
+        settings_path = tmp_path / '.claude' / 'settings.local.json'
+        assert settings_path.exists()
+        data = json.loads(settings_path.read_text())
+        assert 'hooks' in data
+        assert 'SessionStart' in data['hooks']
+        assert 'PreCompact' in data['hooks']
+
+    def test_settings_local_preserves_existing_keys(self, tmp_path):
+        settings_path = tmp_path / '.claude' / 'settings.local.json'
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps({'permissions': {'allow': ['Bash']}, 'enableAllProjectMcpServers': True})
+        )
+
+        _invoke('--project-dir', str(tmp_path))
+
+        data = json.loads(settings_path.read_text())
+        assert data['permissions'] == {'allow': ['Bash']}
+        assert data['enableAllProjectMcpServers'] is True
+        assert 'hooks' in data
+
+    def test_no_hooks_flag_skips_generation(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path), '--no-hooks')
+        assert result.exit_code == 0
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        assert not hooks_dir.exists()
+        # settings.local.json should not be created by hooks step
+        settings_path = tmp_path / '.claude' / 'settings.local.json'
+        assert not settings_path.exists()
+
+    def test_with_session_tracking_creates_session_end(self, tmp_path):
+        result = _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
+        assert result.exit_code == 0
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        assert (hooks_dir / 'on_session_end.sh').exists()
+
+        data = json.loads((tmp_path / '.claude' / 'settings.local.json').read_text())
+        assert 'SessionEnd' in data['hooks']
+
+    def test_with_session_tracking_script_executable(self, tmp_path):
+        import os
+
+        _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
+        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_session_end.sh'
+        assert os.access(script, os.X_OK)
+
+    def test_skips_existing_hooks_without_force(self, tmp_path):
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        hooks_dir.mkdir(parents=True)
+        script = hooks_dir / 'on_session_start.sh'
+        script.write_text('custom hook')
+
+        _invoke('--project-dir', str(tmp_path))
+
+        assert script.read_text() == 'custom hook'
+
+    def test_force_overwrites_existing_hooks(self, tmp_path):
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        hooks_dir.mkdir(parents=True)
+        script = hooks_dir / 'on_session_start.sh'
+        script.write_text('custom hook')
+
+        _invoke('--project-dir', str(tmp_path), '--force')
+
+        content = script.read_text()
+        assert content != 'custom hook'
+        assert '#!/usr/bin/env bash' in content
+
+    def test_rerun_overwrites_settings_hooks(self, tmp_path):
+        """Re-running always updates the hooks section in settings.local.json."""
+        _invoke('--project-dir', str(tmp_path))
+        _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
+
+        data = json.loads((tmp_path / '.claude' / 'settings.local.json').read_text())
+        assert 'SessionEnd' in data['hooks']
+
+
+# ===========================================================================
+# Unit tests — hook script syntax validation
+# ===========================================================================
+
+
+class TestHookScriptSyntax:
+    """Verify generated hook scripts pass bash syntax checks."""
+
+    def test_session_start_passes_bash_syntax(self, tmp_path):
+        import subprocess
+
+        _invoke('--project-dir', str(tmp_path))
+        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_session_start.sh'
+        result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, f'Syntax error: {result.stderr}'
+
+    def test_pre_compact_passes_bash_syntax(self, tmp_path):
+        import subprocess
+
+        _invoke('--project-dir', str(tmp_path))
+        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_pre_compact.sh'
+        result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, f'Syntax error: {result.stderr}'
+
+    def test_session_end_passes_bash_syntax(self, tmp_path):
+        import subprocess
+
+        _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
+        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_session_end.sh'
+        result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, f'Syntax error: {result.stderr}'
 
 
 # ===========================================================================

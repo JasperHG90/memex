@@ -63,6 +63,23 @@ def show_config(
         console.print('[red]No configuration loaded.[/red]')
         raise typer.Exit(1)
 
+    # Show vault summary with config source
+    vault_source = ctx.meta.get('vault_source', 'unknown')
+    source_labels = {
+        'cli': '--vault flag',
+        'local': f'local config ({ctx.meta.get("config_path", "?")})',
+        'global': f'global config ({ctx.meta.get("config_path", "?")})',
+        'default': 'default',
+    }
+    source_label = source_labels.get(vault_source, vault_source)
+    vault_section = (
+        '\n[bold]Vault Configuration:[/bold]\n'
+        f'  Active (Writer): {config.server.active_vault}\n'
+        f'  Attached (Read):  {config.server.attached_vaults or "[none]"}\n'
+        f'  Source:           {source_label}\n'
+    )
+    console.print(vault_section)
+
     # Dump config
     # mode='python' preserves SecretStr objects so we can identify and mask them
     # exclude_unset=compact: If compact is True, we exclude defaults. If False (default), we show everything.

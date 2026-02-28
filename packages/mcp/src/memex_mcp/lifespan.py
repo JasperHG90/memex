@@ -1,5 +1,6 @@
 """Lifespan for Memex FastMCP app"""
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, cast
 
@@ -10,6 +11,8 @@ from mcp.shared.context import RequestContext
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_mcp.models import AppContext
+
+logger = logging.getLogger('memex.mcp')
 
 
 @asynccontextmanager
@@ -28,6 +31,12 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
     app_context = AppContext(config=config)
     app_context._api = api
+
+    try:
+        vault = await api.get_active_vault()
+        logger.info('Connected to Memex. Active vault: "%s" (id: %s)', vault.name, vault.id)
+    except Exception as e:
+        logger.warning('Could not verify active vault: %s. Server may not be running.', e)
 
     try:
         yield app_context

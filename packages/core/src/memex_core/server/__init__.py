@@ -8,6 +8,11 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from memex_core.api import MemexAPI
 from memex_core.config import parse_memex_config
+from memex_common.config import (
+    GLOBAL_VAULT_NAME,
+    LocalYamlConfigSettingsSource,
+    MemexConfig,
+)
 from memex_core.context import set_session_id
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
@@ -59,6 +64,29 @@ async def lifespan(app: FastAPI):
         config=config,
     )
     await api.initialize()
+
+    try:
+        active_vault_name = config.server.active_vault
+        active_vault_id = await api.resolve_vault_identifier(active_vault_name)
+        attached = config.server.attached_vaults
+        logger.info(
+            'Memex server started. Active vault: "%s" (id: %s)',
+            active_vault_name,
+            active_vault_id,
+        )
+        if attached:
+            logger.info('Attached vaults: %s', attached)
+
+        # Detect if local config overrides the active vault
+        local_data = LocalYamlConfigSettingsSource(MemexConfig)()
+        local_vault = (local_data.get('server', {}) or {}).get('active_vault')
+        if local_vault and local_vault != GLOBAL_VAULT_NAME:
+            logger.info(
+                'Notice: active vault overridden by local config to "%s".',
+                local_vault,
+            )
+    except Exception as e:
+        logger.warning('Could not resolve active vault info: %s', e)
 
     app.state.api = api
 

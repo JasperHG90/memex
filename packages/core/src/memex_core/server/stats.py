@@ -1,8 +1,9 @@
 """Stats endpoints."""
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from memex_common.schemas import SystemStatsCountsDTO, TokenUsageResponse
 
@@ -13,10 +14,13 @@ router = APIRouter(prefix='/api/v1')
 
 
 @router.get('/stats/counts', response_model=SystemStatsCountsDTO)
-async def get_stats_counts(api: Annotated[MemexAPI, Depends(get_api)]):
+async def get_stats_counts(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: UUID | None = Query(None, description='Filter by vault ID'),
+):
     """Get total counts for documents, entities, and reflection queue."""
     try:
-        counts = await api.get_stats_counts()
+        counts = await api.get_stats_counts(vault_id=vault_id)
         return SystemStatsCountsDTO(**counts)
     except Exception as e:
         raise _handle_error(e, 'Failed to fetch system stats')

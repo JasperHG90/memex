@@ -20,6 +20,7 @@ export class MemexClient {
   private readonly baseUrl: string;
   private readonly config: PluginConfig;
   private readonly logger?: { warn?: (msg: string) => void };
+  private vaultVerified = false;
 
   constructor(config: PluginConfig, logger?: { warn?: (msg: string) => void }) {
     this.config = config;
@@ -28,10 +29,64 @@ export class MemexClient {
   }
 
   /**
+   * Ensure the configured vault exists, creating it if needed.
+   * Called lazily on first operation that needs it.
+   */
+  private async ensureVault(): Promise<void> {
+    if (this.vaultVerified) return;
+
+    const vaultIdentifier = this.config.vaultId ?? this.config.vaultName;
+    if (!vaultIdentifier) {
+      this.vaultVerified = true;
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/api/v1/vaults/${encodeURIComponent(vaultIdentifier)}`,
+      );
+      if (response.ok) {
+        this.vaultVerified = true;
+        return;
+      }
+      if (response.status === 404) {
+        // Vault doesn't exist — create it
+        const name = this.config.vaultName ?? String(vaultIdentifier);
+        const createResponse = await fetch(`${this.baseUrl}/api/v1/vaults`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            description: 'Auto-created by OpenClaw',
+          }),
+        });
+        if (!createResponse.ok) {
+          const text = await createResponse.text();
+          this.logger?.warn?.(
+            `[memex-openclaw] Failed to create vault "${name}": ${createResponse.status} - ${text}`,
+          );
+        }
+        this.vaultVerified = true;
+        return;
+      }
+      // Other errors — mark verified to avoid retrying every call
+      this.logger?.warn?.(
+        `[memex-openclaw] Vault check failed: ${response.status} ${response.statusText}`,
+      );
+      this.vaultVerified = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger?.warn?.(`[memex-openclaw] Vault check failed: ${message}`);
+      this.vaultVerified = true;
+    }
+  }
+
+  /**
    * POST /api/v1/memories/search
    * Returns a stream of MemoryUnitDTO via NDJSON.
    */
   async searchMemories(query: string, signal?: AbortSignal): Promise<MemoryUnitDTO[]> {
+    await this.ensureVault();
     const vaultIdentifier = this.config.vaultId ?? this.config.vaultName;
     const request: MemorySearchRequest = {
       query,
@@ -96,23 +151,31 @@ export class MemexClient {
       vault_id: vaultIdentifier,
     };
 
-    void fetch(`${this.baseUrl}/api/v1/ingestions?background=true`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((response: Response): Promise<void> | void => {
-        if (!response.ok) {
-          return response.text().then((text: string) => {
-            throw new Error(`Memex ingest failed: ${response.status} - ${text}`);
-          });
-        }
+    void (async () => {
+      try {
+        await this.ensureVault();
+      } catch {
+        // ensureVault already logs warnings
+      }
+
+      void fetch(`${this.baseUrl}/api/v1/ingestions?background=true`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        const warn = this.logger?.warn ?? console.warn;
-        warn(`[memex-openclaw] Background ingest failed: ${message}`);
-      });
+        .then((response: Response): Promise<void> | void => {
+          if (!response.ok) {
+            return response.text().then((text: string) => {
+              throw new Error(`Memex ingest failed: ${response.status} - ${text}`);
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          const warn = this.logger?.warn ?? console.warn;
+          warn(`[memex-openclaw] Background ingest failed: ${message}`);
+        });
+    })();
   }
 
   /**

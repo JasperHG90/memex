@@ -3,6 +3,8 @@
 from typing import Literal, Union, Annotated, Any, TypeAlias
 import pathlib as plb
 import os
+import re
+import warnings
 import yaml
 from uuid import UUID
 
@@ -549,6 +551,26 @@ class ServerConfig(BaseModel):
         default_factory=DocumentConfig,
         description='Configuration for document search and processing.',
     )
+
+    @model_validator(mode='after')
+    def _validate_vault_name(self) -> 'ServerConfig':
+        """Warn if active_vault looks like a typo."""
+        name = self.active_vault
+        if len(name) > 50:
+            warnings.warn(
+                f'active_vault name is suspiciously long ({len(name)} chars): "{name[:30]}..."',
+                UserWarning,
+                stacklevel=2,
+            )
+        if re.search(r'[^a-zA-Z0-9_\-.]', name):
+            warnings.warn(
+                f'active_vault "{name}" contains special characters. '
+                'Vault names typically use only alphanumeric characters, '
+                'hyphens, underscores, and dots.',
+                UserWarning,
+                stacklevel=2,
+            )
+        return self
 
     @model_validator(mode='after')
     def sync_default_model(self) -> 'ServerConfig':

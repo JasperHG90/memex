@@ -8,8 +8,9 @@ memory backend inside Claude Code sessions.
 import json
 import logging
 import pathlib as plb
+import stat
 from importlib import resources
-from typing import Annotated
+from typing import Any, Annotated
 
 import httpx
 import typer
@@ -40,10 +41,24 @@ CLAUDE_MD_MARKER = '<!-- MEMEX CLAUDE CODE INTEGRATION -->'
 
 _TEMPLATE_PKG = resources.files(_templates)
 
+_HOOK_TEMPLATES: list[tuple[str, str]] = [
+    ('on_session_start.sh', 'hooks/on_session_start.sh'),
+    ('on_pre_compact.sh', 'hooks/on_pre_compact.sh'),
+    ('on_session_end.sh', 'hooks/on_session_end.sh'),
+]
+
+_PROJECT_DIR_PLACEHOLDER = '__PROJECT_DIR__'
+
 
 def _load_template(name: str) -> str:
     """Read a bundled template file from the ``memex_cli.templates`` package."""
     return (_TEMPLATE_PKG / name).read_text(encoding='utf-8')
+
+
+def _load_hook_template(name: str, project_dir: plb.Path) -> str:
+    """Load a hook template and replace the project-dir placeholder."""
+    content = _load_template(f'hooks/{name}')
+    return content.replace(_PROJECT_DIR_PLACEHOLDER, str(project_dir))
 
 
 def _mcp_server_entry(vault: str) -> dict:
@@ -56,6 +71,76 @@ def _mcp_server_entry(vault: str) -> dict:
             'MEMEX_SERVER__ACTIVE_VAULT': vault,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Hooks helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_hooks_config(
+    project_dir: plb.Path,
+    *,
+    include_session_end: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build the ``hooks`` section for ``settings.local.json``."""
+    hooks_dir = project_dir / '.claude' / 'hooks' / 'memex'
+
+    hooks: dict[str, list[dict[str, Any]]] = {
+        'SessionStart': [
+            {
+                'matcher': 'startup',
+                'hooks': [
+                    {
+                        'type': 'command',
+                        'command': str(hooks_dir / 'on_session_start.sh'),
+                    },
+                ],
+            },
+        ],
+        'PreCompact': [
+            {
+                'hooks': [
+                    {
+                        'type': 'command',
+                        'command': str(hooks_dir / 'on_pre_compact.sh'),
+                    },
+                ],
+            },
+        ],
+    }
+
+    if include_session_end:
+        hooks['SessionEnd'] = [
+            {
+                'hooks': [
+                    {
+                        'type': 'command',
+                        'command': str(hooks_dir / 'on_session_end.sh'),
+                    },
+                ],
+            },
+        ]
+
+    return hooks
+
+
+def _merge_settings_local(
+    settings_path: plb.Path,
+    hooks_config: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Read existing ``settings.local.json``, merge the ``hooks`` key, and return."""
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            logger.warning('Malformed %s — creating fresh settings.', settings_path.name)
+            data = {}
+    else:
+        data = {}
+
+    data['hooks'] = hooks_config
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +190,27 @@ async def setup_claude_code(
             help='Skip CLAUDE.md modifications.',
         ),
     ] = False,
+    no_hooks: Annotated[
+        bool,
+        typer.Option(
+            '--no-hooks',
+            help='Skip hook generation.',
+        ),
+    ] = False,
+    with_session_tracking: Annotated[
+        bool,
+        typer.Option(
+            '--with-session-tracking',
+            help='Include SessionEnd hook for session tracking.',
+        ),
+    ] = False,
 ):
     """
     Configure Claude Code to use Memex as its long-term memory backend.
 
     Generates MCP server config, slash-command skills (/remember, /recall),
-    and optionally appends memory-integration instructions to CLAUDE.md.
+    hooks for session lifecycle events, and optionally appends
+    memory-integration instructions to CLAUDE.md.
     """
     project_dir = project_dir.resolve()
     config: MemexConfig | None = ctx.obj
@@ -207,7 +307,58 @@ async def setup_claude_code(
     else:
         console.print('[dim]Skipping CLAUDE.md (--no-claude-md)[/dim]')
 
+    # --- 4. Hooks -------------------------------------------------------------
+    hooks_enabled = False
+    if not no_hooks:
+        hooks_dir = project_dir / '.claude' / 'hooks' / 'memex'
+        state_dir = hooks_dir / '.state'
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        hook_scripts = [
+            ('on_session_start.sh', True),
+            ('on_pre_compact.sh', True),
+            ('on_session_end.sh', with_session_tracking),
+        ]
+
+        for script_name, include in hook_scripts:
+            if not include:
+                continue
+            script_path = hooks_dir / script_name
+            if script_path.exists() and not force:
+                console.print(
+                    f'[dim]Skipping {script_path.relative_to(project_dir)} '
+                    '(already exists, use --force to overwrite)[/dim]'
+                )
+            else:
+                content = _load_hook_template(script_name, project_dir)
+                script_path.write_text(content)
+                script_path.chmod(
+                    script_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
+                created.append(str(script_path.relative_to(project_dir)))
+                console.print(f'[green]✓[/green] Created {script_path.relative_to(project_dir)}')
+
+        # Merge hooks config into settings.local.json
+        hooks_config = _build_hooks_config(project_dir, include_session_end=with_session_tracking)
+        settings_path = project_dir / '.claude' / 'settings.local.json'
+        settings_data = _merge_settings_local(settings_path, hooks_config)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings_data, indent=2) + '\n')
+        created.append(str(settings_path.relative_to(project_dir)))
+        console.print(f'[green]✓[/green] Updated {settings_path.relative_to(project_dir)}')
+        hooks_enabled = True
+    else:
+        console.print('[dim]Skipping hooks (--no-hooks)[/dim]')
+
     # --- Summary --------------------------------------------------------------
+    if hooks_enabled:
+        hook_names = 'SessionStart + PreCompact'
+        if with_session_tracking:
+            hook_names += ' + SessionEnd'
+        hooks_status = f'Hooks: Enabled ({hook_names})'
+    else:
+        hooks_status = 'Hooks: Disabled'
+
     console.print()
     console.print(
         Panel(
@@ -215,6 +366,7 @@ async def setup_claude_code(
                 [
                     f'[bold]Vault:[/bold]  {vault_name}',
                     f'[bold]Files:[/bold]  {len(created)} created/updated',
+                    f'[bold]{hooks_status}[/bold]',
                     '',
                     'Next steps:',
                     '  1. Start (or restart) Claude Code in this project',

@@ -429,7 +429,7 @@ class MemexAPI:
                     )
                     session.add(vault)
                     await session.commit()
-                    logger.info('Global Vault created.')
+                    logger.info('Global Vault created (id: %s).', GLOBAL_VAULT_ID)
             except IntegrityError:
                 await session.rollback()
                 logger.debug('Global Vault already exists (concurrent creation handled).')
@@ -439,9 +439,12 @@ class MemexAPI:
             if active_identifier != GLOBAL_VAULT_NAME:
                 try:
                     # Check if it exists
-                    await self.resolve_vault_identifier(active_identifier)
+                    vault_id = await self.resolve_vault_identifier(active_identifier)
+                    logger.info('Active vault: "%s" (id: %s)', active_identifier, vault_id)
                 except VaultNotFoundError:
-                    logger.info(f"Initializing configured Active Vault: '{active_identifier}'...")
+                    logger.info(
+                        'Created vault "%s" (auto-initialized from config)', active_identifier
+                    )
                     # If it's a UUID string, use it as ID, otherwise use as Name
                     try:
                         v_id = UUID(active_identifier)
@@ -459,7 +462,7 @@ class MemexAPI:
                     try:
                         session.add(new_vault)
                         await session.commit()
-                        logger.info(f"Vault '{active_identifier}' created.")
+                        logger.info('Vault "%s" created.', active_identifier)
                     except IntegrityError:
                         await session.rollback()
                         logger.debug(
@@ -468,6 +471,17 @@ class MemexAPI:
 
         # Clear cache after initialization to ensure resolve_vault_identifier sees new vaults
         _VAULT_RESOLUTION_CACHE.clear()
+
+        # 3. Validate attached vaults
+        for av_name in self.config.server.attached_vaults:
+            try:
+                av_id = await self.resolve_vault_identifier(av_name)
+                logger.info('Attached vault: "%s" (id: %s)', av_name, av_id)
+            except VaultNotFoundError:
+                logger.warning(
+                    'Attached vault "%s" not found. It will be skipped during retrieval.',
+                    av_name,
+                )
 
         # Reconcile interrupted batch jobs
         try:
@@ -938,15 +952,20 @@ ingested_at: {now}
                 return None
             return NodeDTO.model_validate(node)
 
-    async def list_notes(self, limit: int = 100, offset: int = 0) -> list[Any]:
+    async def list_notes(
+        self, limit: int = 100, offset: int = 0, vault_id: UUID | None = None
+    ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the active vault (write target).
+        Filters by the given vault_id, or the active vault (write target) if not provided.
         """
         from memex_core.memory.sql_models import Note
         from sqlmodel import select
 
-        target_vault_id = await self.resolve_vault_identifier(self.config.server.active_vault)
+        if vault_id:
+            target_vault_id = vault_id
+        else:
+            target_vault_id = await self.resolve_vault_identifier(self.config.server.active_vault)
 
         async with self.metastore.session() as session:
             stmt = select(Note)
@@ -955,17 +974,25 @@ ingested_at: {now}
             stmt = stmt.offset(offset).limit(limit)
             return list((await session.exec(stmt)).all())
 
-    async def get_stats_counts(self) -> dict[str, int]:
+    async def get_stats_counts(self, vault_id: UUID | None = None) -> dict[str, int]:
         """
         Get total counts for documents, entities, and reflection queue.
         """
-        from memex_core.memory.sql_models import Note, Entity, ReflectionQueue
-        from sqlmodel import select, func
+        from memex_core.memory.sql_models import Entity, Note, ReflectionQueue
+        from sqlmodel import func, select
 
         async with self.metastore.session() as session:
-            doc_count = (await session.exec(select(func.count(Note.id)))).one()
-            entity_count = (await session.exec(select(func.count(Entity.id)))).one()
-            queue_count = (await session.exec(select(func.count(ReflectionQueue.id)))).one()
+            doc_stmt = select(func.count(Note.id))
+            entity_stmt = select(func.count(Entity.id))
+            queue_stmt = select(func.count(ReflectionQueue.id))
+
+            if vault_id:
+                doc_stmt = doc_stmt.where(col(Note.vault_id) == vault_id)
+                queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id) == vault_id)
+
+            doc_count = (await session.exec(doc_stmt)).one()
+            entity_count = (await session.exec(entity_stmt)).one()
+            queue_count = (await session.exec(queue_stmt)).one()
 
             return {
                 'memories': doc_count,
@@ -973,18 +1000,23 @@ ingested_at: {now}
                 'reflection_queue': queue_count,
             }
 
-    async def get_recent_notes(self, limit: int = 5) -> list[Any]:
+    async def get_recent_notes(self, limit: int = 5, vault_id: UUID | None = None) -> list[Any]:
         """
         Get the most recent notes.
         """
         from memex_core.memory.sql_models import Note
-        from sqlmodel import select, desc
+        from sqlmodel import desc, select
 
         async with self.metastore.session() as session:
-            stmt = select(Note).order_by(desc(Note.created_at)).limit(limit)
+            stmt = select(Note).order_by(desc(Note.created_at))
+            if vault_id:
+                stmt = stmt.where(col(Note.vault_id) == vault_id)
+            stmt = stmt.limit(limit)
             return list((await session.exec(stmt)).all())
 
-    async def list_entities_ranked(self, limit: int = 100) -> AsyncGenerator[Any, None]:
+    async def list_entities_ranked(
+        self, limit: int = 100, vault_id: UUID | None = None
+    ) -> AsyncGenerator[Any, None]:
         """
         Stream entities ranked by hybrid score.
         Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
@@ -1028,42 +1060,50 @@ ingested_at: {now}
             async for row in stream:
                 yield row[0]
 
-    async def get_entity_cooccurrences(self, entity_id: UUID | str) -> list[Any]:
+    async def get_entity_cooccurrences(
+        self, entity_id: UUID | str, vault_id: UUID | None = None
+    ) -> list[Any]:
         """
         Get co-occurrence edges for an entity.
         """
         from memex_core.memory.sql_models import EntityCooccurrence
-        from sqlmodel import select, or_
+        from sqlmodel import or_, select
 
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
             stmt = select(EntityCooccurrence).where(
                 or_(EntityCooccurrence.entity_id_1 == eid, EntityCooccurrence.entity_id_2 == eid)
             )
+            if vault_id:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id) == vault_id)
             return list((await session.exec(stmt)).all())
 
-    async def get_bulk_cooccurrences(self, entity_ids: list[UUID]) -> list[Any]:
+    async def get_bulk_cooccurrences(
+        self, entity_ids: list[UUID], vault_id: UUID | None = None
+    ) -> list[Any]:
         """
         Get co-occurrences between a set of entities.
         """
         from memex_core.memory.sql_models import EntityCooccurrence
-        from sqlmodel import select, col
+        from sqlmodel import col, select
 
         async with self.metastore.session() as session:
             stmt = select(EntityCooccurrence).where(
                 (col(EntityCooccurrence.entity_id_1).in_(entity_ids))
                 & (col(EntityCooccurrence.entity_id_2).in_(entity_ids))
             )
+            if vault_id:
+                stmt = stmt.where(col(EntityCooccurrence.vault_id) == vault_id)
             return list((await session.exec(stmt)).all())
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20
+        self, entity_id: UUID | str, limit: int = 20, vault_id: UUID | None = None
     ) -> list[dict[str, Any]]:
         """
         Get memory units and source documents where this entity is mentioned.
         """
         from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
-        from sqlmodel import select, desc
+        from sqlmodel import desc, select
 
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
@@ -1072,9 +1112,10 @@ ingested_at: {now}
                 .join(UnitEntity, UnitEntity.unit_id == MemoryUnit.id)
                 .join(Note, MemoryUnit.note_id == Note.id)
                 .where(UnitEntity.entity_id == eid)
-                .order_by(desc(MemoryUnit.created_at))
-                .limit(limit)
             )
+            if vault_id:
+                stmt = stmt.where(col(MemoryUnit.vault_id) == vault_id)
+            stmt = stmt.order_by(desc(MemoryUnit.created_at)).limit(limit)
             results = (await session.exec(stmt)).all()
             return [{'unit': unit, 'document': doc} for unit, doc in results]
 
@@ -1623,7 +1664,7 @@ ingested_at: {now}
                 session, limit=limit, vault_id=vault_id
             )
 
-    async def get_top_entities(self, limit: int = 5) -> list[Any]:
+    async def get_top_entities(self, limit: int = 5, vault_id: UUID | None = None) -> list[Any]:
         """Get top entities by mention count."""
         from memex_core.memory.sql_models import Entity
         from sqlmodel import select, desc
@@ -1632,7 +1673,9 @@ ingested_at: {now}
             stmt = select(Entity).order_by(desc(Entity.mention_count)).limit(limit)
             return list((await session.exec(stmt)).all())
 
-    async def search_entities(self, query: str, limit: int = 10) -> list[Any]:
+    async def search_entities(
+        self, query: str, limit: int = 10, vault_id: UUID | None = None
+    ) -> list[Any]:
         """
         Search for entities by canonical name using trigram similarity or ILIKE.
         """

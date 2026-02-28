@@ -138,3 +138,47 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         raise HTTPException(status_code=404, detail='Vault not found or could not be deleted')
     except Exception as e:
         raise _handle_error(e, 'Vault deletion failed')
+
+
+@router.post('/vaults/{identifier}/set-writer')
+async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get_api)]):
+    """
+    Set the active (writer) vault for the current server session.
+    This is a runtime override — on restart, config file values apply again.
+    """
+    try:
+        vault_id = await api.resolve_vault_identifier(identifier)
+        api.config.server.active_vault = identifier
+        return {'status': 'success', 'active_vault': str(vault_id)}
+    except Exception as e:
+        raise _handle_error(e, 'Failed to set writer vault')
+
+
+@router.post('/vaults/{identifier}/toggle-attached')
+async def toggle_attached_vault(
+    identifier: str,
+    attach: bool,
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """
+    Attach or detach a vault for read-only search inclusion.
+    This is a runtime override — on restart, config file values apply again.
+    """
+    try:
+        # Validate the vault exists
+        await api.resolve_vault_identifier(identifier)
+
+        if attach:
+            if identifier not in api.config.server.attached_vaults:
+                api.config.server.attached_vaults.append(identifier)
+        else:
+            api.config.server.attached_vaults = [
+                v for v in api.config.server.attached_vaults if v != identifier
+            ]
+
+        return {
+            'status': 'success',
+            'attached_vaults': api.config.server.attached_vaults,
+        }
+    except Exception as e:
+        raise _handle_error(e, 'Failed to toggle attached vault')
