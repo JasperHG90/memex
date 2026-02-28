@@ -45,6 +45,8 @@ dependencies = [
     "pymupdf4llm>=0.3.4",
     "cloudscraper>=1.2.71",
     "slowapi>=0.1.9",
+    "structlog>=25.5.0",
+    "alembic>=1.15.0",
 ]
 
 [build-system]
