@@ -182,3 +182,6 @@ gemini-extension.json
 # OpenClaw plugin (TypeScript build artifacts)
 packages/openclaw/node_modules/
 packages/openclaw/dist/
+
+.playwright-mcp
+.tmp

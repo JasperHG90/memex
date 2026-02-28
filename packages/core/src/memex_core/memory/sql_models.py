@@ -752,6 +752,12 @@ class Entity(SQLModel, table=True):  # type: ignore
         description='Additional metadata associated with the entity (e.g. bio, type).',
     )
 
+    entity_type: str | None = Field(
+        default=None,
+        sa_column=Column(Text),
+        description='NER-derived entity type (Person, Organization, Location, Concept).',
+    )
+
     first_seen: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
         description='Timestamp when the entity was first encountered in the corpus.',

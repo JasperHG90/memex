@@ -2,10 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Memex Dashboard</title>
-    <style>html,body,#root{background-color:#0D0D0D;color:#EDEDED}</style>
+    <script>
+      (function() {
+        var theme = localStorage.getItem('memex_theme');
+        if (theme === 'light') {
+          document.documentElement.classList.add('light');
+          document.documentElement.style.backgroundColor = '#FFFFFF';
+          document.documentElement.style.color = '#171717';
+        } else {
+          document.documentElement.style.backgroundColor = '#0D0D0D';
+          document.documentElement.style.color = '#EDEDED';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

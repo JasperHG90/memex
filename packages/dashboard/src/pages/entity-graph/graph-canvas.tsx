@@ -4,6 +4,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   useNodesState,
   useEdgesState,
   type Edge,
@@ -20,7 +21,7 @@ import {
   type SimulationLinkDatum,
 } from 'd3-force';
 import type { EntityDTO, CooccurrenceRecord } from '@/api/generated';
-import { EntityNode, type EntityFlowNode } from './entity-node';
+import { EntityNode, TYPE_COLORS, type EntityFlowNode } from './entity-node';
 import type { GraphFilters } from './filter-panel';
 
 const nodeTypes = { entity: EntityNode };
@@ -82,6 +83,7 @@ function buildFlowElements(
   // 1. Filter entities
   const filteredEntities = entities.filter((e) => {
     if ((e.mention_count ?? 0) < filters.minImportance) return false;
+    if (filters.entityTypes.length > 0 && e.entity_type && !filters.entityTypes.includes(e.entity_type)) return false;
     return true;
   });
 
@@ -245,6 +247,17 @@ export function GraphCanvas({
         maskColor="rgba(0, 0, 0, 0.7)"
         className="!bg-card !border-border"
       />
+      <Panel position="top-right" className="!bg-card/90 !border !border-border !rounded-lg !p-3 !shadow-lg">
+        <p className="text-xs font-medium text-muted-foreground mb-2">Entity Types</p>
+        <div className="flex flex-col gap-1.5">
+          {Object.entries(TYPE_COLORS).map(([type, color]) => (
+            <div key={type} className="flex items-center gap-2">
+              <div className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
+              <span className="text-xs text-foreground">{type}</span>
+            </div>
+          ))}
+        </div>
+      </Panel>
     </ReactFlow>
   );
 }

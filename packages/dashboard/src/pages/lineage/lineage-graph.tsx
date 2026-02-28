@@ -207,7 +207,7 @@ function lineageToGraph(
     type: 'default',
     animated: false,
     markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-    style: { stroke: '#444', strokeWidth: 1.5 },
+    style: { stroke: 'var(--muted-foreground)', strokeWidth: 1.5 },
   }));
 
   return getLayoutedElements(nodes, edges);
@@ -266,7 +266,7 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
         eds.map((e) => ({
           ...e,
           animated: false,
-          style: { stroke: '#444', strokeWidth: 1.5 },
+          style: { stroke: 'var(--muted-foreground)', strokeWidth: 1.5 },
         })),
       );
       return;
@@ -294,7 +294,7 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
           ...e,
           animated: isHighlighted,
           style: {
-            stroke: isHighlighted ? '#ffffff' : '#444',
+            stroke: isHighlighted ? 'var(--foreground)' : 'var(--muted-foreground)',
             strokeWidth: isHighlighted ? 2.5 : 1.5,
             opacity: isHighlighted ? 0.8 : 0.15,
           },
@@ -329,7 +329,7 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
         minZoom={0.1}
         maxZoom={2}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#333" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
         <Controls
           className="!bg-card !border-border !shadow-lg [&>button]:!bg-card [&>button]:!border-border [&>button]:!text-foreground [&>button:hover]:!bg-hover"
         />

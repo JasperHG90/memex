@@ -142,6 +142,14 @@ class TestTemplateContent:
         assert 'memex_add_note' in content
         assert 'memex_search' in content
 
+    def test_claude_md_section_has_capture_constraint(self):
+        content = _load_template('claude_md_section.md')
+        assert '<constraint name="proactive-memory-capture" priority="critical">' in content
+        assert 'multi-step task' in content
+        assert 'bug root cause' in content
+        assert 'architectural decision' in content
+        assert 'user preference' in content
+
     # --- helpers ----------------------------------------------------------
 
     @staticmethod
@@ -543,6 +551,7 @@ class TestOutputMessages:
         result = _invoke('--project-dir', str(tmp_path))
         assert 'Hooks: Enabled' in result.output
         assert 'SessionStart' in result.output
+        assert 'PostToolUse' in result.output
 
     def test_summary_shows_hooks_disabled(self, tmp_path):
         result = _invoke('--project-dir', str(tmp_path), '--no-hooks')
@@ -582,13 +591,13 @@ class TestHookTemplateContent:
         content = _load_template('hooks/on_pre_compact.sh')
         assert content.startswith('#!/usr/bin/env bash')
 
-    def test_pre_compact_references_state_dir(self):
+    def test_pre_compact_outputs_system_message(self):
         content = _load_template('hooks/on_pre_compact.sh')
-        assert 'compact_pending.json' in content
+        assert 'systemMessage' in content
 
-    def test_pre_compact_has_project_dir_placeholder(self):
+    def test_pre_compact_has_no_project_dir_placeholder(self):
         content = _load_template('hooks/on_pre_compact.sh')
-        assert '__PROJECT_DIR__' in content
+        assert '__PROJECT_DIR__' not in content
 
     def test_session_end_exists_and_has_shebang(self):
         content = _load_template('hooks/on_session_end.sh')
@@ -607,6 +616,29 @@ class TestHookTemplateContent:
         content = _load_template('hooks/on_session_end.sh')
         assert 'command -v uv' in content
 
+    # --- on_post_commit.sh ------------------------------------------------
+
+    def test_post_commit_exists_and_has_shebang(self):
+        content = _load_template('hooks/on_post_commit.sh')
+        assert content.startswith('#!/usr/bin/env bash')
+
+    def test_post_commit_checks_git_commit(self):
+        content = _load_template('hooks/on_post_commit.sh')
+        assert 'git' in content
+        assert 'commit' in content
+
+    def test_post_commit_outputs_system_message(self):
+        content = _load_template('hooks/on_post_commit.sh')
+        assert 'systemMessage' in content
+
+    def test_post_commit_has_noop_fallback(self):
+        content = _load_template('hooks/on_post_commit.sh')
+        assert "echo '{}'" in content or 'echo {}' in content.replace("'", '')
+
+    def test_post_commit_has_no_project_dir_placeholder(self):
+        content = _load_template('hooks/on_post_commit.sh')
+        assert '__PROJECT_DIR__' not in content
+
 
 # ===========================================================================
 # Unit tests — _build_hooks_config
@@ -620,6 +652,7 @@ class TestBuildHooksConfig:
         config = _build_hooks_config(tmp_path)
         assert 'SessionStart' in config
         assert 'PreCompact' in config
+        assert 'PostToolUse' in config
         assert 'SessionEnd' not in config
 
     def test_session_end_included_when_requested(self, tmp_path):
@@ -646,6 +679,22 @@ class TestBuildHooksConfig:
         hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
         end_cmd = config['SessionEnd'][0]['hooks'][0]['command']
         assert end_cmd == str(hooks_dir / 'on_session_end.sh')
+
+    def test_default_includes_post_tool_use(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        assert 'PostToolUse' in config
+        assert 'Stop' not in config
+
+    def test_post_tool_use_has_bash_matcher(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        entry = config['PostToolUse'][0]
+        assert entry['matcher'] == 'Bash'
+
+    def test_post_tool_use_references_correct_script(self, tmp_path):
+        config = _build_hooks_config(tmp_path)
+        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
+        post_cmd = config['PostToolUse'][0]['hooks'][0]['command']
+        assert post_cmd == str(hooks_dir / 'on_post_commit.sh')
 
     def test_hook_entries_have_command_type(self, tmp_path):
         config = _build_hooks_config(tmp_path, include_session_end=True)
@@ -709,10 +758,9 @@ class TestMergeSettingsLocal:
 class TestLoadHookTemplate:
     """Verify hook template loading and placeholder replacement."""
 
-    def test_replaces_project_dir_placeholder(self, tmp_path):
+    def test_pre_compact_has_no_placeholder(self, tmp_path):
         content = _load_hook_template('on_pre_compact.sh', tmp_path)
         assert '__PROJECT_DIR__' not in content
-        assert str(tmp_path) in content
 
     def test_session_start_has_no_placeholder(self):
         """on_session_start.sh has no __PROJECT_DIR__ placeholder."""
@@ -726,6 +774,13 @@ class TestLoadHookTemplate:
         content = _load_hook_template('on_session_end.sh', tmp_path)
         assert '__PROJECT_DIR__' not in content
         assert str(tmp_path) in content
+
+    def test_post_commit_has_no_placeholder_to_replace(self):
+        import pathlib
+
+        content = _load_hook_template('on_post_commit.sh', pathlib.Path('/fake'))
+        assert '#!/usr/bin/env bash' in content
+        assert '__PROJECT_DIR__' not in content
 
 
 # ===========================================================================
@@ -743,6 +798,7 @@ class TestSetupCreatesHooks:
         hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
         assert (hooks_dir / 'on_session_start.sh').exists()
         assert (hooks_dir / 'on_pre_compact.sh').exists()
+        assert (hooks_dir / 'on_post_commit.sh').exists()
         # SessionEnd not created by default
         assert not (hooks_dir / 'on_session_end.sh').exists()
 
@@ -756,13 +812,17 @@ class TestSetupCreatesHooks:
 
         _invoke('--project-dir', str(tmp_path))
         hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
-        for script in ('on_session_start.sh', 'on_pre_compact.sh'):
+        for script in (
+            'on_session_start.sh',
+            'on_pre_compact.sh',
+            'on_post_commit.sh',
+        ):
             assert os.access(hooks_dir / script, os.X_OK)
 
     def test_placeholder_replaced_in_scripts(self, tmp_path):
-        _invoke('--project-dir', str(tmp_path))
+        _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
         hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
-        for script in ('on_pre_compact.sh',):
+        for script in ('on_session_end.sh',):
             content = (hooks_dir / script).read_text()
             assert '__PROJECT_DIR__' not in content
             assert str(tmp_path) in content
@@ -775,6 +835,13 @@ class TestSetupCreatesHooks:
         assert 'hooks' in data
         assert 'SessionStart' in data['hooks']
         assert 'PreCompact' in data['hooks']
+
+    def test_settings_local_includes_new_hooks(self, tmp_path):
+        _invoke('--project-dir', str(tmp_path))
+        settings_path = tmp_path / '.claude' / 'settings.local.json'
+        data = json.loads(settings_path.read_text())
+        assert 'Stop' not in data['hooks']
+        assert 'PostToolUse' in data['hooks']
 
     def test_settings_local_preserves_existing_keys(self, tmp_path):
         settings_path = tmp_path / '.claude' / 'settings.local.json'
@@ -867,6 +934,14 @@ class TestHookScriptSyntax:
 
         _invoke('--project-dir', str(tmp_path))
         script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_pre_compact.sh'
+        result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, f'Syntax error: {result.stderr}'
+
+    def test_post_commit_passes_bash_syntax(self, tmp_path):
+        import subprocess
+
+        _invoke('--project-dir', str(tmp_path))
+        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_post_commit.sh'
         result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
         assert result.returncode == 0, f'Syntax error: {result.stderr}'
 

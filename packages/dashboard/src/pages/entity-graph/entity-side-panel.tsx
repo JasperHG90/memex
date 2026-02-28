@@ -7,7 +7,7 @@ import {
   useEntity,
   useEntities,
 } from '@/api/hooks/use-entities';
-import { X, ExternalLink, Loader2 } from 'lucide-react';
+import { X, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import type { EntityMention, CooccurrenceRecord } from '@/api/generated';
+import { useTriggerReflection } from '@/api/hooks/use-reflections';
+import { toast } from 'sonner';
 
 const FACT_TYPE_COLORS: Record<string, string> = {
   world: '#3B82F6',
@@ -36,6 +38,7 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
   const { data: cooccurrences, isLoading: cooccurrencesLoading } = useEntityCooccurrences(entityId);
   const { data: allEntities } = useEntities({ limit: 100, sort: '-mentions' });
   const [selectedMention, setSelectedMention] = useState<EntityMention | null>(null);
+  const triggerReflection = useTriggerReflection();
 
   // Build a name lookup for co-occurring entity IDs
   const entityNameMap = useMemo(() => {
@@ -77,10 +80,27 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
                 <ExternalLink className="mr-1 h-3 w-3" />
                 Details
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                disabled={triggerReflection.isPending}
+                onClick={async () => {
+                  try {
+                    await triggerReflection.mutateAsync(entityId);
+                    toast.success('Reflection triggered successfully');
+                  } catch (err) {
+                    toast.error(`Failed to trigger reflection: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }}
+              >
+                <RefreshCw className={`mr-1 h-3 w-3 ${triggerReflection.isPending ? 'animate-spin' : ''}`} />
+                Reflect
+              </Button>
             </div>
           )}
 
-          {/* Mentions */}
+          {/* Mentions Timeline */}
           <div>
             <h4 className="mb-2 text-xs font-medium text-muted-foreground">Mentions</h4>
             {mentionsLoading ? (
@@ -89,11 +109,7 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
                 Loading mentions...
               </div>
             ) : mentions && mentions.length > 0 ? (
-              <div className="flex flex-col gap-2">
-                {mentions.map((m: EntityMention) => (
-                  <MentionCard key={m.unit.id} mention={m} onClick={() => setSelectedMention(m)} />
-                ))}
-              </div>
+              <MentionsTimeline mentions={mentions} onMentionClick={setSelectedMention} />
             ) : (
               <p className="text-xs text-muted-foreground">No mentions found.</p>
             )}
@@ -178,6 +194,59 @@ export function EntitySidePanel({ entityId, onClose, onOpenDetail }: EntitySideP
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function MentionsTimeline({
+  mentions,
+  onMentionClick,
+}: {
+  mentions: EntityMention[];
+  onMentionClick: (m: EntityMention) => void;
+}) {
+  // Group by date
+  const grouped = useMemo(() => {
+    const groups = new Map<string, EntityMention[]>();
+    for (const m of mentions) {
+      const date = m.unit.mentioned_at
+        ? new Date(m.unit.mentioned_at).toLocaleDateString()
+        : 'Unknown date';
+      const existing = groups.get(date) ?? [];
+      existing.push(m);
+      groups.set(date, existing);
+    }
+    return [...groups.entries()].sort(([a], [b]) => {
+      if (a === 'Unknown date') return 1;
+      if (b === 'Unknown date') return -1;
+      return new Date(b).getTime() - new Date(a).getTime();
+    });
+  }, [mentions]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {grouped.map(([date, items]) => (
+        <div key={date}>
+          <p className="text-[10px] font-semibold text-muted-foreground mb-1.5 uppercase tracking-wider">
+            {date}
+          </p>
+          <div className="relative ml-2 border-l border-border pl-3 flex flex-col gap-2">
+            {items.map((m) => {
+              const color = FACT_TYPE_COLORS[m.unit.fact_type] ?? '#71717A';
+              return (
+                <div key={m.unit.id} className="relative">
+                  {/* Timeline dot */}
+                  <div
+                    className="absolute -left-[17px] top-2 h-2.5 w-2.5 rounded-full border-2 border-card"
+                    style={{ backgroundColor: color }}
+                  />
+                  <MentionCard mention={m} onClick={() => onMentionClick(m)} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

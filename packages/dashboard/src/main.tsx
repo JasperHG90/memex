@@ -8,6 +8,14 @@ import { PageSkeleton } from '@/components/shared/page-skeleton'
 import App from './app'
 import './index.css'
 
+// Restore saved theme before render to avoid flash
+const savedTheme = localStorage.getItem('memex_theme');
+if (savedTheme === 'light') {
+  document.documentElement.classList.add('light');
+  document.documentElement.style.backgroundColor = '#FFFFFF';
+  document.documentElement.style.color = '#171717';
+}
+
 const Overview = lazy(() => import('@/pages/overview'))
 const EntityGraph = lazy(() => import('@/pages/entity-graph'))
 const Lineage = lazy(() => import('@/pages/lineage'))
@@ -15,6 +23,9 @@ const MemorySearch = lazy(() => import('@/pages/memory-search'))
 const NoteSearch = lazy(() => import('@/pages/note-search'))
 const SystemStatus = lazy(() => import('@/pages/system-status'))
 const Settings = lazy(() => import('@/pages/settings'))
+const Reflection = lazy(() => import('@/pages/reflection'))
+const MemoryTimeline = lazy(() => import('@/pages/timeline'))
+const KnowledgeFlow = lazy(() => import('@/pages/knowledge-flow'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,6 +52,9 @@ const router = createBrowserRouter([
       { path: 'doc-search', element: <SuspenseWrapper><NoteSearch /></SuspenseWrapper> },
       { path: 'status', element: <SuspenseWrapper><SystemStatus /></SuspenseWrapper> },
       { path: 'settings', element: <SuspenseWrapper><Settings /></SuspenseWrapper> },
+      { path: 'reflection', element: <SuspenseWrapper><Reflection /></SuspenseWrapper> },
+      { path: 'timeline', element: <SuspenseWrapper><MemoryTimeline /></SuspenseWrapper> },
+      { path: 'knowledge-flow', element: <SuspenseWrapper><KnowledgeFlow /></SuspenseWrapper> },
     ],
   },
 ])

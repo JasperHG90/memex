@@ -85,12 +85,11 @@ def build_note_dto(doc: Any) -> NoteDTO:
 
 def build_entity_dto(entity: Any) -> EntityDTO:
     """Build an EntityDTO from an ORM entity object."""
-    metadata = getattr(entity, 'entity_metadata', None) or {}
     return EntityDTO(
         id=entity.id,
         name=entity.canonical_name,
         mention_count=entity.mention_count,
-        entity_type=metadata.get('type'),
+        entity_type=getattr(entity, 'entity_type', None),
     )
 
 

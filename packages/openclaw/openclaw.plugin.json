@@ -39,6 +39,18 @@
       },
       "autoCapture": {
         "type": "boolean"
+      },
+      "profileFrequency": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 500
+      },
+      "captureMode": {
+        "type": "string",
+        "enum": ["filtered", "full"]
+      },
+      "sessionGrouping": {
+        "type": "boolean"
       }
     }
   },
@@ -87,6 +99,22 @@
     "autoCapture": {
       "label": "Auto-Capture",
       "help": "Automatically store conversation turns in Memex after each turn"
+    },
+    "profileFrequency": {
+      "label": "Profile Frequency",
+      "placeholder": "20",
+      "help": "Inject entity/knowledge-graph context every N turns. Lower = more context but more tokens.",
+      "advanced": true
+    },
+    "captureMode": {
+      "label": "Capture Mode",
+      "help": "'filtered' captures only user messages (default). 'full' captures both user and assistant.",
+      "advanced": true
+    },
+    "sessionGrouping": {
+      "label": "Session Grouping",
+      "help": "Group turns into a single session document instead of one note per turn.",
+      "advanced": true
     }
   }
 }

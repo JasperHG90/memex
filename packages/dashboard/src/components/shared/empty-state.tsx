@@ -6,9 +6,10 @@ interface EmptyStateProps {
   title: string;
   description: string;
   action?: { label: string; onClick: () => void };
+  suggestions?: { label: string; onClick: () => void }[];
 }
 
-export function EmptyState({ icon: Icon, title, description, action }: EmptyStateProps) {
+export function EmptyState({ icon: Icon, title, description, action, suggestions }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-12 text-center">
       <Icon className="h-12 w-12 text-muted-foreground mb-4" aria-hidden="true" />
@@ -18,6 +19,20 @@ export function EmptyState({ icon: Icon, title, description, action }: EmptyStat
         <Button variant="outline" className="mt-4" onClick={action.onClick}>
           {action.label}
         </Button>
+      )}
+      {suggestions && suggestions.length > 0 && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {suggestions.map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              onClick={s.onClick}
+              className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-hover hover:text-foreground transition-colors"
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );

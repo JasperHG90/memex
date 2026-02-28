@@ -47,6 +47,9 @@ describe('parseConfig', () => {
     expect(cfg.minCaptureLength).toBe(50);
     expect(cfg.autoRecall).toBe(true);
     expect(cfg.autoCapture).toBe(true);
+    expect(cfg.profileFrequency).toBe(20);
+    expect(cfg.captureMode).toBe('filtered');
+    expect(cfg.sessionGrouping).toBe(true);
   });
 
   it('uses explicit config values over defaults', () => {
@@ -141,6 +144,126 @@ describe('parseConfig', () => {
     process.env['MEMEX_TOKEN_BUDGET'] = 'abc';
     const cfg = parseConfig();
     expect(cfg.tokenBudget).toBeNull();
+  });
+});
+
+describe('parseConfig — profileFrequency', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('defaults to 20', () => {
+    const cfg = parseConfig();
+    expect(cfg.profileFrequency).toBe(20);
+  });
+
+  it('uses explicit config value', () => {
+    const cfg = parseConfig({ profileFrequency: 100 });
+    expect(cfg.profileFrequency).toBe(100);
+  });
+
+  it('reads from MEMEX_PROFILE_FREQUENCY env var', () => {
+    process.env['MEMEX_PROFILE_FREQUENCY'] = '50';
+    const cfg = parseConfig();
+    expect(cfg.profileFrequency).toBe(50);
+  });
+
+  it('falls back to default for invalid env var', () => {
+    process.env['MEMEX_PROFILE_FREQUENCY'] = 'abc';
+    const cfg = parseConfig();
+    expect(cfg.profileFrequency).toBe(20);
+  });
+
+  it('explicit config takes precedence over env var', () => {
+    process.env['MEMEX_PROFILE_FREQUENCY'] = '50';
+    const cfg = parseConfig({ profileFrequency: 75 });
+    expect(cfg.profileFrequency).toBe(75);
+  });
+});
+
+describe('parseConfig — captureMode', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('defaults to filtered', () => {
+    const cfg = parseConfig();
+    expect(cfg.captureMode).toBe('filtered');
+  });
+
+  it('uses explicit config value', () => {
+    const cfg = parseConfig({ captureMode: 'full' });
+    expect(cfg.captureMode).toBe('full');
+  });
+
+  it('reads from MEMEX_CAPTURE_MODE env var', () => {
+    process.env['MEMEX_CAPTURE_MODE'] = 'full';
+    const cfg = parseConfig();
+    expect(cfg.captureMode).toBe('full');
+  });
+
+  it('falls back to filtered for invalid value', () => {
+    process.env['MEMEX_CAPTURE_MODE'] = 'bogus';
+    const cfg = parseConfig();
+    expect(cfg.captureMode).toBe('filtered');
+  });
+
+  it('explicit config takes precedence over env var', () => {
+    process.env['MEMEX_CAPTURE_MODE'] = 'filtered';
+    const cfg = parseConfig({ captureMode: 'full' });
+    expect(cfg.captureMode).toBe('full');
+  });
+});
+
+describe('parseConfig — sessionGrouping', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('defaults to true', () => {
+    const cfg = parseConfig();
+    expect(cfg.sessionGrouping).toBe(true);
+  });
+
+  it('uses explicit config value', () => {
+    const cfg = parseConfig({ sessionGrouping: false });
+    expect(cfg.sessionGrouping).toBe(false);
+  });
+
+  it('reads from MEMEX_SESSION_GROUPING env var', () => {
+    process.env['MEMEX_SESSION_GROUPING'] = 'true';
+    const cfg = parseConfig();
+    expect(cfg.sessionGrouping).toBe(true);
+  });
+
+  it('treats non-true env var as false', () => {
+    process.env['MEMEX_SESSION_GROUPING'] = 'false';
+    const cfg = parseConfig();
+    expect(cfg.sessionGrouping).toBe(false);
+  });
+
+  it('explicit config takes precedence over env var', () => {
+    process.env['MEMEX_SESSION_GROUPING'] = 'false';
+    const cfg = parseConfig({ sessionGrouping: true });
+    expect(cfg.sessionGrouping).toBe(true);
   });
 });
 

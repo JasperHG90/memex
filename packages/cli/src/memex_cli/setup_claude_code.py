@@ -45,6 +45,7 @@ _HOOK_TEMPLATES: list[tuple[str, str]] = [
     ('on_session_start.sh', 'hooks/on_session_start.sh'),
     ('on_pre_compact.sh', 'hooks/on_pre_compact.sh'),
     ('on_session_end.sh', 'hooks/on_session_end.sh'),
+    ('on_post_commit.sh', 'hooks/on_post_commit.sh'),
 ]
 
 _PROJECT_DIR_PLACEHOLDER = '__PROJECT_DIR__'
@@ -109,6 +110,18 @@ def _build_hooks_config(
             },
         ],
     }
+
+    hooks['PostToolUse'] = [
+        {
+            'matcher': 'Bash',
+            'hooks': [
+                {
+                    'type': 'command',
+                    'command': str(hooks_dir / 'on_post_commit.sh'),
+                },
+            ],
+        },
+    ]
 
     if include_session_end:
         hooks['SessionEnd'] = [
@@ -317,6 +330,7 @@ async def setup_claude_code(
         hook_scripts = [
             ('on_session_start.sh', True),
             ('on_pre_compact.sh', True),
+            ('on_post_commit.sh', True),
             ('on_session_end.sh', with_session_tracking),
         ]
 
@@ -352,7 +366,7 @@ async def setup_claude_code(
 
     # --- Summary --------------------------------------------------------------
     if hooks_enabled:
-        hook_names = 'SessionStart + PreCompact'
+        hook_names = 'SessionStart + PreCompact + PostToolUse'
         if with_session_tracking:
             hook_names += ' + SessionEnd'
         hooks_status = f'Hooks: Enabled ({hook_names})'

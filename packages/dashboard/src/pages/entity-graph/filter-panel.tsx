@@ -1,7 +1,9 @@
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { useState } from 'react';
+import { ENTITY_TYPES } from './entity-node';
 
 const RECENCY_OPTIONS = [
   { label: 'All time', value: 'all' },
@@ -14,6 +16,7 @@ export interface GraphFilters {
   minConnectionStrength: number;
   minImportance: number;
   recency: string;
+  entityTypes: string[];
 }
 
 interface FilterPanelProps {
@@ -33,6 +36,7 @@ export function FilterPanel({ filters, onFiltersChange }: FilterPanelProps) {
       minConnectionStrength: 1,
       minImportance: 1,
       recency: 'all',
+      entityTypes: [...ENTITY_TYPES],
     });
   }
 
@@ -92,6 +96,26 @@ export function FilterPanel({ filters, onFiltersChange }: FilterPanelProps) {
                   >
                     {opt.label}
                   </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-muted-foreground">Entity Types</label>
+              <div className="mt-1 flex flex-col gap-1">
+                {[...ENTITY_TYPES].map((type) => (
+                  <label key={type} className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
+                    <Checkbox
+                      checked={filters.entityTypes.includes(type)}
+                      onCheckedChange={(checked) => {
+                        const newTypes = checked
+                          ? [...filters.entityTypes, type]
+                          : filters.entityTypes.filter((t) => t !== type);
+                        updateFilter('entityTypes', newTypes);
+                      }}
+                    />
+                    {type}
+                  </label>
                 ))}
               </div>
             </div>

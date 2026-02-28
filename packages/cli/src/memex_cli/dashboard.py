@@ -1,5 +1,7 @@
 """CLI commands for managing the Memex Dashboard."""
 
+import os
+import signal
 import subprocess
 from pathlib import Path
 import shutil
@@ -9,6 +11,7 @@ import typer
 from rich.console import Console
 
 from memex_cli.process import (
+    GRACEFUL_TIMEOUT,
     check_port_available,
     graceful_stop,
     log_file_path,
@@ -117,13 +120,34 @@ def start(
         console.print(f'[green]Dashboard started (PID {proc.pid}).[/green]')
     else:
         console.print(f'Starting dashboard in {mode} mode on {host}:{port}')
+        proc = subprocess.Popen(
+            cmd,
+            cwd=dashboard_dir,
+            start_new_session=True,
+        )
         try:
-            subprocess.run(cmd, cwd=dashboard_dir, check=True, stdout=None, stderr=None)
+            proc.wait()
         except KeyboardInterrupt:
+            # Terminate the entire process group (npm/npx + children)
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.wait(timeout=GRACEFUL_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.wait()
             console.print('\nDashboard stopped.')
-        except subprocess.CalledProcessError as e:
-            console.print(f'[bold red]Error:[/bold red] Dashboard exited with code {e.returncode}.')
-            raise typer.Exit(e.returncode)
+        else:
+            if proc.returncode and proc.returncode != 0:
+                console.print(
+                    f'[bold red]Error:[/bold red] Dashboard exited with code {proc.returncode}.'
+                )
+                raise typer.Exit(proc.returncode)
 
 
 @app.command()

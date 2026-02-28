@@ -5,7 +5,6 @@ import { Search, Loader2, FileText, ChevronDown, ChevronUp } from 'lucide-react'
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -23,14 +22,15 @@ import { SummaryCard } from '@/components/shared/summary-card';
 import { ResultCardSkeleton } from '@/components/shared/result-card-skeleton';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ErrorState } from '@/components/shared/error-state';
+import { AdvancedSearchPanel, type AdvancedSearchParams } from '@/components/shared/advanced-search-panel';
 import { useNoteSearch } from '@/api/hooks/use-notes';
 import { useNote, useNotePageIndex } from '@/api/hooks/use-notes';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
+import { usePreferencesStore } from '@/stores/preferences-store';
 import type { NoteSearchResult, NoteSnippet } from '@/api/generated';
 
-const DOC_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model'];
-const SEARCH_LIMIT = 10;
+const DOC_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal'];
 
 function extractTitle(metadata: Record<string, unknown>): string {
   return String(metadata?.title ?? metadata?.name ?? 'Untitled');
@@ -117,12 +117,16 @@ function flattenPageIndex(
 
 export default function NoteSearch() {
   const allSelectedVaultIds = useVaultStore((s) => s.allSelectedVaultIds);
+  const defaultSearchLimit = usePreferencesStore((s) => s.defaultSearchLimit);
 
   // Search state
   const [query, setQuery] = useState('');
   const [activeStrategies, setActiveStrategies] = useState<string[]>(DOC_STRATEGIES);
   const [results, setResults] = useState<NoteSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+
+  // Advanced search params
+  const [advancedParams, setAdvancedParams] = useState<AdvancedSearchParams>({ minScore: null, tokenBudget: null, expandQuery: false });
 
   // Summary state
   const [showSummary, setShowSummary] = useState(false);
@@ -145,10 +149,10 @@ export default function NoteSearch() {
       searchMutation.mutate(
         {
           query: searchQuery,
-          limit: SEARCH_LIMIT,
+          limit: defaultSearchLimit,
           vault_ids: vaultIds.length > 0 ? vaultIds : undefined,
           strategies: strategies ?? ['semantic', 'keyword', 'graph', 'temporal'],
-          expand_query: false,
+          expand_query: advancedParams.expandQuery,
           fusion_strategy: 'rrf',
           reason: false,
           summarize: false,
@@ -161,7 +165,7 @@ export default function NoteSearch() {
         },
       );
     },
-    [activeStrategies, allSelectedVaultIds, searchMutation],
+    [activeStrategies, advancedParams, allSelectedVaultIds, defaultSearchLimit, searchMutation],
   );
 
   const handleSearch = useCallback(() => {
@@ -170,6 +174,12 @@ export default function NoteSearch() {
     summaryMutation.reset();
     executeSearch(query);
   }, [query, executeSearch, summaryMutation]);
+
+  const handleSearchWithQuery = useCallback((q: string) => {
+    setResults([]);
+    summaryMutation.reset();
+    executeSearch(q);
+  }, [executeSearch, summaryMutation]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -265,7 +275,11 @@ export default function NoteSearch() {
       <StrategyFilter
         selected={activeStrategies}
         onChange={handleToggleStrategy}
+        available={DOC_STRATEGIES}
       />
+
+      {/* Advanced search options */}
+      <AdvancedSearchPanel params={advancedParams} onChange={setAdvancedParams} />
 
       {/* Summary toggle */}
       <div className="flex items-center gap-2">
@@ -305,11 +319,17 @@ export default function NoteSearch() {
           description="Try adjusting your search query or strategy filters."
         />
       ) : !hasSearched ? (
-        <div className="rounded-xl border border-border bg-card p-10 text-center">
-          <p className="text-muted-foreground">
-            Enter a query to start searching notes.
-          </p>
-        </div>
+        <EmptyState
+          icon={Search}
+          title="Search Notes"
+          description="Enter a query to search across all ingested notes."
+          suggestions={[
+            { label: 'Architecture decisions', onClick: () => { setQuery('architecture decisions'); handleSearchWithQuery('architecture decisions'); } },
+            { label: 'Meeting notes', onClick: () => { setQuery('meeting notes'); handleSearchWithQuery('meeting notes'); } },
+            { label: 'Research findings', onClick: () => { setQuery('research findings'); handleSearchWithQuery('research findings'); } },
+            { label: 'Project updates', onClick: () => { setQuery('project updates'); handleSearchWithQuery('project updates'); } },
+          ]}
+        />
       ) : (
         <div className="space-y-3">
           {results.map((result) => (
@@ -544,12 +564,38 @@ function NoteDetailDialog({
                   Created: {new Date(note.created_at).toLocaleDateString()}
                 </p>
                 {note.assets && note.assets.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {note.assets.map((asset) => (
-                      <Badge key={asset} variant="outline" className="text-[10px]">
-                        {asset}
-                      </Badge>
-                    ))}
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                      Assets
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {note.assets.map((asset) => {
+                        const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(asset);
+                        const fileName = asset.split('/').pop() ?? asset;
+                        return (
+                          <div key={asset} className="rounded-md border border-border p-2">
+                            {isImage && (
+                              <img
+                                src={`${import.meta.env.VITE_API_BASE ?? '/api/v1'}/resources/${encodeURIComponent(asset)}`}
+                                alt={fileName}
+                                className="mb-2 max-h-32 rounded object-contain"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            )}
+                            <a
+                              href={`${import.meta.env.VITE_API_BASE ?? '/api/v1'}/resources/${encodeURIComponent(asset)}`}
+                              download={fileName}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              <FileText className="h-3 w-3" />
+                              {fileName}
+                            </a>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

@@ -2,11 +2,12 @@
 
 import os
 import signal
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
 from memex_cli.process import (
+    _kill_tree,
     check_port_available,
     graceful_stop,
     pid_file_path,
@@ -71,38 +72,92 @@ class TestCheckPortAvailable:
             assert check_port_available('127.0.0.1', port) is False
 
 
+class TestKillTree:
+    def test_uses_killpg_first(self):
+        """_kill_tree sends signal to the process group via os.killpg."""
+        with patch('memex_cli.process.os.killpg') as mock_killpg:
+            _kill_tree(12345, signal.SIGTERM)
+            mock_killpg.assert_called_once_with(12345, signal.SIGTERM)
+
+    def test_falls_back_to_kill(self):
+        """_kill_tree falls back to os.kill when killpg raises PermissionError."""
+        with (
+            patch('memex_cli.process.os.killpg', side_effect=PermissionError),
+            patch('memex_cli.process.os.kill') as mock_kill,
+        ):
+            _kill_tree(12345, signal.SIGTERM)
+            mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+
+    def test_falls_back_on_process_lookup_error(self):
+        """_kill_tree falls back to os.kill when killpg raises ProcessLookupError."""
+        with (
+            patch('memex_cli.process.os.killpg', side_effect=ProcessLookupError),
+            patch('memex_cli.process.os.kill') as mock_kill,
+        ):
+            _kill_tree(12345, signal.SIGKILL)
+            mock_kill.assert_called_once_with(12345, signal.SIGKILL)
+
+
 class TestGracefulStop:
     def test_no_process(self, cache_dir):
         assert graceful_stop('nonexistent') is False
 
     def test_process_exits_on_sigterm(self, cache_dir):
-        """Process exits immediately after SIGTERM."""
+        """Process exits after group SIGTERM via _kill_tree."""
         write_pid('test', 12345)
 
         def mock_kill(pid, sig):
-            if sig == signal.SIGTERM:
-                return  # Accept SIGTERM
             if sig == 0:
-                # Process is gone after SIGTERM
                 raise ProcessLookupError
 
         with (
             patch('memex_cli.process.read_pid', return_value=12345),
+            patch('memex_cli.process.os.killpg') as mock_killpg,
             patch('memex_cli.process.os.kill', side_effect=mock_kill),
         ):
             result = graceful_stop('test')
 
         assert result is True
+        mock_killpg.assert_called_once_with(12345, signal.SIGTERM)
 
     def test_already_dead_on_sigterm(self, cache_dir):
         """Process already dead when we send SIGTERM."""
         write_pid('test', 12345)
 
-        # Make read_pid return the value (skip os.kill(pid, 0) in read_pid)
         with (
             patch('memex_cli.process.read_pid', return_value=12345),
+            patch('memex_cli.process.os.killpg', side_effect=ProcessLookupError),
             patch('memex_cli.process.os.kill', side_effect=ProcessLookupError),
         ):
             result = graceful_stop('test')
 
         assert result is False
+
+    def test_escalates_to_sigkill(self, cache_dir):
+        """Process that ignores SIGTERM gets SIGKILL on the group."""
+        write_pid('test', 12345)
+        kill_calls = 0
+
+        def mock_kill(pid, sig):
+            nonlocal kill_calls
+            if sig == 0:
+                # Process stays alive for first few checks, then dies after SIGKILL
+                kill_calls += 1
+                if kill_calls > 2:
+                    return  # still alive (used in loop)
+                return  # still alive
+
+        with (
+            patch('memex_cli.process.read_pid', return_value=12345),
+            patch('memex_cli.process.os.killpg') as mock_killpg,
+            patch('memex_cli.process.os.kill', side_effect=mock_kill),
+            patch('memex_cli.process.time.sleep'),
+            patch('memex_cli.process.GRACEFUL_TIMEOUT', 0),
+        ):
+            result = graceful_stop('test')
+
+        assert result is True
+        assert mock_killpg.call_args_list == [
+            call(12345, signal.SIGTERM),
+            call(12345, signal.SIGKILL),
+        ]

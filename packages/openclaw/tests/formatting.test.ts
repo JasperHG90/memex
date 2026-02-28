@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { escapeForPrompt, formatMemoryContext, extractTextContent } from '../src/formatting';
+import { escapeForPrompt, formatEntityContext, formatMemoryContext, extractTextContent } from '../src/formatting';
+import type { EntityDTO } from '../src/types';
 import { makeMemoryUnit } from './helpers';
 
 describe('escapeForPrompt', () => {
@@ -76,6 +77,75 @@ describe('formatMemoryContext', () => {
     expect(result).toContain('1. A');
     expect(result).toContain('2. B');
     expect(result).toContain('3. C');
+  });
+});
+
+describe('formatEntityContext', () => {
+  it('returns empty string for empty array', () => {
+    expect(formatEntityContext([])).toBe('');
+  });
+
+  it('formats entities with XML tags and preamble', () => {
+    const entities: EntityDTO[] = [
+      { id: 'e1', name: 'Python', entity_type: 'technology', mention_count: 42 },
+      { id: 'e2', name: 'FastAPI', entity_type: 'framework', mention_count: 15 },
+    ];
+    const result = formatEntityContext(entities);
+
+    expect(result).toContain('<knowledge-profile>');
+    expect(result).toContain('</knowledge-profile>');
+    expect(result).toContain('Key entities and concepts from your knowledge base');
+    expect(result).toContain('1. Python (technology) — 42 mentions');
+    expect(result).toContain('2. FastAPI (framework) — 15 mentions');
+  });
+
+  it('escapes entity names to prevent prompt injection', () => {
+    const entities: EntityDTO[] = [
+      { id: 'e1', name: '<script>alert("xss")</script>', entity_type: 'test', mention_count: 1 },
+    ];
+    const result = formatEntityContext(entities);
+
+    expect(result).toContain('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
+    expect(result).not.toContain('<script>');
+  });
+
+  it('defaults to "unknown" type and 0 mentions when null', () => {
+    const entities: EntityDTO[] = [
+      { id: 'e1', name: 'Mystery', entity_type: null, mention_count: null },
+    ];
+    const result = formatEntityContext(entities);
+
+    expect(result).toContain('1. Mystery (unknown) — 0 mentions');
+  });
+});
+
+describe('formatMemoryContext with entities', () => {
+  it('appends entity context when entities are provided', () => {
+    const memories = [makeMemoryUnit({ text: 'A fact' })];
+    const entities: EntityDTO[] = [
+      { id: 'e1', name: 'Python', entity_type: 'tech', mention_count: 10 },
+    ];
+    const result = formatMemoryContext(memories, entities);
+
+    expect(result).toContain('</relevant-memories>');
+    expect(result).toContain('<knowledge-profile>');
+    expect(result).toContain('1. Python (tech) — 10 mentions');
+  });
+
+  it('omits entity context when entities array is empty', () => {
+    const memories = [makeMemoryUnit({ text: 'A fact' })];
+    const result = formatMemoryContext(memories, []);
+
+    expect(result).toContain('</relevant-memories>');
+    expect(result).not.toContain('<knowledge-profile>');
+  });
+
+  it('omits entity context when entities is undefined', () => {
+    const memories = [makeMemoryUnit({ text: 'A fact' })];
+    const result = formatMemoryContext(memories);
+
+    expect(result).toContain('</relevant-memories>');
+    expect(result).not.toContain('<knowledge-profile>');
   });
 });
 

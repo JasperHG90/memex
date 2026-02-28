@@ -28,6 +28,12 @@ import { Badge } from '@/components/ui/badge'
 import { useSystemStats, useTokenUsage, useMetrics } from '@/api/hooks/use-stats'
 import { useNotes } from '@/api/hooks/use-notes'
 
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
 function parseMetrics(metricsText: string | undefined) {
   if (!metricsText) {
     return { cpuUsage: '-', memoryUsage: '-', requests: '-', status: 'Unknown' }
@@ -74,6 +80,7 @@ export default function Overview() {
   const recentNotes = useNotes({ limit: 10, sort: '-created_at' })
 
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
+  const [tokenRange, setTokenRange] = useState<'7d' | '30d' | '90d' | 'all'>('30d')
 
   const serverStats = useMemo(
     () => parseMetrics(metrics.data as string | undefined),
@@ -87,6 +94,12 @@ export default function Overview() {
       tokens: entry.total_tokens,
     }))
   }, [tokenUsage.data])
+
+  const filteredChartData = useMemo(() => {
+    if (tokenRange === 'all') return chartData
+    const days = tokenRange === '7d' ? 7 : tokenRange === '30d' ? 30 : 90
+    return chartData.slice(-days)
+  }, [chartData, tokenRange])
 
   const noteItems: NoteItem[] = useMemo(() => {
     if (!recentNotes.data) return []
@@ -140,8 +153,8 @@ export default function Overview() {
               value={stats.data?.memories ?? 0}
             />
             <MetricCard
-              icon={FileText}
-              label="Total Notes"
+              icon={RefreshCw}
+              label="Reflection Queue"
               value={stats.data?.reflection_queue ?? 0}
               description="Pending reflections"
             />
@@ -161,16 +174,40 @@ export default function Overview() {
           {/* Token Usage Chart */}
           <Card className="bg-card border-border">
             <CardContent className="p-6">
-              <h2 className="mb-4 text-lg font-semibold text-foreground">Token Usage</h2>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-foreground">Token Usage</h2>
+                <div className="flex gap-1">
+                  {(['7d', '30d', '90d', 'all'] as const).map((range) => (
+                    <button
+                      key={range}
+                      type="button"
+                      onClick={() => setTokenRange(range)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        tokenRange === range
+                          ? 'bg-primary text-white'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-hover'
+                      }`}
+                    >
+                      {range === 'all' ? 'All' : range.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {tokenUsage.isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
-              ) : chartData.length === 0 ? (
+              ) : filteredChartData.length === 0 ? (
                 <div className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
                   No token usage data available
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={chartData}>
+                  <BarChart data={filteredChartData}>
+                    <defs>
+                      <linearGradient id="tokenGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#3B82F6" stopOpacity={1} />
+                        <stop offset="100%" stopColor="#3B82F6" stopOpacity={0.4} />
+                      </linearGradient>
+                    </defs>
                     <CartesianGrid
                       strokeDasharray="3 3"
                       stroke="#262626"
@@ -186,6 +223,7 @@ export default function Overview() {
                       tick={{ fill: '#A1A1AA', fontSize: 12 }}
                       axisLine={{ stroke: '#262626' }}
                       tickLine={false}
+                      tickFormatter={formatNumber}
                     />
                     <Tooltip
                       contentStyle={{
@@ -196,8 +234,9 @@ export default function Overview() {
                       }}
                       labelStyle={{ color: '#A1A1AA' }}
                       cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                      formatter={(value: number | undefined) => [formatNumber(value ?? 0), 'Tokens']}
                     />
-                    <Bar dataKey="tokens" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="tokens" fill="url(#tokenGradient)" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

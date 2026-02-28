@@ -37,7 +37,7 @@ function LineageNodeComponent({ data }: NodeProps) {
       className="rounded-lg border px-3 py-2 shadow-md transition-all duration-150 hover:scale-105 hover:shadow-lg cursor-pointer"
       style={{
         backgroundColor: style.bg,
-        borderColor: nodeData.highlighted ? '#ffffff' : style.border,
+        borderColor: nodeData.highlighted ? 'var(--foreground)' : style.border,
         borderWidth: nodeData.highlighted ? 2 : 1,
         opacity: nodeData.dimmed ? 0.2 : 1,
         minWidth: 180,

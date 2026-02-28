@@ -1,21 +1,11 @@
-import { Fragment, useState, useCallback, useEffect, type KeyboardEvent } from 'react';
+import { useState, useCallback, useEffect, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Loader2 } from 'lucide-react';
 
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
 import { PageHeader } from '@/components/layout/page-header';
 import { StrategyFilter } from '@/components/shared/strategy-filter';
 import { SummaryCard } from '@/components/shared/summary-card';
@@ -23,26 +13,33 @@ import { TypeBadge } from '@/components/shared/type-badge';
 import { ResultCardSkeleton } from '@/components/shared/result-card-skeleton';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ErrorState } from '@/components/shared/error-state';
+import { AdvancedSearchPanel, type AdvancedSearchParams } from '@/components/shared/advanced-search-panel';
+import { MemoryDetailDialog } from '@/components/shared/memory-detail-dialog';
 import { useMemorySearch } from '@/api/hooks/use-memories';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
+import { usePreferencesStore } from '@/stores/preferences-store';
 import { useDebounce } from '@/lib/use-debounce';
 import type { MemoryUnitDTO } from '@/api/generated';
 
 const ALL_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model'];
-const SEARCH_LIMIT = 10;
 
 export default function MemorySearch() {
   const navigate = useNavigate();
   const allSelectedVaultIds = useVaultStore((s) => s.allSelectedVaultIds);
+  const defaultSearchLimit = usePreferencesStore((s) => s.defaultSearchLimit);
+  const defaultStrategies = usePreferencesStore((s) => s.defaultStrategies);
 
   // Search state
   const [query, setQuery] = useState('');
-  const [activeStrategies, setActiveStrategies] = useState<string[]>(ALL_STRATEGIES);
+  const [activeStrategies, setActiveStrategies] = useState<string[]>(defaultStrategies);
   const [results, setResults] = useState<MemoryUnitDTO[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+
+  // Advanced search params
+  const [advancedParams, setAdvancedParams] = useState<AdvancedSearchParams>({ minScore: null, tokenBudget: null, expandQuery: false });
 
   // Summary state
   const [showSummary, setShowSummary] = useState(false);
@@ -68,7 +65,7 @@ export default function MemorySearch() {
       searchMutation.mutate(
         {
           query: searchQuery,
-          limit: SEARCH_LIMIT,
+          limit: defaultSearchLimit,
           offset: searchOffset,
           rerank: true,
           include_vectors: false,
@@ -76,6 +73,8 @@ export default function MemorySearch() {
           vault_ids: vaultIds.length > 0 ? vaultIds : undefined,
           strategies: strategies ?? undefined,
           skip_opinion_formation: true,
+          min_score: advancedParams.minScore ?? undefined,
+          token_budget: advancedParams.tokenBudget ?? undefined,
         },
         {
           onSuccess: (data) => {
@@ -85,13 +84,13 @@ export default function MemorySearch() {
             } else {
               setResults(newResults);
             }
-            setHasMore(newResults.length >= SEARCH_LIMIT);
+            setHasMore(newResults.length >= defaultSearchLimit);
             setHasSearched(true);
           },
         },
       );
     },
-    [activeStrategies, allSelectedVaultIds, searchMutation],
+    [activeStrategies, advancedParams, allSelectedVaultIds, defaultSearchLimit, searchMutation],
   );
 
   const handleSearch = useCallback(() => {
@@ -102,11 +101,18 @@ export default function MemorySearch() {
     executeSearch(query, 0, false);
   }, [query, executeSearch, summaryMutation]);
 
+  const handleSearchWithQuery = useCallback((q: string) => {
+    setOffset(0);
+    setResults([]);
+    summaryMutation.reset();
+    executeSearch(q, 0, false);
+  }, [executeSearch, summaryMutation]);
+
   const handleLoadMore = useCallback(() => {
-    const nextOffset = offset + SEARCH_LIMIT;
+    const nextOffset = offset + defaultSearchLimit;
     setOffset(nextOffset);
     executeSearch(query, nextOffset, true);
-  }, [query, offset, executeSearch]);
+  }, [query, offset, defaultSearchLimit, executeSearch]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -211,6 +217,9 @@ export default function MemorySearch() {
         onChange={handleToggleStrategy}
       />
 
+      {/* Advanced search options */}
+      <AdvancedSearchPanel params={advancedParams} onChange={setAdvancedParams} />
+
       {/* Summary toggle */}
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">AI Summary</span>
@@ -249,11 +258,17 @@ export default function MemorySearch() {
           description="Try adjusting your search query or strategy filters."
         />
       ) : !hasSearched ? (
-        <div className="rounded-xl border border-border bg-card p-10 text-center">
-          <p className="text-muted-foreground">
-            Enter a search query to find memories.
-          </p>
-        </div>
+        <EmptyState
+          icon={Search}
+          title="Search Memories"
+          description="Enter a query to search across all memory units."
+          suggestions={[
+            { label: 'Recent conversations', onClick: () => { setQuery('recent conversations'); handleSearchWithQuery('recent conversations'); } },
+            { label: 'Key decisions', onClick: () => { setQuery('key decisions'); handleSearchWithQuery('key decisions'); } },
+            { label: 'Technical insights', onClick: () => { setQuery('technical insights'); handleSearchWithQuery('technical insights'); } },
+            { label: 'All observations', onClick: () => { setQuery('observations'); handleSearchWithQuery('observations'); } },
+          ]}
+        />
       ) : (
         <div className="space-y-3">
           {results.map((result, index) => (
@@ -288,8 +303,9 @@ export default function MemorySearch() {
 
       {/* Detail modal */}
       <MemoryDetailDialog
-        result={selectedResult}
-        onClose={() => setSelectedResult(null)}
+        unit={selectedResult}
+        open={!!selectedResult}
+        onOpenChange={(open) => { if (!open) setSelectedResult(null); }}
       />
     </div>
   );
@@ -332,6 +348,16 @@ function ResultCard({ result, index, onViewDetails, onViewLineage }: ResultCardP
               <span className="text-xs text-muted-foreground">
                 {score.toFixed(2)}
               </span>
+              {(() => {
+                const conf = getConfidenceInfo(result.confidence_alpha, result.confidence_beta);
+                if (!conf) return null;
+                return (
+                  <div className="flex items-center gap-1.5 ml-2">
+                    <div className={`h-2 w-2 rounded-full ${conf.color}`} />
+                    <span className={`text-xs ${conf.textColor}`}>{(conf.mean * 100).toFixed(0)}%</span>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -369,139 +395,10 @@ function cleanFactType(raw: string): string {
   return raw.toLowerCase();
 }
 
-function MemoryDetailDialog({
-  result,
-  onClose,
-}: {
-  result: MemoryUnitDTO | null;
-  onClose: () => void;
-}) {
-  if (!result) return null;
-
-  const factType = cleanFactType(result.fact_type);
-  const metadata = result.metadata ?? {};
-  const metaEntries = Object.entries(metadata);
-
-  return (
-    <Dialog open={!!result} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[85vh]">
-        <DialogHeader>
-          <DialogTitle>Memory Details</DialogTitle>
-          <DialogDescription>Full memory unit with metadata</DialogDescription>
-        </DialogHeader>
-
-        {/* Type badges */}
-        <div className="flex flex-wrap items-center gap-2">
-          <TypeBadge type="memory_unit" />
-          <TypeBadge type={factType} />
-          {result.status && (
-            <Badge variant="outline" className="text-xs">
-              {result.status}
-            </Badge>
-          )}
-        </div>
-
-        {/* Full text */}
-        <ScrollArea className="max-h-[40vh]">
-          <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-            {result.text}
-          </p>
-        </ScrollArea>
-
-        <Separator />
-
-        {/* Metadata section */}
-        <div className="space-y-3">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-            Metadata
-          </p>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            {result.note_id && (
-              <>
-                <span className="text-muted-foreground">Source Note</span>
-                <span className="text-foreground truncate" title={result.note_id}>
-                  {result.note_id}
-                </span>
-              </>
-            )}
-            {result.source_note_ids && result.source_note_ids.length > 0 && (
-              <>
-                <span className="text-muted-foreground">Source Notes</span>
-                <span className="text-foreground break-all">
-                  {result.source_note_ids.join(', ')}
-                </span>
-              </>
-            )}
-            {result.score != null && (
-              <>
-                <span className="text-muted-foreground">Score</span>
-                <span className="text-foreground">{result.score.toFixed(4)}</span>
-              </>
-            )}
-            {result.confidence_alpha != null && (
-              <>
-                <span className="text-muted-foreground">Confidence (alpha)</span>
-                <span className="text-foreground">{result.confidence_alpha.toFixed(4)}</span>
-              </>
-            )}
-            {result.confidence_beta != null && (
-              <>
-                <span className="text-muted-foreground">Confidence (beta)</span>
-                <span className="text-foreground">{result.confidence_beta.toFixed(4)}</span>
-              </>
-            )}
-            {result.mentioned_at && (
-              <>
-                <span className="text-muted-foreground">Mentioned At</span>
-                <span className="text-foreground">
-                  {new Date(result.mentioned_at).toLocaleString()}
-                </span>
-              </>
-            )}
-            {result.occurred_start && (
-              <>
-                <span className="text-muted-foreground">Occurred Start</span>
-                <span className="text-foreground">
-                  {new Date(result.occurred_start).toLocaleString()}
-                </span>
-              </>
-            )}
-            {result.occurred_end && (
-              <>
-                <span className="text-muted-foreground">Occurred End</span>
-                <span className="text-foreground">
-                  {new Date(result.occurred_end).toLocaleString()}
-                </span>
-              </>
-            )}
-            {result.vault_id && (
-              <>
-                <span className="text-muted-foreground">Vault</span>
-                <span className="text-foreground truncate" title={result.vault_id}>
-                  {result.vault_id}
-                </span>
-              </>
-            )}
-          </div>
-
-          {/* Extra metadata from the metadata field */}
-          {metaEntries.length > 0 && (
-            <>
-              <Separator />
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                {metaEntries.map(([key, value]) => (
-                  <Fragment key={key}>
-                    <span className="text-muted-foreground">{key}</span>
-                    <span className="text-foreground break-all">
-                      {typeof value === 'object' ? JSON.stringify(value) : String(value ?? '-')}
-                    </span>
-                  </Fragment>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+function getConfidenceInfo(alpha: number | null | undefined, beta: number | null | undefined) {
+  if (alpha == null || beta == null || alpha + beta === 0) return null;
+  const mean = alpha / (alpha + beta);
+  if (mean > 0.7) return { mean, color: 'bg-emerald-500', textColor: 'text-emerald-500', label: 'High' };
+  if (mean > 0.4) return { mean, color: 'bg-amber-500', textColor: 'text-amber-500', label: 'Medium' };
+  return { mean, color: 'bg-red-500', textColor: 'text-red-500', label: 'Low' };
 }

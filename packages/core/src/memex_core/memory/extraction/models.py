@@ -306,10 +306,28 @@ class RetainContent(SQLModel):
     payload: dict = Field(default_factory=dict, description='Additional metadata for the content.')
 
 
+EntityType = Literal[
+    'Person',
+    'Organization',
+    'Location',
+    'Concept',
+    'Technology',
+    'File',
+    'Misc',
+]
+
+
 class Entity(SQLModel):
     """An entity extracted from text."""
 
     text: str = Field(..., description='The specific, named entity.')
+    entity_type: EntityType | None = Field(
+        default=None,
+        description='Category of the entity. '
+        'Person: people. Organization: companies, teams, groups. Location: places. '
+        'Concept: abstract ideas, themes. Technology: languages, frameworks, tools, databases. '
+        'File: files, documents, paths. Misc: anything else.',
+    )
 
 
 class EntityLink(SQLModel):

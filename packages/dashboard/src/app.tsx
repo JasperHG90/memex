@@ -3,6 +3,7 @@ import { Sidebar } from '@/components/layout/sidebar'
 import { ConnectionBanner } from '@/components/shared/connection-banner'
 import { QuickNoteModal } from '@/components/quick-note-modal'
 import { CommandPalette } from '@/components/command-palette'
+import { WelcomeModal } from '@/components/onboarding/welcome-modal'
 import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useConnectionStatus } from '@/hooks/use-connection-status'
 import { useUIStore } from '@/stores/ui-store'
@@ -26,6 +27,7 @@ export default function App() {
       </main>
       <QuickNoteModal />
       <CommandPalette />
+      <WelcomeModal />
     </div>
   )
 }

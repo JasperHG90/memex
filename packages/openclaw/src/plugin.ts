@@ -20,8 +20,10 @@ import {
   MemexClient,
   encodeBase64,
   formatConversationNote,
+  formatSessionNote,
   hashTurnKey,
 } from './memex-client';
+import type { EntityDTO, SessionTurn } from './types';
 
 const memexPlugin = {
   id: 'memory-memex',
@@ -33,6 +35,9 @@ const memexPlugin = {
     const cfg = parseConfig(api.pluginConfig);
     const client = new MemexClient(cfg, api.logger);
     const breaker = new CircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 60_000 });
+    let turnCounter = 0;
+    const sessionId = crypto.randomUUID();
+    const sessionBuffer: SessionTurn[] = [];
 
     api.logger.info(
       `memory-memex: registered (server: ${cfg.serverUrl}, recall: ${cfg.autoRecall}, capture: ${cfg.autoCapture})`,
@@ -551,6 +556,7 @@ const memexPlugin = {
     if (cfg.autoRecall) {
       api.on('before_agent_start', async (event) => {
         if (!event.prompt || event.prompt.length < 5) return;
+        turnCounter++;
         if (breaker.isOpen()) {
           api.logger.debug?.('memory-memex: circuit breaker open — skipping recall');
           return;
@@ -565,13 +571,25 @@ const memexPlugin = {
             return;
           }
 
+          // On every Nth turn, fetch entity profile (best-effort)
+          let entities: EntityDTO[] = [];
+          if (turnCounter % cfg.profileFrequency === 0) {
+            try {
+              entities = await client.listEntities(undefined, 15, signal);
+            } catch (entityErr) {
+              api.logger.warn?.(
+                `memory-memex: entity fetch failed (best-effort): ${String(entityErr)}`,
+              );
+            }
+          }
+
           api.logger.info?.(
             `memory-memex: injecting ${memories.length} memories into context`,
           );
           breaker.recordSuccess();
 
           return {
-            prependContext: formatMemoryContext(memories),
+            prependContext: formatMemoryContext(memories, entities),
           };
         } catch (err) {
           breaker.recordFailure();
@@ -590,17 +608,21 @@ const memexPlugin = {
 
         try {
           let userText: string | null = null;
+          let assistantText: string | null = null;
 
-          // Only capture user messages to avoid self-poisoning feedback loops:
-          // recalled memories → assistant response → re-captured → recalled again.
           for (const msg of [...event.messages].reverse()) {
             if (!msg || typeof msg !== 'object') continue;
             const m = msg as Record<string, unknown>;
 
-            if (m.role === 'user') {
+            if (m.role === 'user' && !userText) {
               userText = extractTextContent(m.content);
-              break;
+              if (cfg.captureMode === 'filtered') break;
             }
+            if (m.role === 'assistant' && !assistantText) {
+              assistantText = extractTextContent(m.content);
+            }
+
+            if (userText && assistantText) break;
           }
 
           // Strip injected <relevant-memories> block to avoid re-ingesting
@@ -611,28 +633,60 @@ const memexPlugin = {
               '',
             ).trim();
           }
+          if (assistantText) {
+            assistantText = assistantText.replace(
+              /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/,
+              '',
+            ).trim();
+          }
 
           if (!userText || userText.length < cfg.minCaptureLength) return;
 
           const now = new Date();
-          const markdown = formatConversationNote(
-            userText,
-            '',
-            now,
-            cfg.defaultTags,
-          );
-          const content = encodeBase64(markdown);
-          const noteKey = hashTurnKey(userText, now);
 
-          client.ingestNote({
-            name: `Conversation — ${now.toISOString()}`,
-            note_key: noteKey,
-            description: `Agent conversation captured on ${now.toISOString()}`,
-            content,
-            tags: cfg.defaultTags,
-          });
+          if (cfg.sessionGrouping) {
+            sessionBuffer.push({
+              userMessage: userText,
+              assistantMessage: assistantText ?? '',
+              timestamp: now,
+            });
 
-          api.logger.info?.('memory-memex: user message captured');
+            const markdown = formatSessionNote(sessionBuffer, now, cfg.defaultTags);
+            const content = encodeBase64(markdown);
+            const noteKey = `session_${sessionId}`;
+
+            client.ingestNote({
+              name: `Session — ${now.toISOString()}`,
+              note_key: noteKey,
+              description: `Agent session captured on ${now.toISOString()}`,
+              content,
+              tags: cfg.defaultTags,
+            });
+
+            api.logger.info?.(
+              `memory-memex: session turn ${sessionBuffer.length} captured (${sessionId.slice(0, 8)})`,
+            );
+          } else {
+            const aiResponse = cfg.captureMode === 'full' ? (assistantText ?? '') : '';
+            const markdown = formatConversationNote(
+              userText,
+              aiResponse,
+              now,
+              cfg.defaultTags,
+            );
+            const content = encodeBase64(markdown);
+            const noteKey = hashTurnKey(userText, now);
+
+            client.ingestNote({
+              name: `Conversation — ${now.toISOString()}`,
+              note_key: noteKey,
+              description: `Agent conversation captured on ${now.toISOString()}`,
+              content,
+              tags: cfg.defaultTags,
+            });
+
+            api.logger.info?.('memory-memex: user message captured');
+          }
         } catch (err) {
           api.logger.warn?.(`memory-memex: capture failed: ${String(err)}`);
         }

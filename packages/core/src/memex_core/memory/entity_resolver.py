@@ -28,6 +28,7 @@ class EntityInput(BaseModel):
     text: str
     event_date: datetime
     nearby_entity_names: set[str]
+    entity_type: str | None = None
 
 
 class EntityCandidate(BaseModel):
@@ -156,10 +157,14 @@ class EntityResolver:
             if evt_date.tzinfo is None:
                 evt_date = evt_date.replace(tzinfo=timezone.utc)
 
+            entity_type = data.get('entity_type')
+
             if key in grouped:
                 existing = grouped[key]
                 existing.indices.append(idx)
                 existing.nearby_entity_names.update(nearby)
+                if entity_type and not existing.entity_type:
+                    existing.entity_type = entity_type
             else:
                 grouped[key] = EntityInput(
                     index=len(grouped),  # Local index within the deduplicated list
@@ -167,6 +172,7 @@ class EntityResolver:
                     text=raw_text,
                     event_date=evt_date,
                     nearby_entity_names=nearby,
+                    entity_type=entity_type,
                 )
 
         return list(grouped.values())
@@ -375,6 +381,8 @@ class EntityResolver:
         update_ids: set[str] = set()
         alias_values = []
 
+        type_updates: dict[str, str] = {}  # entity_id -> entity_type
+
         for res in resolutions:
             if not res.is_new and res.entity_id:
                 # Map all original indices to this ID
@@ -383,6 +391,9 @@ class EntityResolver:
                     final_ids_map[idx] = str_id
 
                 update_ids.add(res.entity_id)
+
+                if res.input_data.entity_type:
+                    type_updates[res.entity_id] = res.input_data.entity_type
 
                 # Prepare alias recording
                 alias_values.append(
@@ -400,6 +411,16 @@ class EntityResolver:
                 .values(mention_count=Entity.mention_count + 1, last_seen=current_time)
             )
             await session.exec(stmt)
+
+        # Backfill entity type for existing entities that lack one
+        for eid, etype in type_updates.items():
+            type_stmt = (
+                update(Entity)
+                .where(col(Entity.id) == eid)
+                .where(col(Entity.entity_type).is_(None))
+                .values(entity_type=etype)
+            )
+            await session.exec(type_stmt)
 
         if alias_values:
             # Record alias (if it doesn't already exist)
@@ -430,15 +451,16 @@ class EntityResolver:
             insert_values = []
             for group in creates_groups.values():
                 data = group['data']
-                insert_values.append(
-                    {
-                        'canonical_name': data.text,
-                        'phonetic_code': get_phonetic_code(data.text),
-                        'first_seen': data.event_date or current_time,
-                        'last_seen': data.event_date or current_time,
-                        'mention_count': len(group['indices']),
-                    }
-                )
+                row: dict[str, Any] = {
+                    'canonical_name': data.text,
+                    'phonetic_code': get_phonetic_code(data.text),
+                    'first_seen': data.event_date or current_time,
+                    'last_seen': data.event_date or current_time,
+                    'mention_count': len(group['indices']),
+                }
+                if data.entity_type:
+                    row['entity_type'] = data.entity_type
+                insert_values.append(row)
 
             insert_stmt = pg_insert(Entity).values(insert_values)
 

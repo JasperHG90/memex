@@ -17,6 +17,9 @@ export function makeConfig(overrides: Partial<PluginConfig> = {}): PluginConfig 
     timeoutMs: 5000,
     autoRecall: true,
     autoCapture: true,
+    profileFrequency: 20,
+    captureMode: 'filtered',
+    sessionGrouping: false,
     ...overrides,
   };
 }

@@ -2,11 +2,13 @@ import { useState, useCallback } from 'react';
 import { useEntities, useBulkCooccurrences } from '@/api/hooks/use-entities';
 import { GraphCanvas } from './entity-graph/graph-canvas';
 import { FilterPanel, type GraphFilters } from './entity-graph/filter-panel';
+import { ENTITY_TYPES } from './entity-graph/entity-node';
 
 const DEFAULT_FILTERS: GraphFilters = {
   minConnectionStrength: 1,
   minImportance: 1,
   recency: 'all',
+  entityTypes: [...ENTITY_TYPES],
 };
 import { EntitySidePanel } from './entity-graph/entity-side-panel';
 import {

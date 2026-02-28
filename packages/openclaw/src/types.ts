@@ -157,6 +157,14 @@ export interface EntityMentionDTO {
 // Plugin configuration
 // ---------------------------------------------------------------------------
 
+export type CaptureMode = 'filtered' | 'full';
+
+export interface SessionTurn {
+  userMessage: string;
+  assistantMessage: string;
+  timestamp: Date;
+}
+
 /** Resolved plugin configuration. */
 export interface PluginConfig {
   serverUrl: string;
@@ -170,4 +178,7 @@ export interface PluginConfig {
   autoRecall: boolean;
   autoCapture: boolean;
   timeoutMs: number;
+  profileFrequency: number;
+  captureMode: CaptureMode;
+  sessionGrouping: boolean;
 }

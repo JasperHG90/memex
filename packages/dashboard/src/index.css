@@ -100,10 +100,41 @@
   --sidebar-ring: #3B82F6;
 }
 
-/* Prevent white flash on initial load and page transitions */
+.light {
+  --background: #FFFFFF;
+  --foreground: #171717;
+  --card: #F9FAFB;
+  --card-foreground: #171717;
+  --popover: #FFFFFF;
+  --popover-foreground: #171717;
+  --primary: #3B82F6;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F3F4F6;
+  --secondary-foreground: #171717;
+  --muted: #F3F4F6;
+  --muted-foreground: #6B7280;
+  --accent: #3B82F6;
+  --accent-foreground: #FFFFFF;
+  --destructive: #EF4444;
+  --border: #E5E7EB;
+  --input: #E5E7EB;
+  --ring: #3B82F6;
+  --chart-1: #3B82F6;
+  --chart-2: #22C55E;
+  --chart-3: #F59E0B;
+  --chart-4: #EF4444;
+  --chart-5: #8B5CF6;
+  --sidebar: #F3F4F6;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #3B82F6;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E5E7EB;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #E5E7EB;
+  --sidebar-ring: #3B82F6;
+}
+
 html, body, #root {
-  background-color: #0D0D0D;
-  color: #EDEDED;
   min-height: 100vh;
 }
 
@@ -138,6 +169,36 @@ html, body, #root {
 
 /* React Flow edge hover highlight */
 .react-flow__edge:hover path {
-  stroke: rgba(255, 255, 255, 0.5) !important;
-  transition: stroke 150ms ease-in-out;
+  stroke: var(--foreground) !important;
+  opacity: 0.5;
+  transition: stroke 150ms ease-in-out, opacity 150ms ease-in-out;
+}
+
+/* Invert dark logo for dark background, no-op in light mode */
+.dark-invert {
+  filter: invert(1) brightness(1.8);
+}
+.light .dark-invert {
+  filter: none;
+}
+
+/* Shimmer animation for skeletons */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
 }

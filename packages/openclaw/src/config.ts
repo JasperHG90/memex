@@ -1,4 +1,4 @@
-import type { PluginConfig } from './types';
+import type { CaptureMode, PluginConfig } from './types';
 
 /** Parse an integer from a string, returning `fallback` if the result is NaN. */
 export function safeParseInt(value: string | undefined, fallback: number): number {
@@ -62,6 +62,25 @@ export function parseConfig(raw?: unknown): PluginConfig {
   const autoRecall = cfg.autoRecall !== false;
   const autoCapture = cfg.autoCapture !== false;
 
+  const profileFrequency =
+    typeof cfg.profileFrequency === 'number'
+      ? cfg.profileFrequency
+      : safeParseInt(process.env['MEMEX_PROFILE_FREQUENCY'], 20);
+
+  const captureModeRaw =
+    typeof cfg.captureMode === 'string'
+      ? cfg.captureMode
+      : process.env['MEMEX_CAPTURE_MODE'] ?? 'filtered';
+  const captureMode: CaptureMode = captureModeRaw === 'full' ? 'full' : 'filtered';
+
+  const sessionGroupingEnv = process.env['MEMEX_SESSION_GROUPING'];
+  const sessionGrouping =
+    typeof cfg.sessionGrouping === 'boolean'
+      ? cfg.sessionGrouping
+      : sessionGroupingEnv != null
+        ? sessionGroupingEnv === 'true'
+        : true;
+
   return {
     serverUrl,
     searchLimit,
@@ -74,6 +93,9 @@ export function parseConfig(raw?: unknown): PluginConfig {
     autoRecall,
     autoCapture,
     beforeTurnTimeoutMs: timeoutMs,
+    profileFrequency,
+    captureMode,
+    sessionGrouping,
   };
 }
 

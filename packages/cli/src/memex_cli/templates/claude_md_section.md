@@ -4,10 +4,28 @@
 
 Access Memex (long-term memory) via MCP tools. Build persistent knowledge across sessions.
 
+<constraint name="proactive-memory-capture" priority="critical">
 ### Capture
 
-Call `memex_add_note` (background: true) for: architectural decisions, bug root causes, user preferences, important project context, key technical discoveries.
-Do NOT capture: trivial exchanges, routine edits, debugging noise, information already in codebase.
+You MUST call `memex_add_note` (with `background: true`) at these trigger points:
+
+1. **After completing a multi-step task** — summarize what was done, key decisions, and outcome
+2. **After diagnosing a bug root cause** — record the symptom, root cause, and fix
+3. **After making an architectural decision** — capture the decision, alternatives considered, and rationale
+4. **After learning a user preference** — record workflow preferences, tool choices, or communication style
+
+#### What NOT to capture
+
+- Trivial exchanges or routine code edits
+- Debugging noise (intermediate failed attempts)
+- Information already in the codebase (README, CLAUDE.md, docstrings)
+
+#### How to capture
+
+- Use a **descriptive title** (not "Untitled" or "Note")
+- Include **context**: what project, what problem, what was decided
+- Add **tags** for retrieval (e.g., `["architecture", "auth", "decision"]`)
+</constraint>
 
 ### Retrieval
 

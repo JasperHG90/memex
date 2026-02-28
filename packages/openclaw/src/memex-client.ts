@@ -14,6 +14,7 @@ import type {
   NoteSearchResult,
   PageIndexOutput,
   PluginConfig,
+  SessionTurn,
 } from './types';
 
 export class MemexClient {
@@ -380,6 +381,43 @@ export function formatConversationNote(
     ...(aiResponse ? ['', '## Assistant', '', aiResponse] : []),
     '',
   ].join('\n');
+}
+
+/**
+ * Format a multi-turn session as a Markdown note with YAML frontmatter.
+ * Each turn gets its own section header with a timestamp.
+ */
+export function formatSessionNote(
+  turns: SessionTurn[],
+  timestamp: Date,
+  tags: string[] = ['agent', 'openclaw'],
+): string {
+  const iso = timestamp.toISOString();
+  const dateStr = iso.split('T')[0] ?? iso;
+  const tagList = tags.map((t) => t.trim()).filter(Boolean);
+
+  const parts = [
+    '---',
+    `date: ${dateStr}`,
+    `timestamp: ${iso}`,
+    'source: openclaw',
+    `tags: [${tagList.join(', ')}]`,
+    `turns: ${turns.length}`,
+    '---',
+  ];
+
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i]!;
+    const turnIso = turn.timestamp.toISOString();
+    parts.push('', `## Turn ${i + 1} — ${turnIso}`);
+    parts.push('', '### User', '', turn.userMessage);
+    if (turn.assistantMessage) {
+      parts.push('', '### Assistant', '', turn.assistantMessage);
+    }
+  }
+
+  parts.push('');
+  return parts.join('\n');
 }
 
 /** Encode a UTF-8 string as Base64 (Node.js Buffer). */

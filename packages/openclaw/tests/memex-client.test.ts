@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { MemexClient, encodeBase64, formatConversationNote, hashTurnKey } from '../src/memex-client';
+import { MemexClient, encodeBase64, formatConversationNote, formatSessionNote, hashTurnKey } from '../src/memex-client';
 import { makeConfig, makeMemoryUnit, ndjsonResponse, jsonResponse, errorResponse, vaultOkResponse } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -877,5 +877,81 @@ describe('hashTurnKey', () => {
     const a = hashTurnKey('same message', ts);
     const b = hashTurnKey('same message', ts2);
     expect(a).not.toBe(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatSessionNote
+// ---------------------------------------------------------------------------
+
+describe('formatSessionNote', () => {
+  const sessionTs = new Date('2025-06-15T14:00:00.000Z');
+
+  it('produces valid YAML frontmatter with turns count', () => {
+    const turns = [
+      { userMessage: 'Hello', assistantMessage: 'Hi', timestamp: new Date('2025-06-15T14:00:00.000Z') },
+    ];
+    const note = formatSessionNote(turns, sessionTs);
+
+    expect(note).toContain('---');
+    expect(note).toContain('date: 2025-06-15');
+    expect(note).toContain('timestamp: 2025-06-15T14:00:00.000Z');
+    expect(note).toContain('source: openclaw');
+    expect(note).toContain('tags: [agent, openclaw]');
+    expect(note).toContain('turns: 1');
+  });
+
+  it('formats multiple turns with numbered headers', () => {
+    const turns = [
+      { userMessage: 'First question', assistantMessage: 'First answer', timestamp: new Date('2025-06-15T14:00:00.000Z') },
+      { userMessage: 'Follow up', assistantMessage: 'More info', timestamp: new Date('2025-06-15T14:01:00.000Z') },
+    ];
+    const note = formatSessionNote(turns, sessionTs);
+
+    expect(note).toContain('## Turn 1 — 2025-06-15T14:00:00.000Z');
+    expect(note).toContain('### User');
+    expect(note).toContain('First question');
+    expect(note).toContain('### Assistant');
+    expect(note).toContain('First answer');
+    expect(note).toContain('## Turn 2 — 2025-06-15T14:01:00.000Z');
+    expect(note).toContain('Follow up');
+    expect(note).toContain('More info');
+    expect(note).toContain('turns: 2');
+  });
+
+  it('omits Assistant section when assistantMessage is empty', () => {
+    const turns = [
+      { userMessage: 'Just a question', assistantMessage: '', timestamp: new Date('2025-06-15T14:00:00.000Z') },
+    ];
+    const note = formatSessionNote(turns, sessionTs);
+
+    expect(note).toContain('### User');
+    expect(note).toContain('Just a question');
+    expect(note).not.toContain('### Assistant');
+  });
+
+  it('uses custom tags when provided', () => {
+    const turns = [
+      { userMessage: 'msg', assistantMessage: 'resp', timestamp: new Date('2025-06-15T14:00:00.000Z') },
+    ];
+    const note = formatSessionNote(turns, sessionTs, ['session', 'debug']);
+
+    expect(note).toContain('tags: [session, debug]');
+  });
+
+  it('uses default tags when none provided', () => {
+    const turns = [
+      { userMessage: 'msg', assistantMessage: 'resp', timestamp: new Date('2025-06-15T14:00:00.000Z') },
+    ];
+    const note = formatSessionNote(turns, sessionTs);
+
+    expect(note).toContain('tags: [agent, openclaw]');
+  });
+
+  it('handles empty turns array', () => {
+    const note = formatSessionNote([], sessionTs);
+
+    expect(note).toContain('turns: 0');
+    expect(note).not.toContain('## Turn');
   });
 });

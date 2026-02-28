@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
 # Memex Claude Code Hook — PreCompact
-# Warns before context compaction and records the event.
+# Nudges the agent to persist important context before compaction discards it.
 set -euo pipefail
 
-STATE_DIR="__PROJECT_DIR__/.claude/hooks/memex/.state"
-mkdir -p "$STATE_DIR"
-
-# Record compaction event
-echo "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$STATE_DIR/compact_pending.json"
-
-echo "## Context Compaction Imminent"
-echo ""
-echo "Context compaction is about to discard conversation history."
-echo "Use **/remember** to save any important learnings before they are lost."
+cat <<'EOF'
+{"systemMessage": "Context compaction is imminent — conversation history will be compressed. Before continuing, review this session for anything worth persisting to long-term memory via `memex_add_note` (background: true). Save if: (1) you diagnosed a bug root cause, (2) made or discovered an architectural decision, (3) learned a user preference or workflow pattern, (4) completed a multi-step task with reusable insights. Skip if nothing notable happened this session."}
+EOF

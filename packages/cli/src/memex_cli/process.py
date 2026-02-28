@@ -53,6 +53,20 @@ def remove_pid(service: str) -> None:
     pid_file_path(service).unlink(missing_ok=True)
 
 
+def _kill_tree(pid: int, sig: signal.Signals) -> None:
+    """Send *sig* to the process group led by *pid*, falling back to the single PID.
+
+    When a daemon is launched with ``start_new_session=True`` its PID equals
+    the PGID, so ``os.killpg`` terminates the entire tree (npm/npx + children).
+    If the process isn't a group leader ``killpg`` raises ``PermissionError`` or
+    ``ProcessLookupError``; we fall back to a plain ``os.kill`` in that case.
+    """
+    try:
+        os.killpg(pid, sig)
+    except (PermissionError, ProcessLookupError, OSError):
+        os.kill(pid, sig)
+
+
 def check_port_available(host: str, port: int) -> bool:
     """Return True if the port is available for binding."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -70,7 +84,7 @@ def graceful_stop(service: str) -> bool:
         return False
 
     try:
-        os.kill(pid, signal.SIGTERM)
+        _kill_tree(pid, signal.SIGTERM)
         console.print(f'Sent SIGTERM to {service} (PID {pid}), waiting for exit...')
     except ProcessLookupError:
         remove_pid(service)
@@ -88,7 +102,7 @@ def graceful_stop(service: str) -> bool:
     # Still alive — escalate
     try:
         console.print(f'[yellow]Process {pid} did not exit, sending SIGKILL...[/yellow]')
-        os.kill(pid, signal.SIGKILL)
+        _kill_tree(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
 

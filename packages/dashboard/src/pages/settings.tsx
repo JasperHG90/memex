@@ -18,15 +18,26 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, PenLine, Trash2 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
+import { Plus, PenLine, Trash2, Sun, Moon } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
 import { api } from '@/api/client';
 import { useVaults, useDefaultVaults, useCreateVault, useDeleteVault } from '@/api/hooks/use-vaults';
 import { useVaultStore } from '@/stores/vault-store';
+import { usePreferencesStore } from '@/stores/preferences-store';
+import { useUIStore } from '@/stores/ui-store';
 import type { VaultDTO } from '@/api/generated';
 
 // --- Components ---
@@ -292,10 +303,147 @@ function VaultsTab() {
   );
 }
 
+const ALL_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model'];
+const SEARCH_LIMITS = [10, 25, 50, 100];
+const REFRESH_OPTIONS = [
+  { value: '0', label: 'Off' },
+  { value: '15', label: '15s' },
+  { value: '30', label: '30s' },
+  { value: '60', label: '60s' },
+];
+
 function PreferencesTab() {
+  const [isDark, setIsDark] = useState(() => !document.documentElement.classList.contains('light'));
+  const prefs = usePreferencesStore();
+  const ui = useUIStore();
+
+  const handleThemeToggle = useCallback((checked: boolean) => {
+    setIsDark(checked);
+    if (checked) {
+      document.documentElement.classList.remove('light');
+      document.documentElement.style.backgroundColor = '#0D0D0D';
+      document.documentElement.style.color = '#EDEDED';
+      localStorage.setItem('memex_theme', 'dark');
+    } else {
+      document.documentElement.classList.add('light');
+      document.documentElement.style.backgroundColor = '#FFFFFF';
+      document.documentElement.style.color = '#171717';
+      localStorage.setItem('memex_theme', 'light');
+    }
+  }, []);
+
+  const handleStrategyToggle = useCallback(
+    (strategy: string, checked: boolean) => {
+      const current = prefs.defaultStrategies;
+      const next = checked
+        ? [...current, strategy]
+        : current.filter((s) => s !== strategy);
+      if (next.length > 0) {
+        prefs.setDefaultStrategies(next);
+      }
+    },
+    [prefs],
+  );
+
   return (
-    <div className="space-y-6 pt-4">
-      <p className="text-muted-foreground">Preferences coming soon</p>
+    <div className="space-y-6 pt-4 max-w-lg">
+      {/* Theme */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Theme</p>
+          <p className="text-xs text-muted-foreground">Toggle between dark and light mode</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Sun className="h-4 w-4 text-muted-foreground" />
+          <Switch checked={isDark} onCheckedChange={handleThemeToggle} aria-label="Toggle theme" />
+          <Moon className="h-4 w-4 text-muted-foreground" />
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Default search limit */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Default search limit</p>
+          <p className="text-xs text-muted-foreground">Number of results per search</p>
+        </div>
+        <Select
+          value={String(prefs.defaultSearchLimit)}
+          onValueChange={(v) => prefs.setDefaultSearchLimit(Number(v))}
+        >
+          <SelectTrigger className="w-24">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SEARCH_LIMITS.map((n) => (
+              <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Separator />
+
+      {/* Default search strategies */}
+      <div>
+        <p className="text-sm font-medium text-foreground mb-1">Default search strategies</p>
+        <p className="text-xs text-muted-foreground mb-3">Strategies enabled by default for memory search</p>
+        <div className="space-y-2">
+          {ALL_STRATEGIES.map((strategy) => (
+            <label key={strategy} className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={prefs.defaultStrategies.includes(strategy)}
+                onCheckedChange={(checked) => handleStrategyToggle(strategy, Boolean(checked))}
+              />
+              <span className="text-sm text-foreground capitalize">{strategy.replace('_', ' ')}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Auto-refresh interval */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Auto-refresh interval</p>
+          <p className="text-xs text-muted-foreground">How often to refresh data on pages</p>
+        </div>
+        <Select
+          value={String(prefs.autoRefreshInterval)}
+          onValueChange={(v) => prefs.setAutoRefreshInterval(Number(v))}
+        >
+          <SelectTrigger className="w-24">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {REFRESH_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Separator />
+
+      {/* Sidebar collapsed by default */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Sidebar collapsed by default</p>
+          <p className="text-xs text-muted-foreground">Start with the sidebar minimized</p>
+        </div>
+        <Switch
+          checked={prefs.sidebarCollapsedByDefault}
+          onCheckedChange={(checked) => {
+            prefs.setSidebarCollapsedByDefault(checked);
+            if (checked !== ui.isSidebarCollapsed) {
+              ui.toggleSidebar();
+            }
+          }}
+          aria-label="Sidebar collapsed by default"
+        />
+      </div>
     </div>
   );
 }

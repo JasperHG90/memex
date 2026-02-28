@@ -1,31 +1,27 @@
-import { memo } from 'react';
-import { Handle, Position, type NodeProps, type Node } from '@xyflow/react';
+import { memo, useState } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { TYPE_COLORS, type EntityFlowNode } from './entity-types';
 
-const TYPE_COLORS: Record<string, string> = {
-  Person: '#3B82F6',
-  Organization: '#A855F7',
-  Location: '#22C55E',
-  Concept: '#F59E0B',
-  Event: '#EF4444',
-  Technology: '#06B6D4',
-};
-
-export interface EntityNodeData {
-  label: string;
-  type: string;
-  mentionCount: number;
-  entityId: string;
-  [key: string]: unknown;
-}
-
-export type EntityFlowNode = Node<EntityNodeData, 'entity'>;
+export { ENTITY_TYPES, TYPE_COLORS, type EntityNodeData, type EntityFlowNode } from './entity-types';
 
 function EntityNodeComponent({ data, selected }: NodeProps<EntityFlowNode>) {
+  const [isHovered, setIsHovered] = useState(false);
   const color = TYPE_COLORS[data.type] ?? '#71717A';
   const size = Math.max(32, Math.min(56, 32 + data.mentionCount * 2));
 
   return (
-    <div className="flex flex-col items-center group">
+    <div
+      className="flex flex-col items-center group relative"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* Tooltip */}
+      {isHovered && (
+        <div className="absolute -top-16 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border bg-card px-3 py-2 shadow-lg whitespace-nowrap pointer-events-none">
+          <p className="text-xs font-semibold text-foreground">{data.label}</p>
+          <p className="text-[10px] text-muted-foreground">{data.type} · {data.mentionCount} mentions</p>
+        </div>
+      )}
       <Handle type="target" position={Position.Top} className="!invisible" />
       <div
         className={`rounded-full flex items-center justify-center text-xs font-bold border-2 transition-transform duration-150 ${

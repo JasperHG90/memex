@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client.ts';
 import type {
   MemoryUnitDTO,
@@ -18,6 +18,28 @@ export function useMemorySearch() {
   return useMutation({
     mutationFn: (request: RetrievalRequest) =>
       api.post<MemoryUnitDTO[]>('/memories/search', request),
+  });
+}
+
+export function useAdjustBelief() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ unitId, adjustment }: { unitId: string; adjustment: 'confirm' | 'contradict' }) =>
+      api.post<void>(`/memories/${unitId}/belief`, { adjustment }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memories'] });
+    },
+  });
+}
+
+export function useDeleteMemory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (unitId: string) => api.delete<void>(`/memories/${unitId}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['memories'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+    },
   });
 }
 

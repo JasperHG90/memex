@@ -1,6 +1,7 @@
 """Tests for the dashboard CLI commands."""
 
-from unittest.mock import patch, AsyncMock
+import signal
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from typer.testing import CliRunner
@@ -50,12 +51,14 @@ class TestDashboardStart:
         with (
             patch('memex_cli.dashboard.read_pid', return_value=None),
             patch('memex_cli.dashboard.check_port_available', return_value=True),
-            patch('memex_cli.dashboard._setup_runtime_cwd', return_value='/tmp'),
+            patch('memex_cli.dashboard._get_dashboard_dir') as mock_dir,
             patch('memex_cli.dashboard.log_file_path', return_value='/tmp/dashboard.log'),
             patch('builtins.open', create=True),
-            patch('subprocess.Popen') as mock_popen,
+            patch('memex_cli.dashboard.subprocess.Popen') as mock_popen,
             patch('memex_cli.dashboard.write_pid'),
         ):
+            mock_dir.return_value = MagicMock(exists=lambda: True)
+            mock_dir.return_value.__truediv__ = lambda self, x: MagicMock(exists=lambda: True)
             mock_popen.return_value.pid = 9999
             result = runner.invoke(app, ['start', '--daemon'])
             assert result.exit_code == 0
@@ -64,50 +67,64 @@ class TestDashboardStart:
 
     def test_start_dev_daemon_warns(self, runner, mock_dashboard_installed, mock_config):
         """--dev with --daemon should warn and ignore daemon."""
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 0
+        mock_proc.pid = 1234
+
         with (
             patch('memex_cli.dashboard.read_pid', return_value=None),
             patch('memex_cli.dashboard.check_port_available', return_value=True),
-            patch('memex_cli.dashboard._setup_runtime_cwd', return_value='/tmp'),
-            patch('subprocess.run') as mock_run,
+            patch('memex_cli.dashboard._get_dashboard_dir') as mock_dir,
+            patch('memex_cli.dashboard.subprocess.Popen', return_value=mock_proc),
         ):
+            mock_dir.return_value = MagicMock(exists=lambda: True)
             result = runner.invoke(app, ['start', '--dev', '--daemon'])
             assert 'not supported with --dev' in result.stdout
-            # Should still run (foreground dev mode)
-            mock_run.assert_called_once()
 
-    def test_start_prod_uses_single_port(self, runner, mock_dashboard_installed, mock_config):
-        """Production mode should use --single-port to avoid port conflicts."""
+    def test_start_foreground_uses_popen_with_new_session(
+        self, runner, mock_dashboard_installed, mock_config
+    ):
+        """Foreground mode uses Popen with start_new_session=True for group cleanup."""
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 0
+        mock_proc.pid = 5555
+
         with (
             patch('memex_cli.dashboard.read_pid', return_value=None),
             patch('memex_cli.dashboard.check_port_available', return_value=True),
-            patch('memex_cli.dashboard._setup_runtime_cwd', return_value='/tmp'),
-            patch('subprocess.run') as mock_run,
+            patch('memex_cli.dashboard._get_dashboard_dir') as mock_dir,
+            patch('memex_cli.dashboard.subprocess.Popen', return_value=mock_proc) as mock_popen,
         ):
-            result = runner.invoke(app, ['start'])
-            assert result.exit_code == 0
-            cmd = mock_run.call_args[0][0]
-            assert '--single-port' in cmd
-            assert '--env' in cmd
-            assert 'prod' in cmd
-            assert '--backend-port' in cmd
-            assert '3001' in cmd
-
-    def test_start_dev_uses_separate_ports(self, runner, mock_dashboard_installed, mock_config):
-        """Dev mode should use separate frontend/backend ports."""
-        with (
-            patch('memex_cli.dashboard.read_pid', return_value=None),
-            patch('memex_cli.dashboard.check_port_available', return_value=True),
-            patch('memex_cli.dashboard._setup_runtime_cwd', return_value='/tmp'),
-            patch('subprocess.run') as mock_run,
-        ):
+            mock_dir.return_value = MagicMock(exists=lambda: True)
+            mock_dir.return_value.__truediv__ = lambda self, x: MagicMock(exists=lambda: True)
             result = runner.invoke(app, ['start', '--dev'])
             assert result.exit_code == 0
-            cmd = mock_run.call_args[0][0]
-            assert '--single-port' not in cmd
-            assert '--frontend-port' in cmd
-            assert '3001' in cmd
-            assert '--backend-port' in cmd
-            assert '3002' in cmd
+            popen_kwargs = mock_popen.call_args
+            assert popen_kwargs[1]['start_new_session'] is True
+
+    def test_start_foreground_keyboard_interrupt_kills_group(
+        self, runner, mock_dashboard_installed, mock_config
+    ):
+        """Ctrl+C in foreground mode sends SIGTERM to the process group."""
+        mock_proc = MagicMock()
+        mock_proc.wait.side_effect = [KeyboardInterrupt, None]
+        mock_proc.returncode = -15
+        mock_proc.pid = 7777
+
+        with (
+            patch('memex_cli.dashboard.read_pid', return_value=None),
+            patch('memex_cli.dashboard.check_port_available', return_value=True),
+            patch('memex_cli.dashboard._get_dashboard_dir') as mock_dir,
+            patch('memex_cli.dashboard.subprocess.Popen', return_value=mock_proc),
+            patch('memex_cli.dashboard.os.killpg') as mock_killpg,
+        ):
+            mock_dir.return_value = MagicMock(exists=lambda: True)
+            mock_dir.return_value.__truediv__ = lambda self, x: MagicMock(exists=lambda: True)
+            result = runner.invoke(app, ['start', '--dev'])
+            assert 'Dashboard stopped' in result.stdout
+            mock_killpg.assert_any_call(7777, signal.SIGTERM)
 
     def test_start_missing_deps(self, runner):
         """Should exit with helpful message when dashboard not installed."""

@@ -180,7 +180,7 @@ describe('agent_end hook', () => {
   const longMsg = 'A'.repeat(60);
 
   it('captures only user message (no assistant text) with ingestNote', async () => {
-    const api = registerPlugin();
+    const api = registerPlugin({ sessionGrouping: false });
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
@@ -209,7 +209,7 @@ describe('agent_end hook', () => {
   });
 
   it('extracts text from ContentBlock arrays (user only)', async () => {
-    const api = registerPlugin();
+    const api = registerPlugin({ sessionGrouping: false });
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
 
@@ -688,5 +688,332 @@ describe('/remember command', () => {
     const result = await cmd.handler({ args: '' }) as { text: string };
 
     expect(result.text).toBe('Usage: /remember <text to store>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Profile frequency (before_agent_start entity injection)
+// ---------------------------------------------------------------------------
+
+describe('profile frequency', () => {
+  const longPrompt = 'Tell me about this topic with enough text for the prompt guard';
+
+  it('does not fetch entities on non-profile turn', async () => {
+    // profileFrequency=20 (default), turn 1 → 1 % 20 !== 0 → no entity call
+    const api = registerPlugin();
+    const m1 = makeMemoryUnit({ text: 'fact one' });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1]));
+
+    const hook = api.hooks.get('before_agent_start')![0]!;
+    const result = await hook({ prompt: longPrompt });
+
+    expect(result).toHaveProperty('prependContext');
+    const ctx = (result as { prependContext: string }).prependContext;
+    expect(ctx).toContain('fact one');
+    // Should NOT contain knowledge-profile since it's not an Nth turn
+    expect(ctx).not.toContain('<knowledge-profile>');
+  });
+
+  it('fetches and injects entities on Nth turn', async () => {
+    // Set profileFrequency=1 so every turn is a profile turn
+    const api = registerPlugin({ profileFrequency: 1 });
+    const m1 = makeMemoryUnit({ text: 'fact one' });
+    const entities = [
+      { id: 'e1', name: 'TypeScript', entity_type: 'technology', mention_count: 42 },
+    ];
+    // Turn 1: vault check + memory search + entity list
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1]));
+    fetchSpy.mockResolvedValueOnce(jsonResponse(entities));
+
+    const hook = api.hooks.get('before_agent_start')![0]!;
+    const result = await hook({ prompt: longPrompt });
+
+    expect(result).toHaveProperty('prependContext');
+    const ctx = (result as { prependContext: string }).prependContext;
+    expect(ctx).toContain('<relevant-memories>');
+    expect(ctx).toContain('<knowledge-profile>');
+    expect(ctx).toContain('TypeScript');
+  });
+
+  it('gracefully falls back when entity fetch fails', async () => {
+    const api = registerPlugin({ profileFrequency: 1 });
+    const m1 = makeMemoryUnit({ text: 'fact one' });
+    // vault + memory OK, entity fails
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1]));
+    fetchSpy.mockRejectedValueOnce(new Error('entity service down'));
+
+    const hook = api.hooks.get('before_agent_start')![0]!;
+    const result = await hook({ prompt: longPrompt });
+
+    // Should still return memories without entities (best-effort)
+    expect(result).toHaveProperty('prependContext');
+    const ctx = (result as { prependContext: string }).prependContext;
+    expect(ctx).toContain('fact one');
+    expect(ctx).not.toContain('<knowledge-profile>');
+    // Should log warning but NOT trip the breaker
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('entity fetch failed (best-effort)'),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capture mode (agent_end)
+// ---------------------------------------------------------------------------
+
+describe('capture mode', () => {
+  const longMsg = 'A'.repeat(60);
+
+  it('filtered mode captures user message only', async () => {
+    const api = registerPlugin({ captureMode: 'filtered', sessionGrouping: false });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+    const hook = api.hooks.get('agent_end')![0]!;
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'AI response text here' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(decoded).toContain(longMsg);
+    expect(decoded).not.toContain('AI response text here');
+  });
+
+  it('full mode captures both user and assistant messages', async () => {
+    const api = registerPlugin({ captureMode: 'full', sessionGrouping: false });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+    const hook = api.hooks.get('agent_end')![0]!;
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'AI response text for full capture' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(decoded).toContain(longMsg);
+    expect(decoded).toContain('AI response text for full capture');
+  });
+
+  it('strips relevant-memories from assistant text in full mode', async () => {
+    const api = registerPlugin({ captureMode: 'full', sessionGrouping: false });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+    const memoriesBlock =
+      '<relevant-memories>\n1. old memory\n</relevant-memories>\n';
+
+    const hook = api.hooks.get('agent_end')![0]!;
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: memoriesBlock + 'Clean assistant response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(decoded).not.toContain('<relevant-memories>');
+    expect(decoded).toContain('Clean assistant response');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session grouping (agent_end)
+// ---------------------------------------------------------------------------
+
+describe('session grouping', () => {
+  const longMsg = 'B'.repeat(60);
+  const longMsg2 = 'C'.repeat(60);
+
+  it('uses same note_key across turns', async () => {
+    const api = registerPlugin({ sessionGrouping: true, captureMode: 'full' });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    // Turn 1: vault check + ingest = 2 calls
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'response one' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init1] = fetchSpy.mock.calls[1]!;
+    const body1 = JSON.parse(init1.body);
+    const noteKey1 = body1.note_key;
+    expect(noteKey1).toMatch(/^session_/);
+
+    // Turn 2: vault already cached, only ingest = 1 call (total 3)
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg2 },
+        { role: 'assistant', content: 'response two' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+
+    const [, init2] = fetchSpy.mock.calls[2]!;
+    const body2 = JSON.parse(init2.body);
+    expect(body2.note_key).toBe(noteKey1);
+  });
+
+  it('cumulative note contains all turns', async () => {
+    const api = registerPlugin({ sessionGrouping: true, captureMode: 'full' });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    // Turn 1: vault check + ingest = 2 calls
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'first response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    // Turn 2: vault already cached, only ingest = 1 call (total 3)
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg2 },
+        { role: 'assistant', content: 'second response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+
+    const [, init2] = fetchSpy.mock.calls[2]!;
+    const body2 = JSON.parse(init2.body);
+    const decoded = Buffer.from(body2.content, 'base64').toString('utf-8');
+    // Cumulative note should contain both turns
+    expect(decoded).toContain(longMsg);
+    expect(decoded).toContain(longMsg2);
+    expect(decoded).toContain('first response');
+    expect(decoded).toContain('second response');
+    expect(decoded).toContain('Turn 1');
+    expect(decoded).toContain('Turn 2');
+  });
+
+  it('session log message includes truncated UUID', async () => {
+    const api = registerPlugin({ sessionGrouping: true });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/session turn 1 captured \([a-f0-9]{8}\)/),
+    );
+  });
+
+  it('falls back to per-turn capture when sessionGrouping is disabled', async () => {
+    const api = registerPlugin({ sessionGrouping: false, captureMode: 'filtered' });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    // Per-turn mode uses hash-based note_key, not session_*
+    expect(body.note_key).not.toMatch(/^session_/);
+    expect(body.name).toMatch(/^Conversation —/);
+    expect(api.logger.info).toHaveBeenCalledWith('memory-memex: user message captured');
+  });
+
+  it('session grouping works with full capture mode', async () => {
+    const api = registerPlugin({ sessionGrouping: true, captureMode: 'full' });
+    const hook = api.hooks.get('agent_end')![0]!;
+
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'full mode assistant reply' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    const decoded = Buffer.from(body.content, 'base64').toString('utf-8');
+    expect(body.note_key).toMatch(/^session_/);
+    expect(decoded).toContain(longMsg);
+    expect(decoded).toContain('full mode assistant reply');
   });
 });

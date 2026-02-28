@@ -1480,17 +1480,22 @@ class ExtractionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> set[UUID]:
         """Resolve entities and link them to units. Returns set of touched entity IDs."""
+        # Run NER on all fact texts to get entity type information
+        ner_type_map = await self._build_ner_type_map(facts)
+
         entities_data = []
 
         for i, fact in enumerate(facts):
             unit_id = unit_ids[i]
             for ent in fact.entities:
+                entity_type = ent.entity_type or ner_type_map.get(ent.text.lower())
                 entities_data.append(
                     {
                         'text': ent.text,
                         'event_date': fact.occurred_start or fact.mentioned_at,
                         'nearby_entities': [{'text': e.text} for e in fact.entities],
                         'unit_id': unit_id,
+                        'entity_type': entity_type,
                     }
                 )
 
@@ -1511,6 +1516,41 @@ class ExtractionEngine:
         )
 
         return {UUID(rid) for rid in resolved_ids}
+
+    NER_TYPE_MAP: dict[str, str] = {
+        'PER': 'Person',
+        'ORG': 'Organization',
+        'LOC': 'Location',
+        'MISC': 'Misc',
+    }
+
+    async def _build_ner_type_map(self, facts: list[ProcessedFact]) -> dict[str, str]:
+        """Run NER on fact texts and build a lowercase entity name -> type mapping."""
+        try:
+            from memex_core.memory.models.ner import get_ner_model
+
+            ner_model = await get_ner_model()
+        except Exception:
+            logger.debug('NER model unavailable, skipping entity type enrichment')
+            return {}
+
+        type_map: dict[str, str] = {}
+        for fact in facts:
+            text = fact.fact_text
+            if not text:
+                continue
+            try:
+                ner_results = ner_model.predict(text)
+                for result in ner_results:
+                    word = result.get('word', '').lower()
+                    raw_type = result.get('type', '')
+                    mapped_type = self.NER_TYPE_MAP.get(raw_type)
+                    if word and mapped_type and word not in type_map:
+                        type_map[word] = mapped_type
+            except Exception:
+                logger.debug('NER prediction failed for fact text', exc_info=True)
+
+        return type_map
 
     async def _create_links(
         self,
