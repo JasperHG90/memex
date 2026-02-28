@@ -69,7 +69,7 @@ class FileContentProcessor:
                     images=images,
                     document_date=_file_mtime_utc(path),
                 )
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.error(f'Failed to extract content from PDF {path}: {e}')
             raise ValueError(f'PDF extraction failed for {path}: {e}') from e
 
@@ -94,7 +94,7 @@ class FileContentProcessor:
                 metadata=metadata,
                 document_date=_file_mtime_utc(path),
             )
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f'Failed to extract content from {path}: {e}')
             raise ValueError(f'Extraction failed for {path}: {e}') from e
 

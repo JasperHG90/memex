@@ -137,7 +137,7 @@ async def extract_title_via_llm(
             context_metadata={'operation': 'title_extraction'},
             vault_id=vault_id,
         )
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.warning('LLM title extraction failed: %s', e, exc_info=True)
         return None
 

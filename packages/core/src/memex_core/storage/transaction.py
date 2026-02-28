@@ -39,7 +39,7 @@ class AsyncTransaction:
         await self._session.begin()
         try:
             self.fs.begin_staging(self.txn_id)
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             self._logger.error(f'Failed to begin file staging: {e}.')
             await self._session.close()
             self._session = None

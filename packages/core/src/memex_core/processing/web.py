@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import cloudscraper  # type: ignore
+import requests  # type: ignore[import-untyped]
 import trafilatura
 from dateutil import parser as dateutil_parser
 
@@ -53,7 +54,7 @@ class WebContentProcessor:
             response = scraper.get(url)
             response.raise_for_status()
             downloaded = response.text
-        except Exception as e:
+        except requests.RequestException as e:
             raise ValueError(f'Failed to fetch content from {url}: {e}')
 
         # Extract main text

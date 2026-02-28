@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     async_sessionmaker,
 )
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import text, SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -119,7 +119,7 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
                     await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
             except IntegrityError:
                 self._logger.warning('Vector extension already exists (race condition handled).')
-            except Exception as e:
+            except SQLAlchemyError as e:
                 self._logger.warning(f'Error checking vector extension: {e}')
 
             # 2. pg_trgm extension
@@ -128,7 +128,7 @@ class AsyncPostgresMetaStoreEngine(AsyncBaseMetaStoreEngine[PostgresMetaStoreCon
                     await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
             except IntegrityError:
                 self._logger.warning('pg_trgm extension already exists (race condition handled).')
-            except Exception as e:
+            except SQLAlchemyError as e:
                 self._logger.warning(f'Error checking pg_trgm extension: {e}')
 
             # 3. Create tables
