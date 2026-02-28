@@ -1,7 +1,6 @@
 import math
 import asyncio
 import logging
-from collections import defaultdict
 from datetime import timedelta, datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -42,6 +41,10 @@ from memex_core.memory.extraction.core import (
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.extraction.utils import parse_datetime, normalize_timestamp
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
+from memex_core.memory.extraction.pipeline.diffing import (
+    diff_blocks,
+    diff_page_index_blocks,
+)
 from memex_core.memory.sql_models import ContentStatus
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.confidence import ConfidenceEngine
@@ -340,19 +343,16 @@ class ExtractionEngine:
         )
         new_blocks = stable_chunk_text(combined_text, block_size=block_size)
 
-        # 2. Build lookup of existing block hashes -> block metadata
-        existing_hash_map: dict[str, dict[str, object]] = {}
-        for existing_block in existing_blocks:
-            h = str(existing_block['content_hash'])
-            existing_hash_map[h] = existing_block
+        # 2-3. Diff new blocks against existing blocks
+        block_diff = diff_blocks(new_blocks, existing_blocks)
+        retained_hashes = block_diff.retained_hashes
+        added_blocks = block_diff.added_blocks
+        removed_hashes = block_diff.removed_hashes
 
-        new_hash_set = {b.content_hash for b in new_blocks}
-        existing_hash_set = set(existing_hash_map.keys())
-
-        # 3. Classify blocks
-        retained_hashes = new_hash_set & existing_hash_set
-        added_blocks = [b for b in new_blocks if b.content_hash not in existing_hash_set]
-        removed_hashes = existing_hash_set - new_hash_set
+        # Build existing hash map for reconciliation later
+        existing_hash_map: dict[str, dict[str, object]] = {
+            str(b['content_hash']): b for b in existing_blocks
+        }
 
         logger.info(
             f'Incremental diff for document {note_id}: '
@@ -586,45 +586,21 @@ class ExtractionEngine:
             f'coverage={page_index_output.coverage_ratio:.1%}'
         )
 
-        # 2. Block-level diff
-        existing_hash_map: dict[str, dict[str, object]] = {
-            str(b['content_hash']): b for b in existing_blocks
-        }
-        existing_hash_set = set(existing_hash_map.keys())
-        new_hash_set = {b.id for b in page_index_output.blocks}
-
-        retained_hashes = new_hash_set & existing_hash_set
-        new_block_hashes = new_hash_set - existing_hash_set
-        removed_hashes = existing_hash_set - new_hash_set
-
-        # 3. Node-level change detection for new blocks
+        # 2-3. Block-level diff with node-level change detection
         prev_nodes = await storage.get_note_nodes(session, note_id)
         prev_node_hash_set = {str(n['node_hash']) for n in prev_nodes}
 
-        # Build block_hash -> constituent node hashes from new PageIndexOutput
-        block_node_hashes: dict[str, set[str]] = defaultdict(set)
+        pi_diff = diff_page_index_blocks(page_index_output, existing_blocks, prev_node_hash_set)
+        retained_hashes = pi_diff.retained_hashes
+        boundary_shift_hashes = pi_diff.boundary_shift_hashes
+        content_changed_hashes = pi_diff.content_changed_hashes
+        removed_hashes = pi_diff.removed_hashes
+        block_node_hashes = pi_diff.block_node_hashes
 
-        def _walk_nodes(nodes: list[TOCNode]) -> None:
-            for n in nodes:
-                if n.content_hash:
-                    block_hash = page_index_output.node_to_block_map.get(n.id)
-                    if block_hash:
-                        block_node_hashes[block_hash].add(n.content_hash)
-                _walk_nodes(n.children)
-
-        _walk_nodes(page_index_output.toc)
-
-        # Classify new blocks
-        boundary_shift_hashes: set[str] = set()
-        content_changed_hashes: set[str] = set()
-        for block in page_index_output.blocks:
-            if block.id not in new_block_hashes:
-                continue  # retained
-            node_hashes = block_node_hashes.get(block.id, set())
-            if node_hashes and node_hashes.issubset(prev_node_hash_set):
-                boundary_shift_hashes.add(block.id)
-            else:
-                content_changed_hashes.add(block.id)
+        # Build existing hash map for reconciliation later
+        existing_hash_map: dict[str, dict[str, object]] = {
+            str(b['content_hash']): b for b in existing_blocks
+        }
 
         logger.info(
             f'PageIndex incremental diff for {note_id}: '
