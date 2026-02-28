@@ -2,7 +2,6 @@ import math
 import asyncio
 import logging
 from datetime import timedelta, datetime, timezone
-from typing import Any
 from uuid import UUID
 
 import dspy
@@ -42,6 +41,7 @@ from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.extraction.utils import parse_datetime, normalize_timestamp
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
+    build_thin_tree,
     diff_blocks,
     diff_page_index_blocks,
 )
@@ -777,28 +777,7 @@ class ExtractionEngine:
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
-        toc_id_to_hash: dict[str, str] = {}
-
-        def _collect_hashes(node: TOCNode) -> None:
-            h = node.content_hash or content_hash_md5(node.content or node.title)
-            toc_id_to_hash[node.id] = h
-            for child in node.children:
-                _collect_hashes(child)
-
-        for toc_node in page_index_output.toc:
-            _collect_hashes(toc_node)
-
-        def _replace_ids(tree_dict: dict[str, Any]) -> dict[str, Any]:
-            old_id = tree_dict.get('id', '')
-            tree_dict['id'] = toc_id_to_hash.get(old_id, old_id)
-            tree_dict['children'] = [_replace_ids(c) for c in tree_dict.get('children', [])]
-            return tree_dict
-
-        thin_tree = [
-            _replace_ids(n.tree_without_text(min_node_tokens=min_tokens))
-            for n in page_index_output.toc
-            if min_tokens <= 0 or (n.token_estimate or 0) > min_tokens
-        ]
+        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
         await storage.update_note_page_index(session, note_id, thin_tree)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
@@ -893,31 +872,8 @@ class ExtractionEngine:
             min_node_tokens=min_tokens,
         )
 
-        # 3. Build a mapping from TOCNode id → node_hash so the thin tree
-        #    uses stable hashes as IDs (matching the DB `node_hash` column).
-        #    This allows LLM-returned section IDs to be looked up directly.
-        toc_id_to_hash: dict[str, str] = {}
-
-        def _collect_hashes(node: TOCNode) -> None:
-            h = node.content_hash or content_hash_md5(node.content or node.title)
-            toc_id_to_hash[node.id] = h
-            for child in node.children:
-                _collect_hashes(child)
-
-        for toc_node in page_index_output.toc:
-            _collect_hashes(toc_node)
-
-        def _replace_ids(tree_dict: dict[str, Any]) -> dict[str, Any]:
-            old_id = tree_dict.get('id', '')
-            tree_dict['id'] = toc_id_to_hash.get(old_id, old_id)
-            tree_dict['children'] = [_replace_ids(c) for c in tree_dict.get('children', [])]
-            return tree_dict
-
-        thin_tree = [
-            _replace_ids(n.tree_without_text(min_node_tokens=min_tokens))
-            for n in page_index_output.toc
-            if min_tokens <= 0 or (n.token_estimate or 0) > min_tokens
-        ]
+        # 3. Build hash-stable thin tree for storage
+        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
         await storage.update_note_page_index(session, effective_doc_id, thin_tree)
 
         # Resolve and store the document title from the TOC / block summaries.

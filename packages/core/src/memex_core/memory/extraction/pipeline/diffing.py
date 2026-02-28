@@ -16,10 +16,13 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
+from typing import Any
+
 from memex_core.memory.extraction.models import (
     PageIndexOutput,
     StableBlock,
     TOCNode,
+    content_hash_md5,
 )
 
 logger = logging.getLogger('memex.core.memory.extraction.pipeline.diffing')
@@ -171,3 +174,79 @@ def diff_page_index_blocks(
         removed_hashes=removed_hashes,
         block_node_hashes=block_node_hashes,
     )
+
+
+# ---------------------------------------------------------------------------
+# Thin-tree construction helpers
+# ---------------------------------------------------------------------------
+
+
+def collect_toc_hashes(toc: list[TOCNode]) -> dict[str, str]:
+    """Build a mapping from TOC node ID to its content hash.
+
+    For each node, uses ``content_hash`` if available, otherwise
+    computes ``content_hash_md5`` from ``content`` (or ``title``
+    as fallback).
+
+    Args:
+        toc: The root-level TOC nodes from a ``PageIndexOutput``.
+
+    Returns:
+        Dict mapping node ID to its content hash string.
+    """
+    result: dict[str, str] = {}
+
+    def _collect(node: TOCNode) -> None:
+        h = node.content_hash or content_hash_md5(node.content or node.title)
+        result[node.id] = h
+        for child in node.children:
+            _collect(child)
+
+    for n in toc:
+        _collect(n)
+    return result
+
+
+def replace_tree_ids(
+    tree_dict: dict[str, Any],
+    id_map: dict[str, str],
+) -> dict[str, Any]:
+    """Recursively replace ``id`` fields in a thin-tree dict using *id_map*.
+
+    Args:
+        tree_dict: A dict produced by ``TOCNode.tree_without_text()``.
+        id_map: Mapping from old IDs to new IDs (typically content hashes).
+
+    Returns:
+        The same dict, mutated in-place, with ``id`` fields replaced.
+    """
+    old_id = tree_dict.get('id', '')
+    tree_dict['id'] = id_map.get(old_id, old_id)
+    tree_dict['children'] = [replace_tree_ids(c, id_map) for c in tree_dict.get('children', [])]
+    return tree_dict
+
+
+def build_thin_tree(
+    toc: list[TOCNode],
+    min_node_tokens: int = 0,
+) -> list[dict[str, Any]]:
+    """Build a hash-stable thin tree from TOC nodes.
+
+    Combines ``collect_toc_hashes`` and ``replace_tree_ids`` to produce
+    a list of thin-tree dicts with ``id`` fields replaced by content
+    hashes. This is the format stored by
+    ``storage.update_note_page_index``.
+
+    Args:
+        toc: Root-level TOC nodes from a ``PageIndexOutput``.
+        min_node_tokens: Minimum token count for a node to be included.
+
+    Returns:
+        List of thin-tree dicts ready for storage.
+    """
+    id_map = collect_toc_hashes(toc)
+    return [
+        replace_tree_ids(n.tree_without_text(min_node_tokens=min_node_tokens), id_map)
+        for n in toc
+        if min_node_tokens <= 0 or (n.token_estimate or 0) > min_node_tokens
+    ]

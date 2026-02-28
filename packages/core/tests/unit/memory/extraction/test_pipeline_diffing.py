@@ -14,8 +14,11 @@ from memex_core.memory.extraction.models import (
 from memex_core.memory.extraction.pipeline.diffing import (
     BlockDiffResult,
     PageIndexDiffResult,
+    build_thin_tree,
+    collect_toc_hashes,
     diff_blocks,
     diff_page_index_blocks,
+    replace_tree_ids,
     _walk_nodes,
 )
 
@@ -421,3 +424,128 @@ class TestDiffPageIndexBlocks:
 
         # All three node hashes should be in the block's node_hashes
         assert len(result.block_node_hashes['hash_1']) == 3
+
+
+# ===========================================================================
+# Thin-tree builder tests
+# ===========================================================================
+
+
+class TestCollectTocHashes:
+    """Tests for collect_toc_hashes."""
+
+    def test_flat_nodes(self) -> None:
+        """Collect hashes from flat list of nodes."""
+        node_a = _make_toc_node('a', content='content A')
+        node_b = _make_toc_node('b', content='content B')
+
+        result = collect_toc_hashes([node_a, node_b])
+
+        assert node_a.id in result
+        assert node_b.id in result
+        assert result[node_a.id] == node_a.content_hash
+        assert result[node_b.id] == node_b.content_hash
+
+    def test_nested_nodes(self) -> None:
+        """Collect hashes from nested tree structure."""
+        child = _make_toc_node('child', content='child content')
+        parent = _make_toc_node('parent', content='parent content', children=[child])
+
+        result = collect_toc_hashes([parent])
+
+        assert parent.id in result
+        assert child.id in result
+
+    def test_node_without_content_uses_title(self) -> None:
+        """Nodes without content use title for hash."""
+        node = _make_toc_node('x', content=None)
+
+        result = collect_toc_hashes([node])
+
+        from memex_core.memory.extraction.models import content_hash_md5
+
+        assert result[node.id] == content_hash_md5(node.title)
+
+    def test_empty_toc(self) -> None:
+        """Empty TOC returns empty dict."""
+        assert collect_toc_hashes([]) == {}
+
+
+class TestReplaceTreeIds:
+    """Tests for replace_tree_ids."""
+
+    def test_replaces_top_level_id(self) -> None:
+        """Replace ID at the top level."""
+        tree = {'id': 'old_id', 'children': []}
+        id_map = {'old_id': 'new_hash'}
+
+        result = replace_tree_ids(tree, id_map)
+
+        assert result['id'] == 'new_hash'
+
+    def test_replaces_nested_ids(self) -> None:
+        """Replace IDs recursively in nested children."""
+        tree = {
+            'id': 'parent',
+            'children': [
+                {'id': 'child', 'children': []},
+            ],
+        }
+        id_map = {'parent': 'hash_parent', 'child': 'hash_child'}
+
+        result = replace_tree_ids(tree, id_map)
+
+        assert result['id'] == 'hash_parent'
+        assert result['children'][0]['id'] == 'hash_child'
+
+    def test_unmapped_id_kept(self) -> None:
+        """IDs not in the map are kept as-is."""
+        tree = {'id': 'unknown', 'children': []}
+
+        result = replace_tree_ids(tree, {})
+
+        assert result['id'] == 'unknown'
+
+
+class TestBuildThinTree:
+    """Tests for build_thin_tree."""
+
+    def test_basic_thin_tree(self) -> None:
+        """Build thin tree from TOC nodes."""
+        node = _make_toc_node('n1', content='some content')
+        node.token_estimate = 100
+
+        result = build_thin_tree([node])
+
+        assert len(result) == 1
+        assert result[0]['id'] == node.content_hash
+
+    def test_min_node_tokens_filter(self) -> None:
+        """Nodes below min_node_tokens are excluded."""
+        big_node = _make_toc_node('big', content='big content')
+        big_node.token_estimate = 100
+        small_node = _make_toc_node('small', content='x')
+        small_node.token_estimate = 5
+
+        result = build_thin_tree([big_node, small_node], min_node_tokens=10)
+
+        assert len(result) == 1
+
+    def test_empty_toc(self) -> None:
+        """Empty TOC produces empty thin tree."""
+        assert build_thin_tree([]) == []
+
+    def test_ids_are_content_hashes(self) -> None:
+        """Verify all IDs in the thin tree are content hashes, not UUIDs."""
+        child = _make_toc_node('c', content='child text')
+        child.token_estimate = 50
+        parent = _make_toc_node('p', content='parent text', children=[child])
+        parent.token_estimate = 100
+
+        result = build_thin_tree([parent])
+
+        assert result[0]['id'] == parent.content_hash
+        # Children that pass the filter should also have hash IDs
+        child_entries = result[0].get('children', [])
+        if child_entries:
+            assert child_entries[0]['id'] == child.content_hash
