@@ -196,6 +196,7 @@ function lineageToGraph(
       content: entry.content,
       highlighted: false,
       dimmed: false,
+      raw: entry.raw,
     } satisfies LineageNodeData,
   }));
 
@@ -306,8 +307,8 @@ export function LineageGraph({ lineage, onNodeClick }: LineageGraphProps) {
     (_: React.MouseEvent, node: Node) => {
       setSelectedNodeId((prev) => (prev === node.id ? null : node.id));
       if (onNodeClick) {
-        const raw = (node.data as unknown as { raw?: Record<string, unknown> }).raw;
-        onNodeClick(node.id, raw ?? {});
+        const nodeData = node.data as LineageNodeData;
+        onNodeClick(node.id, nodeData.raw ?? {});
       }
     },
     [onNodeClick],

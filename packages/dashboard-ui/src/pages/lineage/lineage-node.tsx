@@ -8,6 +8,7 @@ export interface LineageNodeData extends Record<string, unknown> {
   content?: string;
   highlighted?: boolean;
   dimmed?: boolean;
+  raw?: Record<string, unknown>;
 }
 
 const NODE_STYLES: Record<string, { bg: string; border: string; icon: LucideIcon }> = {
@@ -33,7 +34,7 @@ function LineageNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className="rounded-lg border px-3 py-2 shadow-md transition-all duration-150 hover:scale-105 hover:shadow-lg"
+      className="rounded-lg border px-3 py-2 shadow-md transition-all duration-150 hover:scale-105 hover:shadow-lg cursor-pointer"
       style={{
         backgroundColor: style.bg,
         borderColor: nodeData.highlighted ? '#ffffff' : style.border,
