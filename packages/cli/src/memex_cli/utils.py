@@ -95,7 +95,8 @@ class LazyTyperGroup(TyperGroup):
             elif cmd_name == 'dashboard':
                 console.print('[bold red]Error:[/bold red] Dashboard requires Node.js.')
                 console.print(
-                    'Install Node.js and run: [cyan]cd packages/dashboard && npm install[/cyan]'
+                    'Install the dashboard package from: '
+                    '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
                 )
                 raise typer.Exit(code=1)
 

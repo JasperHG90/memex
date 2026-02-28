@@ -48,7 +48,10 @@ def check_dashboard_installed() -> None:
     dashboard_dir = _get_dashboard_dir()
     if not dashboard_dir.exists():
         console.print(f'[bold red]Error:[/bold red] Dashboard UI not found at {dashboard_dir}')
-        console.print('Run: [cyan]cd packages/dashboard && npm install[/cyan]')
+        console.print(
+            'Install the dashboard package from: '
+            '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
+        )
         raise typer.Exit(1)
 
 
@@ -95,8 +98,12 @@ def start(
         dist_dir = dashboard_dir / 'dist'
         if not dist_dir.exists():
             console.print(
-                '[bold red]Error:[/bold red] Production build not found. '
-                'Run [cyan]npm run build[/cyan] in the dashboard directory first.'
+                '[bold red]Error:[/bold red] Production build not found at '
+                f'[cyan]{dist_dir}[/cyan].'
+            )
+            console.print(
+                'Install the dashboard package from: '
+                '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
             )
             raise typer.Exit(1)
         cmd = ['npx', 'serve', 'dist', '-l', f'tcp://{host}:{port}']
