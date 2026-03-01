@@ -180,7 +180,7 @@ class RetrievalEngine:
             effective_limit = 50
 
         use_reranker = self.reranker is not None and request.rerank
-        candidate_depth = min(max(effective_limit * 3, 50), 50) if use_reranker else effective_limit
+        candidate_depth = max(effective_limit * 3, 50) if use_reranker else effective_limit
 
         # 4. Perform Retrieval (Fused across all queries)
         filters = request.filters or {}
@@ -252,8 +252,9 @@ class RetrievalEngine:
             sim_matrix = self._build_hybrid_similarity_matrix(
                 cosine_matrix, jaccard_matrix, w_emb, w_ent
             )
+            mmr_limit = effective_limit if token_budget is not None else request.limit
             final_results = self._apply_mmr_diversity(
-                final_results, sim_matrix, mmr_lambda, request.limit
+                final_results, sim_matrix, mmr_lambda, mmr_limit
             )
 
         # 10. Update Resonance
