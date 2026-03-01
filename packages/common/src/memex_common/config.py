@@ -494,7 +494,7 @@ class RetrievalConfig(BaseModel):
         description='Number of candidates per strategy in multi-strategy RRF retrieval.',
     )
     mmr_lambda: float | None = Field(
-        default=None,
+        default=0.9,
         description='MMR diversity lambda. None=disabled, 0.9=conservative.',
     )
     mmr_embedding_weight: float = Field(
