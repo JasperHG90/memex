@@ -7,7 +7,7 @@ from memex_common.schemas import MemoryUnitDTO, FactTypes
 
 @pytest.mark.asyncio
 async def test_contradicted_marker_in_search_output(mock_api, mcp_client):
-    """Test that contradicted opinions show [CONTRADICTED - Low Confidence]."""
+    """Test that contradicted opinions show [CONTRADICTED]."""
     mock_api.search.return_value = [
         MemoryUnitDTO(
             id=uuid4(),
@@ -25,7 +25,7 @@ async def test_contradicted_marker_in_search_output(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_search', {'query': 'qmd', 'limit': 1})
     output_text = result.content[0].text
 
-    assert '[CONTRADICTED - Low Confidence]' in output_text
+    assert '[CONTRADICTED]' in output_text
 
 
 @pytest.mark.asyncio

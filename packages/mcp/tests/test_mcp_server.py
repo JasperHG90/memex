@@ -77,9 +77,9 @@ async def test_mcp_search_tool(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_search', {'query': 'python language', 'limit': 5})
 
     assert 'Found 1 results' in result.content[0].text
-    assert '[Type: world]' in result.content[0].text
+    assert '[world]' in result.content[0].text
     assert 'Python is a popular programming language' in result.content[0].text
-    assert '(Score: 0.95)' in result.content[0].text
+    assert '(0.95)' in result.content[0].text
 
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
@@ -107,7 +107,7 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_search', {'query': 'event'})
     text = result.content[0].text
 
-    assert '(Date: 2025-06-15' in text
+    assert '(2025-06-15' in text
 
 
 @pytest.mark.asyncio
