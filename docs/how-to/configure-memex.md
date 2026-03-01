@@ -4,7 +4,7 @@ This guide shows you how to set up and customize Memex configuration using YAML 
 
 ## Prerequisites
 
-* Memex installed (`uv pip install memex-cli`)
+* Memex installed (`uv tool install git+https://github.com/JasperHG90/memex.git`)
 
 ## Configuration Sources and Precedence
 

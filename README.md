@@ -196,6 +196,13 @@ Memex is built as a monorepo:
 - **`packages/dashboard`**: The view. React + Vite web UI for exploring your knowledge graph.
 - **`packages/openclaw`**: The plugin. Memex memory integration for OpenClaw agents.
 
+## Acknowledgements
+
+Memex builds on ideas and code from these projects:
+
+- **[Hindsight](https://github.com/vectorize-io/hindsight)** — the Hindsight retention engine formed the basis for Memex's memory system (extraction, retrieval, and reflection).
+- **[PageIndex](https://github.com/VectifyAI/PageIndex)** — inspired the hierarchical page index used for structured note retrieval.
+
 ## License
 
-[MIT](LICENSE.txt)
+[MIT](LICENSE.txt). See [NOTICES](NOTICES) for third-party attributions.
