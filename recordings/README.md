@@ -60,6 +60,20 @@ Available recordings:
 
 The `.tape` files in `cli/` are VHS format files kept for reference but are not used for recording (VHS has compatibility issues in containerized environments).
 
+### Claude Code integration (simulated)
+
+The `cli/record-claude-code.sh` script produces a standalone GIF showing Claude Code using Memex as long-term memory via MCP tools. This recording uses **simulated terminal output** (printf/echo with ANSI colors) rather than a live CLI session, since Claude Code interactions are non-deterministic.
+
+```bash
+bash recordings/cli/record-claude-code.sh
+# or
+just record-claude-code
+```
+
+| Name | Output |
+|------|--------|
+| `claude_code` | `assets/memex_claude_code.gif` |
+
 ### Dashboard recordings (Playwright)
 
 Each script in `dashboard/scripts/` drives a headless browser to capture a dashboard interaction:

@@ -66,6 +66,11 @@ memex memory search "How does Python handle memory management?"
 > [!NOTE]
 > Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
 
+### Claude Code Integration
+Give Claude Code persistent memory across sessions.
+
+![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
+
 ### Memory Search
 Search across your knowledge base with TEMPR multi-strategy retrieval.
 
