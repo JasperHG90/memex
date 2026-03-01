@@ -41,7 +41,8 @@ mcp = FastMCP(
 Workflow:
 1. Discovery: `memex_search` for facts/entities; `memex_note_search` for source documents.
 2. Reading: `memex_get_page_index` → `memex_get_node`. Fall back to `memex_read_note` for small notes.
-3. AVOID: `memex_list_notes` for discovery — use search tools instead.
+3. Feedback: `memex_submit_evidence` to adjust opinion confidence; `memex_get_evidence_log` for audit trail.
+4. AVOID: `memex_list_notes` for discovery — use search tools instead.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -582,13 +583,17 @@ async def memex_search(
             date = res.mentioned_at or res.occurred_start
             date_str = f' ({date.isoformat()})' if date else ''
 
-            # Include confidence annotation for contradicted/disputed opinions
+            # Include confidence annotation for opinions
             confidence = res.confidence_score if hasattr(res, 'confidence_score') else None
             confidence_str = ''
-            if confidence is not None and confidence < 0.3:
-                confidence_str = ' [CONTRADICTED]'
-            elif confidence is not None and confidence < 0.5:
-                confidence_str = ' [Disputed]'
+            if confidence is not None:
+                pct = int(round(confidence * 100))
+                if confidence < 0.3:
+                    confidence_str = f' [Opinion: {pct}% — CONTRADICTED]'
+                elif confidence < 0.5:
+                    confidence_str = f' [Opinion: {pct}% — Disputed]'
+                else:
+                    confidence_str = f' [Opinion: {pct}%]'
 
             output.append(
                 f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
@@ -1136,6 +1141,88 @@ async def memex_get_memory_unit(
     except Exception as e:
         logging.error(f'Get memory unit failed: {e}', exc_info=True)
         raise ToolError(f'Get memory unit failed: {e}')
+
+
+@mcp.tool(
+    name='memex_submit_evidence',
+    description=(
+        "Submit evidence to adjust an opinion's confidence score. "
+        "Performs a Bayesian update on the memory unit's confidence. "
+        'Valid evidence types: corroboration, contradiction, source_reliability, '
+        'temporal_consistency, cross_reference, user_validation, user_rejection, '
+        'llm_assessment, opinion_merge.'
+    ),
+)
+async def memex_submit_evidence(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    evidence_type: Annotated[str, Field(description='The type of evidence to submit.')],
+    description: Annotated[
+        str | None,
+        Field(default=None, description='Optional description of the evidence.'),
+    ] = None,
+) -> str:
+    """Submit evidence to adjust an opinion's confidence score."""
+    try:
+        api = get_api(ctx)
+        try:
+            result = await api.adjust_belief(unit_id, evidence_type, description=description)
+        except ValueError as e:
+            return f'Error: {e}'
+
+        before_pct = int(round(result.confidence_before * 100))
+        after_pct = int(round(result.confidence_after * 100))
+        return (
+            f'Evidence recorded: {evidence_type}\n'
+            f'Confidence: {before_pct}% \u2192 {after_pct}%\n'
+            f'Parameters: \u03b1={result.alpha:.1f}, \u03b2={result.beta:.1f}'
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Submit evidence failed: {e}', exc_info=True)
+        raise ToolError(f'Submit evidence failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_evidence_log',
+    description=(
+        'Retrieve the evidence audit trail for a memory unit. '
+        'Shows the history of confidence adjustments with before/after scores.'
+    ),
+)
+async def memex_get_evidence_log(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    limit: Annotated[int, Field(description='Max entries to return.')] = 20,
+) -> str:
+    """Retrieve the evidence audit trail for a memory unit."""
+    try:
+        api = get_api(ctx)
+        try:
+            logs = await api.get_evidence_log(unit_id, limit=limit)
+        except ValueError as e:
+            return f'Error: {e}'
+
+        if not logs:
+            return 'No evidence log entries found for this memory unit.'
+
+        lines = [f'Evidence log ({len(logs)} entries):']
+        for log in logs:
+            before_pct = int(round(log.confidence_before * 100))
+            after_pct = int(round(log.confidence_after * 100))
+            desc = f' \u2014 {log.description}' if log.description else ''
+            lines.append(
+                f'  [{log.created_at}] {log.evidence_type}: {before_pct}% \u2192 {after_pct}%{desc}'
+            )
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Get evidence log failed: {e}', exc_info=True)
+        raise ToolError(f'Get evidence log failed: {e}')
 
 
 @mcp.tool(
