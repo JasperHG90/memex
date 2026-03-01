@@ -57,7 +57,7 @@ async def test_list_vaults_error_raises_tool_error(mock_api, mcp_client):
 async def test_list_notes_returns_formatted_list(mock_api, mcp_client):
     n1 = NoteDTO(
         id=uuid4(),
-        doc_metadata={'title': 'First Note'},
+        title='First Note',
         vault_id=uuid4(),
         created_at=dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc),
     )
