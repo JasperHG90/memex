@@ -1,5 +1,6 @@
 import asyncio
 import os
+import posixpath
 
 import logging
 from typing import Generic, TypeVar, cast, Self, AsyncGenerator
@@ -11,7 +12,12 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
 
-from memex_core.config import LocalFileStoreConfig, FileStoreConfig
+from memex_core.config import (
+    LocalFileStoreConfig,
+    S3FileStoreConfig,
+    GCSFileStoreConfig,
+    FileStoreConfig,
+)
 
 T = TypeVar('T', bound=FileStoreConfig)
 
@@ -35,26 +41,39 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         """Initialize the storage backend and return the filesystem object."""
         pass
 
-    @cached(cache=LRUCache(maxsize=128))
     def join_path(self, key: str) -> str:
-        """Join root path with a key
+        """Join root path with a key using POSIX semantics (cloud-safe).
 
         Args:
-            key (str): relative path to the file, e.g. path/to/file.txt
+            key: relative path to the file, e.g. path/to/file.txt
 
         Returns:
-            str: joined path, e.g. /home/vscode/workspace/path/to/file.txt
+            Joined path under root.
 
         Raises:
             ValueError: If root path is not set or key resolves outside root.
         """
         if not self.config.root:
             raise ValueError('Root path is not set.')
-        root_real = os.path.realpath(self.config.root)
-        joined = os.path.realpath(os.path.join(root_real, key.lstrip('/')))
-        if not joined.startswith(root_real + os.sep) and joined != root_real:
+        root = self.config.root.rstrip('/')
+        stripped = key.lstrip('/')
+        if not stripped:
+            return root
+        joined = posixpath.normpath(f'{root}/{stripped}')
+        # Reject if normpath resolved .. components above root
+        if not joined.startswith(root + '/') and joined != root:
             raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
         return joined
+
+    async def check_connection(self) -> bool:
+        """Verify the backend is reachable by listing the root."""
+        try:
+            async with self._semaphore:
+                await self._fs._ls(self.join_path(''), detail=False)
+            return True
+        except Exception:
+            self._logger.warning('Connection check failed for %s', self.__class__.__name__)
+            return False
 
     def begin_staging(self, transaction_id: str):
         """If using a transaction, then this is setting up the staging process
@@ -260,6 +279,132 @@ class LocalAsyncFileStore(BaseAsyncFileStore[LocalFileStoreConfig]):
         """
         return AsyncFileSystemWrapper(LocalFileSystem())
 
+    @cached(cache=LRUCache(maxsize=128))
+    def join_path(self, key: str) -> str:
+        """Join root path with a key using OS-native path resolution.
+
+        Args:
+            key: relative path to the file, e.g. path/to/file.txt
+
+        Returns:
+            Joined absolute path under root.
+
+        Raises:
+            ValueError: If root path is not set or key resolves outside root.
+        """
+        if not self.config.root:
+            raise ValueError('Root path is not set.')
+        root_real = os.path.realpath(self.config.root)
+        joined = os.path.realpath(os.path.join(root_real, key.lstrip('/')))
+        if not joined.startswith(root_real + os.sep) and joined != root_real:
+            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
+        return joined
+
+
+class S3AsyncFileStore(BaseAsyncFileStore['S3FileStoreConfig']):
+    """Async File store implementation for S3-compatible storage (AWS S3, MinIO)."""
+
+    def initialize(self) -> AsyncFileSystem:
+        try:
+            from s3fs import S3FileSystem
+        except ImportError:
+            raise ImportError(
+                'S3 file store requires the s3fs package. Install with: uv add "memex-core[s3]"'
+            )
+        cfg = self.config
+        kwargs: dict = {'anon': False}
+        if cfg.endpoint_url:
+            kwargs['endpoint_url'] = cfg.endpoint_url
+            kwargs['client_kwargs'] = {'endpoint_url': cfg.endpoint_url}
+        if cfg.region:
+            kwargs['client_kwargs'] = {**kwargs.get('client_kwargs', {}), 'region_name': cfg.region}
+        if cfg.access_key_id:
+            kwargs['key'] = cfg.access_key_id.get_secret_value()
+        if cfg.secret_access_key:
+            kwargs['secret'] = cfg.secret_access_key.get_secret_value()
+        if cfg.session_token:
+            kwargs['token'] = cfg.session_token.get_secret_value()
+        return S3FileSystem(**kwargs)
+
+    def join_path(self, key: str) -> str:
+        """Join bucket/prefix with a key. Returns bare path (no s3:// protocol).
+
+        Args:
+            key: relative path to the file.
+
+        Returns:
+            Joined path as bucket/prefix/key.
+
+        Raises:
+            ValueError: If path traversal is detected.
+        """
+        bucket = self.config.bucket
+        prefix = self.config.root.strip('/')
+        stripped = key.lstrip('/')
+
+        if prefix:
+            root = f'{bucket}/{prefix}'
+        else:
+            root = bucket
+
+        if not stripped:
+            return root
+
+        joined = posixpath.normpath(f'{root}/{stripped}')
+        if not joined.startswith(root + '/') and joined != root:
+            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
+        return joined
+
+
+class GCSAsyncFileStore(BaseAsyncFileStore['GCSFileStoreConfig']):
+    """Async File store implementation for Google Cloud Storage."""
+
+    def initialize(self) -> AsyncFileSystem:
+        try:
+            from gcsfs import GCSFileSystem
+        except ImportError:
+            raise ImportError(
+                'GCS file store requires the gcsfs package. Install with: uv add "memex-core[gcs]"'
+            )
+        cfg = self.config
+        kwargs: dict = {}
+        if cfg.project:
+            kwargs['project'] = cfg.project
+        if cfg.token:
+            kwargs['token'] = cfg.token
+        if cfg.endpoint_url:
+            kwargs['endpoint_url'] = cfg.endpoint_url
+        return GCSFileSystem(**kwargs)
+
+    def join_path(self, key: str) -> str:
+        """Join bucket/prefix with a key. Returns bare path (no gs:// protocol).
+
+        Args:
+            key: relative path to the file.
+
+        Returns:
+            Joined path as bucket/prefix/key.
+
+        Raises:
+            ValueError: If path traversal is detected.
+        """
+        bucket = self.config.bucket
+        prefix = self.config.root.strip('/')
+        stripped = key.lstrip('/')
+
+        if prefix:
+            root = f'{bucket}/{prefix}'
+        else:
+            root = bucket
+
+        if not stripped:
+            return root
+
+        joined = posixpath.normpath(f'{root}/{stripped}')
+        if not joined.startswith(root + '/') and joined != root:
+            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
+        return joined
+
 
 # Alias for type hinting
 FileStore = BaseAsyncFileStore
@@ -269,6 +414,10 @@ def get_filestore(config: FileStoreConfig) -> FileStore:
     """Factory function to get the appropriate file store backend."""
     if isinstance(config, LocalFileStoreConfig):
         return LocalAsyncFileStore(config)
+    if isinstance(config, S3FileStoreConfig):
+        return S3AsyncFileStore(config)
+    if isinstance(config, GCSFileStoreConfig):
+        return GCSAsyncFileStore(config)
 
     # Fallback for dicts or other models where 'type' might be present
     config_dict = config.model_dump() if hasattr(config, 'model_dump') else config
@@ -276,5 +425,9 @@ def get_filestore(config: FileStoreConfig) -> FileStore:
 
     if ctype == 'local':
         return LocalAsyncFileStore(cast(LocalFileStoreConfig, config))
+    if ctype == 's3':
+        return S3AsyncFileStore(cast(S3FileStoreConfig, config))
+    if ctype == 'gcs':
+        return GCSAsyncFileStore(cast(GCSFileStoreConfig, config))
 
     raise ValueError(f'Unsupported file store type: {ctype}')

@@ -49,6 +49,11 @@ dependencies = [
     "alembic>=1.15.0",
 ]
 
+[project.optional-dependencies]
+s3 = ["s3fs>=2024.6.0"]
+gcs = ["gcsfs>=2024.6.0"]
+cloud = ["s3fs>=2024.6.0", "gcsfs>=2024.6.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

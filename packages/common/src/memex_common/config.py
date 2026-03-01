@@ -139,7 +139,41 @@ class LocalFileStoreConfig(FileStoreConfig):
         return str(plb.Path(self.root).expanduser().resolve())
 
 
-FileStoreBackend = Annotated[Union[LocalFileStoreConfig], Field(discriminator='type')]
+class S3FileStoreConfig(FileStoreConfig):
+    """Configuration for S3-compatible file stores (AWS S3, MinIO, etc.)."""
+
+    type: Literal['s3'] = 's3'
+    bucket: str = Field(..., description='S3 bucket name.')
+    root: str = Field(default='', description='Key prefix inside the bucket.')
+    region: str | None = Field(default=None, description='AWS region name.')
+    endpoint_url: str | None = Field(
+        default=None, description='Custom endpoint URL (e.g. for MinIO).'
+    )
+    access_key_id: SecretStr | None = Field(default=None, description='AWS access key ID.')
+    secret_access_key: SecretStr | None = Field(default=None, description='AWS secret access key.')
+    session_token: SecretStr | None = Field(default=None, description='AWS session token.')
+
+
+class GCSFileStoreConfig(FileStoreConfig):
+    """Configuration for Google Cloud Storage file stores."""
+
+    type: Literal['gcs'] = 'gcs'
+    bucket: str = Field(..., description='GCS bucket name.')
+    root: str = Field(default='', description='Key prefix inside the bucket.')
+    project: str | None = Field(default=None, description='GCP project ID.')
+    token: str | None = Field(
+        default=None,
+        description='Path to JSON service account key, or "google_default" / "anon".',
+    )
+    endpoint_url: str | None = Field(
+        default=None, description='Custom endpoint URL (e.g. for GCS emulator).'
+    )
+
+
+FileStoreBackend = Annotated[
+    Union[LocalFileStoreConfig, S3FileStoreConfig, GCSFileStoreConfig],
+    Field(discriminator='type'),
+]
 
 
 class PostgresInstanceConfig(BaseModel):
@@ -786,6 +820,8 @@ __all__ = [
     'ConfigWithRoot',
     'FileStoreConfig',
     'LocalFileStoreConfig',
+    'S3FileStoreConfig',
+    'GCSFileStoreConfig',
     'FileStoreBackend',
     'PostgresInstanceConfig',
     'PostgresMetaStoreConfig',

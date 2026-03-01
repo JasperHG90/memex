@@ -70,5 +70,5 @@ def test_note_page_index_invalid_uuid(runner, mock_api, monkeypatch):
     monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(note_app, ['page-index', 'not-a-uuid'])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert 'Invalid UUID' in result.stdout
