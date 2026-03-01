@@ -1,6 +1,6 @@
 [project]
 name = "memex-common"
-version = "0.0.0"
+dynamic = ["version"]
 description = "Memex common provides shared utilities and components for the Memex project."
 authors = [
   {name="Jasper Ginn", email="jasperginn@gmail.com"}
@@ -17,5 +17,9 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = "../.."

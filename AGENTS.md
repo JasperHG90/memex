@@ -116,7 +116,7 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 4. Learned a user preference or workflow pattern
 5. Resolved a tricky configuration/environment issue
 
-**Keep notes concise** (5-15 lines). Capture the key insight, not a detailed report. No per-file changelogs.
+**Keep notes concise** (hard maximum: 300 tokens). Capture the key insight, not a detailed report. No per-file changelogs.
 
 A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 </constraint>

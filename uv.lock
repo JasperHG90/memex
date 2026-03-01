@@ -2618,7 +2618,6 @@ dev = [
 
 [[package]]
 name = "memex-cli"
-version = "0.0.1"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "aiofiles" },
@@ -2652,11 +2651,10 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
-provides-extras = ["server", "mcp"]
+provides-extras = ["mcp", "server"]
 
 [[package]]
 name = "memex-common"
-version = "0.0.0"
 source = { editable = "packages/common" }
 dependencies = [
     { name = "httpx" },
@@ -2679,7 +2677,6 @@ requires-dist = [
 
 [[package]]
 name = "memex-core"
-version = "0.0.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "aioclock" },
@@ -2754,7 +2751,7 @@ requires-dist = [
     { name = "gunicorn", specifier = ">=21.2.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-text-splitters", specifier = ">=1.1.0" },
-    { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx", "outlook"], specifier = ">=0.1.2" },
+    { name = "markitdown", extras = ["docx", "outlook", "pdf", "pptx", "xlsx"], specifier = ">=0.1.2" },
     { name = "memex-common", editable = "packages/common" },
     { name = "metaphone", specifier = ">=0.6" },
     { name = "onnxruntime", specifier = ">=1.23.2" },
@@ -2777,14 +2774,13 @@ requires-dist = [
     { name = "trafilatura", specifier = ">=2.0.0" },
     { name = "uvicorn", specifier = ">=0.40.0" },
 ]
-provides-extras = ["s3", "gcs", "cloud"]
+provides-extras = ["cloud", "gcs", "s3"]
 
 [package.metadata.requires-dev]
 dev = []
 
 [[package]]
 name = "memex-mcp"
-version = "0.0.0"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "fastmcp" },
