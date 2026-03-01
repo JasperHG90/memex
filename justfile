@@ -127,6 +127,10 @@ recording-seed:
 record-cli:
     bash recordings/cli/record-cli.sh
 
+# Record Claude Code + Memex integration GIF (simulated session)
+record-claude-code:
+    bash recordings/cli/record-claude-code.sh
+
 # Record dashboard GIFs via Playwright
 record-dashboard:
     cd recordings/dashboard && npx tsx scripts/record-overview.ts
@@ -136,4 +140,4 @@ record-dashboard:
     cd recordings/dashboard && npx tsx scripts/record-lineage.ts
 
 # Record all GIFs (server + dashboard must be running)
-record-all: recording-seed record-cli record-dashboard
+record-all: recording-seed record-cli record-claude-code record-dashboard
