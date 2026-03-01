@@ -1,6 +1,6 @@
 [project]
 name = "memex-core"
-version = "0.0.0"
+dynamic = ["version"]
 description = "Memex core provides hindsight-style memory management and an API interface."
 authors = [
   {name="Jasper Ginn", email="jasperginn@gmail.com"}
@@ -55,8 +55,12 @@ gcs = ["gcsfs>=2024.6.0"]
 cloud = ["s3fs>=2024.6.0", "gcsfs>=2024.6.0"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = "../.."
 
 [tool.uv.sources]
 memex-common = { workspace = true }
