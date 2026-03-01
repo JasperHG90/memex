@@ -1,5 +1,35 @@
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
+
+from memex_core.memory.reflect.prompts import ReflectMemoryContext
+from memex_core.memory.sql_models import MemoryUnit
+
+
+def build_memory_context(
+    memories: list[MemoryUnit],
+    *,
+    index_map: dict[UUID, int] | None = None,
+) -> list[ReflectMemoryContext]:
+    """Convert MemoryUnits to ReflectMemoryContext with confidence populated.
+
+    Args:
+        memories: List of MemoryUnit objects.
+        index_map: Optional mapping from unit ID to display index.
+            If None, uses sequential 0-based indexing.
+    """
+    contexts = []
+    for i, unit in enumerate(memories):
+        idx = index_map[unit.id] if index_map else i
+        contexts.append(
+            ReflectMemoryContext(
+                index_id=idx,
+                content=unit.formatted_fact_text,
+                occurred=(unit.event_date or datetime.now(timezone.utc)).isoformat(),
+                confidence=unit.confidence_score,
+            )
+        )
+    return contexts
 
 
 def create_citation_map(uuids: list[str]) -> tuple[dict[str, int], dict[int, str]]:

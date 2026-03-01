@@ -16,6 +16,7 @@ async def test_get_lineage_mental_model_stub_from_entity(api, mock_session):
 
     mock_mm_result = MagicMock()
     mock_mm_result.first.return_value = None
+    mock_mm_result.all.return_value = []
 
     mock_ent_result = MagicMock()
     # Create an Entity without vault_id (as per schema)

@@ -13,7 +13,14 @@ from memex_core.config import MemexConfig
 def mock_session():
     from sqlmodel.ext.asyncio.session import AsyncSession
 
-    return AsyncMock(spec=AsyncSession)
+    session = AsyncMock(spec=AsyncSession)
+    # Configure exec() to return a mock whose .all() is a regular (non-async) method
+    # returning an empty list by default. This handles the confidence score query
+    # and any other DB lookups in Phase 4.
+    exec_result = MagicMock()
+    exec_result.all.return_value = []
+    session.exec.return_value = exec_result
+    return session
 
 
 @pytest.fixture

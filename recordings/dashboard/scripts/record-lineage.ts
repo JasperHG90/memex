@@ -12,62 +12,89 @@ const OUTPUT_PATH = resolve(__dirname, '../../../assets/memex_dashboard_lineage.
 
 async function main() {
   console.log('Recording: Lineage');
-  await waitForServices(API_URL, DASHBOARD_URL);
+  const urls = await waitForServices(API_URL, DASHBOARD_URL);
 
   const recorder = new GifRecorder(OUTPUT_PATH, { fps: 6 });
   const page = await recorder.start();
 
   try {
-    // Navigate to lineage page
-    await page.goto(`${DASHBOARD_URL}/lineage`, { waitUntil: 'networkidle' });
+    // Navigate to lineage page and dismiss dialogs
+    await page.goto(`${urls.dashboardUrl}/lineage`, { waitUntil: 'networkidle' });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1500);
 
-    // NOW start capturing — show the empty state briefly
+    // Start capturing — show empty state briefly
     recorder.startCapture();
     await page.waitForTimeout(1500);
 
-    // Search for Python entity
+    // Type search for Python entity
     const searchInput = page.locator('input[placeholder*="Search entities"]');
     await searchInput.click();
     await page.waitForTimeout(500);
-    await searchInput.pressSequentially('Python', { delay: 80 });
+    await searchInput.pressSequentially('Python', { delay: 100 });
+    await page.waitForTimeout(1500);
+
+    // Select the Python result from dropdown
+    const pythonBtn = page.locator('button:has-text("Python")').first();
+    if (await pythonBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await pythonBtn.click();
+    }
+
+    // Wait for lineage graph to fully render
+    await page.waitForSelector('.react-flow__node', { timeout: 15000 });
     await page.waitForTimeout(2000);
 
-    // Select the first matching result
-    const pythonResult = page.locator('text=/Python/').first();
-    if (await pythonResult.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await pythonResult.click();
+    // Click "Fit View" to frame the graph nicely
+    const fitBtn = page.getByRole('button', { name: 'Fit View' });
+    if (await fitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await fitBtn.click();
     }
+    // *** Linger on the full graph overview ***
+    await page.waitForTimeout(4000);
 
-    // Wait for the lineage graph to render
-    await page.waitForSelector('.react-flow__node', { timeout: 15000 });
-    await page.waitForTimeout(3000);
-
-    // Slowly scroll/pan to show the full graph
-    await page.mouse.move(640, 400);
-    for (let i = 0; i < 3; i++) {
-      await page.mouse.wheel(0, 150);
-      await page.waitForTimeout(1000);
-    }
-
-    // Hover over a node to show details
+    // Click on a node to open the detail panel
     const nodes = page.locator('.react-flow__node');
     const nodeCount = await nodes.count();
     console.log(`Found ${nodeCount} lineage nodes`);
 
-    if (nodeCount > 2) {
+    if (nodeCount > 1) {
       try {
-        await nodes.nth(2).hover({ force: true, timeout: 5000 });
-        await page.waitForTimeout(2000);
+        await nodes.nth(1).click({ force: true, timeout: 5000 });
       } catch {
         // Skip
       }
     }
+    // *** Linger on the node highlight + detail panel ***
+    await page.waitForTimeout(4000);
 
-    // Scroll back
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-    await page.waitForTimeout(2000);
+    // Zoom in using the UI button (3 clicks)
+    const zoomInBtn = page.getByRole('button', { name: 'Zoom In' });
+    for (let i = 0; i < 4; i++) {
+      if (await zoomInBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await zoomInBtn.click();
+      }
+      await page.waitForTimeout(400);
+    }
+    // *** Linger on zoomed view ***
+    await page.waitForTimeout(3000);
+
+    // Click a different node while zoomed in
+    if (nodeCount > 3) {
+      try {
+        await nodes.nth(3).click({ force: true, timeout: 5000 });
+      } catch {
+        // Skip
+      }
+    }
+    // *** Linger on zoomed detail ***
+    await page.waitForTimeout(3000);
+
+    // Zoom back out with Fit View
+    if (await fitBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await fitBtn.click();
+    }
+    // *** Linger on final overview ***
+    await page.waitForTimeout(4000);
 
     await recorder.stop();
     console.log('Done: Lineage');

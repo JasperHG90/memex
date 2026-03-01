@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { FileText, Brain, Eye, Lightbulb, Tag, File, type LucideIcon } from 'lucide-react';
+import { VaultBadge } from '@/components/shared/vault-badge';
 
 export interface LineageNodeData extends Record<string, unknown> {
   label: string;
@@ -9,6 +10,7 @@ export interface LineageNodeData extends Record<string, unknown> {
   highlighted?: boolean;
   dimmed?: boolean;
   raw?: Record<string, unknown>;
+  vaultId?: string;
 }
 
 const NODE_STYLES: Record<string, { bg: string; border: string; icon: LucideIcon }> = {
@@ -55,6 +57,7 @@ function LineageNodeComponent({ data }: NodeProps<LineageNodeType>) {
           {data.entityType.replace('_', ' ')}
         </span>
       </div>
+      {data.vaultId && <VaultBadge vaultId={data.vaultId} className="mb-1" />}
       <div className="text-sm font-medium text-foreground truncate">{data.label}</div>
       {truncatedContent && (
         <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{truncatedContent}</div>

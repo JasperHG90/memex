@@ -229,13 +229,45 @@ class ReflectionService:
         unit_uuid: str | UUID,
         evidence_type_key: str,
         description: str | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """Adjust the confidence of a memory unit based on new evidence."""
         async with self.metastore.session() as session:
-            await self._extraction.adjust_belief(
+            result = await self._extraction.adjust_belief(
                 session, str(unit_uuid), evidence_type_key, description
             )
             await session.commit()
+            return result
+
+    async def get_evidence_log(self, unit_id: UUID, *, limit: int = 20) -> list[dict]:
+        """Retrieve the evidence audit trail for a memory unit."""
+        async with self.metastore.session() as session:
+            from sqlmodel import select, col
+            from memex_core.memory.sql_models import EvidenceLog
+
+            statement = (
+                select(EvidenceLog)
+                .where(col(EvidenceLog.unit_id) == unit_id)
+                .order_by(col(EvidenceLog.created_at).desc())
+                .limit(limit)
+            )
+            result = await session.exec(statement)
+            logs = result.all()
+            return [
+                {
+                    'id': log.id,
+                    'unit_id': log.unit_id,
+                    'evidence_type': log.evidence_type,
+                    'description': log.description,
+                    'alpha_before': log.alpha_before,
+                    'beta_before': log.beta_before,
+                    'alpha_after': log.alpha_after,
+                    'beta_after': log.beta_after,
+                    'confidence_before': log.alpha_before / (log.alpha_before + log.beta_before),
+                    'confidence_after': log.alpha_after / (log.alpha_after + log.beta_after),
+                    'created_at': log.created_at,
+                }
+                for log in logs
+            ]
 
     async def get_reflection_queue_batch(
         self,

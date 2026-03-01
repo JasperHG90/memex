@@ -16,8 +16,7 @@ You have been invoked via the `/recall` slash command.
 
 2. **Search strategy** (execute in order, stop when you have useful results):
    a. Call `memex_search` with the query to retrieve atomic facts and memory units.
-   b. If the results are insufficient or the user wants a synthesized answer, call
-      `memex_note_search` with `summarize=true`.
+   b. If the results are insufficient, call `memex_note_search` to search source documents.
    c. If keyword-based search yields nothing, call `memex_list_entities` to browse
       the knowledge graph for relevant entities.
 

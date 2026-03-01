@@ -584,9 +584,9 @@ class TestHookTemplateContent:
         content = _load_template('hooks/on_session_start.sh')
         assert 'command -v uv' in content
 
-    def test_session_start_checks_jq(self):
+    def test_session_start_uses_compact_mode(self):
         content = _load_template('hooks/on_session_start.sh')
-        assert 'command -v jq' in content
+        assert '--compact' in content
 
     def test_pre_compact_exists_and_has_shebang(self):
         content = _load_template('hooks/on_pre_compact.sh')

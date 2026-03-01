@@ -3,6 +3,8 @@
 import os
 import signal
 import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 import shutil
 
@@ -27,6 +29,14 @@ app = typer.Typer(name='dashboard', help='Manage the Memex Dashboard.', no_args_
 
 SERVICE = 'dashboard'
 
+GITHUB_REPO = 'JasperHG90/memex'
+DASHBOARD_ASSET = 'dashboard-dist.tar.gz'
+
+
+def _get_install_dir() -> Path:
+    """Return the standard install location for the dashboard."""
+    return Path(user_data_dir('memex')) / 'dashboard'
+
 
 def _get_dashboard_dir() -> Path:
     """Locate the dashboard directory."""
@@ -35,7 +45,7 @@ def _get_dashboard_dir() -> Path:
     if mono_path.exists():
         return mono_path
     # Check common install location
-    return Path(user_data_dir('memex')) / 'dashboard'
+    return _get_install_dir()
 
 
 def check_dashboard_installed() -> None:
@@ -46,13 +56,87 @@ def check_dashboard_installed() -> None:
         raise typer.Exit(1)
 
     dashboard_dir = _get_dashboard_dir()
-    if not dashboard_dir.exists():
-        console.print(f'[bold red]Error:[/bold red] Dashboard UI not found at {dashboard_dir}')
-        console.print(
-            'Install the dashboard package from: '
-            '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
-        )
+    if not (dashboard_dir / 'dist').exists():
+        console.print('[bold red]Error:[/bold red] Dashboard is not installed.')
+        console.print('Run [cyan]memex dashboard install[/cyan] to download and install it.')
         raise typer.Exit(1)
+
+
+def _check_api_server(server_url: str) -> bool:
+    """Check if the Memex API server is reachable. Returns True if healthy."""
+    health_url = f'{server_url}/api/v1/health'
+    try:
+        resp = httpx.get(health_url, timeout=5.0)
+        return resp.status_code == 200
+    except httpx.RequestError:
+        return False
+
+
+def _download_dashboard_asset(version: str | None) -> Path:
+    """Download dashboard-dist.tar.gz from GitHub releases. Returns path to temp file."""
+    if version:
+        url = f'https://github.com/{GITHUB_REPO}/releases/download/{version}/{DASHBOARD_ASSET}'
+    else:
+        url = f'https://github.com/{GITHUB_REPO}/releases/latest/download/{DASHBOARD_ASSET}'
+
+    console.print(f'Downloading dashboard from [cyan]{url}[/cyan] ...')
+    tmp = tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False)
+    try:
+        with httpx.stream('GET', url, follow_redirects=True, timeout=60.0) as resp:
+            if resp.status_code == 404:
+                console.print(
+                    f'[bold red]Error:[/bold red] Release asset not found at [cyan]{url}[/cyan].'
+                )
+                if version:
+                    console.print(
+                        f'Check that version [cyan]{version}[/cyan] exists at: '
+                        f'[cyan]https://github.com/{GITHUB_REPO}/releases[/cyan]'
+                    )
+                raise typer.Exit(1)
+            resp.raise_for_status()
+            for chunk in resp.iter_bytes():
+                tmp.write(chunk)
+        tmp.close()
+        return Path(tmp.name)
+    except httpx.RequestError as e:
+        console.print(f'[bold red]Error:[/bold red] Download failed: {e}')
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def install(
+    version: str = typer.Option(
+        None, '--version', '-v', help='Release tag to install (e.g. v0.0.3a). Default: latest.'
+    ),
+    force: bool = typer.Option(False, '--force', '-f', help='Overwrite existing installation.'),
+) -> None:
+    """Download and install the Memex Dashboard from GitHub releases."""
+    if not shutil.which('node'):
+        console.print('[bold red]Error:[/bold red] Node.js is not installed or not on PATH.')
+        console.print('Install Node.js from: [cyan]https://nodejs.org/[/cyan]')
+        raise typer.Exit(1)
+
+    install_dir = _get_install_dir()
+
+    if (install_dir / 'dist').exists() and not force:
+        console.print(f'[yellow]Dashboard is already installed at {install_dir}.[/yellow]')
+        console.print('Use [cyan]--force[/cyan] to overwrite.')
+        raise typer.Exit(0)
+
+    tarball = _download_dashboard_asset(version)
+    try:
+        # Clean existing install
+        if install_dir.exists():
+            shutil.rmtree(install_dir)
+        install_dir.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(tarball, 'r:gz') as tf:
+            tf.extractall(install_dir, filter='data')
+
+        console.print(f'[green]Dashboard installed to {install_dir}.[/green]')
+        console.print('Start it with: [cyan]memex dashboard start[/cyan]')
+    finally:
+        tarball.unlink(missing_ok=True)
 
 
 @app.command()
@@ -70,6 +154,16 @@ def start(
     config = parse_memex_config()
     host = host or config.dashboard.host
     port = port or config.dashboard.port
+    server_url = config.server_url
+
+    # Verify the API server is live before starting
+    if not _check_api_server(server_url):
+        console.print(
+            f'[bold red]Error:[/bold red] Memex API server is not reachable at '
+            f'[cyan]{server_url}[/cyan].'
+        )
+        console.print('Start the server first with: [cyan]memex server start[/cyan]')
+        raise typer.Exit(1)
 
     # Check for existing process
     existing_pid = read_pid(SERVICE)
@@ -97,22 +191,33 @@ def start(
     else:
         dist_dir = dashboard_dir / 'dist'
         if not dist_dir.exists():
+            console.print('[bold red]Error:[/bold red] Dashboard is not installed.')
+            console.print('Run [cyan]memex dashboard install[/cyan] to download and install it.')
+            raise typer.Exit(1)
+        serve_script = dashboard_dir / 'serve.cjs'
+        if not serve_script.exists():
             console.print(
-                '[bold red]Error:[/bold red] Production build not found at '
-                f'[cyan]{dist_dir}[/cyan].'
-            )
-            console.print(
-                'Install the dashboard package from: '
-                '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
+                '[bold red]Error:[/bold red] serve.cjs not found. '
+                'Run [cyan]memex dashboard install[/cyan] to update.'
             )
             raise typer.Exit(1)
-        cmd = ['npx', 'serve', 'dist', '-l', f'tcp://{host}:{port}']
+        cmd = [
+            'node',
+            str(serve_script),
+            '--host',
+            host,
+            '--port',
+            str(port),
+            '--api',
+            server_url,
+        ]
 
     mode = 'development' if dev else 'production'
     log = log_file_path(SERVICE)
 
     if daemon:
         console.print(f'Starting dashboard in daemon mode on {host}:{port}')
+        console.print(f'API proxy target: {server_url}')
         console.print(f'Logs will be written to: {log}')
 
         with open(log, 'a') as lf:
@@ -127,6 +232,8 @@ def start(
         console.print(f'[green]Dashboard started (PID {proc.pid}).[/green]')
     else:
         console.print(f'Starting dashboard in {mode} mode on {host}:{port}')
+        if not dev:
+            console.print(f'API proxy target: {server_url}')
         proc = subprocess.Popen(
             cmd,
             cwd=dashboard_dir,

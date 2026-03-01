@@ -22,7 +22,10 @@ def client():
     mock_metastore = MagicMock()
     mock_metastore.session = MagicMock(return_value=mock_session)
 
-    mock_api = SimpleNamespace(metastore=mock_metastore)
+    mock_filestore = MagicMock()
+    mock_filestore.check_connection = AsyncMock(return_value=True)
+
+    mock_api = SimpleNamespace(metastore=mock_metastore, filestore=mock_filestore)
     app.state.api = mock_api
 
     yield TestClient(app)
@@ -51,7 +54,10 @@ class TestReadyEndpoint:
     def test_ready_returns_200_when_db_reachable(self, client):
         response = client.get('/api/v1/ready')
         assert response.status_code == 200
-        assert response.json() == {'status': 'ok'}
+        data = response.json()
+        assert data['status'] == 'ok'
+        assert data['database'] == 'ok'
+        assert data['filestore'] == 'ok'
 
     def test_ready_returns_503_when_db_unreachable(self, client):
         # Make the session's execute raise an exception
@@ -64,7 +70,9 @@ class TestReadyEndpoint:
 
         response = client.get('/api/v1/ready')
         assert response.status_code == 503
-        assert response.json() == {'status': 'unavailable'}
+        data = response.json()
+        assert data['status'] == 'unavailable'
+        assert data['database'] == 'unavailable'
 
     def test_ready_returns_503_on_session_failure(self, client):
         # Make opening the session itself fail
@@ -76,7 +84,9 @@ class TestReadyEndpoint:
 
         response = client.get('/api/v1/ready')
         assert response.status_code == 503
-        assert response.json() == {'status': 'unavailable'}
+        data = response.json()
+        assert data['status'] == 'unavailable'
+        assert data['database'] == 'unavailable'
 
     def test_ready_is_get_only(self, client):
         response = client.post('/api/v1/ready')

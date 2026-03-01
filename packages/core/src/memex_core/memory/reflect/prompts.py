@@ -46,6 +46,9 @@ class ReflectMemoryContext(BaseModel):
     index_id: int = Field(description='The integer reference ID for this memory (0, 1, ...).')
     content: str = Field(description='The core fact text.')
     occurred: str = Field(description='ISO timestamp or relative time.')
+    confidence: float | None = Field(
+        default=None, description='Confidence score (0-1) for opinion-type memories'
+    )
 
 
 class ReflectObservationContext(BaseModel):
@@ -121,6 +124,8 @@ class UpdateExistingSignature(dspy.Signature):
     For each existing observation, check the provided potential evidence.
     Extract EXACT quotes that support the observation.
     Flag if any evidence strictly contradicts the observation.
+    Evidence with confidence >= 0.7 is well-supported. Confidence < 0.3 indicates contradicted
+    opinions — treat with skepticism. Evidence without confidence is factual and reliable.
     """
 
     recent_memories: list[ReflectMemoryContext] = dspy.InputField(
@@ -158,6 +163,8 @@ class ValidatePhaseSignature(dspy.Signature):
     Validate candidate observations against retrieved evidence.
     Reject candidates that are hallucinations or lack strong evidence.
     For accepted candidates, extract EXACT quotes from the supporting memories.
+    Evidence with confidence >= 0.7 is well-supported. Confidence < 0.3 indicates contradicted
+    opinions — treat with skepticism. Evidence without confidence is factual and reliable.
 
     STRICT RULE: All titles and content MUST be written in English.
     """
@@ -189,6 +196,9 @@ class ReflectEvidenceContext(BaseModel):
     index_id: int = Field(description='The integer reference ID for this evidence.')
     quote: str = Field(description='The exact text quote.')
     occurred: str = Field(description='ISO timestamp or relative time.')
+    confidence: float | None = Field(
+        default=None, description='Confidence score (0-1) for opinion-type memories'
+    )
 
 
 class ReflectComparisonObservation(HasEvidenceIndices):
@@ -208,6 +218,8 @@ class ComparePhaseSignature(dspy.Signature):
 
     The 'evidence_context' list contains all unique facts/evidence referenced by the observations.
     Observations refer to these facts by their 0-based index in 'evidence_context'.
+    Evidence with confidence >= 0.7 is well-supported. Confidence < 0.3 indicates contradicted
+    opinions — treat with skepticism. Evidence without confidence is factual and reliable.
 
     STRICT RULE: All output observations MUST be in English.
     """

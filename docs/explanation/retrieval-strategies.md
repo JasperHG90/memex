@@ -115,9 +115,60 @@ When `expand_query` is enabled, Memex uses an LLM to generate query variations b
 
 Each variation runs through all five strategies independently. Results are then fused together, with the original query weighted 2x higher than expansions.
 
-## Candidate Pool and Reranking
+## Post-Fusion Pipeline
 
-Each strategy returns up to `candidate_pool_size` results (default: 60). After RRF fusion, the top results can optionally pass through a cross-encoder reranker for more precise scoring. The reranker evaluates each (query, fact) pair directly, which is more accurate than embedding similarity but too slow to run on all candidates.
+After RRF fusion produces a single ranked list, results pass through several post-processing steps before being returned. These steps refine the ranking based on signals that are orthogonal to relevance.
+
+### Confidence Weighting
+
+Memory units that are *opinions* (as opposed to facts) carry a Bayesian confidence score. After RRF fusion, the pipeline applies confidence weighting to adjust rankings:
+
+```
+final_score = position_score × confidence_weight(score)
+```
+
+Where `confidence_weight` is:
+- **Facts** (world, experience): weight = `1.0` — facts are trusted fully
+- **Opinions** with confidence score: weight = `0.3 + 0.7 × score` — a linear scale with a floor of 0.3
+
+This means a well-supported opinion (confidence 0.9) gets weight 0.93, while a contradicted opinion (confidence 0.1) gets weight 0.37. The floor of 0.3 ensures that even low-confidence opinions are never completely suppressed — they are demoted, not hidden.
+
+In search results, opinions are annotated with confidence labels:
+- `[CONTRADICTED — treat with skepticism]` — confidence < 30%
+- `[Disputed — mixed evidence]` — confidence 30-50%
+- `[Opinion]` — confidence 50-70%
+- `[Well-supported opinion]` — confidence ≥ 70%
+
+### MMR Diversity Filtering
+
+After confidence weighting, Maximal Marginal Relevance (MMR) filtering removes near-duplicate results. This is especially important when multiple retrieval strategies surface the same cluster of facts — for example, 10 facts about Python classes from a single tutorial note.
+
+**The MMR formula:**
+
+```
+MMR(candidate) = λ × relevance − (1 − λ) × max_similarity(candidate, already_selected)
+```
+
+Where:
+- `λ` (lambda) controls the trade-off: `1.0` = pure relevance (no diversity), `0.0` = max diversity
+- Default: `0.9` (conservative — only suppresses near-duplicates)
+
+**Hybrid similarity kernel:**
+
+MMR uses a hybrid similarity measure that combines two signals:
+
+| Signal | Weight | Method |
+|:-------|:-------|:-------|
+| Embedding cosine | `0.6` | `1 - (a.embedding <=> b.embedding)` via pgvector |
+| Entity Jaccard | `0.4` | `|entities_a ∩ entities_b| / |entities_a ∪ entities_b|` |
+
+This means two facts are considered "similar" if they have both similar vector representations *and* mention the same entities. The entity Jaccard component catches cases where facts are semantically similar but about different subjects.
+
+When two candidates have identical MMR scores, a temporal tiebreaker (ε=0.01 × recency) favors more recent facts.
+
+### Cross-Encoder Reranking
+
+The top results can optionally pass through a cross-encoder reranker for more precise scoring. The reranker evaluates each (query, fact) pair directly, which is more accurate than embedding similarity but too slow to run on all candidates.
 
 ## Debug Mode
 
@@ -143,6 +194,9 @@ server:
       similarity_threshold: 0.3         # pg_trgm threshold for entity matching
       temporal_decay_days: 30.0         # Half-life for temporal scoring
       temporal_decay_base: 2.0          # Exponential base for decay
+      mmr_lambda: 0.9                   # MMR diversity (null=disabled, 0.9=conservative)
+      mmr_embedding_weight: 0.6         # Cosine weight in hybrid similarity kernel
+      mmr_entity_weight: 0.4            # Entity Jaccard weight in hybrid similarity kernel
       retrieval_strategies:
         semantic: true
         keyword: true

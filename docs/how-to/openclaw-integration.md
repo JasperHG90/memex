@@ -20,10 +20,10 @@ npm install
 npm run build
 ```
 
-Or add it as a dependency in your OpenClaw project:
+Or download the package tarball from [GitHub Releases](https://github.com/JasperHG90/memex/releases) and install it:
 
 ```bash
-npm install memory-memex
+npm install memory-memex-<version>.tgz
 ```
 
 ### 2. Register the Plugin

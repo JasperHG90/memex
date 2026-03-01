@@ -27,10 +27,10 @@ async def test_mcp_search_expanded_output(mock_api, mcp_client):
 
     output_text = result.content[0].text
     assert 'Found 1 results' in output_text
-    assert f'[Unit ID: {unit_id}]' in output_text
-    assert f'[Note ID: {doc_id}]' in output_text
-    assert '[Type: world]' in output_text
-    assert '(Score: 0.95)' in output_text
+    assert f'[Unit: {unit_id}]' in output_text
+    assert f'[Note: {doc_id}]' in output_text
+    assert '[world]' in output_text
+    assert '(0.95)' in output_text
 
 
 @pytest.mark.asyncio

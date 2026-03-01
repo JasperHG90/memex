@@ -38,30 +38,11 @@ mcp = FastMCP(
     'memex_mcp',
     instructions="""Memex is a personal knowledge management system.
 
-Tools:
-- `memex_search`: Memory Search — find atomic facts, observations, mental models across the entire
-  knowledge graph using TEMPR (Temporal, Entity, Mental Model, Probabilistic Ranking). Use for
-  general questions ("What do we know about X?").
-- `memex_note_search`: Note/Document Search — find passages in raw source notes (PDFs, Markdown,
-  web scrapes) using hybrid RRF. Use summarize=True to synthesize, reason=True to identify relevant
-  sections. Use for specific quotes or scoped searches.
-- `memex_get_page_index`: Get the table of contents (section titles, summaries, node IDs) for a
-  note. Use BEFORE reading note content.
-- `memex_get_node`: Retrieve full text of a specific note section by node ID. Use after
-  `memex_get_page_index`.
-- `memex_read_note`: Read full note content. FALLBACK ONLY — prefer get_page_index + get_node.
-- `memex_get_lineage`: Trace provenance of a unit, observation, note, or mental model.
-- `memex_list_assets`: List file assets attached to a note by Note ID.
-- `memex_get_resource`: Retrieve a file asset by path (get paths from `memex_list_assets`).
-- `memex_list_entities` / `memex_get_entity`: Browse and inspect the entity/knowledge graph.
-- `memex_list_vaults`: List available vaults.
-- `memex_list_notes`: List notes in a vault. NOT useful for discovery — use search tools instead.
-
 Workflow:
-1. Discovery: `memex_search` for global facts/entities; `memex_note_search` for source documents.
-2. Reading: `memex_get_page_index` → `memex_get_node`. Only fall back to `memex_read_note` for
-   small notes.
-3. AVOID: Do not use `memex_list_notes` for discovery.
+1. Discovery: `memex_search` for facts/entities; `memex_note_search` for source documents.
+2. Reading: `memex_get_page_index` → `memex_get_node`. Fall back to `memex_read_note` for small notes.
+3. Feedback: `memex_submit_evidence` to adjust opinion confidence; `memex_get_evidence_log` for audit trail.
+4. AVOID: `memex_list_notes` for discovery — use search tools instead.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -426,7 +407,7 @@ async def memex_add_note(
     markdown_content: Annotated[
         str,
         Field(
-            description='Note content in markdown. Use `memex_get_template` to get the expected structure.',
+            description='Note content in markdown. Keep concise: 5-15 lines capturing the key insight, not a detailed report.',
         ),
     ],
     description: Annotated[
@@ -542,13 +523,23 @@ async def memex_add_note(
 async def memex_search(
     ctx: Context,
     query: Annotated[str, Field(description='The search query.')],
-    limit: Annotated[int, Field(description='Maximum number of results to return.')] = 10,
+    limit: Annotated[
+        int,
+        Field(description='Maximum number of results to return. Ignored when token_budget is set.'),
+    ] = 10,
     vault_ids: Annotated[
         list[str] | None,
         Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
     ] = None,
     token_budget: Annotated[
-        int | None, Field(description='Optional token budget for retrieval.')
+        int | None,
+        Field(
+            description=(
+                'Optional token budget for retrieval. '
+                'When set, this is the leading constraint — results are packed greedily '
+                'until the budget is reached and the limit parameter is ignored.'
+            )
+        ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
@@ -581,27 +572,32 @@ async def memex_search(
         output = [f"Found {len(results)} results for '{query}':\n"]
 
         for i, res in enumerate(results, 1):
-            score_str = f' (Score: {res.score:.2f})' if res.score is not None else ''
+            score_str = f' ({res.score:.2f})' if res.score is not None else ''
 
-            snippet = res.text[:500] + '...' if len(res.text) > 500 else res.text
+            snippet = res.text[:300] + '...' if len(res.text) > 300 else res.text
 
             unit_type = getattr(res, 'fact_type', 'unknown')
             unit_type = getattr(unit_type, 'value', unit_type)
 
             # Include date if available
             date = res.mentioned_at or res.occurred_start
-            date_str = f' (Date: {date.isoformat()})' if date else ''
+            date_str = f' ({date.isoformat()})' if date else ''
 
-            # Include confidence annotation for contradicted/disputed opinions
+            # Include confidence label for opinions
             confidence = res.confidence_score if hasattr(res, 'confidence_score') else None
             confidence_str = ''
-            if confidence is not None and confidence < 0.3:
-                confidence_str = ' [CONTRADICTED - Low Confidence]'
-            elif confidence is not None and confidence < 0.5:
-                confidence_str = ' [Disputed]'
+            if confidence is not None:
+                if confidence < 0.3:
+                    confidence_str = ' [CONTRADICTED — treat with skepticism]'
+                elif confidence < 0.5:
+                    confidence_str = ' [Disputed — mixed evidence]'
+                elif confidence < 0.7:
+                    confidence_str = ' [Opinion]'
+                else:
+                    confidence_str = ' [Well-supported opinion]'
 
             output.append(
-                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]'
+                f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
                 f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
 
@@ -617,8 +613,7 @@ async def memex_search(
     description=(
         'Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). '
         'Returns ranked notes with snippets. '
-        'Use for whole notes; use `memex_search` for atomic facts. '
-        'summarize=True synthesizes an answer; reason=True annotates relevant sections.'
+        'Use for whole notes; use `memex_search` for atomic facts.'
     ),
 )
 async def memex_note_search(
@@ -629,12 +624,13 @@ async def memex_note_search(
         bool, Field(description='Enable multi-query expansion via LLM.')
     ] = False,
     reason: Annotated[
-        bool, Field(description='Identify relevant sections with reasoning.')
-    ] = False,
-    summarize: Annotated[
         bool,
         Field(
-            description='Synthesize an answer from the retrieved sections (implies reason=True).'
+            description=(
+                'Identify relevant sections with reasoning. '
+                'Note: prefer doing your own reasoning over search results rather than '
+                'relying on this flag.'
+            )
         ),
     ] = False,
     vault_ids: Annotated[
@@ -650,7 +646,7 @@ async def memex_note_search(
             limit=limit,
             expand_query=expand_query,
             reason=reason,
-            summarize=summarize,
+            summarize=False,
             vault_ids=vault_ids,
         )
 
@@ -674,8 +670,8 @@ async def memex_note_search(
                 lines.append(f'- **Source:** {src}')
             if doc.snippets:
                 lines.append('- **Snippets:**')
-                for snippet in doc.snippets[:3]:
-                    text = snippet.text.strip()[:300]
+                for snippet in doc.snippets[:2]:
+                    text = snippet.text.strip()[:200]
                     prefix = f'*[{snippet.node_title}]* ' if snippet.node_title else ''
                     lines.append(f'  - {prefix}{text}')
             if doc.reasoning:
@@ -686,15 +682,7 @@ async def memex_note_search(
                     lines.append(f'  - Node `{node_id}`: {reasoning_text}')
             lines.append('')
 
-        if summarize:
-            if ans := next((r.answer for r in results if r.answer), None):
-                lines += ['---', '## Synthesized Answer', ans]
-
-        lines.append(
-            'Tip: Use `memex_get_page_index` with a Note ID to browse the table of contents.'
-        )
-        lines.append('Tip: Use `memex_get_node` with a Node ID to retrieve specific section text.')
-        lines.append('Tip: Use `memex_read_note` only as a fallback for small notes.')
+        lines.append('Use memex_get_page_index / memex_get_node to read sections.')
         return '\n'.join(lines)
 
     except Exception as e:
@@ -941,7 +929,7 @@ async def memex_list_notes(
 
         lines = [f'Found {len(notes)} note(s):\n']
         for i, n in enumerate(notes, 1):
-            title = n.doc_metadata.get('title') or n.doc_metadata.get('name') or 'Untitled'
+            title = n.title or 'Untitled'
             lines.append(f'{i}. **{title}** (ID: {n.id}, created: {n.created_at})')
 
         return '\n'.join(lines)
@@ -973,11 +961,11 @@ async def memex_list_entities(
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
 
         if query:
-            vault_ids = [resolved_vault_id] if resolved_vault_id else None
-            entities = await api.search_entities(query, limit=limit, vault_ids=vault_ids)
+            entities = await api.search_entities(query, limit=limit, vault_id=resolved_vault_id)
         else:
-            vault_ids = [resolved_vault_id] if resolved_vault_id else None
-            entities = [e async for e in api.list_entities_ranked(limit=limit, vault_ids=vault_ids)]
+            entities = [
+                e async for e in api.list_entities_ranked(limit=limit, vault_id=resolved_vault_id)
+            ]
 
         if not entities:
             return 'No entities found.'
@@ -1141,7 +1129,10 @@ async def memex_get_memory_unit(
         if unit.occurred_start:
             lines.append(f'**Occurred:** {unit.occurred_start} — {unit.occurred_end or "ongoing"}')
         if unit.metadata:
-            lines.append(f'**Metadata:** {unit.metadata}')
+            meta_str = str(unit.metadata)
+            if len(meta_str) > 200:
+                meta_str = meta_str[:197] + '...'
+            lines.append(f'**Metadata:** {meta_str}')
         lines.append(f'\n## Text\n{unit.text}')
 
         return '\n'.join(lines)
@@ -1151,6 +1142,88 @@ async def memex_get_memory_unit(
     except Exception as e:
         logging.error(f'Get memory unit failed: {e}', exc_info=True)
         raise ToolError(f'Get memory unit failed: {e}')
+
+
+@mcp.tool(
+    name='memex_submit_evidence',
+    description=(
+        "Submit evidence to adjust an opinion's confidence score. "
+        "Performs a Bayesian update on the memory unit's confidence. "
+        'Valid evidence types: corroboration, contradiction, source_reliability, '
+        'temporal_consistency, cross_reference, user_validation, user_rejection, '
+        'llm_assessment, opinion_merge.'
+    ),
+)
+async def memex_submit_evidence(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    evidence_type: Annotated[str, Field(description='The type of evidence to submit.')],
+    description: Annotated[
+        str | None,
+        Field(default=None, description='Optional description of the evidence.'),
+    ] = None,
+) -> str:
+    """Submit evidence to adjust an opinion's confidence score."""
+    try:
+        api = get_api(ctx)
+        try:
+            result = await api.adjust_belief(unit_id, evidence_type, description=description)
+        except ValueError as e:
+            return f'Error: {e}'
+
+        before_pct = int(round(result.confidence_before * 100))
+        after_pct = int(round(result.confidence_after * 100))
+        return (
+            f'Evidence recorded: {evidence_type}\n'
+            f'Confidence: {before_pct}% \u2192 {after_pct}%\n'
+            f'Parameters: \u03b1={result.alpha:.1f}, \u03b2={result.beta:.1f}'
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Submit evidence failed: {e}', exc_info=True)
+        raise ToolError(f'Submit evidence failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_evidence_log',
+    description=(
+        'Retrieve the evidence audit trail for a memory unit. '
+        'Shows the history of confidence adjustments with before/after scores.'
+    ),
+)
+async def memex_get_evidence_log(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    limit: Annotated[int, Field(description='Max entries to return.')] = 20,
+) -> str:
+    """Retrieve the evidence audit trail for a memory unit."""
+    try:
+        api = get_api(ctx)
+        try:
+            logs = await api.get_evidence_log(unit_id, limit=limit)
+        except ValueError as e:
+            return f'Error: {e}'
+
+        if not logs:
+            return 'No evidence log entries found for this memory unit.'
+
+        lines = [f'Evidence log ({len(logs)} entries):']
+        for log in logs:
+            before_pct = int(round(log.confidence_before * 100))
+            after_pct = int(round(log.confidence_after * 100))
+            desc = f' \u2014 {log.description}' if log.description else ''
+            lines.append(
+                f'  [{log.created_at}] {log.evidence_type}: {before_pct}% \u2192 {after_pct}%{desc}'
+            )
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Get evidence log failed: {e}', exc_info=True)
+        raise ToolError(f'Get evidence log failed: {e}')
 
 
 @mcp.tool(

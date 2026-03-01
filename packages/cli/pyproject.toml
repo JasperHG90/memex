@@ -1,6 +1,6 @@
 [project]
 name = "memex-cli"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Memex CLI provides command-line tools for interacting with the Memex system."
 authors = [
   {name="Jasper Ginn", email="jasperginn@gmail.com"}
@@ -31,5 +31,9 @@ memex-mcp = { workspace = true }
 memex = "memex_cli:app"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = "../.."

@@ -13,5 +13,5 @@ if [ -n "$stop_active" ]; then
 fi
 
 cat <<'EOF'
-{"decision": "block", "reason": "MEMORY CHECK: Did this turn involve: (1) completing a multi-step task, (2) diagnosing a bug, (3) an architectural/design decision, or (4) learning a user preference? If YES to any, call `memex_add_note` now with background=true, author='claude-code'. If nothing notable happened, you may stop."}
+{"decision": "block", "reason": "MEMORY CHECK: Save notable work (bug fix, decision, feature, preference) via memex_add_note. Skip if trivial."}
 EOF

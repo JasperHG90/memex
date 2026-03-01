@@ -12,9 +12,16 @@ class RetrievalRequest(SQLModel):
     """
 
     query: str = Field(..., description='The search query or context string.')
-    limit: int = Field(default=10, description='Maximum number of results to return.')
+    limit: int = Field(
+        default=10,
+        description='Maximum number of results to return. Ignored when token_budget is set.',
+    )
     token_budget: int | None = Field(
-        default=None, description='Maximum token budget for results (greedy packing).'
+        default=None,
+        description=(
+            'Maximum token budget for results (greedy packing). '
+            'When set, token_budget is the sole constraint — limit is ignored.'
+        ),
     )
 
     # Scoping
@@ -61,6 +68,10 @@ class RetrievalRequest(SQLModel):
         description=(
             'When True, collect per-strategy attribution (name, rank, RRF score, timing).'
         ),
+    )
+    mmr_lambda: float | None = Field(
+        default=None,
+        description='Per-request MMR lambda override. None=use config default.',
     )
 
     @model_validator(mode='after')

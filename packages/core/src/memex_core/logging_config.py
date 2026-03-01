@@ -62,3 +62,4 @@ def configure_logging(level: str = 'WARNING', json_output: bool = False) -> None
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(getattr(logging, level.upper(), logging.WARNING))
+    root.propagate = False

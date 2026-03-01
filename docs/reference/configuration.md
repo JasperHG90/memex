@@ -168,6 +168,9 @@ TEMPR multi-strategy search configuration.
 | `temporal_decay_base` | float | `2.0` | Base for temporal decay exponential: `score = base ^ (-days / decay_days)`. |
 | `rrf_k` | int | `60` | Reciprocal Rank Fusion constant. Higher values produce more uniform blending across strategies. |
 | `candidate_pool_size` | int | `60` | Number of candidates retrieved per strategy in multi-strategy RRF retrieval. |
+| `mmr_lambda` | float \| null | `0.9` | MMR (Maximal Marginal Relevance) diversity lambda for memory search. `1.0` = pure relevance, `0.0` = max diversity. `null` disables MMR. `0.9` is conservative — suppresses near-duplicates while preserving distinct results. |
+| `mmr_embedding_weight` | float | `0.6` | Weight of cosine similarity in the MMR hybrid similarity kernel. |
+| `mmr_entity_weight` | float | `0.4` | Weight of entity Jaccard similarity in the MMR hybrid similarity kernel. |
 
 ##### Retrieval Strategies (`server.memory.retrieval.retrieval_strategies`)
 
@@ -323,6 +326,7 @@ export MEMEX_SERVER__DEFAULT_MODEL__API_KEY=sk-...
 # Retrieval tuning
 export MEMEX_SERVER__MEMORY__RETRIEVAL__TOKEN_BUDGET=4000
 export MEMEX_SERVER__MEMORY__RETRIEVAL__RRF_K=80
+export MEMEX_SERVER__MEMORY__RETRIEVAL__MMR_LAMBDA=0.9
 
 # Reflection
 export MEMEX_SERVER__MEMORY__REFLECTION__BACKGROUND_REFLECTION_ENABLED=false
@@ -435,6 +439,7 @@ server:
       token_budget: 4000
       candidate_pool_size: 100
       rrf_k: 80
+      mmr_lambda: 0.9  # Conservative diversity filtering (null to disable)
 
     reflection:
       background_reflection_enabled: true

@@ -58,30 +58,16 @@ async def test_memex_note_search_no_results(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_with_synthesized_answer(mock_api, mcp_client):
-    """When answer=True and a result carries an answer, it appears in the output."""
-    doc = _make_result(title='Knowledge Base Article', answer='The answer is 42.')
+async def test_memex_note_search_always_passes_summarize_false(mock_api, mcp_client):
+    """MCP tool should always pass summarize=False to the API."""
+    doc = _make_result(title='Any Doc')
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'the answer', 'summarize': True}
-    )
-    text = result.content[0].text
+    await mcp_client.call_tool('memex_note_search', {'query': 'test'})
 
-    assert 'Synthesized Answer' in text
-    assert 'The answer is 42.' in text
-
-
-@pytest.mark.asyncio
-async def test_memex_note_search_answer_section_absent_when_no_answer(mock_api, mcp_client):
-    """Synthesized Answer section must not appear when no result carries an answer."""
-    doc = _make_result(title='Plain Doc', answer=None)
-    mock_api.search_notes.return_value = [doc]
-
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'topic', 'summarize': True})
-    text = result.content[0].text
-
-    assert 'Synthesized Answer' not in text
+    mock_api.search_notes.assert_called_once()
+    call_kwargs = mock_api.search_notes.call_args[1]
+    assert call_kwargs['summarize'] is False
 
 
 @pytest.mark.asyncio
@@ -98,11 +84,11 @@ async def test_memex_note_search_includes_source_uri(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_memex_note_search_includes_snippets(mock_api, mcp_client):
-    """Up to 3 text snippets should appear in the output."""
+    """Up to 2 text snippets should appear in the output."""
     snippets = [
         NoteSnippet(text='First relevant passage.', score=0.9),
         NoteSnippet(text='Second relevant passage.', score=0.8),
-        NoteSnippet(text='Third relevant passage.', score=0.7),
+        NoteSnippet(text='Third passage should be omitted.', score=0.7),
         NoteSnippet(text='Fourth passage should be omitted.', score=0.6),
     ]
     doc = _make_result(title='Rich Document', snippets=snippets)
@@ -113,7 +99,7 @@ async def test_memex_note_search_includes_snippets(mock_api, mcp_client):
 
     assert 'First relevant passage.' in text
     assert 'Second relevant passage.' in text
-    assert 'Third relevant passage.' in text
+    assert 'Third passage should be omitted.' not in text
     assert 'Fourth passage should be omitted.' not in text
 
 
@@ -159,12 +145,12 @@ async def test_memex_note_search_exception_handling(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_memex_note_search_tip_always_present(mock_api, mcp_client):
-    """The read_note tip should appear for every successful result."""
+    """The follow-up tip should appear for every successful result."""
     doc = _make_result(title='Any Doc')
     mock_api.search_notes.return_value = [doc]
 
     result = await mcp_client.call_tool('memex_note_search', {'query': 'anything'})
     text = result.content[0].text
 
-    assert 'memex_read_note' in text
-    assert 'Note ID' in text
+    assert 'memex_get_page_index' in text
+    assert 'memex_get_node' in text

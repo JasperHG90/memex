@@ -16,9 +16,11 @@ from memex_common.schemas import (
     IngestURLRequest,
     IngestFileRequest,
     AdjustBeliefRequest,
+    AdjustBeliefResponse,
     BatchJobStatus,
     CreateVaultRequest,
     DefaultVaultsResponse,
+    EvidenceLogDTO,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -483,14 +485,22 @@ class RemoteMemexAPI:
         unit_uuid: UUID | str,
         evidence_type_key: str,
         description: str | None = None,
-    ) -> None:
+    ) -> AdjustBeliefResponse:
         """Adjust belief confidence for a memory unit."""
         request = AdjustBeliefRequest(
             unit_uuid=UUID(str(unit_uuid)),
             evidence_type_key=evidence_type_key,
             description=description,
         )
-        await self._patch(f'memories/{unit_uuid}/belief', request)
+        result = await self._patch(f'memories/{unit_uuid}/belief', request)
+        return AdjustBeliefResponse(**result)
+
+    async def get_evidence_log(
+        self, unit_id: UUID | str, *, limit: int = 20
+    ) -> list[EvidenceLogDTO]:
+        """Retrieve the evidence audit trail for a memory unit."""
+        result = await self._get(f'memories/{unit_id}/evidence-log', params={'limit': limit})
+        return [EvidenceLogDTO(**item) for item in result]
 
     async def get_resource(self, path: str) -> bytes:
         """

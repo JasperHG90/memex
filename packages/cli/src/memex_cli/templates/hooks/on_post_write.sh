@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Memex Claude Code Hook — PostToolUse (Write/Edit)
 # After significant file writes, reminds the agent to consider saving to memory.
+# Throttled: only fires every 10th write to reduce context window overhead.
 set -euo pipefail
 
 # Read tool input from stdin
@@ -17,6 +18,21 @@ case "$file_path" in
         ;;
 esac
 
+# Throttle: only fire every 10th write
+STATE_DIR="${HOME}/.claude/.state"
+mkdir -p "$STATE_DIR"
+COUNTER_FILE="${STATE_DIR}/memex_write_count"
+
+count=0
+[ -f "$COUNTER_FILE" ] && count=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "$COUNTER_FILE"
+
+if [ $((count % 10)) -ne 0 ]; then
+    echo '{}'
+    exit 0
+fi
+
 cat <<'EOF'
-{"systemMessage": "A file was just written/edited. If this completed a meaningful task (feature, fix, refactor), consider saving a summary to long-term memory via `memex_add_note` (background: true, author: 'claude-code')."}
+{"systemMessage": "10+ files written this session. If you completed a meaningful task (feature, fix, refactor), save a summary via `memex_add_note` (background: true, author: 'claude-code')."}
 EOF

@@ -1,7 +1,15 @@
 import pytest
 from pathlib import Path
-from memex_core.storage.filestore import LocalAsyncFileStore
+from unittest.mock import patch, MagicMock
+
+from memex_core.storage.filestore import (
+    LocalAsyncFileStore,
+    S3AsyncFileStore,
+    GCSAsyncFileStore,
+    get_filestore,
+)
 from memex_core.config import LocalFileStoreConfig
+from memex_common.config import S3FileStoreConfig, GCSFileStoreConfig
 
 
 @pytest.fixture
@@ -210,3 +218,163 @@ class TestPathTraversalPrevention:
         """A .. that still resolves under root is allowed."""
         result = fresh_store.join_path('a/b/../c.txt')
         assert result == str(tmp_path / 'a' / 'c.txt')
+
+
+# ---------------------------------------------------------------------------
+# S3 join_path tests
+# ---------------------------------------------------------------------------
+
+
+class TestS3JoinPath:
+    """Tests for S3AsyncFileStore.join_path()."""
+
+    def _make_store(self, bucket: str = 'my-bucket', root: str = 'data') -> S3AsyncFileStore:
+        config = S3FileStoreConfig(bucket=bucket, root=root)
+        with patch(
+            'memex_core.storage.filestore.S3AsyncFileStore.initialize', return_value=MagicMock()
+        ):
+            return S3AsyncFileStore(config)
+
+    def test_normal_key(self) -> None:
+        store = self._make_store()
+        assert store.join_path('notes/file.md') == 'my-bucket/data/notes/file.md'
+
+    def test_empty_key(self) -> None:
+        store = self._make_store()
+        assert store.join_path('') == 'my-bucket/data'
+
+    def test_leading_slash_stripped(self) -> None:
+        store = self._make_store()
+        assert store.join_path('/notes/file.md') == 'my-bucket/data/notes/file.md'
+
+    def test_no_prefix(self) -> None:
+        store = self._make_store(root='')
+        assert store.join_path('file.txt') == 'my-bucket/file.txt'
+
+    def test_no_prefix_empty_key(self) -> None:
+        store = self._make_store(root='')
+        assert store.join_path('') == 'my-bucket'
+
+    def test_traversal_rejected(self) -> None:
+        store = self._make_store()
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            store.join_path('../../etc/passwd')
+
+
+# ---------------------------------------------------------------------------
+# GCS join_path tests
+# ---------------------------------------------------------------------------
+
+
+class TestGCSJoinPath:
+    """Tests for GCSAsyncFileStore.join_path()."""
+
+    def _make_store(self, bucket: str = 'my-bucket', root: str = 'prefix') -> GCSAsyncFileStore:
+        config = GCSFileStoreConfig(bucket=bucket, root=root)
+        with patch(
+            'memex_core.storage.filestore.GCSAsyncFileStore.initialize', return_value=MagicMock()
+        ):
+            return GCSAsyncFileStore(config)
+
+    def test_normal_key(self) -> None:
+        store = self._make_store()
+        assert store.join_path('notes/file.md') == 'my-bucket/prefix/notes/file.md'
+
+    def test_empty_key(self) -> None:
+        store = self._make_store()
+        assert store.join_path('') == 'my-bucket/prefix'
+
+    def test_leading_slash_stripped(self) -> None:
+        store = self._make_store()
+        assert store.join_path('/notes/file.md') == 'my-bucket/prefix/notes/file.md'
+
+    def test_no_prefix(self) -> None:
+        store = self._make_store(root='')
+        assert store.join_path('file.txt') == 'my-bucket/file.txt'
+
+    def test_traversal_rejected(self) -> None:
+        store = self._make_store()
+        with pytest.raises(ValueError, match='Path traversal detected'):
+            store.join_path('../../etc/passwd')
+
+
+# ---------------------------------------------------------------------------
+# Import guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestImportGuards:
+    """Test that missing optional dependencies raise helpful errors."""
+
+    def test_s3_import_guard(self) -> None:
+        import sys
+
+        config = S3FileStoreConfig(bucket='test')
+        with patch.dict(sys.modules, {'s3fs': None}):
+            with pytest.raises(ImportError, match='s3fs'):
+                S3AsyncFileStore(config)
+
+    def test_gcs_import_guard(self) -> None:
+        import sys
+
+        config = GCSFileStoreConfig(bucket='test')
+        with patch.dict(sys.modules, {'gcsfs': None}):
+            with pytest.raises(ImportError, match='gcsfs'):
+                GCSAsyncFileStore(config)
+
+
+# ---------------------------------------------------------------------------
+# check_connection tests
+# ---------------------------------------------------------------------------
+
+
+class TestCheckConnection:
+    """Tests for BaseAsyncFileStore.check_connection()."""
+
+    @pytest.mark.asyncio
+    async def test_check_connection_success(self, store: LocalAsyncFileStore) -> None:
+        result = await store.check_connection()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_check_connection_failure(self) -> None:
+        config = LocalFileStoreConfig(root='/nonexistent/path/that/does/not/exist')
+        s = LocalAsyncFileStore(config)
+        result = await s.check_connection()
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetFilestore:
+    """Tests for the get_filestore factory function."""
+
+    def test_local(self, tmp_path: Path) -> None:
+        config = LocalFileStoreConfig(root=str(tmp_path))
+        store = get_filestore(config)
+        assert isinstance(store, LocalAsyncFileStore)
+
+    def test_s3(self) -> None:
+        config = S3FileStoreConfig(bucket='test')
+        with patch(
+            'memex_core.storage.filestore.S3AsyncFileStore.initialize', return_value=MagicMock()
+        ):
+            store = get_filestore(config)
+            assert isinstance(store, S3AsyncFileStore)
+
+    def test_gcs(self) -> None:
+        config = GCSFileStoreConfig(bucket='test')
+        with patch(
+            'memex_core.storage.filestore.GCSAsyncFileStore.initialize', return_value=MagicMock()
+        ):
+            store = get_filestore(config)
+            assert isinstance(store, GCSAsyncFileStore)
+
+    def test_unsupported(self) -> None:
+        config = MagicMock()
+        config.model_dump.return_value = {'type': 'ftp'}
+        with pytest.raises(ValueError, match='Unsupported file store type'):
+            get_filestore(config)

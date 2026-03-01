@@ -10,6 +10,16 @@ from memex_core.memory.sql_models import MemoryUnit, EvidenceLog
 logger = logging.getLogger('memex.core.memory.confidence')
 
 
+def confidence_weight(confidence_score: float | None, floor: float = 0.3) -> float:
+    """Continuous confidence weighting factor for ranking.
+
+    Returns floor + (1-floor) * confidence for opinions, 1.0 for non-opinions (None).
+    """
+    if confidence_score is None:
+        return 1.0
+    return floor + (1.0 - floor) * confidence_score
+
+
 class ConfidenceEngine:
     """
     Engine for calculating and updating confidence scores using Bayesian inference
@@ -32,7 +42,7 @@ class ConfidenceEngine:
         unit_uuid: str | UUID,
         evidence_type_key: str,
         description: str | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """
         Adjust the confidence of a memory unit based on new evidence (Bayesian update).
         """
@@ -55,6 +65,12 @@ class ConfidenceEngine:
 
         if not unit:
             raise ValueError(f'Memory unit not found: {unit_id}')
+
+        if unit.fact_type != 'opinion':
+            raise ValueError(
+                f'Cannot adjust belief on non-opinion unit (type={unit.fact_type}). '
+                f'Only opinion-type memory units have confidence scores.'
+            )
 
         # 2. Capture state before update
         alpha_before = unit.confidence_alpha if unit.confidence_alpha is not None else 1.0
@@ -81,6 +97,14 @@ class ConfidenceEngine:
         session.add(log_entry)
         session.add(unit)
         await session.flush()
+
+        return {
+            'confidence_before': alpha_before / (alpha_before + beta_before),
+            'confidence_after': unit.confidence_alpha
+            / (unit.confidence_alpha + unit.confidence_beta),
+            'alpha': unit.confidence_alpha,
+            'beta': unit.confidence_beta,
+        }
 
     async def apply_custom_update(
         self,
