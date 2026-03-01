@@ -20,6 +20,7 @@ from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
 
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
+from memex_core.memory.confidence import confidence_weight
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
 from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
@@ -31,13 +32,16 @@ from memex_core.memory.reflect.prompts import (
     ComparePhaseSignature,
     CandidateObservation,
     UnvalidatedCandidateObservation,
-    ReflectMemoryContext,
     ReflectObservationContext,
     UpdateExistingSignature,
     ReflectEvidenceContext,
     ReflectComparisonObservation,
 )
-from memex_core.memory.reflect.utils import create_citation_map, parse_timestamp
+from memex_core.memory.reflect.utils import (
+    build_memory_context,
+    create_citation_map,
+    parse_timestamp,
+)
 from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.embedding import FastEmbedder
 from memex_core.memory.formatting import format_for_embedding
@@ -415,14 +419,7 @@ class ReflectionEngine:
 
         memory_map = {i: m for i, m in enumerate(memories)}
 
-        memory_context = [
-            ReflectMemoryContext(
-                index_id=i,
-                content=m.formatted_fact_text,
-                occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
-            )
-            for i, m in enumerate(memories)
-        ]
+        memory_context = build_memory_context(memories)
 
         obs_context = [
             ReflectObservationContext(index_id=i, title=o.title, content=o.content)
@@ -481,14 +478,7 @@ class ReflectionEngine:
         if not memories:
             return []
 
-        memory_context = [
-            ReflectMemoryContext(
-                index_id=i,
-                content=m.formatted_fact_text,
-                occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
-            )
-            for i, m in enumerate(memories)
-        ]
+        memory_context = build_memory_context(memories)
 
         obs_context = [
             ReflectObservationContext(index_id=i, title=o.title, content=o.content)
@@ -574,6 +564,13 @@ class ReflectionEngine:
                 units_result = await self.session.exec(unit_stmt)
                 found_memories = list(units_result.all())
 
+            # Confidence-weighted re-ranking
+            similarity_map = {item[0]: item[1] for item in similar_items}
+            found_memories.sort(
+                key=lambda m: similarity_map.get(m.id, 0.0) * confidence_weight(m.confidence_score),
+                reverse=True,
+            )
+
             # Merge similar and tail memories (deduplicate by ID)
             all_mems = {m.id: m for m in found_memories}
             for tm in tail_memories:
@@ -634,17 +631,8 @@ class ReflectionEngine:
 
         candidate_observations = []
         for cand, mems in candidates_with_evidence:
-            context_objs = []
-            for m in mems:
-                u_str = str(m.id)
-                global_idx = uuid_to_int.get(u_str, -1)
-                context_objs.append(
-                    ReflectMemoryContext(
-                        index_id=global_idx,
-                        content=m.formatted_fact_text,
-                        occurred=(m.event_date or datetime.now(timezone.utc)).isoformat(),
-                    )
-                )
+            index_map = {m.id: uuid_to_int.get(str(m.id), -1) for m in mems}
+            context_objs = build_memory_context(mems, index_map=index_map)
 
             candidate_observations.append(
                 UnvalidatedCandidateObservation(content=cand.content, context=context_objs)
@@ -743,6 +731,25 @@ class ReflectionEngine:
         valid_uuids = sorted(evidence_data_map.keys())
         uuid_to_int, int_to_uuid = create_citation_map(valid_uuids)
 
+        # Fetch confidence scores for evidence units
+        confidence_map: dict[str, float | None] = {}
+        evidence_uuid_objs = []
+        for uid_str in valid_uuids:
+            try:
+                evidence_uuid_objs.append(UUID(uid_str))
+            except ValueError:
+                pass
+        if evidence_uuid_objs:
+            conf_stmt = select(
+                MemoryUnit.id, MemoryUnit.confidence_alpha, MemoryUnit.confidence_beta
+            ).where(col(MemoryUnit.id).in_(evidence_uuid_objs))
+            conf_rows = (await self.session.exec(conf_stmt)).all()
+            for uid, alpha, beta in conf_rows:
+                if alpha is not None and beta is not None:
+                    confidence_map[str(uid)] = alpha / (alpha + beta)
+                else:
+                    confidence_map[str(uid)] = None
+
         # 2. Build Structured Contexts
         evidence_context = []
         for idx in range(len(valid_uuids)):
@@ -750,7 +757,10 @@ class ReflectionEngine:
             data = evidence_data_map[uid]
             evidence_context.append(
                 ReflectEvidenceContext(
-                    index_id=idx, quote=data['quote'], occurred=str(data['timestamp'])
+                    index_id=idx,
+                    quote=data['quote'],
+                    occurred=str(data['timestamp']),
+                    confidence=confidence_map.get(uid),
                 )
             )
 
