@@ -9,11 +9,15 @@ from memex_core.server import app
 def mock_lifespan_dependencies():
     with (
         patch('memex_core.server.get_metastore') as mock_meta,
-        patch('memex_core.server.get_filestore'),
+        patch('memex_core.server.get_filestore') as mock_fs,
         patch('memex_core.server.run_scheduler_with_leader_election'),
         patch('memex_core.server.parse_memex_config') as mock_conf,
         patch('memex_core.server.setup_auth'),
         patch('memex_core.server.setup_rate_limiting'),
+        patch('memex_core.server.get_embedding_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_reranking_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_ner_model', new_callable=AsyncMock),
+        patch('memex_core.server.MemexAPI') as mock_api_cls,
     ):
         # Configure metastore mock
         mock_metastore = MagicMock()
@@ -38,6 +42,17 @@ def mock_lifespan_dependencies():
         mock_metastore.session.return_value.__aenter__.return_value = mock_session
 
         mock_meta.return_value = mock_metastore
+
+        # Configure filestore mock
+        mock_filestore = MagicMock()
+        mock_filestore.check_connection = AsyncMock(return_value=True)
+        mock_fs.return_value = mock_filestore
+
+        # Configure MemexAPI mock
+        mock_api = MagicMock()
+        mock_api.initialize = AsyncMock()
+        mock_api.resolve_vault_identifier = AsyncMock(return_value='test-vault-id')
+        mock_api_cls.return_value = mock_api
 
         # Configure Config Mock
         config_mock = MagicMock()

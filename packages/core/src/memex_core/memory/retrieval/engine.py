@@ -252,7 +252,7 @@ class RetrievalEngine:
 
         # 11. Apply Token Budget Filtering
         if token_budget is not None:
-            return self._filter_by_token_budget(final_results, token_budget)
+            final_results = self._filter_by_token_budget(final_results, token_budget)
 
         return final_results[: request.limit]
 
