@@ -55,6 +55,16 @@ def check_dashboard_installed() -> None:
         raise typer.Exit(1)
 
 
+def _check_api_server(server_url: str) -> bool:
+    """Check if the Memex API server is reachable. Returns True if healthy."""
+    health_url = f'{server_url}/api/v1/health'
+    try:
+        resp = httpx.get(health_url, timeout=5.0)
+        return resp.status_code == 200
+    except httpx.RequestError:
+        return False
+
+
 @app.command()
 def start(
     host: str = typer.Option(None, help='Host to bind to (default: from config)'),
@@ -70,6 +80,16 @@ def start(
     config = parse_memex_config()
     host = host or config.dashboard.host
     port = port or config.dashboard.port
+    server_url = config.server_url
+
+    # Verify the API server is live before starting
+    if not _check_api_server(server_url):
+        console.print(
+            f'[bold red]Error:[/bold red] Memex API server is not reachable at '
+            f'[cyan]{server_url}[/cyan].'
+        )
+        console.print('Start the server first with: [cyan]memex server start[/cyan]')
+        raise typer.Exit(1)
 
     # Check for existing process
     existing_pid = read_pid(SERVICE)
@@ -106,13 +126,29 @@ def start(
                 '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
             )
             raise typer.Exit(1)
-        cmd = ['npx', 'serve', 'dist', '-l', f'tcp://{host}:{port}']
+        serve_script = dashboard_dir / 'serve.cjs'
+        if not serve_script.exists():
+            console.print(
+                f'[bold red]Error:[/bold red] serve.cjs not found at [cyan]{serve_script}[/cyan].'
+            )
+            raise typer.Exit(1)
+        cmd = [
+            'node',
+            str(serve_script),
+            '--host',
+            host,
+            '--port',
+            str(port),
+            '--api',
+            server_url,
+        ]
 
     mode = 'development' if dev else 'production'
     log = log_file_path(SERVICE)
 
     if daemon:
         console.print(f'Starting dashboard in daemon mode on {host}:{port}')
+        console.print(f'API proxy target: {server_url}')
         console.print(f'Logs will be written to: {log}')
 
         with open(log, 'a') as lf:
@@ -127,6 +163,8 @@ def start(
         console.print(f'[green]Dashboard started (PID {proc.pid}).[/green]')
     else:
         console.print(f'Starting dashboard in {mode} mode on {host}:{port}')
+        if not dev:
+            console.print(f'API proxy target: {server_url}')
         proc = subprocess.Popen(
             cmd,
             cwd=dashboard_dir,
