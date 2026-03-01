@@ -254,6 +254,8 @@ class RetrievalEngine:
         if token_budget is not None:
             final_results = self._filter_by_token_budget(final_results, token_budget)
 
+        if request.token_budget is not None:
+            return final_results  # token_budget is the sole constraint
         return final_results[: request.limit]
 
     def _fuse_multi_query_results(

@@ -58,30 +58,16 @@ async def test_memex_note_search_no_results(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_with_synthesized_answer(mock_api, mcp_client):
-    """When answer=True and a result carries an answer, it appears in the output."""
-    doc = _make_result(title='Knowledge Base Article', answer='The answer is 42.')
+async def test_memex_note_search_always_passes_summarize_false(mock_api, mcp_client):
+    """MCP tool should always pass summarize=False to the API."""
+    doc = _make_result(title='Any Doc')
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'the answer', 'summarize': True}
-    )
-    text = result.content[0].text
+    await mcp_client.call_tool('memex_note_search', {'query': 'test'})
 
-    assert 'Synthesized Answer' in text
-    assert 'The answer is 42.' in text
-
-
-@pytest.mark.asyncio
-async def test_memex_note_search_answer_section_absent_when_no_answer(mock_api, mcp_client):
-    """Synthesized Answer section must not appear when no result carries an answer."""
-    doc = _make_result(title='Plain Doc', answer=None)
-    mock_api.search_notes.return_value = [doc]
-
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'topic', 'summarize': True})
-    text = result.content[0].text
-
-    assert 'Synthesized Answer' not in text
+    mock_api.search_notes.assert_called_once()
+    call_kwargs = mock_api.search_notes.call_args[1]
+    assert call_kwargs['summarize'] is False
 
 
 @pytest.mark.asyncio
