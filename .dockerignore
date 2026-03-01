@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+node_modules
+packages/dashboard/node_modules
+packages/dashboard/dist
+.devcontainer
+.claude
+tests
+*.egg-info
+.cache
+.temp
+notebooks
