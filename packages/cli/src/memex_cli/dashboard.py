@@ -129,7 +129,9 @@ def start(
         serve_script = dashboard_dir / 'serve.cjs'
         if not serve_script.exists():
             console.print(
-                f'[bold red]Error:[/bold red] serve.cjs not found at [cyan]{serve_script}[/cyan].'
+                '[bold red]Error:[/bold red] serve.cjs not found. '
+                'Please update your dashboard from: '
+                '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
             )
             raise typer.Exit(1)
         cmd = [
