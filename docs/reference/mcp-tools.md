@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 22 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 24 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -16,7 +16,8 @@ memex mcp run --transport sse --port 8080
 
 1. **Discovery**: `memex_search` for global facts/entities; `memex_note_search` for source documents.
 2. **Reading**: `memex_get_page_index` (table of contents) then `memex_get_node` (section text). Only fall back to `memex_read_note` for small notes.
-3. **Avoid**: Do not use `memex_list_notes` for discovery (titles are often "Untitled").
+3. **Feedback**: `memex_submit_evidence` to adjust an opinion's confidence; `memex_get_evidence_log` to review the audit trail.
+4. **Avoid**: Do not use `memex_list_notes` for discovery.
 
 ---
 
@@ -199,6 +200,37 @@ Retrieve a specific memory unit by its UUID. Returns the unit text, type, status
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `unit_id` | string | Yes | The UUID of the memory unit. |
+
+---
+
+## Evidence & Confidence
+
+### `memex_submit_evidence`
+
+Submit evidence to adjust an opinion's Bayesian confidence score. Performs a Beta distribution update on the memory unit's alpha/beta parameters.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_id` | string | Yes | - | The UUID of the memory unit (must be an opinion). |
+| `evidence_type` | string | Yes | - | Type of evidence (see below). |
+| `description` | string | No | - | Optional description of the evidence. |
+
+**Evidence types:** `corroboration`, `contradiction`, `source_reliability`, `temporal_consistency`, `cross_reference`, `user_validation`, `user_rejection`, `llm_assessment`, `opinion_merge`.
+
+`user_validation` carries the highest weight (10), making it the strongest signal. Most other types have weight 1-2.
+
+---
+
+### `memex_get_evidence_log`
+
+Retrieve the evidence audit trail for a memory unit. Shows the history of confidence adjustments with before/after scores.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_id` | string | Yes | - | The UUID of the memory unit. |
+| `limit` | int | No | `20` | Maximum entries to return. |
+
+Returns timestamped evidence entries with type, description, and the confidence score before and after each adjustment.
 
 ---
 

@@ -87,4 +87,7 @@ dev = [
     "pyright>=1.1.408",
     "hypothesis>=6.151.9",
     "pytest-benchmark>=5.2.3",
+    "s3fs>=2024.6.0",
+    "gcsfs>=2024.6.0",
+    "minio>=7.2.0",
 ]

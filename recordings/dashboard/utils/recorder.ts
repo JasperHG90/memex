@@ -1,6 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { execSync } from 'child_process';
-import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 
@@ -25,7 +25,8 @@ export class GifRecorder {
   private page: Page | null = null;
   private tmpDir: string | null = null;
   private frameCount: number = 0;
-  private captureInterval: ReturnType<typeof setInterval> | null = null;
+  private capturing: boolean = false;
+  private capturePromise: Promise<void> | null = null;
 
   constructor(outputPath: string, options?: RecorderOptions) {
     this.outputPath = outputPath;
@@ -63,17 +64,29 @@ export class GifRecorder {
       throw new Error('Recorder not started');
     }
 
+    this.capturing = true;
     const intervalMs = Math.round(1000 / this.fps);
-    this.captureInterval = setInterval(async () => {
-      if (!this.page || !this.tmpDir) return;
-      try {
-        const framePath = join(this.tmpDir, `frame-${String(this.frameCount).padStart(5, '0')}.png`);
-        await this.page.screenshot({ path: framePath });
-        this.frameCount++;
-      } catch {
-        // Page might be navigating, skip frame
+
+    // Sequential capture loop: wait for each screenshot before scheduling the next.
+    // This prevents overlapping screenshot calls that cause silent failures.
+    this.capturePromise = (async () => {
+      while (this.capturing && this.page && this.tmpDir) {
+        const start = Date.now();
+        try {
+          const framePath = join(this.tmpDir, `frame-${String(this.frameCount).padStart(5, '0')}.png`);
+          await this.page.screenshot({ path: framePath });
+          this.frameCount++;
+        } catch {
+          // Page might be navigating, skip frame
+        }
+        // Sleep for the remainder of the interval (or skip if screenshot took too long)
+        const elapsed = Date.now() - start;
+        const sleepMs = Math.max(0, intervalMs - elapsed);
+        if (sleepMs > 0 && this.capturing) {
+          await new Promise((r) => setTimeout(r, sleepMs));
+        }
       }
-    }, intervalMs);
+    })();
   }
 
   async stop(): Promise<void> {
@@ -81,10 +94,11 @@ export class GifRecorder {
       throw new Error('Recorder not started');
     }
 
-    // Stop capturing
-    if (this.captureInterval) {
-      clearInterval(this.captureInterval);
-      this.captureInterval = null;
+    // Stop the capture loop and wait for it to finish
+    this.capturing = false;
+    if (this.capturePromise) {
+      await this.capturePromise;
+      this.capturePromise = null;
     }
 
     // Take one final frame
@@ -99,7 +113,10 @@ export class GifRecorder {
     await this.page.close();
     await this.browser.close();
 
-    if (this.frameCount === 0) {
+    // Count actual files on disk (frameCount may over-count if screenshots failed)
+    const actualFrames = readdirSync(this.tmpDir).filter((f) => f.startsWith('frame-') && f.endsWith('.png')).length;
+
+    if (actualFrames === 0) {
       rmSync(this.tmpDir, { recursive: true, force: true });
       throw new Error('No frames captured');
     }
@@ -115,18 +132,18 @@ export class GifRecorder {
     try {
       // Pass 1: Generate palette from all frames
       execSync(
-        `ffmpeg -y -framerate ${this.fps} -i "${inputPattern}" -vf "palettegen=stats_mode=diff" "${palettePath}"`,
+        `ffmpeg -y -framerate ${this.fps} -i "${inputPattern}" -vf "palettegen=stats_mode=full" "${palettePath}"`,
         { stdio: 'pipe' }
       );
 
-      // Pass 2: Generate GIF using palette with bayer dithering
+      // Pass 2: Generate GIF using palette
       execSync(
         `ffmpeg -y -framerate ${this.fps} -i "${inputPattern}" -i "${palettePath}" -lavfi "[0:v][1:v] paletteuse=dither=bayer:bayer_scale=3" -loop 0 "${this.outputPath}"`,
         { stdio: 'pipe' }
       );
 
       const stats = execSync(`ls -lh "${this.outputPath}"`).toString().trim();
-      console.log(`GIF saved: ${this.outputPath} (${this.frameCount} frames)`);
+      console.log(`GIF saved: ${this.outputPath} (${actualFrames} frames, ${(actualFrames / this.fps).toFixed(1)}s)`);
       console.log(`  ${stats}`);
     } finally {
       rmSync(this.tmpDir, { recursive: true, force: true });

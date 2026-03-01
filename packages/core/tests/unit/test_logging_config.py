@@ -15,6 +15,7 @@ class TestConfigureLogging:
         """Reset logging state before each test."""
         root = logging.getLogger('memex')
         root.handlers.clear()
+        root.setLevel(logging.WARNING)
         structlog.reset_defaults()
         structlog.contextvars.clear_contextvars()
 
@@ -22,6 +23,7 @@ class TestConfigureLogging:
         """Clean up after each test."""
         root = logging.getLogger('memex')
         root.handlers.clear()
+        root.setLevel(logging.WARNING)
         structlog.reset_defaults()
         structlog.contextvars.clear_contextvars()
 

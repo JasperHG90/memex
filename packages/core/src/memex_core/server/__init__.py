@@ -62,6 +62,12 @@ async def lifespan(app: FastAPI):
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
 
+    if not await filestore.check_connection():
+        raise RuntimeError(
+            f'File store backend ({type(filestore).__name__}) is not reachable. '
+            'Check your configuration and ensure the storage service is running.'
+        )
+
     create_schema = os.getenv('MEMEX_SKIP_SCHEMA_CHECK', 'false').lower() != 'true'
     await metastore.connect(create_schema=create_schema)
 

@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -64,7 +66,7 @@ jobs:
         run: npm run build
 
       - name: Create archive
-        run: tar -czf dashboard-dist.tar.gz -C packages/dashboard dist/
+        run: tar -czf dashboard-dist.tar.gz -C packages/dashboard dist/ serve.cjs
 
       - name: Upload dashboard artifacts
         uses: actions/upload-artifact@v4

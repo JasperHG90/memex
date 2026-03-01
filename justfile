@@ -7,23 +7,19 @@ alias uc := update_collections
 release version:
   #!/usr/bin/env bash
   set -euo pipefail
-  # Validate semver format
-  if ! echo "{{version}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "Error: version must be semver (e.g., 0.1.0)" >&2
+  # Validate semver format (allows pre-release suffixes like 0.1.0a, 0.1.0rc1)
+  if ! echo "{{version}}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9]*$'; then
+    echo "Error: version must be semver (e.g., 0.1.0 or 0.1.0a)" >&2
     exit 1
   fi
-  # Update Python package versions
-  for f in pyproject.toml packages/core/pyproject.toml packages/cli/pyproject.toml packages/mcp/pyproject.toml packages/common/pyproject.toml; do
-    sed -i 's/^version = ".*"/version = "{{version}}"/' "$f"
-  done
-  # Update TypeScript package versions
+  # Update TypeScript package versions (Python versions are automatic via hatch-vcs)
   for f in packages/dashboard/package.json packages/openclaw/package.json; do
     sed -i 's/"version": ".*"/"version": "{{version}}"/' "$f"
   done
   # Sync lock file
   uv lock
   # Stage, commit, tag
-  git add pyproject.toml uv.lock packages/*/pyproject.toml packages/dashboard/package.json packages/openclaw/package.json
+  git add uv.lock packages/dashboard/package.json packages/openclaw/package.json
   git commit -m "chore(release): v{{version}}"
   git tag "v{{version}}"
   echo "Tagged v{{version}}. Push with: git push && git push --tags"
@@ -127,6 +123,10 @@ recording-seed:
 record-cli:
     bash recordings/cli/record-cli.sh
 
+# Record Claude Code + Memex integration GIF (simulated session)
+record-claude-code:
+    bash recordings/cli/record-claude-code.sh
+
 # Record dashboard GIFs via Playwright
 record-dashboard:
     cd recordings/dashboard && npx tsx scripts/record-overview.ts
@@ -136,4 +136,4 @@ record-dashboard:
     cd recordings/dashboard && npx tsx scripts/record-lineage.ts
 
 # Record all GIFs (server + dashboard must be running)
-record-all: recording-seed record-cli record-dashboard
+record-all: recording-seed record-cli record-claude-code record-dashboard

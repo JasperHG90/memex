@@ -33,6 +33,9 @@ async def list_notes(
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
     ] = False,
+    compact: Annotated[
+        bool, typer.Option('--compact', help='One line per note: title, date, description.')
+    ] = False,
 ):
     """
     List all notes.
@@ -48,6 +51,11 @@ async def list_notes(
     if minimal:
         for d in notes:
             console.print(str(d.id))
+        return
+
+    if compact:
+        for d in notes:
+            _print_compact_note(d)
         return
 
     if json_output:
@@ -74,6 +82,9 @@ async def list_recent(
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
     ] = False,
+    compact: Annotated[
+        bool, typer.Option('--compact', help='One line per note: title, date, description.')
+    ] = False,
 ):
     """
     Show most recent notes.
@@ -91,6 +102,11 @@ async def list_recent(
             console.print(str(d.id))
         return
 
+    if compact:
+        for d in notes:
+            _print_compact_note(d)
+        return
+
     if json_output:
         console.print_json(json.dumps([d.model_dump() for d in notes], default=str))
         return
@@ -104,6 +120,19 @@ async def list_recent(
         table.add_row(d.name or 'Untitled', str(d.created_at), str(d.id))
 
     console.print(table)
+
+
+def _print_compact_note(d: Any) -> None:
+    """Print a single note in compact one-line format."""
+    title = d.title or d.name or 'Untitled'
+    date = str(d.created_at.date()) if d.created_at else 'unknown'
+    desc = ''
+    if d.doc_metadata:
+        desc = d.doc_metadata.get('description', '') or ''
+    if len(desc) > 150:
+        desc = desc[:147] + '...'
+    suffix = f': {desc}' if desc else ''
+    print(f'- **{title}** ({date}){suffix}')
 
 
 @app.command('delete')

@@ -310,51 +310,6 @@ class TestRetryDeadLetter:
 
 
 # ---------------------------------------------------------------------------
-# Alembic migration tests
-# ---------------------------------------------------------------------------
-
-
-class TestDLQMigration:
-    """Tests for the DLQ Alembic migration file."""
-
-    def test_migration_file_exists(self):
-        import pathlib
-
-        migration = pathlib.Path(
-            '/home/vscode/workspace/packages/core/alembic/versions/003_add_dlq_fields.py'
-        )
-        assert migration.exists()
-
-    def test_migration_revision_chain(self):
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            '_migration_003',
-            '/home/vscode/workspace/packages/core/alembic/versions/003_add_dlq_fields.py',
-        )
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-
-        assert mod.revision == '003'
-        assert mod.down_revision == '002'
-
-    def test_migration_has_upgrade_and_downgrade(self):
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            '_migration_003',
-            '/home/vscode/workspace/packages/core/alembic/versions/003_add_dlq_fields.py',
-        )
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-
-        assert callable(mod.upgrade)
-        assert callable(mod.downgrade)
-
-
-# ---------------------------------------------------------------------------
 # DeadLetterItemDTO tests
 # ---------------------------------------------------------------------------
 

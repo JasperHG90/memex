@@ -6,7 +6,7 @@ In this tutorial, we will build a simple Python agent that uses Memex as its lon
 
 * A running Memex server (see [Getting Started](getting-started.md))
 * Python 3.12+
-* `httpx` and `openai` packages installed (`uv pip install httpx openai`)
+* `httpx` and `openai` packages installed (`uv add httpx openai`)
 * An OpenAI API key (or any OpenAI-compatible provider)
 
 ## Step 1: Create the Project

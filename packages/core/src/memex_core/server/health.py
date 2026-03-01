@@ -24,12 +24,27 @@ async def health() -> HealthResponse:
 
 @router.get('/ready', response_model=HealthResponse)
 async def ready(request: Request) -> JSONResponse:
-    """Readiness probe — returns 200 when DB is reachable, 503 otherwise."""
+    """Readiness probe — returns 200 when DB and file store are reachable, 503 otherwise."""
     api = request.app.state.api
+    checks: dict[str, str] = {}
+
     try:
         async with api.metastore.session() as session:
             await session.execute(text('SELECT 1'))
-        return JSONResponse(content={'status': 'ok'}, status_code=200)
+        checks['database'] = 'ok'
     except Exception as e:
-        logger.warning('Readiness check failed: database unreachable: %s', e, exc_info=True)
-        return JSONResponse(content={'status': 'unavailable'}, status_code=503)
+        logger.warning('Readiness: database unreachable: %s', e, exc_info=True)
+        checks['database'] = 'unavailable'
+
+    try:
+        fs_ok = await api.filestore.check_connection()
+        checks['filestore'] = 'ok' if fs_ok else 'unavailable'
+    except Exception as e:
+        logger.warning('Readiness: filestore unreachable: %s', e, exc_info=True)
+        checks['filestore'] = 'unavailable'
+
+    all_ok = all(v == 'ok' for v in checks.values())
+    return JSONResponse(
+        content={'status': 'ok' if all_ok else 'unavailable', **checks},
+        status_code=200 if all_ok else 503,
+    )

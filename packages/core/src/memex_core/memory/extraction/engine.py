@@ -1100,15 +1100,16 @@ class ExtractionEngine:
         unit_uuid: str,
         evidence_type_key: str,
         description: str | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """
         Adjust the confidence of a memory unit based on new evidence.
         Delegates to the ConfidenceEngine.
         """
-        await self.confidence_engine.adjust_belief(
+        result = await self.confidence_engine.adjust_belief(
             session, unit_uuid, evidence_type_key, description
         )
         await session.commit()
+        return result
 
     async def _extract_facts(
         self,
