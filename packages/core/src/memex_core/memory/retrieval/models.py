@@ -69,6 +69,10 @@ class RetrievalRequest(SQLModel):
             'When True, collect per-strategy attribution (name, rank, RRF score, timing).'
         ),
     )
+    mmr_lambda: float | None = Field(
+        default=None,
+        description='Per-request MMR lambda override. None=use config default.',
+    )
 
     @model_validator(mode='after')
     def validate_strategies(self) -> Self:
