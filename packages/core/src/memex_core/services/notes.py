@@ -61,11 +61,23 @@ class NoteService:
             return doc.page_index
 
     async def get_node(self, node_id: UUID) -> NodeDTO | None:
-        """Retrieve a specific document node by its ID."""
+        """Retrieve a specific document node by its ID.
+
+        Tries a primary-key lookup first.  Falls back to querying by
+        ``node_hash`` so that the MD5 content-hash IDs returned by
+        ``get_note_page_index`` also resolve correctly.
+        """
+        from sqlmodel import select
+
         from memex_core.memory.sql_models import Node
 
         async with self.metastore.session() as session:
             node = await session.get(Node, node_id)
+            if node is None:
+                # Page-index IDs are MD5 content hashes stored in node_hash.
+                stmt = select(Node).where(Node.node_hash == node_id.hex)
+                result = await session.exec(stmt)
+                node = result.first()
             if node is None:
                 return None
             return NodeDTO.model_validate(node)
