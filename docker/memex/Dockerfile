@@ -1,5 +1,5 @@
 # Stage 1 — uv: install deps + build workspace
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS uv
+FROM ghcr.io/astral-sh/uv:0.10-python3.12-bookworm-slim AS uv
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
