@@ -96,7 +96,7 @@ async def test_list_entities_ranked(mock_api, mcp_client):
     """Without a query, should call list_entities_ranked."""
     e1 = EntityDTO(id=uuid4(), name='Python', mention_count=42)
 
-    async def _ranked(limit: int = 100, vault_ids=None):
+    async def _ranked(limit: int = 100, vault_id=None):
         yield e1
 
     mock_api.list_entities_ranked = _ranked
@@ -118,7 +118,7 @@ async def test_list_entities_with_query(mock_api, mcp_client):
     text = result.content[0].text
 
     assert '**Rust**' in text
-    mock_api.search_entities.assert_called_once_with('rust', limit=20, vault_ids=None)
+    mock_api.search_entities.assert_called_once_with('rust', limit=20, vault_id=None)
 
 
 @pytest.mark.asyncio
