@@ -65,7 +65,7 @@ When a user or AI agent queries Memex, the recall loop retrieves relevant inform
 - **P**robabilistic — Semantic vector similarity (dense retrieval via cosine distance).
 - **R**anking — Keyword matching (sparse retrieval via PostgreSQL full-text search with ts_rank_cd).
 
-Each strategy contributes candidates, and RRF combines them into a single ranked list. The reason for multiple strategies is that no single retrieval method works best for all queries — entity-centric questions benefit from graph traversal, while conceptual questions benefit from semantic search.
+Each strategy contributes candidates, and RRF combines them into a single ranked list. After fusion, results pass through confidence weighting (opinions are scaled by their Bayesian confidence score) and MMR diversity filtering (near-duplicate results are pruned using a hybrid cosine + entity Jaccard similarity kernel). The reason for multiple strategies is that no single retrieval method works best for all queries — entity-centric questions benefit from graph traversal, while conceptual questions benefit from semantic search.
 
 **Practical example:** The query "What deployment decisions did we make?" triggers:
 - *Temporal* surfaces recent deployment-related facts

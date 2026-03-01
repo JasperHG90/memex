@@ -76,7 +76,7 @@ The LLM is given context about what observations already exist to avoid generati
 
 For each candidate observation, Memex performs a vector similarity search to find supporting and contradicting evidence in the knowledge graph. This is the "evidence gathering" phase.
 
-The search uses the reflection configuration's `search_limit` (default: 10 candidates) and `similarity_threshold` (default: 0.6) to filter results.
+The search uses the reflection configuration's `search_limit` (default: 10 candidates) and `similarity_threshold` (default: 0.6) to filter results. Retrieved evidence is re-ranked by `similarity × confidence_weight()`, so well-supported facts are prioritized over disputed ones when building the evidence set.
 
 ### Phase 3: Validate (LLM)
 
@@ -85,6 +85,8 @@ The LLM evaluates each candidate observation against the gathered evidence:
 - Assigns a **confidence score** based on the strength and consistency of evidence
 - Generates **citations** linking the observation to specific memory units
 - Rejects candidates with insufficient or contradictory evidence
+
+The LLM receives confidence metadata for each piece of evidence (via the `ReflectMemoryContext` model), with guidance that scores ≥ 0.7 indicate well-supported facts and scores < 0.3 suggest contradicted information. This allows the LLM to weigh evidence appropriately when forming observations.
 
 This phase ensures that observations are grounded in actual evidence, not hallucinated by the seed phase.
 
