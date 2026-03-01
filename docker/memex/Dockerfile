@@ -23,9 +23,6 @@ COPY packages/common/src packages/common/src
 COPY packages/core/src   packages/core/src
 COPY packages/cli/src    packages/cli/src
 COPY packages/mcp/src    packages/mcp/src
-# alembic migrations needed for DB setup
-COPY packages/core/alembic.ini packages/core/alembic.ini
-COPY packages/core/alembic     packages/core/alembic
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
