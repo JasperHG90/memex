@@ -928,7 +928,7 @@ async def memex_list_notes(
 
         lines = [f'Found {len(notes)} note(s):\n']
         for i, n in enumerate(notes, 1):
-            title = n.doc_metadata.get('title') or n.doc_metadata.get('name') or 'Untitled'
+            title = n.title or 'Untitled'
             lines.append(f'{i}. **{title}** (ID: {n.id}, created: {n.created_at})')
 
         return '\n'.join(lines)
