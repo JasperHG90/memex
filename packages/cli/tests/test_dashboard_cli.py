@@ -22,23 +22,43 @@ def mock_dashboard_installed():
 
 
 @pytest.fixture
+def mock_api_server_live():
+    """Mock the API server health check to return True."""
+    with patch('memex_cli.dashboard._check_api_server', return_value=True):
+        yield
+
+
+@pytest.fixture
 def mock_config():
     """Mock parse_memex_config to return a config with dashboard settings."""
     with patch('memex_cli.dashboard.parse_memex_config') as mock:
         mock.return_value.dashboard.host = '0.0.0.0'
         mock.return_value.dashboard.port = 3001
+        mock.return_value.server_url = 'http://localhost:8000'
         yield mock
 
 
 class TestDashboardStart:
-    def test_start_already_running(self, runner, mock_dashboard_installed, mock_config):
+    def test_start_api_server_not_running(self, runner, mock_dashboard_installed, mock_config):
+        """Should exit with error when API server is not reachable."""
+        with patch('memex_cli.dashboard._check_api_server', return_value=False):
+            result = runner.invoke(app, ['start'])
+            assert result.exit_code == 1
+            assert 'not reachable' in result.stdout
+            assert 'memex server start' in result.stdout
+
+    def test_start_already_running(
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
+    ):
         with patch('memex_cli.dashboard.read_pid', return_value=1234):
             result = runner.invoke(app, ['start'])
             assert result.exit_code == 0
             assert 'already running' in result.stdout
             assert 'PID 1234' in result.stdout
 
-    def test_start_port_in_use(self, runner, mock_dashboard_installed, mock_config):
+    def test_start_port_in_use(
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
+    ):
         with (
             patch('memex_cli.dashboard.read_pid', return_value=None),
             patch('memex_cli.dashboard.check_port_available', return_value=False),
@@ -47,7 +67,9 @@ class TestDashboardStart:
             assert result.exit_code == 1
             assert 'already in use' in result.stdout
 
-    def test_start_daemon_mode(self, runner, mock_dashboard_installed, mock_config):
+    def test_start_daemon_mode(
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
+    ):
         with (
             patch('memex_cli.dashboard.read_pid', return_value=None),
             patch('memex_cli.dashboard.check_port_available', return_value=True),
@@ -65,7 +87,9 @@ class TestDashboardStart:
             assert 'daemon mode' in result.stdout
             assert 'PID 9999' in result.stdout
 
-    def test_start_dev_daemon_warns(self, runner, mock_dashboard_installed, mock_config):
+    def test_start_dev_daemon_warns(
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
+    ):
         """--dev with --daemon should warn and ignore daemon."""
         mock_proc = MagicMock()
         mock_proc.wait.return_value = None
@@ -83,7 +107,7 @@ class TestDashboardStart:
             assert 'not supported with --dev' in result.stdout
 
     def test_start_foreground_uses_popen_with_new_session(
-        self, runner, mock_dashboard_installed, mock_config
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
     ):
         """Foreground mode uses Popen with start_new_session=True for group cleanup."""
         mock_proc = MagicMock()
@@ -105,7 +129,7 @@ class TestDashboardStart:
             assert popen_kwargs[1]['start_new_session'] is True
 
     def test_start_foreground_keyboard_interrupt_kills_group(
-        self, runner, mock_dashboard_installed, mock_config
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
     ):
         """Ctrl+C in foreground mode sends SIGTERM to the process group."""
         mock_proc = MagicMock()
@@ -134,6 +158,30 @@ class TestDashboardStart:
         ):
             result = runner.invoke(app, ['start'])
             assert result.exit_code != 0
+
+    def test_start_production_uses_serve_cjs(
+        self, runner, mock_dashboard_installed, mock_api_server_live, mock_config
+    ):
+        """Production mode should use node serve.cjs with --api flag."""
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 0
+        mock_proc.pid = 8888
+
+        with (
+            patch('memex_cli.dashboard.read_pid', return_value=None),
+            patch('memex_cli.dashboard.check_port_available', return_value=True),
+            patch('memex_cli.dashboard._get_dashboard_dir') as mock_dir,
+            patch('memex_cli.dashboard.subprocess.Popen', return_value=mock_proc) as mock_popen,
+        ):
+            mock_dir.return_value = MagicMock(exists=lambda: True)
+            mock_dir.return_value.__truediv__ = lambda self, x: MagicMock(exists=lambda: True)
+            result = runner.invoke(app, ['start'])
+            assert result.exit_code == 0
+            cmd = mock_popen.call_args[0][0]
+            assert cmd[0] == 'node'
+            assert '--api' in cmd
+            assert 'http://localhost:8000' in cmd
 
 
 class TestDashboardStop:
