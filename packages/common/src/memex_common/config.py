@@ -493,6 +493,18 @@ class RetrievalConfig(BaseModel):
         default=60,
         description='Number of candidates per strategy in multi-strategy RRF retrieval.',
     )
+    mmr_lambda: float | None = Field(
+        default=None,
+        description='MMR diversity lambda. None=disabled, 0.9=conservative.',
+    )
+    mmr_embedding_weight: float = Field(
+        default=0.6,
+        description='Embedding cosine weight in hybrid similarity kernel.',
+    )
+    mmr_entity_weight: float = Field(
+        default=0.4,
+        description='Entity Jaccard weight in hybrid similarity kernel.',
+    )
 
 
 class AuthConfig(BaseModel):

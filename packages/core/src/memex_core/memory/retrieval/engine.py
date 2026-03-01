@@ -239,6 +239,23 @@ class RetrievalEngine:
         # 9b. Confidence-weighted reranking
         final_results = self._apply_confidence_weighting(final_results)
 
+        # 9c. MMR diversity filtering
+        mmr_lambda = request.mmr_lambda
+        if mmr_lambda is None and self.retrieval_config:
+            mmr_lambda = self.retrieval_config.mmr_lambda
+        if mmr_lambda is not None and len(final_results) > 1:
+            unit_ids = [u.id for u in final_results]
+            cosine_matrix = await self._compute_pairwise_cosine(session, unit_ids)
+            jaccard_matrix = self._compute_entity_jaccard(final_results)
+            w_emb = self.retrieval_config.mmr_embedding_weight if self.retrieval_config else 0.6
+            w_ent = self.retrieval_config.mmr_entity_weight if self.retrieval_config else 0.4
+            sim_matrix = self._build_hybrid_similarity_matrix(
+                cosine_matrix, jaccard_matrix, w_emb, w_ent
+            )
+            final_results = self._apply_mmr_diversity(
+                final_results, sim_matrix, mmr_lambda, request.limit
+            )
+
         # 10. Update Resonance
         if final_results:
             await self._update_resonance(session, final_results, vault_id=primary_vault_id)
@@ -677,6 +694,123 @@ class RetrievalEngine:
             scored.append((unit, position_score * confidence_weight(unit.confidence_score)))
         scored.sort(key=lambda x: x[1], reverse=True)
         return [u for u, _ in scored]
+
+    @staticmethod
+    async def _compute_pairwise_cosine(
+        session: AsyncSession, unit_ids: list[UUID]
+    ) -> dict[tuple[UUID, UUID], float]:
+        """Compute pairwise cosine similarity for a set of memory units via SQL."""
+        from sqlalchemy import text
+
+        if len(unit_ids) < 2:
+            return {}
+
+        stmt = text("""
+            WITH reps AS (
+                SELECT id, embedding
+                FROM memory_units
+                WHERE id = ANY(:unit_ids)
+            )
+            SELECT a.id AS id_a, b.id AS id_b,
+                   1 - (a.embedding <=> b.embedding) AS similarity
+            FROM reps a
+            CROSS JOIN reps b
+            WHERE a.id < b.id
+        """)
+        result = await session.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
+        matrix: dict[tuple[UUID, UUID], float] = {}
+        for row in result:
+            key = (row.id_a, row.id_b)
+            matrix[key] = float(row.similarity)
+            matrix[(row.id_b, row.id_a)] = float(row.similarity)
+        return matrix
+
+    @staticmethod
+    def _compute_entity_jaccard(results: list[MemoryUnit]) -> dict[tuple[UUID, UUID], float]:
+        """Compute pairwise entity Jaccard similarity from eagerly-loaded unit_entities."""
+        entity_sets: dict[UUID, set[UUID]] = {}
+        for unit in results:
+            entity_sets[unit.id] = {ue.entity_id for ue in (unit.unit_entities or [])}
+
+        matrix: dict[tuple[UUID, UUID], float] = {}
+        ids = [u.id for u in results]
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a_set, b_set = entity_sets[ids[i]], entity_sets[ids[j]]
+                union = a_set | b_set
+                if not union:
+                    sim = 0.0
+                else:
+                    sim = len(a_set & b_set) / len(union)
+                matrix[(ids[i], ids[j])] = sim
+                matrix[(ids[j], ids[i])] = sim
+        return matrix
+
+    @staticmethod
+    def _build_hybrid_similarity_matrix(
+        cosine_matrix: dict[tuple[UUID, UUID], float],
+        jaccard_matrix: dict[tuple[UUID, UUID], float],
+        w_emb: float,
+        w_ent: float,
+    ) -> dict[tuple[UUID, UUID], float]:
+        """Combine cosine and entity Jaccard into a hybrid similarity matrix."""
+        all_pairs = set(cosine_matrix.keys()) | set(jaccard_matrix.keys())
+        matrix: dict[tuple[UUID, UUID], float] = {}
+        for pair in all_pairs:
+            cos = cosine_matrix.get(pair, 0.0)
+            jac = jaccard_matrix.get(pair, 0.0)
+            matrix[pair] = w_emb * cos + w_ent * jac
+        return matrix
+
+    @staticmethod
+    def _apply_mmr_diversity(
+        results: list[MemoryUnit],
+        similarity_matrix: dict[tuple[UUID, UUID], float],
+        lambda_: float,
+        limit: int,
+    ) -> list[MemoryUnit]:
+        """Greedy MMR selection with temporal tiebreaker."""
+        if not results:
+            return results
+
+        n = len(results)
+        # Relevance is positional score from current ordering
+        relevance = {results[i].id: (n - i) / n for i in range(n)}
+
+        selected: list[MemoryUnit] = []
+        remaining = list(results)
+
+        # First item is always the top result
+        selected.append(remaining.pop(0))
+
+        eps = 0.01  # Tiebreaker threshold
+
+        while remaining and len(selected) < limit:
+            best_score = -float('inf')
+            best_idx = 0
+
+            for idx, candidate in enumerate(remaining):
+                rel = relevance[candidate.id]
+                # Max similarity to any already-selected item
+                max_sim = 0.0
+                for sel in selected:
+                    pair = (candidate.id, sel.id)
+                    max_sim = max(max_sim, similarity_matrix.get(pair, 0.0))
+                mmr_score = lambda_ * rel - (1 - lambda_) * max_sim
+
+                if mmr_score > best_score + eps:
+                    best_score = mmr_score
+                    best_idx = idx
+                elif abs(mmr_score - best_score) <= eps:
+                    # Temporal tiebreaker: prefer newer event_date
+                    current_best = remaining[best_idx]
+                    if candidate.event_date > current_best.event_date:
+                        best_score = mmr_score
+                        best_idx = idx
+
+            selected.append(remaining.pop(best_idx))
+
+        return selected
 
     def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """
