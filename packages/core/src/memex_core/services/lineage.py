@@ -218,14 +218,43 @@ class LineageService(BaseService):
             stmt = select(MentalModel).where(
                 (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
             )
-            obj = (await session.exec(stmt)).first()
-            if not obj:
+            results = (await session.exec(stmt)).all()
+
+            if not results:
                 stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
                 ent = (await session.exec(stmt_ent)).first()
                 if not ent:
                     raise ResourceNotFoundError(f'Entity {entity_id} not found.')
-                obj = MentalModel(entity_id=entity_id, name=ent.canonical_name)
+                results = [MentalModel(entity_id=entity_id, name=ent.canonical_name)]
 
+            # Multiple mental models (multi-vault): wrap under an entity node
+            if len(results) > 1:
+                stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
+                ent = (await session.exec(stmt_ent)).first()
+                if ent:
+                    entity_data = _sanitize_data(ent.model_dump())
+                else:
+                    entity_data = {'id': str(entity_id), 'canonical_name': results[0].name}
+
+                mm_children: list[LineageResponse] = []
+                for mm in results:
+                    mm_data = _sanitize_data(mm.model_dump())
+                    mm_children.append(
+                        LineageResponse(
+                            entity_type='mental_model',
+                            entity=mm_data,
+                            derived_from=[],
+                        )
+                    )
+
+                return LineageResponse(
+                    entity_type='entity',
+                    entity=entity_data,
+                    derived_from=mm_children,
+                )
+
+            # Single mental model: return directly
+            obj = results[0]
             entity_data = _sanitize_data(obj.model_dump())
 
         else:
@@ -258,54 +287,53 @@ class LineageService(BaseService):
             stmt = select(MentalModel).where(
                 (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
             )
-            obj = (await session.exec(stmt)).first()
-            if not obj:
+            results = (await session.exec(stmt)).all()
+
+            if not results:
                 stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
                 ent = (await session.exec(stmt_ent)).first()
                 if not ent:
                     raise ResourceNotFoundError(f'Entity {entity_id} not found.')
-                obj = MentalModel(entity_id=entity_id, name=ent.canonical_name)
+                results = [MentalModel(entity_id=entity_id, name=ent.canonical_name)]
 
+            # Multiple mental models (multi-vault): wrap under an entity node
+            if len(results) > 1:
+                stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
+                ent = (await session.exec(stmt_ent)).first()
+                if ent:
+                    entity_data = _sanitize_data(ent.model_dump())
+                else:
+                    entity_data = {'id': str(entity_id), 'canonical_name': results[0].name}
+
+                mm_children: list[LineageResponse] = []
+                for mm in results:
+                    mm_child = await self._build_mental_model_upstream(
+                        session,
+                        mm,
+                        current_depth + 1,
+                        max_depth,
+                        limit,
+                    )
+                    mm_children.append(mm_child)
+
+                return LineageResponse(
+                    entity_type='entity',
+                    entity=entity_data,
+                    derived_from=mm_children,
+                )
+
+            # Single mental model: return directly
+            obj = results[0]
             entity_data = _sanitize_data(obj.model_dump())
 
             if not stop_recursion:
-                observations = obj.observations or []
-                count = 0
-                for obs in observations:
-                    if count >= limit:
-                        break
-                    obs_children: list[LineageResponse] = []
-
-                    if current_depth + 1 < max_depth:
-                        evidence = obs.get('evidence', [])
-                        ev_count = 0
-                        for item in evidence:
-                            if ev_count >= limit:
-                                break
-                            mem_id_str = item.get('memory_id')
-                            if mem_id_str:
-                                try:
-                                    mem_id = UUID(str(mem_id_str))
-                                    ev_child = await self._get_lineage_upstream(
-                                        session,
-                                        'memory_unit',
-                                        mem_id,
-                                        current_depth + 2,
-                                        max_depth,
-                                        limit,
-                                    )
-                                    obs_children.append(ev_child)
-                                    ev_count += 1
-                                except (ValueError, ResourceNotFoundError):
-                                    pass
-
-                    obs_node = LineageResponse(
-                        entity_type='observation',
-                        entity=_sanitize_data(obs),
-                        derived_from=obs_children,
-                    )
-                    children.append(obs_node)
-                    count += 1
+                children = await self._build_mm_observations_upstream(
+                    session,
+                    obj,
+                    current_depth,
+                    max_depth,
+                    limit,
+                )
 
         elif entity_type == 'observation':
             stmt = select(MentalModel).where(
@@ -390,4 +418,78 @@ class LineageService(BaseService):
             entity_type=entity_type,
             entity=entity_data,
             derived_from=children,
+        )
+
+    async def _build_mm_observations_upstream(
+        self,
+        session: Any,
+        mm: Any,
+        current_depth: int,
+        max_depth: int,
+        limit: int,
+    ) -> list[LineageResponse]:
+        """Build observation subtree for a single mental model (upstream)."""
+        obs_nodes: list[LineageResponse] = []
+        observations = mm.observations or []
+        count = 0
+        for obs in observations:
+            if count >= limit:
+                break
+            obs_children: list[LineageResponse] = []
+
+            if current_depth + 1 < max_depth:
+                evidence = obs.get('evidence', [])
+                ev_count = 0
+                for item in evidence:
+                    if ev_count >= limit:
+                        break
+                    mem_id_str = item.get('memory_id')
+                    if mem_id_str:
+                        try:
+                            mem_id = UUID(str(mem_id_str))
+                            ev_child = await self._get_lineage_upstream(
+                                session,
+                                'memory_unit',
+                                mem_id,
+                                current_depth + 2,
+                                max_depth,
+                                limit,
+                            )
+                            obs_children.append(ev_child)
+                            ev_count += 1
+                        except (ValueError, ResourceNotFoundError):
+                            pass
+
+            obs_node = LineageResponse(
+                entity_type='observation',
+                entity=_sanitize_data(obs),
+                derived_from=obs_children,
+            )
+            obs_nodes.append(obs_node)
+            count += 1
+        return obs_nodes
+
+    async def _build_mental_model_upstream(
+        self,
+        session: Any,
+        mm: Any,
+        current_depth: int,
+        max_depth: int,
+        limit: int,
+    ) -> LineageResponse:
+        """Build a full mental_model LineageResponse node with its observation subtree."""
+        mm_data = _sanitize_data(mm.model_dump())
+        obs_children: list[LineageResponse] = []
+        if current_depth < max_depth:
+            obs_children = await self._build_mm_observations_upstream(
+                session,
+                mm,
+                current_depth,
+                max_depth,
+                limit,
+            )
+        return LineageResponse(
+            entity_type='mental_model',
+            entity=mm_data,
+            derived_from=obs_children,
         )

@@ -74,6 +74,7 @@ async def test_get_lineage_upstream_mental_model(api, mock_session):
     # Mock exec for MentalModel lookup
     mock_result = MagicMock()
     mock_result.first.return_value = mm
+    mock_result.all.return_value = [mm]
     mock_session.exec.return_value = mock_result
 
     # Execute

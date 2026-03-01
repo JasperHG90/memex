@@ -81,10 +81,11 @@ interface NodeEntry {
   entityType: string;
   content?: string;
   raw: Record<string, unknown>;
+  vaultId?: string;
 }
 
 function getLabel(entity: Record<string, unknown>): string {
-  const title = entity.title ?? entity.name;
+  const title = entity.title ?? entity.name ?? entity.canonical_name;
   if (typeof title === 'string' && title) return title;
 
   const meta = entity.doc_metadata;
@@ -125,6 +126,7 @@ function lineageToGraph(
     memory_unit: 2,
     observation: 3,
     mental_model: 4,
+    entity: 5,
   };
 
   function processNode(node: LineageResponse): string {
@@ -133,12 +135,14 @@ function lineageToGraph(
     const id = String(entity.id ?? entity.uuid ?? `anon-${Math.random()}`);
 
     if (!nodesMap.has(id)) {
+      const vaultId = typeof entity.vault_id === 'string' ? entity.vault_id : undefined;
       nodesMap.set(id, {
         id,
         label: getLabel(entity),
         entityType,
         content: getContent(entity),
         raw: entity,
+        vaultId,
       });
     }
 
@@ -205,6 +209,7 @@ function lineageToGraph(
       highlighted: false,
       dimmed: false,
       raw: entry.raw,
+      vaultId: entry.vaultId,
     } satisfies LineageNodeData,
   }));
 
