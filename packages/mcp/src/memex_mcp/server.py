@@ -955,11 +955,11 @@ async def memex_list_entities(
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
 
         if query:
-            vault_ids = [resolved_vault_id] if resolved_vault_id else None
-            entities = await api.search_entities(query, limit=limit, vault_ids=vault_ids)
+            entities = await api.search_entities(query, limit=limit, vault_id=resolved_vault_id)
         else:
-            vault_ids = [resolved_vault_id] if resolved_vault_id else None
-            entities = [e async for e in api.list_entities_ranked(limit=limit, vault_ids=vault_ids)]
+            entities = [
+                e async for e in api.list_entities_ranked(limit=limit, vault_id=resolved_vault_id)
+            ]
 
         if not entities:
             return 'No entities found.'
