@@ -314,6 +314,9 @@ async def search_memory(
     ] = False,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[bool, typer.Option('--minimal', help='Output unit IDs only.')] = False,
+    compact: Annotated[
+        bool, typer.Option('--compact', help='One line per result: type + truncated text.')
+    ] = False,
     no_semantic: Annotated[
         bool, typer.Option('--no-semantic', help='Exclude semantic (vector) strategy.')
     ] = False,
@@ -374,6 +377,14 @@ async def search_memory(
         if minimal:
             for unit in results:
                 console.print(str(unit.id))
+            return
+
+        if compact:
+            for unit in results:
+                text = unit.text.replace('\n', ' ')[:200]
+                cs = unit.confidence_score
+                marker = '[!] ' if cs is not None and cs < 0.3 else ''
+                print(f'- [{unit.fact_type}] {marker}{text}')
             return
 
         if json_output:

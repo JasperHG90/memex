@@ -581,27 +581,27 @@ async def memex_search(
         output = [f"Found {len(results)} results for '{query}':\n"]
 
         for i, res in enumerate(results, 1):
-            score_str = f' (Score: {res.score:.2f})' if res.score is not None else ''
+            score_str = f' ({res.score:.2f})' if res.score is not None else ''
 
-            snippet = res.text[:500] + '...' if len(res.text) > 500 else res.text
+            snippet = res.text[:300] + '...' if len(res.text) > 300 else res.text
 
             unit_type = getattr(res, 'fact_type', 'unknown')
             unit_type = getattr(unit_type, 'value', unit_type)
 
             # Include date if available
             date = res.mentioned_at or res.occurred_start
-            date_str = f' (Date: {date.isoformat()})' if date else ''
+            date_str = f' ({date.isoformat()})' if date else ''
 
             # Include confidence annotation for contradicted/disputed opinions
             confidence = res.confidence_score if hasattr(res, 'confidence_score') else None
             confidence_str = ''
             if confidence is not None and confidence < 0.3:
-                confidence_str = ' [CONTRADICTED - Low Confidence]'
+                confidence_str = ' [CONTRADICTED]'
             elif confidence is not None and confidence < 0.5:
                 confidence_str = ' [Disputed]'
 
             output.append(
-                f'{i}. [Type: {unit_type}] [Unit ID: {res.id}] [Note ID: {res.note_id}]'
+                f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
                 f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
 
@@ -674,8 +674,8 @@ async def memex_note_search(
                 lines.append(f'- **Source:** {src}')
             if doc.snippets:
                 lines.append('- **Snippets:**')
-                for snippet in doc.snippets[:3]:
-                    text = snippet.text.strip()[:300]
+                for snippet in doc.snippets[:2]:
+                    text = snippet.text.strip()[:200]
                     prefix = f'*[{snippet.node_title}]* ' if snippet.node_title else ''
                     lines.append(f'  - {prefix}{text}')
             if doc.reasoning:
@@ -690,11 +690,7 @@ async def memex_note_search(
             if ans := next((r.answer for r in results if r.answer), None):
                 lines += ['---', '## Synthesized Answer', ans]
 
-        lines.append(
-            'Tip: Use `memex_get_page_index` with a Note ID to browse the table of contents.'
-        )
-        lines.append('Tip: Use `memex_get_node` with a Node ID to retrieve specific section text.')
-        lines.append('Tip: Use `memex_read_note` only as a fallback for small notes.')
+        lines.append('Use memex_get_page_index / memex_get_node to read sections.')
         return '\n'.join(lines)
 
     except Exception as e:
@@ -1141,7 +1137,10 @@ async def memex_get_memory_unit(
         if unit.occurred_start:
             lines.append(f'**Occurred:** {unit.occurred_start} — {unit.occurred_end or "ongoing"}')
         if unit.metadata:
-            lines.append(f'**Metadata:** {unit.metadata}')
+            meta_str = str(unit.metadata)
+            if len(meta_str) > 200:
+                meta_str = meta_str[:197] + '...'
+            lines.append(f'**Metadata:** {meta_str}')
         lines.append(f'\n## Text\n{unit.text}')
 
         return '\n'.join(lines)
