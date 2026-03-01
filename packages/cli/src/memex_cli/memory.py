@@ -532,6 +532,93 @@ async def reflect(
             handle_api_error(e)
 
 
+@app.command('submit-evidence')
+@async_command
+async def submit_evidence(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the opinion memory unit.')],
+    evidence_type: Annotated[
+        str,
+        typer.Argument(
+            help='Evidence type key: user_validation, user_rejection, corroboration, '
+            'logical_contradiction, execution_success, execution_failure, '
+            'catastrophic_failure, llm_consensus, minor_error.'
+        ),
+    ],
+    description: Annotated[
+        str | None, typer.Option('--description', '-d', help='Description of the evidence.')
+    ] = None,
+):
+    """
+    Submit evidence to adjust an opinion's confidence score (Bayesian update).
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.adjust_belief(uuid_obj, evidence_type, description=description)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    before_pct = int(round(result.confidence_before * 100))
+    after_pct = int(round(result.confidence_after * 100))
+    console.print(f'[bold green]Evidence recorded:[/bold green] {evidence_type}')
+    console.print(f'Confidence: {before_pct}% → {after_pct}%')
+    console.print(f'[dim]Parameters: α={result.alpha:.1f}, β={result.beta:.1f}[/dim]')
+
+
+@app.command('evidence-log')
+@async_command
+async def evidence_log(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit.')],
+    limit: Annotated[int, typer.Option('--limit', '-l', help='Max entries to show.')] = 20,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    Show the evidence audit trail for a memory unit.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+
+    async with get_api_context(config) as api:
+        try:
+            logs = await api.get_evidence_log(uuid_obj, limit=limit)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if not logs:
+        console.print('[yellow]No evidence log entries found.[/yellow]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps([log.model_dump() for log in logs], default=str))
+        return
+
+    table = Table(title=f'Evidence Log ({len(logs)} entries)')
+    table.add_column('Time', style='dim')
+    table.add_column('Type', style='cyan')
+    table.add_column('Before', style='yellow', justify='right')
+    table.add_column('After', style='green', justify='right')
+    table.add_column('Description', style='white')
+
+    for log in logs:
+        before_pct = f'{int(round(log.confidence_before * 100))}%'
+        after_pct = f'{int(round(log.confidence_after * 100))}%'
+        table.add_row(
+            str(log.created_at.strftime('%Y-%m-%d %H:%M')),
+            log.evidence_type,
+            before_pct,
+            after_pct,
+            log.description or '',
+        )
+
+    console.print(table)
+
+
 @app.command('lineage')
 @async_command
 async def get_lineage(
