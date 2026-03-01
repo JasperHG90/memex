@@ -757,9 +757,13 @@ class MemexAPI:
         unit_uuid: str | UUID,
         evidence_type_key: str,
         description: str | None = None,
-    ) -> None:
+    ) -> dict[str, float]:
         """Adjust belief confidence. Delegates to ReflectionService."""
-        await self._reflection.adjust_belief(unit_uuid, evidence_type_key, description)
+        return await self._reflection.adjust_belief(unit_uuid, evidence_type_key, description)
+
+    async def get_evidence_log(self, unit_id: UUID, *, limit: int = 20) -> list:
+        """Get evidence log for a memory unit. Delegates to ReflectionService."""
+        return await self._reflection.get_evidence_log(unit_id, limit=limit)
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""

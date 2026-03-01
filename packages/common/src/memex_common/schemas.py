@@ -285,6 +285,33 @@ class AdjustBeliefRequest(BaseModel):
     description: str | None = Field(default=None, description='Optional explanation.')
 
 
+class AdjustBeliefResponse(BaseModel):
+    """Response from a belief adjustment."""
+
+    unit_id: UUID
+    evidence_type: str
+    confidence_before: float
+    confidence_after: float
+    alpha: float
+    beta: float
+
+
+class EvidenceLogDTO(BaseModel):
+    """DTO for an evidence log entry."""
+
+    id: UUID
+    unit_id: UUID
+    evidence_type: str
+    description: str | None
+    alpha_before: float
+    beta_before: float
+    alpha_after: float
+    beta_after: float
+    confidence_before: float
+    confidence_after: float
+    created_at: dt.datetime
+
+
 class CreateVaultRequest(BaseModel):
     """Request to create a new vault."""
 

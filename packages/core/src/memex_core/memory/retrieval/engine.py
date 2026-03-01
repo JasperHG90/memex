@@ -236,8 +236,8 @@ class RetrievalEngine:
         # 9. Deduplicate and Cite
         final_results = self._deduplicate_and_cite(final_results)
 
-        # 9b. Demote contradicted opinions
-        final_results = self._apply_confidence_penalty(final_results)
+        # 9b. Confidence-weighted reranking
+        final_results = self._apply_confidence_weighting(final_results)
 
         # 10. Update Resonance
         if final_results:
@@ -664,19 +664,19 @@ class RetrievalEngine:
             logger.error(f'Failed to update resonance priorities: {e}')
 
     @staticmethod
-    def _apply_confidence_penalty(results: list[MemoryUnit]) -> list[MemoryUnit]:
-        """Demote contradicted opinions (confidence < 0.3) to end of result list."""
-        from memex_core.memory.sql_models import CONTRADICTION_THRESHOLD
+    def _apply_confidence_weighting(results: list[MemoryUnit]) -> list[MemoryUnit]:
+        """Reweight results by combining position score with confidence factor."""
+        from memex_core.memory.confidence import confidence_weight
 
-        confident: list[MemoryUnit] = []
-        contradicted: list[MemoryUnit] = []
-        for unit in results:
-            score = unit.confidence_score
-            if score is not None and score < CONTRADICTION_THRESHOLD:
-                contradicted.append(unit)
-            else:
-                confident.append(unit)
-        return confident + contradicted
+        n = len(results)
+        if n == 0:
+            return results
+        scored = []
+        for i, unit in enumerate(results):
+            position_score = (n - i) / n
+            scored.append((unit, position_score * confidence_weight(unit.confidence_score)))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [u for u, _ in scored]
 
     def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """
