@@ -367,7 +367,7 @@ class BaseFact(SQLModel):
         description='The type/category of the extracted fact. Use:\n'
         '1. **world**: Factual information about the world, definitions, system states, static knowledge, or outcomes of actions. Describes *what things are*, *how they function*, or *what is true* (e.g., "The system uses Python", "Project X is completed"). '
         'Classify as WORLD even if described with past-tense verbs like "established" or "implemented" if the core value is the resulting state.\n'
-        '2. **experience**: Specific episodic events, narrative occurrences, or actions that happened at a specific time. Describes *what happened* (narrative) to a person, system, or organization (e.g., "The server crashed", "We deployed v2", "We had a meeting"). '
+        '2. **event**: Specific episodic events, narrative occurrences, or actions that happened at a specific time. Describes *what happened* (narrative) to a person, system, or organization (e.g., "The server crashed", "We deployed v2", "We had a meeting"). '
         'Do NOT include facts that purely define a state or property, even if they have a start date.',
     )
 
@@ -424,19 +424,19 @@ class RawFact(BaseFact):
     )
     fact_kind: FactKindTypes = Field(
         default=FactKindTypes.CONVERSATION,
-        description="'event' = specific datable occurrence (set occurred dates), "
+        description="'dated' = specific datable occurrence (set occurred dates), "
         "'conversation' = general info (no occurred dates)",
     )
     occurred_start: str | None = Field(
         default=None,
         description='Exact date in ISO 8601 format (YYYY-MM-DD). ONLY use if a specific date is present. Otherwise None. '
-        "WHEN the event happened (ISO timestamp). Only for fact_kind='event'. Leave null for conversations. If a `date "
+        "WHEN the event happened (ISO timestamp). Only for fact_kind='dated'. Leave null for conversations. If a `date "
         "is mentioned in 'when', you **MUST** convert it here.",
     )
     occurred_end: str | None = Field(
         default=None,
         description='Exact date in ISO 8601 format (YYYY-MM-DD). ONLY use if a specific date is present. Otherwise None. '
-        'WHEN the event ended (ISO timestamp). Only for events with duration. Leave null for conversations. '
+        'WHEN the event ended (ISO timestamp). Only for dated events with duration. Leave null for conversations. '
         "If an **end date** is mentioned in 'when', you **MUST** convert it here.",
     )
 
@@ -447,9 +447,9 @@ class RawFact(BaseFact):
     @field_validator('fact_type', mode='before')
     @classmethod
     def normalize_type(cls, v: str) -> str:
-        # Handle LLM tendencies to output 'assistant' instead of 'experience'
-        if v == 'assistant':
-            return 'experience'
+        # Handle LLM tendencies to output 'assistant' or old 'experience' value
+        if v in ('assistant', 'experience'):
+            return 'event'
         return v
 
     @field_validator('occurred_start', 'occurred_end')

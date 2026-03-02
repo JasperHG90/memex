@@ -95,9 +95,9 @@ async def _extract_facts_from_chunk(
     """Extracts facts from a single chunk using DSPy."""
 
     rules = (
-        "1. Extract 'world' and 'experience' facts.\n"
+        "1. Extract 'world' and 'event' facts.\n"
         '2. CLASSIFICATION RULE: Classify facts describing "what something is", "how it works", "system states", or "outcomes" as WORLD. '
-        'Classify facts describing "what happened", "narrative events", or "specific interactions" as EXPERIENCE. '
+        'Classify facts describing "what happened", "narrative events", or "specific interactions" as EVENT. '
         'IMPORTANT: If a fact defines a state (e.g., "The system is push-based"), classify as WORLD even if described with past-tense verbs like "established" or "implemented".\n'
         '3. Consolidate related statements into single facts.\n'
         "4. Resolve coreferences (e.g. 'he' -> 'John').\n"
