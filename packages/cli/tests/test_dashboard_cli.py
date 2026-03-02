@@ -286,6 +286,49 @@ class TestDashboardInstall:
             assert result.exit_code == 0
             mock_dl.assert_called_once_with('v0.0.3a')
 
+    def test_install_from_local_path(self, runner, tmp_path):
+        """--path should install from a local tarball without downloading."""
+        install_dir = tmp_path / 'dashboard'
+
+        tarball_path = tmp_path / 'dashboard-dist.tar.gz'
+        with tarfile.open(tarball_path, 'w:gz') as tf:
+            content = b'<html>local</html>'
+            info = tarfile.TarInfo(name='dist/index.html')
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+            serve_content = b'// serve'
+            info2 = tarfile.TarInfo(name='serve.cjs')
+            info2.size = len(serve_content)
+            tf.addfile(info2, io.BytesIO(serve_content))
+
+        with (
+            patch('memex_cli.dashboard.shutil.which', return_value='/usr/bin/node'),
+            patch('memex_cli.dashboard._get_install_dir', return_value=install_dir),
+            patch('memex_cli.dashboard._download_dashboard_asset') as mock_dl,
+        ):
+            result = runner.invoke(app, ['install', '--path', str(tarball_path)])
+            assert result.exit_code == 0
+            assert 'installed to' in result.stdout
+            assert (install_dir / 'dist' / 'index.html').exists()
+            assert (install_dir / 'serve.cjs').exists()
+            mock_dl.assert_not_called()
+            # Tarball should not be deleted when user-provided
+            assert tarball_path.exists()
+
+    def test_install_from_local_path_not_found(self, runner, tmp_path):
+        """--path with a nonexistent file should error."""
+        result = runner.invoke(app, ['install', '--path', str(tmp_path / 'nope.tar.gz')])
+        assert result.exit_code == 1
+        assert 'File not found' in result.stdout
+
+    def test_install_path_and_version_conflict(self, runner, tmp_path):
+        """--path and --version together should error."""
+        tarball_path = tmp_path / 'fake.tar.gz'
+        tarball_path.touch()
+        result = runner.invoke(app, ['install', '--path', str(tarball_path), '--version', 'v1.0.0'])
+        assert result.exit_code == 1
+        assert 'mutually exclusive' in result.stdout
+
 
 class TestDashboardStop:
     def test_stop_running(self, runner):

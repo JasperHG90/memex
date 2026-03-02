@@ -109,8 +109,19 @@ def install(
         None, '--version', '-v', help='Release tag to install (e.g. v0.0.3a). Default: latest.'
     ),
     force: bool = typer.Option(False, '--force', '-f', help='Overwrite existing installation.'),
+    path: Path | None = typer.Option(
+        None, '--path', '-p', help='Path to a local dashboard-dist.tar.gz file.'
+    ),
 ) -> None:
     """Download and install the Memex Dashboard from GitHub releases."""
+    if path is not None and version is not None:
+        console.print('[bold red]Error:[/bold red] --path and --version are mutually exclusive.')
+        raise typer.Exit(1)
+
+    if path is not None and not path.exists():
+        console.print(f'[bold red]Error:[/bold red] File not found: [cyan]{path}[/cyan].')
+        raise typer.Exit(1)
+
     if not shutil.which('node'):
         console.print('[bold red]Error:[/bold red] Node.js is not installed or not on PATH.')
         console.print('Install Node.js from: [cyan]https://nodejs.org/[/cyan]')
@@ -123,7 +134,8 @@ def install(
         console.print('Use [cyan]--force[/cyan] to overwrite.')
         raise typer.Exit(0)
 
-    tarball = _download_dashboard_asset(version)
+    downloaded = path is None
+    tarball = path if path is not None else _download_dashboard_asset(version)
     try:
         # Clean existing install
         if install_dir.exists():
@@ -136,7 +148,8 @@ def install(
         console.print(f'[green]Dashboard installed to {install_dir}.[/green]')
         console.print('Start it with: [cyan]memex dashboard start[/cyan]')
     finally:
-        tarball.unlink(missing_ok=True)
+        if downloaded:
+            tarball.unlink(missing_ok=True)
 
 
 @app.command()
