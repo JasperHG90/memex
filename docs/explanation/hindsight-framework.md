@@ -26,13 +26,6 @@ graph TD
         F -->|Synthesize| G[AI Answer]
     end
 
-    subgraph "Opinion Formation (Background Task)"
-        F -.->|Post-Query Analysis| H[CARA Evaluation]
-        G -.->|Post-Query Analysis| H
-        H -->|Form Opinion| I[Bayesian Belief Update]
-        I -->|Adjust Confidence| C
-    end
-
     subgraph "3. Reflection (Slow Path)"
         C -.->|Trigger| J[Reflection Queue]
         J -->|Periodically| K[Hunt Evidence]
@@ -65,7 +58,7 @@ When a user or AI agent queries Memex, the recall loop retrieves relevant inform
 - **P**robabilistic — Semantic vector similarity (dense retrieval via cosine distance).
 - **R**anking — Keyword matching (sparse retrieval via PostgreSQL full-text search with ts_rank_cd).
 
-Each strategy contributes candidates, and RRF combines them into a single ranked list. After fusion, results pass through confidence weighting (opinions are scaled by their Bayesian confidence score) and MMR diversity filtering (near-duplicate results are pruned using a hybrid cosine + entity Jaccard similarity kernel). The reason for multiple strategies is that no single retrieval method works best for all queries — entity-centric questions benefit from graph traversal, while conceptual questions benefit from semantic search.
+Each strategy contributes candidates, and RRF combines them into a single ranked list. After fusion, results pass through MMR diversity filtering (near-duplicate results are pruned using a hybrid cosine + entity Jaccard similarity kernel). The reason for multiple strategies is that no single retrieval method works best for all queries — entity-centric questions benefit from graph traversal, while conceptual questions benefit from semantic search.
 
 **Practical example:** The query "What deployment decisions did we make?" triggers:
 - *Temporal* surfaces recent deployment-related facts
@@ -83,7 +76,7 @@ The process has five phases:
 1. **Phase 0 — Update Existing**: Re-evaluate existing observations against new evidence. Compute trend direction (strengthening, weakening, stable, stale, new).
 2. **Phase 1 — Seed**: The LLM reads recent memories and proposes candidate observations — higher-level insights that connect multiple facts.
 3. **Phase 2 — Hunt**: For each candidate observation, Memex searches the knowledge graph for supporting and contradicting evidence using vector similarity.
-4. **Phase 3 — Validate**: The LLM evaluates each candidate against the gathered evidence, assigning confidence scores and citing specific memory units.
+4. **Phase 3 — Validate**: The LLM evaluates each candidate against the gathered evidence, citing specific memory units.
 5. **Phase 4 — Compare**: The LLM merges validated observations with existing ones, resolving duplicates and contradictions.
 6. **Phase 5 — Finalize**: Observations are embedded and stored in the mental model, which is versioned and timestamped.
 
@@ -98,19 +91,6 @@ Priority = (weight_urgency * accumulated_evidence)
 ```
 
 Entities with more new evidence, more global mentions, and more user queries are reflected upon first.
-
-## Opinion Formation (CARA)
-
-CARA (Context, Action, Result, Analysis) is the mechanism by which Memex forms *opinions* — beliefs about contested or evolving facts. It uses Bayesian confidence scoring to track how much evidence supports or contradicts each fact.
-
-- **Context**: What was the situation when the information was captured?
-- **Action**: What did the agent or user do?
-- **Result**: What was the outcome or feedback?
-- **Analysis**: What should be learned from this?
-
-When Memex encounters contradictory facts (e.g., "the migration deadline is Q2" vs. "the migration deadline was pushed to Q3"), CARA evaluates the evidence and assigns confidence scores. Facts with low confidence are annotated as `[Disputed]` or `[CONTRADICTED]` in search results.
-
-The confidence model uses Bayesian belief updates: each piece of evidence shifts the alpha/beta parameters of a Beta distribution, and the mean confidence score (alpha / (alpha + beta)) determines whether a fact is trusted.
 
 ## Design Principles
 

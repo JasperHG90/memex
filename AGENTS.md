@@ -96,7 +96,6 @@ Python monorepo managed by `uv`.
 
 <constraint name="test-practices">
 - Use `uuid4()` in content to prevent `idempotency_check` failures.
-- Use `skip_opinion_formation=True` in payloads to avoid LLM calls in non-LLM tests.
 - Use `patch.dict(os.environ, ...)` for config tests.
 - Ensure `ensure_db_env_vars` fixture is active for E2E tests.
 </constraint>

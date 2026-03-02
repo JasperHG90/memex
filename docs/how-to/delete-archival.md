@@ -22,7 +22,7 @@ memex note delete <note_uuid>
 1. The note record is removed from the database.
 2. The file content and assets are deleted from the FileStore (disk).
 3. All text chunks associated with the note are deleted.
-4. All memory units (facts, observations, opinions) derived solely from this note are deleted.
+4. All memory units (facts, events) derived solely from this note are deleted.
 5. Entity links from the deleted units are removed. Entities themselves are **not** deleted, as they may be referenced by other notes.
 
 To skip the confirmation prompt in scripts:
@@ -35,7 +35,7 @@ memex note delete <note_uuid> --force
 
 ### Delete a Memory Unit
 
-Remove a single fact, opinion, or experience without deleting the source note:
+Remove a single memory unit without deleting the source note:
 
 ```bash
 memex memory delete <unit_uuid>
@@ -44,7 +44,7 @@ memex memory delete <unit_uuid>
 **Cascade effect:**
 
 1. The memory unit is removed.
-2. Entity links, memory links, and evidence records for that unit are deleted.
+2. Entity links and memory links for that unit are deleted.
 
 To skip confirmation:
 
