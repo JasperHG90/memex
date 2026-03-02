@@ -51,7 +51,11 @@ class NoteService:
             return doc.model_dump()
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
-        """Retrieve the page index (slim tree) for a document, or None if not indexed."""
+        """Retrieve the page index for a document, or None if not indexed.
+
+        Returns a dict with ``metadata`` (title, description, tags, etc.)
+        and ``toc`` (the slim tree hierarchy).
+        """
         from memex_core.memory.sql_models import Note
 
         async with self.metastore.session() as session:
