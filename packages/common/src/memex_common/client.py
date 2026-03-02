@@ -202,6 +202,7 @@ class RemoteMemexAPI:
         skip_opinion_formation: bool = False,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
+        include_stale: bool = False,
     ) -> list[MemoryUnitDTO]:
         """Search for memories."""
         request = RetrievalRequest(
@@ -212,6 +213,7 @@ class RemoteMemexAPI:
             skip_opinion_formation=skip_opinion_formation,
             token_budget=token_budget,
             strategies=strategies,
+            include_stale=include_stale,
         )
         result = await self._post('memories/search', request)
         return [MemoryUnitDTO(**r) for r in result]

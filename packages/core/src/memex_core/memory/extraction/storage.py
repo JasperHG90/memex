@@ -822,3 +822,24 @@ async def cleanup_orphaned_entities(
     stmt = delete(Entity).where(col(Entity.id).not_in(select(subq.c.entity_id)))
     result = await session.exec(stmt)
     return result.rowcount  # type: ignore[return-value]
+
+
+async def cleanup_orphaned_mental_models(
+    session: AsyncSession,
+) -> int:
+    """Remove mental models whose entity_id has zero remaining UnitEntity links.
+
+    Follows the same pattern as ``cleanup_orphaned_entities``.  Intended to
+    run as a periodic background maintenance task.
+
+    Returns:
+        Number of orphaned mental models deleted.
+    """
+    from memex_core.memory.sql_models import MentalModel, UnitEntity
+
+    linked_entity_ids = select(UnitEntity.entity_id).distinct().subquery()
+    stmt = delete(MentalModel).where(
+        col(MentalModel.entity_id).not_in(select(linked_entity_ids.c.entity_id))
+    )
+    result = await session.exec(stmt)
+    return result.rowcount  # type: ignore[return-value]

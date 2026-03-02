@@ -85,11 +85,11 @@ def test_deduplicate_malformed_evidence_ids():
     results = [u1, u2]
     deduplicated = engine._deduplicate_and_cite(results)
 
-    # Should collapse u1 into u2 because u1_id is valid
-    assert len(deduplicated) == 1
-    assert deduplicated[0].id == u2.id
+    # Both units remain; citation metadata is attached to u2
+    assert len(deduplicated) == 2
 
-    citations = deduplicated[0].unit_metadata.get('citations')
+    u2_result = next(u for u in deduplicated if u.id == u2.id)
+    citations = u2_result.unit_metadata.get('citations')
     assert citations is not None
     assert len(citations) == 1
     assert citations[0]['id'] == str(u1_id)

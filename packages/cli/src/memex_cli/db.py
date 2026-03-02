@@ -1,5 +1,6 @@
-"""Database migration commands (wraps Alembic)."""
+"""Database migration and maintenance commands (wraps Alembic)."""
 
+import asyncio
 import logging
 import os
 from typing import Annotated
@@ -12,7 +13,11 @@ from memex_common.config import MemexConfig
 console = Console()
 logger = logging.getLogger('memex_cli.db')
 
-app = typer.Typer(name='database', help='Database schema migration commands.', no_args_is_help=True)
+app = typer.Typer(
+    name='database',
+    help='Database schema migration and maintenance commands.',
+    no_args_is_help=True,
+)
 
 
 def _check_core_installed():
@@ -134,3 +139,38 @@ def revision(
     console.print(f'Generating migration: [bold]{message}[/bold] ...')
     command.revision(cfg, message=message, autogenerate=autogenerate)
     console.print('[green]Done.[/green]')
+
+
+@app.command()
+def cleanup(ctx: typer.Context) -> None:
+    """Purge orphaned entities and mental models from the database.
+
+    Removes entities with no remaining UnitEntity links and mental models
+    whose entity has no remaining links. Safe to run at any time.
+    """
+    _check_core_installed()
+    config: MemexConfig = ctx.obj
+
+    async def _run() -> None:
+        from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
+        from memex_core.memory.extraction.storage import (
+            cleanup_orphaned_entities,
+            cleanup_orphaned_mental_models,
+        )
+
+        engine = AsyncPostgresMetaStoreEngine(config=config.server.meta_store)
+        await engine.connect(create_schema=False)
+        try:
+            async with engine.session() as session:
+                entities_removed = await cleanup_orphaned_entities(session)
+                models_removed = await cleanup_orphaned_mental_models(session)
+                await session.commit()
+            console.print(
+                f'[green]Cleanup complete.[/green] '
+                f'Removed {entities_removed} orphaned entities, '
+                f'{models_removed} orphaned mental models.'
+            )
+        finally:
+            await engine.disconnect()
+
+    asyncio.run(_run())

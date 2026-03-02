@@ -244,18 +244,35 @@ class RetrievalEngine:
         if mmr_lambda is None and self.retrieval_config:
             mmr_lambda = self.retrieval_config.mmr_lambda
         if mmr_lambda is not None and len(final_results) > 1:
-            unit_ids = [u.id for u in final_results]
-            cosine_matrix = await self._compute_pairwise_cosine(session, unit_ids)
-            jaccard_matrix = self._compute_entity_jaccard(final_results)
-            w_emb = self.retrieval_config.mmr_embedding_weight if self.retrieval_config else 0.6
-            w_ent = self.retrieval_config.mmr_entity_weight if self.retrieval_config else 0.4
-            sim_matrix = self._build_hybrid_similarity_matrix(
-                cosine_matrix, jaccard_matrix, w_emb, w_ent
-            )
-            mmr_limit = effective_limit if token_budget is not None else request.limit
-            final_results = self._apply_mmr_diversity(
-                final_results, sim_matrix, mmr_lambda, mmr_limit
-            )
+            # Split out virtual observations (no real embeddings) — they would get
+            # an unfair diversity advantage because cosine returns 0.0 for them.
+            real_units = []
+            virtual_positions: list[tuple[int, MemoryUnit]] = []
+            for idx, u in enumerate(final_results):
+                if u.unit_metadata.get('virtual'):
+                    virtual_positions.append((idx, u))
+                else:
+                    real_units.append(u)
+
+            if real_units and len(real_units) > 1:
+                unit_ids = [u.id for u in real_units]
+                cosine_matrix = await self._compute_pairwise_cosine(session, unit_ids)
+                jaccard_matrix = self._compute_entity_jaccard(real_units)
+                w_emb = self.retrieval_config.mmr_embedding_weight if self.retrieval_config else 0.6
+                w_ent = self.retrieval_config.mmr_entity_weight if self.retrieval_config else 0.4
+                sim_matrix = self._build_hybrid_similarity_matrix(
+                    cosine_matrix, jaccard_matrix, w_emb, w_ent
+                )
+                mmr_limit = effective_limit if token_budget is not None else request.limit
+                real_units = self._apply_mmr_diversity(
+                    real_units, sim_matrix, mmr_lambda, mmr_limit
+                )
+
+            # Re-insert virtual units at their original relative positions
+            final_results = list(real_units)
+            for orig_pos, vunit in virtual_positions:
+                insert_at = min(orig_pos, len(final_results))
+                final_results.insert(insert_at, vunit)
 
         # 10. Update Resonance
         if final_results:
@@ -816,11 +833,11 @@ class RetrievalEngine:
     def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """
         Identify 'Observation' units and their evidence.
-        If the evidence (Fact) is also in the list, remove the Fact from the top-level list
-        and cite it within the Observation's metadata.
+        Attach citation metadata to observations that reference facts in the result set.
+        Both facts and observations remain in the results — the reranker decides relevance
+        and MMR handles diversity.
         """
         unit_map = {u.id: u for u in units}
-        ids_to_remove = set()
 
         for unit in units:
             evidence_ids = unit.unit_metadata.get('evidence_ids', []) or []
@@ -846,7 +863,6 @@ class RetrievalEngine:
                     if evid in unit_map and evid != unit.id:
                         cited_unit = unit_map[evid]
                         citations.append(cited_unit)
-                        ids_to_remove.add(cited_unit.id)
 
                 if citations:
                     existing_citations = unit.unit_metadata.get('citations', [])
@@ -860,7 +876,7 @@ class RetrievalEngine:
                     ]
                     unit.unit_metadata['citations'] = existing_citations + new_citations
 
-        return [u for u in units if u.id not in ids_to_remove]
+        return units
 
     def _convert_mm_to_units(self, model: MentalModel) -> list[MemoryUnit]:
         """Converts a MentalModel into virtual MemoryUnits for observations."""
@@ -901,6 +917,7 @@ class RetrievalEngine:
                     embedding=[],
                     unit_metadata={
                         'observation': True,
+                        'virtual': True,
                         'trend': str(trend.value) if hasattr(trend, 'value') else str(trend),
                         'evidence_ids': evidence_ids,
                     },

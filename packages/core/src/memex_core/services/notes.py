@@ -141,13 +141,34 @@ class NoteService:
         Uses AsyncTransaction for atomicity across metastore + filestore.
         ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
         FileStore cleanup handles: assets and filestore_path.
+        After deletion, orphaned mental models (entities with no remaining links) are cleaned up.
         """
-        from memex_core.memory.sql_models import Note
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import (
+            MentalModel,
+            MemoryUnit,
+            Note,
+            UnitEntity,
+        )
 
         async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
             doc = await txn.db_session.get(Note, note_id)
             if not doc:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            # Collect entity_ids linked to this note's memory units before deletion.
+            unit_ids_stmt = select(MemoryUnit.id).where(col(MemoryUnit.note_id) == note_id)
+            unit_ids_result = await txn.db_session.exec(unit_ids_stmt)
+            unit_ids = list(unit_ids_result.all())
+
+            entity_ids_for_cleanup: set[UUID] = set()
+            if unit_ids:
+                entity_stmt = select(UnitEntity.entity_id).where(
+                    col(UnitEntity.unit_id).in_(unit_ids)
+                )
+                entity_result = await txn.db_session.exec(entity_stmt)
+                entity_ids_for_cleanup = set(entity_result.all())
 
             # Stage filestore deletes (deferred until commit)
             if doc.assets:
@@ -158,5 +179,21 @@ class NoteService:
 
             # ORM cascades handle memory_units, chunks, and their children
             await txn.db_session.delete(doc)
+
+            # Flush so cascades execute, then clean up orphaned mental models
+            await txn.db_session.flush()
+
+            if entity_ids_for_cleanup:
+                for eid in entity_ids_for_cleanup:
+                    # Check if any other units still reference this entity
+                    remaining = await txn.db_session.exec(
+                        select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
+                    )
+                    if remaining.first() is None:
+                        # No remaining links — delete mental models for this entity
+                        mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
+                        mm_result = await txn.db_session.exec(mm_stmt)
+                        for mm in mm_result.all():
+                            await txn.db_session.delete(mm)
 
         return True

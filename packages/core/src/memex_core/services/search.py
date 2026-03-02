@@ -70,6 +70,8 @@ class SearchService:
             vaults.append(
                 await self._vaults.resolve_vault_identifier(self.config.server.active_vault)
             )
+            for av in self.config.server.attached_vaults:
+                vaults.append(await self._vaults.resolve_vault_identifier(av))
 
         request = RetrievalRequest(
             query=query,
@@ -124,6 +126,8 @@ class SearchService:
             vaults.append(
                 await self._vaults.resolve_vault_identifier(self.config.server.active_vault)
             )
+            for av in self.config.server.attached_vaults:
+                vaults.append(await self._vaults.resolve_vault_identifier(av))
 
         kwargs: dict[str, Any] = {}
         if strategies is not None:
