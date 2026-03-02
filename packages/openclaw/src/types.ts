@@ -31,7 +31,6 @@ export interface MemorySearchRequest {
   limit?: number;
   offset?: number;
   vault_ids?: string[] | null;
-  skip_opinion_formation?: boolean;
   token_budget?: number | null;
 }
 

@@ -100,7 +100,6 @@ export class MemexClient {
     const request: MemorySearchRequest = {
       query,
       limit: effectiveLimit,
-      skip_opinion_formation: true,
       vault_ids: [vaultIdentifier],
       ...(effectiveTokenBudget != null && { token_budget: effectiveTokenBudget }),
     };

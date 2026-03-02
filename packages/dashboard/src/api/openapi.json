@@ -1505,55 +1505,6 @@
         }
       }
     },
-    "/api/v1/memories/{unit_uuid}/belief": {
-      "patch": {
-        "summary": "Adjust Memory Belief",
-        "description": "Adjust belief confidence for a memory unit.",
-        "operationId": "adjust_memory_belief_api_v1_memories__unit_uuid__belief_patch",
-        "parameters": [
-          {
-            "name": "unit_uuid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Unit Uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AdjustBeliefRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/memories/{id}": {
       "get": {
         "summary": "Get Memory Unit",
@@ -1596,7 +1547,7 @@
       },
       "delete": {
         "summary": "Delete Memory Unit",
-        "description": "Delete a memory unit and all associated data (entity links, memory links, evidence).",
+        "description": "Delete a memory unit and all associated data (entity links, memory links).",
         "operationId": "delete_memory_unit_api_v1_memories__id__delete",
         "parameters": [
           {
@@ -1743,40 +1694,6 @@
   },
   "components": {
     "schemas": {
-      "AdjustBeliefRequest": {
-        "properties": {
-          "unit_uuid": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Unit Uuid",
-            "description": "The UUID of the memory unit."
-          },
-          "evidence_type_key": {
-            "type": "string",
-            "title": "Evidence Type Key",
-            "description": "The type of evidence (e.g. \"confirm\")."
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description",
-            "description": "Optional explanation."
-          }
-        },
-        "type": "object",
-        "required": [
-          "unit_uuid",
-          "evidence_type_key"
-        ],
-        "title": "AdjustBeliefRequest",
-        "description": "Request to adjust belief confidence."
-      },
       "BatchIngestRequest": {
         "properties": {
           "notes": {
@@ -2024,8 +1941,7 @@
         "type": "string",
         "enum": [
           "world",
-          "experience",
-          "opinion",
+          "event",
           "observation"
         ],
         "title": "FactTypes",
@@ -2339,7 +2255,7 @@
             },
             "type": "array",
             "title": "Source Note Ids",
-            "description": "List of source note IDs. For facts, typically single. For opinions, derived from evidence.",
+            "description": "List of source note IDs. For facts, typically single.",
             "examples": [
               [
                 "123e4567-e89b-12d3-a456-426614174000"
@@ -2372,30 +2288,6 @@
             "examples": [
               0.95
             ]
-          },
-          "confidence_alpha": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confidence Alpha",
-            "description": "Alpha parameter of Beta distribution (positive evidence)."
-          },
-          "confidence_beta": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confidence Beta",
-            "description": "Beta parameter of Beta distribution (negative evidence)."
           }
         },
         "type": "object",
@@ -2405,7 +2297,7 @@
           "id"
         ],
         "title": "MemoryUnitDTO",
-        "description": "DTO for a Memory Unit (Fact/Experience)."
+        "description": "DTO for a Memory Unit (Fact/Event)."
       },
       "NodeDTO": {
         "properties": {
@@ -3004,12 +2896,6 @@
             "type": "boolean",
             "title": "Include Stale",
             "description": "Whether to include stale memory units in results.",
-            "default": false
-          },
-          "skip_opinion_formation": {
-            "type": "boolean",
-            "title": "Skip Opinion Formation",
-            "description": "Whether to skip the automated opinion formation loop.",
             "default": false
           }
         },

@@ -23,8 +23,7 @@ import { toast } from 'sonner';
 
 const FACT_TYPE_COLORS: Record<string, string> = {
   world: '#3B82F6',
-  experience: '#A855F7',
-  opinion: '#F59E0B',
+  event: '#A855F7',
   observation: '#22C55E',
 };
 
