@@ -25,7 +25,7 @@ Memex's memory system is organized around the Hindsight Framework, which consist
 
 The extraction phase (`memex_core.memory.extraction`) processes ingested notes to produce structured knowledge:
 
-- **Fact extraction**: An LLM analyzes each note to identify discrete facts, experiences, and observations. Each extracted fact becomes a memory unit with metadata including temporal references and confidence scores.
+- **Fact extraction**: An LLM analyzes each note to identify discrete facts and events. Each extracted fact becomes a memory unit with metadata including temporal references.
 - **Entity resolution**: Named entities (people, technologies, concepts, organizations) are identified and resolved against existing entities in the knowledge graph. Duplicate detection uses both exact matching and semantic similarity to merge references to the same entity.
 - **Embedding generation**: Dense vector embeddings are computed for each memory unit and note chunk, enabling semantic similarity search. The embeddings capture meaning beyond keyword overlap, allowing the system to find conceptually related information.
 

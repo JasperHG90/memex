@@ -14,7 +14,7 @@ The Memex MCP server exposes these tools to connected AI clients:
 
 | Tool | Purpose |
 | :--- | :--- |
-| `memex_search` | Search memory units (facts, opinions, observations) via TEMPR |
+| `memex_search` | Search memory units (facts, events, observations) via TEMPR |
 | `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
 | `memex_add_note` | Save new knowledge to Memex |
 | `memex_read_note` | Read full note content (fallback — prefer `get_page_index` + `get_node`) |

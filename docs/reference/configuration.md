@@ -184,20 +184,6 @@ TEMPR multi-strategy search configuration.
 
 ---
 
-#### Opinion Formation (`server.memory.opinion_formation`)
-
-Bayesian confidence scoring for memory units.
-
-##### Confidence (`server.memory.opinion_formation.confidence`)
-
-| Key | Type | Default | Description |
-|:----|:-----|:--------|:------------|
-| `damping_factor` | float | `0.1` | Factor by which neighbor confidence is dampened when inherited. |
-| `max_inherited_mass` | float | `10.0` | Maximum combined alpha+beta that can be inherited from neighbors. |
-| `similarity_threshold` | float | `0.8` | Minimum cosine similarity to consider a neighbor for inheritance. |
-
----
-
 #### Reflection (`server.memory.reflection`)
 
 Hindsight Reflection Engine configuration for synthesizing observations into mental models.
@@ -213,7 +199,7 @@ Hindsight Reflection Engine configuration for synthesizing observations into men
 | `similarity_threshold` | float | `0.6` | >= 0 | Minimum similarity score for retrieving evidence. |
 | `min_priority` | float | `0.3` | 0-1 | Minimum priority score required for an entity to be selected for reflection. |
 | `tail_sampling_rate` | float | `0.05` | 0-1 | Rate for tail sampling of traces/memories (5% default). |
-| `background_reflection_enabled` | bool | `true` | — | Whether to run the periodic reflection loop in the background. |
+| `background_reflection_enabled` | bool | `false` | — | Whether to run the periodic reflection loop in the background. |
 | `background_reflection_interval_seconds` | int | `600` | >= 10 | Interval in seconds between background reflection runs. |
 | `background_reflection_batch_size` | int | `10` | > 0 | Number of entities to process in each background reflection batch. |
 

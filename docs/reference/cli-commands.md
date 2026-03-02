@@ -25,7 +25,7 @@ These options apply to all commands and must be specified before the subcommand.
 
 ## `memory`
 
-Ingest and search memories (facts and opinions).
+Ingest and search memories.
 
 ### `memory add`
 
@@ -104,7 +104,6 @@ Search the knowledge base using TEMPR retrieval strategies.
 | `--limit` | | int | `5` | Maximum number of results to return. |
 | `--token-budget` | `-t` | int | - | Token budget for retrieval context. |
 | `--answer` | `-a` | bool | `False` | Generate an AI-synthesized answer from results. |
-| `--skip-opinions` | | bool | `False` | Skip automated opinion formation during search. |
 | `--json` | | bool | `False` | Output results as JSON. |
 | `--minimal` | | bool | `False` | Output memory unit IDs only (one per line). |
 | `--no-semantic` | | bool | `False` | Exclude semantic (vector) strategy. |
@@ -140,7 +139,7 @@ memex memory search "error handling" --no-graph --no-temporal --no-mental-model
 memex memory delete UNIT_ID [OPTIONS]
 ```
 
-Delete a memory unit and all associated data (entity links, memory links, evidence).
+Delete a memory unit and all associated data (entity links, memory links).
 
 #### Arguments
 
