@@ -13,7 +13,7 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 Requires Python 3.12+ and `uv`.
 
 ```bash
-uv tool install git+https://github.com/JasperHG90/memex.git[mcp,server]
+uv tool install "git+https://github.com/JasperHG90/memex.git#subdirectory=packages/cli[mcp,server]"
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
