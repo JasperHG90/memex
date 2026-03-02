@@ -332,6 +332,9 @@ async def search_memory(
     no_mental_model: Annotated[
         bool, typer.Option('--no-mental-model', help='Exclude mental model strategy.')
     ] = False,
+    include_stale: Annotated[
+        bool, typer.Option('--include-stale', help='Include stale memory units in results.')
+    ] = False,
 ):
     """
     Search for memories.
@@ -358,6 +361,11 @@ async def search_memory(
     if strategies is not None:
         console.print(f'[dim]Active strategies: {", ".join(strategies)}[/dim]')
 
+    # Resolve vault_ids to pass directly to the server
+    vault_ids: list[str] | None = None
+    if vault:
+        vault_ids = [v.strip() for v in vault]
+
     async with get_api_context(config) as api:
         try:
             results = await api.search(
@@ -366,6 +374,8 @@ async def search_memory(
                 skip_opinion_formation=skip_opinions,
                 token_budget=token_budget,
                 strategies=strategies,
+                vault_ids=vault_ids,
+                include_stale=include_stale,
             )
         except Exception as e:
             handle_api_error(e)
