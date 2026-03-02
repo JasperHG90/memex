@@ -17,8 +17,7 @@ import type { MemoryUnitDTO } from '@/api/generated';
 
 const FACT_TYPE_COLORS: Record<string, string> = {
   world: '#3B82F6',
-  experience: '#A855F7',
-  opinion: '#F59E0B',
+  event: '#A855F7',
   observation: '#22C55E',
 };
 
@@ -44,7 +43,6 @@ export default function Timeline() {
           rerank: true,
           include_vectors: false,
           include_stale: false,
-          skip_opinion_formation: true,
           vault_ids: vaultIds.length > 0 ? vaultIds : undefined,
         },
         {

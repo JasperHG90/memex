@@ -337,7 +337,7 @@ describe('memex_search tool', () => {
   it('returns formatted results on success', async () => {
     const api = registerPlugin();
     const m1 = makeMemoryUnit({ text: 'fact one', fact_type: 'observation' });
-    const m2 = makeMemoryUnit({ text: 'fact two', fact_type: 'experience' });
+    const m2 = makeMemoryUnit({ text: 'fact two', fact_type: 'event' });
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
@@ -612,7 +612,7 @@ describe('memex_get_entity tool', () => {
       )
       .mockResolvedValueOnce(
         jsonResponse([
-          { id: 'm1', text: 'TypeScript is great', fact_type: 'opinion', score: 0.9 },
+          { id: 'm1', text: 'TypeScript is great', fact_type: 'observation', score: 0.9 },
         ]),
       );
 
