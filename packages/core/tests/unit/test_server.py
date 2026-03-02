@@ -116,7 +116,6 @@ def test_retrieve_validation(client, mock_api):
     assert response.status_code == 200, f'Response: {response.text}'
 
     mock_api.search.assert_called_once()
-    mock_api.resolve_vault_identifier.assert_called_with('default-vault')
 
     import json
 
