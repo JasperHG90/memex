@@ -37,7 +37,7 @@ from memex_core.memory.extraction.utils import parse_datetime
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
     assemble_llm_chunks,
-    build_thin_tree,
+    build_page_index_with_metadata,
     diff_blocks,
     diff_page_index_blocks,
     find_node_hash,
@@ -408,8 +408,12 @@ class ExtractionEngine:
                         fact_text=raw_fact.formatted_text,
                         fact_type=raw_fact.fact_type,
                         entities=raw_fact.entities,
-                        occurred_start=None,
-                        occurred_end=None,
+                        occurred_start=parse_datetime(raw_fact.occurred_start)
+                        if raw_fact.occurred_start
+                        else None,
+                        occurred_end=parse_datetime(raw_fact.occurred_end)
+                        if raw_fact.occurred_end
+                        else None,
                         causal_relations=_convert_causal_relations(
                             relations_from_llm=raw_fact.causal_relations,
                             fact_start_idx=fact_start_idx,
@@ -781,12 +785,23 @@ class ExtractionEngine:
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
-        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
-        await storage.update_note_page_index(session, note_id, thin_tree)
+        retain_params = contents[0].payload if contents else {}
+        page_index = build_page_index_with_metadata(
+            page_index_output.toc,
+            metadata={
+                'title': retain_params.get('note_name'),
+                'description': retain_params.get('note_description'),
+                'tags': retain_params.get('tags', []),
+                'publish_date': str(event_date) if event_date else None,
+                'source_uri': retain_params.get('source_uri'),
+            },
+            min_node_tokens=min_tokens,
+        )
+        await storage.update_note_page_index(session, note_id, page_index)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
-            page_index_toc=thin_tree,
+            page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
             session=session,
@@ -876,15 +891,26 @@ class ExtractionEngine:
             min_node_tokens=min_tokens,
         )
 
-        # 3. Build hash-stable thin tree for storage
-        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
-        await storage.update_note_page_index(session, effective_doc_id, thin_tree)
+        # 3. Build hash-stable thin tree with metadata for storage
+        retain_params = contents[0].payload if contents else {}
+        page_index = build_page_index_with_metadata(
+            page_index_output.toc,
+            metadata={
+                'title': retain_params.get('note_name'),
+                'description': retain_params.get('note_description'),
+                'tags': retain_params.get('tags', []),
+                'publish_date': str(event_date) if event_date else None,
+                'source_uri': retain_params.get('source_uri'),
+            },
+            min_node_tokens=min_tokens,
+        )
+        await storage.update_note_page_index(session, effective_doc_id, page_index)
 
         # Resolve and store the document title from the TOC / block summaries.
         # This supersedes the rough title stored by _track_document above.
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
-            page_index_toc=thin_tree,
+            page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
             session=session,

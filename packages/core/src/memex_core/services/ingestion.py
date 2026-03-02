@@ -250,6 +250,7 @@ ingested_at: {now}
                     'assets': asset_files_list,
                     'source_uri': note.source_uri,
                     'content_fingerprint': note.content_fingerprint,
+                    'tags': note._metadata.tags or [],
                 },
                 vault_id=target_vault_id,
             )
@@ -364,6 +365,7 @@ ingested_at: {now}
                                 'filestore_path': asset_path if asset_files_list else None,
                                 'assets': asset_files_list,
                                 'content_fingerprint': note_fingerprints[original_idx],
+                                'tags': note_dto.tags or [],
                             },
                             vault_id=target_vault_id,
                         )
