@@ -4,7 +4,7 @@ import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.config import ExtractionConfig, SimpleTextSplitting, ConfidenceConfig, ModelConfig
+from memex_core.config import ExtractionConfig, SimpleTextSplitting, ModelConfig
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.entity_resolver import EntityResolver
@@ -41,7 +41,6 @@ async def test_extract_and_persist_end_to_end(session: AsyncSession):
 
     extractor = ExtractionEngine(
         config=config,
-        confidence_config=ConfidenceConfig(),
         lm=lm,
         predictor=predictor,
         embedding_model=embedding_model,

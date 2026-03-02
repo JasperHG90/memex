@@ -171,29 +171,7 @@ async def test_cascade_delete(session: AsyncSession):
     assert result is None
 
 
-# --- 3. CHECK CONSTRAINT TEST ---
-@pytest.mark.asyncio
-async def test_check_constraints_negative_beta(session: AsyncSession):
-    """
-    Test that the DB rejects negative confidence_beta values.
-    """
-    unit = MemoryUnit(
-        text='Invalid Confidence',
-        embedding=[0.0] * 384,
-        event_date=datetime.now(timezone.utc),
-        fact_type=FactTypes.WORLD,
-        # INVALID: This violates confidence_beta >= 0.0
-        confidence_alpha=1.0,
-        confidence_beta=-5.0,
-    )
-    session.add(unit)
-
-    # Expect an IntegrityError (Database rejected the row)
-    with pytest.raises((IntegrityError, DBAPIError)):
-        await session.commit()
-
-
-# --- 4. PGVECTOR SEARCH TEST ---
+# --- 3. PGVECTOR SEARCH TEST ---
 @pytest.mark.asyncio
 async def test_vector_search(session: AsyncSession):
     """

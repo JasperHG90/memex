@@ -7,7 +7,6 @@ from memex_core.memory.sql_models import (
     MentalModel,
     TokenUsage,
     ReflectionQueue,
-    EvidenceLog,
     Chunk,
     Entity,
 )
@@ -113,21 +112,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     )
     session.add(reflection_queue)
 
-    # EvidenceLog (depends on Unit and Vault)
-    el_id = uuid.uuid4()
-    evidence_log = EvidenceLog(
-        id=el_id,
-        vault_id=vault_id,
-        unit_id=unit_id,
-        evidence_type='update',
-        description='Test update',
-        alpha_before=1.0,
-        beta_before=1.0,
-        alpha_after=2.0,
-        beta_after=1.0,
-    )
-    session.add(evidence_log)
-
     await session.commit()
 
     # 3. Verify entities exist
@@ -139,7 +123,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     assert await session.get(MentalModel, mm_id)
     assert await session.get(TokenUsage, tu_id)
     assert await session.get(ReflectionQueue, rq_id)
-    assert await session.get(EvidenceLog, el_id)
 
     # 4. Create Global Vault entities (Control group)
     # Global vault should already exist from fixture
@@ -171,7 +154,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     assert (await session.get(MentalModel, mm_id)) is None
     assert (await session.get(TokenUsage, tu_id)) is None
     assert (await session.get(ReflectionQueue, rq_id)) is None
-    assert (await session.get(EvidenceLog, el_id)) is None
 
     # 7. Verify Control group remains
     assert await session.get(Vault, GLOBAL_VAULT_ID)

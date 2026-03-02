@@ -26,13 +26,10 @@ def client(mock_api):
 def test_retrieve_lineage_resolution(client, mock_api):
     # Setup Data
     doc_1 = uuid4()
-    doc_2 = uuid4()
 
     fact_unit_id = uuid4()
-    opinion_unit_id = uuid4()
-    evidence_unit_id = uuid4()
 
-    # 1. Fact Unit (Direct Link)
+    # Fact Unit (Direct Link)
     fact_unit = SimpleNamespace(
         id=fact_unit_id,
         note_id=doc_1,
@@ -48,27 +45,8 @@ def test_retrieve_lineage_resolution(client, mock_api):
         score=1.0,
     )
 
-    # 2. Opinion Unit (Indirect Link via Evidence)
-    opinion_unit = SimpleNamespace(
-        id=opinion_unit_id,
-        note_id=None,  # Opinions don't have a single source doc usually
-        text='Opinion Text',
-        fact_type=FactTypes.OPINION,
-        status='active',
-        mentioned_at=None,
-        occurred_start=None,
-        occurred_end=None,
-        event_date=datetime.now(timezone.utc),
-        vault_id=uuid4(),
-        unit_metadata={'evidence_indices': [str(evidence_unit_id)]},
-        score=0.9,
-    )
-
-    mock_api.search.return_value = [fact_unit, opinion_unit]
-
-    # Mocks resolution method we are about to add
-    # It should map Unit ID -> Document ID
-    mock_api.resolve_source_notes.return_value = {evidence_unit_id: doc_2}
+    mock_api.search.return_value = [fact_unit]
+    mock_api.resolve_source_notes.return_value = {}
 
     # Execute
     payload = {'query': 'test', 'limit': 10}
@@ -83,13 +61,3 @@ def test_retrieve_lineage_resolution(client, mock_api):
     assert data[0]['id'] == str(fact_unit_id)
     assert 'source_note_ids' in data[0]
     assert data[0]['source_note_ids'] == [str(doc_1)]
-
-    # Verify Opinion Lineage
-    assert data[1]['id'] == str(opinion_unit_id)
-    assert 'source_note_ids' in data[1]
-    assert data[1]['source_note_ids'] == [str(doc_2)]
-
-    # Verify we called resolution with the correct evidence ID
-    mock_api.resolve_source_notes.assert_called_once()
-    called_ids = mock_api.resolve_source_notes.call_args[0][0]
-    assert evidence_unit_id in called_ids

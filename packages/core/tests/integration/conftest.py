@@ -279,7 +279,6 @@ def memex_config(postgres_uri: str) -> 'MemexConfig':
         ExtractionConfig,
         SimpleTextSplitting,
         ModelConfig,
-        ConfidenceConfig,
         ReflectionConfig,
         PostgresMetaStoreConfig,
         PostgresInstanceConfig,
@@ -288,7 +287,6 @@ def memex_config(postgres_uri: str) -> 'MemexConfig':
         ServerConfig,
         MemoryConfig,
         RetrievalConfig,
-        OpinionFormationConfig,
     )
     from urllib.parse import urlparse
 
@@ -319,13 +317,6 @@ def memex_config(postgres_uri: str) -> 'MemexConfig':
                     model=ModelConfig(model='gemini/gemini-3-flash-preview'),
                 ),
                 retrieval=RetrievalConfig(token_budget=2000),
-                opinion_formation=OpinionFormationConfig(
-                    confidence=ConfidenceConfig(
-                        similarity_threshold=0.5,  # Permissive for tests
-                        damping_factor=0.1,
-                        max_inherited_mass=10.0,
-                    )
-                ),
             ),
         )
     )

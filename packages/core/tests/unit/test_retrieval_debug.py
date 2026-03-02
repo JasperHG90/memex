@@ -251,8 +251,6 @@ class TestBuildRetrievalDtosDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         if debug_info is not None:
             object.__setattr__(unit, '_debug_info', debug_info)
@@ -356,8 +354,6 @@ class TestSearchEndpointDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         mock_api.search.return_value = [unit]
         mock_api.resolve_source_notes.return_value = {}
@@ -399,8 +395,6 @@ class TestSearchEndpointDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         # Simulate engine attaching debug info
         object.__setattr__(
