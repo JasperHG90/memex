@@ -8,6 +8,12 @@ In this tutorial, we will start the Memex Dashboard and walk through its key vie
 * Some ingested content in at least one vault
 * Node.js installed ([nodejs.org](https://nodejs.org/))
 
+## Installing the dashboard
+
+To install the dashboard, you can run `memex dashboard install`
+
+> [!WARNING] As memex is currently private, you won't be able to downloade the releases. Instead, download the dashboard  distribution tarball from a release and install it using `memex dashboard install --path path/to/downloaded/tarball`
+
 ## Step 1: Start the Dashboard
 
 First, let's make sure the Memex API server is running:
