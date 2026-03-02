@@ -1,25 +1,8 @@
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from memex_core.memory.sql_models import MentalModel, Observation, MemoryUnit
+from memex_core.memory.sql_models import MentalModel, Observation
 from memex_core.config import GLOBAL_VAULT_ID
-
-
-class OpinionFormationRequest(BaseModel):
-    """
-    Request to form opinions based on an interaction.
-    """
-
-    query: str = Field(description="The user's original query.")
-    context: list[MemoryUnit] = Field(
-        description='Optional structured context with full memory units.'
-    )
-    answer: str = Field(description="The agent's final answer.")
-    agent_name: str = Field(default='reasoning_agent', description='The identity of the agent.')
-    vault_id: UUID = Field(
-        default=GLOBAL_VAULT_ID,
-        description='The UUID of the vault where this reasoning takes place.',
-    )
 
 
 class ReflectionRequest(BaseModel):
