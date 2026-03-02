@@ -12,9 +12,7 @@ class SearchSummarySignature(dspy.Signature):
     Only cite results that directly support a claim. If no results are relevant,
     say so explicitly.
 
-    IMPORTANT: Results marked [CONTRADICTED] have been superseded by newer information.
-    Prefer more recent, non-contradicted results. When a contradiction exists between
-    results, favor the correction over the original claim.
+    When results conflict, prefer more recent information.
     """
 
     query: str = dspy.InputField(desc='The original user search query.')
