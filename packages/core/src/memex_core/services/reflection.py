@@ -1,4 +1,4 @@
-"""Reflection service — opinion formation, reflection, and belief adjustment."""
+"""Reflection service — reflection and mental model synthesis."""
 
 from __future__ import annotations
 
@@ -13,12 +13,11 @@ from memex_core.config import MemexConfig
 from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.reflect.models import (
-    OpinionFormationRequest,
     ReflectionRequest,
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit, Observation
+from memex_core.memory.sql_models import Observation
 from memex_core.memory.models.embedding import FastEmbedder
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
@@ -26,7 +25,7 @@ logger = logging.getLogger('memex.core.services.reflection')
 
 
 class ReflectionService:
-    """Reflection, opinion formation, and belief adjustment operations.
+    """Reflection operations.
 
     Unlike other services, ReflectionService has heavier dependencies
     because reflection interacts with the memory engine, LLM, and queue.
@@ -50,50 +49,6 @@ class ReflectionService:
         self.queue_service = queue_service
         self.embedding_model = embedding_model
         self._reflection_lock = asyncio.Lock()
-
-    async def process_opinion_formation(
-        self, query: str, context: list[MemoryUnit], vault_id: UUID
-    ) -> None:
-        """
-        Process the opinion formation loop.
-        Synthesizes an answer and forms opinions.
-        Intended to be capable of running as a background task.
-        """
-        answer = await self._synthesize_answer(query, context)
-
-        op_request = OpinionFormationRequest(
-            query=query, context=context, answer=answer, vault_id=vault_id
-        )
-        await self.form_opinions(op_request)
-
-    async def process_opinion_formation_minimal(
-        self, query: str, context: list[dict], vault_id: UUID
-    ) -> None:
-        """
-        Process opinion formation with minimal context to prevent memory leaks.
-        Receives only lightweight dicts and fetches units by ID in a fresh session,
-        instead of holding full MemoryUnit objects in the background task.
-        """
-        unit_ids = [UUID(c['id']) for c in context if 'id' in c]
-
-        async with self.metastore.session() as session:
-            from sqlmodel import select, col
-
-            stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(unit_ids))
-            result = await session.exec(stmt)
-            fresh_units = list(result.all())
-
-            if not fresh_units:
-                return
-
-            answer = await self._synthesize_answer(query, fresh_units)
-
-            op_request = OpinionFormationRequest(
-                query=query, context=fresh_units, answer=answer, vault_id=vault_id
-            )
-
-            await self.memory.form_opinions(session, op_request)
-            await session.commit()
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
         """Run reflection in the background, ensuring serialization via lock."""
@@ -121,21 +76,6 @@ class ReflectionService:
                 logger.info(f'Completed background batch reflection for {len(requests)} entities')
             except Exception as e:
                 logger.error(f'Error during background batch reflection: {e}', exc_info=True)
-
-    async def _synthesize_answer(self, query: str, context: list[MemoryUnit]) -> str:
-        """Helper to generate an answer for opinion formation context."""
-
-        class RagSignature(dspy.Signature):
-            """Answer the query given the context."""
-
-            context = dspy.InputField()
-            question = dspy.InputField()
-            answer = dspy.OutputField()
-
-        predictor = dspy.Predict(RagSignature)
-        with dspy.context(lm=self.lm):
-            pred = predictor(context=[u.text for u in context], question=query)
-            return pred.answer
 
     async def reflect(self, request: ReflectionRequest) -> ReflectionResult:
         """Reflect on a single entity to update its Mental Model."""
@@ -218,56 +158,6 @@ class ReflectionService:
                     )
                 )
             return results
-
-    async def form_opinions(self, request: OpinionFormationRequest) -> list[Any]:
-        """Extract and persist opinions based on a recent interaction."""
-        async with self.metastore.session() as session:
-            return await self.memory.form_opinions(session, request)
-
-    async def adjust_belief(
-        self,
-        unit_uuid: str | UUID,
-        evidence_type_key: str,
-        description: str | None = None,
-    ) -> dict[str, float]:
-        """Adjust the confidence of a memory unit based on new evidence."""
-        async with self.metastore.session() as session:
-            result = await self._extraction.adjust_belief(
-                session, str(unit_uuid), evidence_type_key, description
-            )
-            await session.commit()
-            return result
-
-    async def get_evidence_log(self, unit_id: UUID, *, limit: int = 20) -> list[dict]:
-        """Retrieve the evidence audit trail for a memory unit."""
-        async with self.metastore.session() as session:
-            from sqlmodel import select, col
-            from memex_core.memory.sql_models import EvidenceLog
-
-            statement = (
-                select(EvidenceLog)
-                .where(col(EvidenceLog.unit_id) == unit_id)
-                .order_by(col(EvidenceLog.created_at).desc())
-                .limit(limit)
-            )
-            result = await session.exec(statement)
-            logs = result.all()
-            return [
-                {
-                    'id': log.id,
-                    'unit_id': log.unit_id,
-                    'evidence_type': log.evidence_type,
-                    'description': log.description,
-                    'alpha_before': log.alpha_before,
-                    'beta_before': log.beta_before,
-                    'alpha_after': log.alpha_after,
-                    'beta_after': log.beta_after,
-                    'confidence_before': log.alpha_before / (log.alpha_before + log.beta_before),
-                    'confidence_after': log.alpha_after / (log.alpha_after + log.beta_after),
-                    'created_at': log.created_at,
-                }
-                for log in logs
-            ]
 
     async def get_reflection_queue_batch(
         self,

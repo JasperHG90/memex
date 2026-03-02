@@ -15,12 +15,9 @@ from memex_common.schemas import (
     ReflectionRequest,
     IngestURLRequest,
     IngestFileRequest,
-    AdjustBeliefRequest,
-    AdjustBeliefResponse,
     BatchJobStatus,
     CreateVaultRequest,
     DefaultVaultsResponse,
-    EvidenceLogDTO,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -199,7 +196,6 @@ class RemoteMemexAPI:
         limit: int = 10,
         offset: int = 0,
         vault_ids: list[UUID | str] | None = None,
-        skip_opinion_formation: bool = False,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
@@ -210,7 +206,6 @@ class RemoteMemexAPI:
             limit=limit,
             offset=offset,
             vault_ids=vault_ids,
-            skip_opinion_formation=skip_opinion_formation,
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
@@ -481,28 +476,6 @@ class RemoteMemexAPI:
             params['vault_id'] = str(vault_id)
         result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
-
-    async def adjust_belief(
-        self,
-        unit_uuid: UUID | str,
-        evidence_type_key: str,
-        description: str | None = None,
-    ) -> AdjustBeliefResponse:
-        """Adjust belief confidence for a memory unit."""
-        request = AdjustBeliefRequest(
-            unit_uuid=UUID(str(unit_uuid)),
-            evidence_type_key=evidence_type_key,
-            description=description,
-        )
-        result = await self._patch(f'memories/{unit_uuid}/belief', request)
-        return AdjustBeliefResponse(**result)
-
-    async def get_evidence_log(
-        self, unit_id: UUID | str, *, limit: int = 20
-    ) -> list[EvidenceLogDTO]:
-        """Retrieve the evidence audit trail for a memory unit."""
-        result = await self._get(f'memories/{unit_id}/evidence-log', params={'limit': limit})
-        return [EvidenceLogDTO(**item) for item in result]
 
     async def get_resource(self, path: str) -> bytes:
         """

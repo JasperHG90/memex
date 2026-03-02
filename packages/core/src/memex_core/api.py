@@ -38,7 +38,6 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.reflect.models import (
     ReflectionRequest,
     ReflectionResult,
-    OpinionFormationRequest,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.memory.sql_models import MemoryUnit
@@ -322,9 +321,7 @@ class MemexAPI:
             self.lm = dspy.settings.lm
 
         # 4. Entity Resolver
-        self.entity_resolver = EntityResolver(
-            resolution_threshold=self.config.server.memory.opinion_formation.confidence.similarity_threshold
-        )
+        self.entity_resolver = EntityResolver()
 
         # 5. DSPy Predictor
         self.predictor = dspy.Predict(ExtractSemanticFacts)
@@ -332,7 +329,6 @@ class MemexAPI:
         # Initialize Engines
         self._extraction = ExtractionEngine(
             config=self.config.server.memory.extraction,
-            confidence_config=self.config.server.memory.opinion_formation.confidence,
             lm=self.lm,
             predictor=self.predictor,
             embedding_model=self.embedding_model,
@@ -666,7 +662,6 @@ class MemexAPI:
         self,
         query: str,
         limit: int = 10,
-        skip_opinion_formation: bool = False,
         vault_ids: list[UUID | str] | None = None,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
@@ -677,7 +672,6 @@ class MemexAPI:
         return await self._search.search(
             query=query,
             limit=limit,
-            skip_opinion_formation=skip_opinion_formation,
             vault_ids=vault_ids,
             token_budget=token_budget,
             strategies=strategies,
@@ -720,18 +714,6 @@ class MemexAPI:
         """Resolve source note IDs. Delegates to SearchService."""
         return await self._search.resolve_source_notes(unit_ids)
 
-    async def process_opinion_formation(
-        self, query: str, context: list[MemoryUnit], vault_id: UUID
-    ) -> None:
-        """Process opinion formation. Delegates to ReflectionService."""
-        await self._reflection.process_opinion_formation(query, context, vault_id)
-
-    async def process_opinion_formation_minimal(
-        self, query: str, context: list[dict], vault_id: UUID
-    ) -> None:
-        """Process opinion formation with minimal context. Delegates to ReflectionService."""
-        await self._reflection.process_opinion_formation_minimal(query, context, vault_id)
-
     async def background_reflect(self, request: ReflectionRequest) -> None:
         """Run background reflection. Delegates to ReflectionService."""
         await self._reflection.background_reflect(request)
@@ -747,23 +729,6 @@ class MemexAPI:
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
-
-    async def form_opinions(self, request: OpinionFormationRequest) -> list[Any]:
-        """Form opinions. Delegates to ReflectionService."""
-        return await self._reflection.form_opinions(request)
-
-    async def adjust_belief(
-        self,
-        unit_uuid: str | UUID,
-        evidence_type_key: str,
-        description: str | None = None,
-    ) -> dict[str, float]:
-        """Adjust belief confidence. Delegates to ReflectionService."""
-        return await self._reflection.adjust_belief(unit_uuid, evidence_type_key, description)
-
-    async def get_evidence_log(self, unit_id: UUID, *, limit: int = 20) -> list:
-        """Get evidence log for a memory unit. Delegates to ReflectionService."""
-        return await self._reflection.get_evidence_log(unit_id, limit=limit)
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""
