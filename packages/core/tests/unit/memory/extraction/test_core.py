@@ -119,31 +119,6 @@ class TestExtractFactsFromChunk:
         assert facts == []
 
     @pytest.mark.asyncio
-    async def test_opinion_extraction_flag(
-        self, mock_lm: DummyLM, mock_predictor: MagicMock, sample_raw_fact: RawFact
-    ) -> None:
-        """Verify opinion extraction flag changes instructions."""
-        mock_result = MagicMock()
-        mock_result.extracted_facts.extracted_facts = [sample_raw_fact]
-        mock_predictor.acall.return_value = mock_result
-        mock_lm.copy = MagicMock(return_value=mock_lm)  # type: ignore
-
-        await _extract_facts_from_chunk(
-            chunk='test',
-            chunk_index=0,
-            total_chunks=1,
-            event_date=dt.datetime.now(),
-            context='',
-            lm=mock_lm,
-            predictor=mock_predictor,
-            extract_opinions=True,
-        )
-
-        # Check call args to verify instructions contained "opinion"
-        call_kwargs = mock_predictor.acall.call_args.kwargs
-        assert "Extract ONLY 'opinion'" in call_kwargs['special_instructions']
-
-    @pytest.mark.asyncio
     async def test_extract_facts_from_chunk_with_semaphore(
         self, mock_lm: DummyLM, mock_predictor: MagicMock, sample_raw_fact: RawFact
     ) -> None:

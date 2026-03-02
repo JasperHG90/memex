@@ -5,9 +5,9 @@ from memex_core.memory.formatting import format_for_embedding, format_for_rerank
 def test_format_for_embedding():
     # Case 1: Standard
     text = 'I changed the oil.'
-    fact_type = 'experience'
+    fact_type = 'event'
     context = 'Maintenance'
-    expected = 'Experience (Maintenance): I changed the oil.'
+    expected = 'Event (Maintenance): I changed the oil.'
     assert format_for_embedding(text, fact_type, context) == expected
 
     # Case 2: No context
@@ -20,11 +20,11 @@ def test_format_for_embedding():
 def test_format_for_reranking():
     dt = datetime(2026, 1, 14)
     text = 'I changed the oil.'
-    fact_type = 'experience'
+    fact_type = 'event'
     context = 'Maintenance'
 
-    # Expected: [Date: January 14, 2026 (2026-01-14)] [Experience] Maintenance: I changed the oil.
-    expected = '[Date: January 14, 2026 (2026-01-14)] [Experience] Maintenance: I changed the oil.'
+    # Expected: [Date: January 14, 2026 (2026-01-14)] [Event] Maintenance: I changed the oil.
+    expected = '[Date: January 14, 2026 (2026-01-14)] [Event] Maintenance: I changed the oil.'
     assert format_for_reranking(text, dt, fact_type, context) == expected
 
     # Case 2: No context

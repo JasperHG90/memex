@@ -115,15 +115,8 @@ def test_retrieve_validation(client, mock_api):
 
     assert response.status_code == 200, f'Response: {response.text}'
 
-    # Verify search was called with skip_opinion_formation=True (enforced by server)
     mock_api.search.assert_called_once()
-    call_kwargs = mock_api.search.call_args[1]
-    assert call_kwargs.get('skip_opinion_formation') is True
-
-    # By default, request.skip_opinion_formation is False, so background task should run.
-    # TestClient runs background tasks after response is returned.
     mock_api.resolve_vault_identifier.assert_called_with('default-vault')
-    mock_api.process_opinion_formation_minimal.assert_called_once()
 
     import json
 
@@ -169,19 +162,6 @@ def test_vault_not_found_error_handling(client, mock_api):
 
     assert response.status_code == 404
     assert "Vault 'missing' not found" in response.json()['detail']
-
-
-def test_retrieve_skip_opinion_explicit(client, mock_api):
-    """Verify background task is NOT scheduled if skip_opinion_formation=True in request."""
-    payload = {'query': 'something', 'limit': 5, 'skip_opinion_formation': True}
-
-    response = client.post('/api/v1/memories/search', json=payload)
-
-    assert response.status_code == 200
-    mock_api.search.assert_called_once()
-
-    # Process opinion formation should NOT be called
-    mock_api.process_opinion_formation.assert_not_called()
 
 
 def test_metrics_endpoint(client):

@@ -59,7 +59,6 @@ def mock_lifespan_dependencies():
         # Ensure deep nesting exists
         config_mock.server.memory.extraction.model.model = 'gemini-1.5-flash'
         config_mock.server.memory.extraction.max_concurrency = 5
-        config_mock.server.memory.opinion_formation.confidence.similarity_threshold = 0.8
         config_mock.server.active_vault = 'global'
         config_mock.server.attached_vaults = []
         config_mock.server.logging.level = 'WARNING'
