@@ -10,7 +10,7 @@ from uuid import UUID
 
 import tiktoken
 from sqlmodel import SQLModel, Field
-from pydantic import BaseModel, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, field_serializer, field_validator
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
@@ -367,8 +367,7 @@ class BaseFact(SQLModel):
         description='The type/category of the extracted fact. Use:\n'
         '1. **world**: Factual information about the world, definitions, system states, static knowledge, or outcomes of actions. Describes *what things are*, *how they function*, or *what is true* (e.g., "The system uses Python", "Project X is completed"). '
         'Classify as WORLD even if described with past-tense verbs like "established" or "implemented" if the core value is the resulting state.\n'
-        '2. **opinion**: Subjective opinions, beliefs, preferences, or sentiments.\n'
-        '3. **experience**: Specific episodic events, narrative occurrences, or actions that happened at a specific time. Describes *what happened* (narrative) to a person, system, or organization (e.g., "The server crashed", "We deployed v2", "We had a meeting"). '
+        '2. **experience**: Specific episodic events, narrative occurrences, or actions that happened at a specific time. Describes *what happened* (narrative) to a person, system, or organization (e.g., "The server crashed", "We deployed v2", "We had a meeting"). '
         'Do NOT include facts that purely define a state or property, even if they have a start date.',
     )
 
@@ -579,31 +578,12 @@ class ProcessedFact(SQLModel):
         default_factory=list, description='Tags for categorization or filtering.'
     )
 
-    confidence_alpha: float | None = Field(
-        default=None,
-        description='Alpha parameter for Beta distribution (positive evidence).',
-    )
-    confidence_beta: float | None = Field(
-        default=None,
-        description='Beta parameter for Beta distribution (negative evidence).',
-    )
-
     @field_validator('occurred_start', 'occurred_end', 'mentioned_at')
     @classmethod
     def ensure_timezone(cls, v: dt.datetime | None) -> dt.datetime | None:
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=dt.timezone.utc)
         return v
-
-    @model_validator(mode='after')
-    def set_default_confidence_for_opinions(self) -> 'ProcessedFact':
-        """Ensure opinions have a default confidence score (neutral prior)."""
-        if self.fact_type == FactTypes.OPINION:
-            if self.confidence_alpha is None:
-                self.confidence_alpha = 1.0
-            if self.confidence_beta is None:
-                self.confidence_beta = 1.0
-        return self
 
     @property
     def is_duplicate(self) -> bool:
