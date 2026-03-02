@@ -19,11 +19,11 @@ def test_e2e_incremental_idempotency(client: TestClient):
     3. Unchanged blocks' memory units are preserved (not marked stale).
     """
 
-    # 1. Setup multi-block content
-    # block_size = 4000
-    # Use realistic lines to allow Line-Based CDC to find boundaries
-    block1 = 'SECTION ONE: The quick brown fox jumps over the lazy dog.\n' * 40  # ~2400 chars
-    block2 = "SECTION TWO: A wizard's quickly-moving jab excited a phantom.\n" * 40  # ~2400 chars
+    # 1. Setup multi-block content with markdown headers for stable block boundaries.
+    # Headers ensure the page indexer uses header-based splitting (not the LLM path),
+    # which produces deterministic block boundaries across document versions.
+    block1 = '# Section One\n\n' + ('The quick brown fox jumps over the lazy dog.\n' * 40)
+    block2 = '# Section Two\n\n' + ("A wizard's quickly-moving jab excited a phantom.\n" * 40)
 
     content_v1 = block1 + '\n\n' + block2
 
@@ -57,9 +57,9 @@ def test_e2e_incremental_idempotency(client: TestClient):
 
     # 3. Incremental Update: Change only SECTION TWO
     print('\n--- Ingesting V2 (Incremental Update) ---')
-    block2_mod = (
-        'SECTION TWO: The wizard was replaced by a giant robotic hamster.\n' * 40
-    )  # ~2400 chars
+    block2_mod = '# Section Two\n\n' + (
+        'The wizard was replaced by a giant robotic hamster.\n' * 40
+    )
     content_v2 = block1 + '\n\n' + block2_mod
 
     payload_v2 = {
