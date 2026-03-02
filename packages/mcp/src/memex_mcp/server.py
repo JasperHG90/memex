@@ -273,7 +273,7 @@ async def memex_read_note(
     except FileNotFoundError:
         raise ToolError(
             f'Note with ID {note_id} not found. '
-            'Note: Retrieving full source notes is only available for fact or experience units. '
+            'Note: Retrieving full source notes is only available for fact or event units. '
             'If you are attempting to read an observation, it does not have a single source note '
             'as it is a synthesized insight. Please check your search results for linkable unit types.'
         )
@@ -517,7 +517,7 @@ async def memex_add_note(
 
 @mcp.tool(
     name='memex_search',
-    description='Search memory units (facts, experiences, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs.',
+    description='Search memory units (facts, events, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs.',
 )
 async def memex_search(
     ctx: Context,

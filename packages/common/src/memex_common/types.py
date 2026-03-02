@@ -51,13 +51,13 @@ class FactTypes(str, enum.Enum):
     """Types of extracted facts."""
 
     WORLD = 'world'
-    EXPERIENCE = 'experience'
+    EVENT = 'event'
     OBSERVATION = 'observation'
 
 
 class FactKindTypes(str, enum.Enum):
     """Kinds of extracted facts."""
 
-    EVENT = 'event'
+    DATED = 'dated'
     CONVERSATION = 'conversation'
     OTHER = 'other'

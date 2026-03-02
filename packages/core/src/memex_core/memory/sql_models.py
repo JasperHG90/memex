@@ -514,7 +514,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
 
     fact_type: FactTypes = Field(
         sa_column=Column(Text, nullable=False, server_default='world'),
-        description='The type/category of the memory unit: world, experience, or observation.',
+        description='The type/category of the memory unit: world, event, or observation.',
     )
 
     occurred_start: datetime | None = Field(
@@ -614,7 +614,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             name='memory_units_chunk_fkey',
             ondelete='SET NULL',
         ),
-        CheckConstraint("fact_type IN ('world', 'experience', 'observation')"),
+        CheckConstraint("fact_type IN ('world', 'event', 'observation')"),
         CheckConstraint("status IN ('active', 'stale')", name='memory_units_status_check'),
         Index('idx_memory_units_note_id', 'note_id'),
         Index('idx_memory_units_chunk_id', 'chunk_id'),
