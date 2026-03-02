@@ -320,7 +320,7 @@ class ReflectionConfig(BaseModel):
         description='Minimum similarity score for retrieving evidence.',
     )
     background_reflection_enabled: bool = Field(
-        default=True,
+        default=False,
         description='Whether to run the periodic reflection loop in the background.',
     )
     background_reflection_interval_seconds: int = Field(
