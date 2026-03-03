@@ -27,16 +27,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. Reclassify opinions as world facts
-    op.execute("UPDATE memory_units SET fact_type = 'world' WHERE fact_type = 'opinion'")
-
-    # 2. Rename experience → event
-    op.execute("UPDATE memory_units SET fact_type = 'event' WHERE fact_type = 'experience'")
-
-    # 3. Drop evidence_log table
-    op.execute('DROP TABLE IF EXISTS evidence_log')
-
-    # 4. Drop old CHECK constraints and add new one
+    # 1. Drop CHECK constraints first (they block the data updates)
     # Drop confidence CHECK (may not exist on all installations)
     op.execute("""
         DO $$
@@ -47,7 +38,7 @@ def upgrade() -> None:
         END $$;
     """)
 
-    # Drop old fact_type CHECK and add new one
+    # Drop old fact_type CHECK
     op.execute("""
         DO $$
         DECLARE
@@ -63,6 +54,17 @@ def upgrade() -> None:
             END LOOP;
         END $$;
     """)
+
+    # 2. Reclassify opinions as world facts
+    op.execute("UPDATE memory_units SET fact_type = 'world' WHERE fact_type = 'opinion'")
+
+    # 3. Rename experience → event
+    op.execute("UPDATE memory_units SET fact_type = 'event' WHERE fact_type = 'experience'")
+
+    # 4. Drop evidence_log table
+    op.execute('DROP TABLE IF EXISTS evidence_log')
+
+    # 5. Add new fact_type CHECK
     op.execute("""
         ALTER TABLE memory_units
         ADD CONSTRAINT memory_units_fact_type_check
