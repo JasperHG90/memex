@@ -470,6 +470,8 @@ async def memex_add_note(
 {markdown_content}
         """.strip()
 
+        effective_note_key = note_key if note_key else f'mcp:add_note:{title}'
+
         note = NoteCreateDTO(
             name=title,
             description=description,
@@ -477,7 +479,7 @@ async def memex_add_note(
             files=files_content,
             tags=tags,
             vault_id=vault_id,
-            note_key=note_key,
+            note_key=effective_note_key,
         )
 
         result = await api.ingest(note, background=background)
@@ -789,6 +791,7 @@ async def memex_batch_ingest(
                 description=f'Imported from {path}',
                 content=base64.b64encode(content),
                 vault_id=vault_id,
+                note_key=str(path.absolute()),
             )
             notes.append(note_dto)
 

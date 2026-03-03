@@ -39,6 +39,23 @@ class TestIsMeaningfulName:
             # UUID-format strings
             ('3f2504e0-4f89-11d3-9a0c-0305e82c3301', False),
             ('3F2504E0-4F89-11D3-9A0C-0305E82C3301', False),
+            # Generic stems (new additions)
+            ('content', False),
+            ('readme', False),
+            ('index', False),
+            ('main', False),
+            ('draft', False),
+            # Filenames with generic stems + recognized extensions
+            ('content.md', False),
+            ('README.md', False),
+            ('index.html', False),
+            ('untitled.txt', False),
+            ('draft.yaml', False),
+            ('main.json', False),
+            # Filenames with meaningful stems (not generic)
+            ('my-meeting-notes.md', True),
+            ('006: Detailing the Sys Layer architecture', True),
+            ('report.pdf', True),  # "report" not in generic names
             # Meaningful names
             ('My Research Notes', True),
             ('Q3 Financial Report', True),

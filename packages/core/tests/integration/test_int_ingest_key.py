@@ -1,8 +1,10 @@
 import pytest
+from unittest.mock import patch, AsyncMock
 from uuid import UUID
 import hashlib
 from memex_core.api import NoteInput
 from memex_core.memory.sql_models import Note
+from memex_common.schemas import NoteCreateDTO
 
 
 @pytest.mark.asyncio
@@ -122,3 +124,105 @@ async def test_ingest_with_explicit_key(api, metastore):
         assert doc is not None
         # With current implementation, the Document record is updated/replaced
         assert doc.original_text == 'content v2'
+
+
+@pytest.mark.asyncio
+async def test_add_note_dedup_via_auto_note_key(api, metastore, fake_retain_factory):
+    """Ingesting via add_note twice with same title should update, not create a second note.
+
+    This simulates what memex_add_note does: auto-deriving note_key from title.
+    """
+    api.memory.retain.side_effect = fake_retain_factory
+
+    title = 'My Unique Topic'
+    auto_key = f'mcp:add_note:{title}'
+    expected_uuid = UUID(hashlib.md5(auto_key.encode()).hexdigest())
+
+    # First ingestion
+    note1 = NoteInput(
+        name=title, description='v1', content=b'first version content', note_key=auto_key
+    )
+    result1 = await api.ingest(note1)
+    assert result1['status'] == 'success'
+    assert UUID(str(result1['note_id'])) == expected_uuid
+
+    # Second ingestion with different content but same key
+    note2 = NoteInput(
+        name=title, description='v1', content=b'second version content', note_key=auto_key
+    )
+    result2 = await api.ingest(note2)
+    assert result2['status'] == 'success'  # incremental update, not duplicated
+
+    # Verify only one note exists with the expected UUID
+    async with metastore.session() as session:
+        doc = await session.get(Note, expected_uuid)
+        assert doc is not None
+        assert doc.original_text == 'second version content'
+
+
+@pytest.mark.asyncio
+async def test_batch_ingest_dedup_via_file_path_key(api, metastore, fake_retain_factory, tmp_path):
+    """Batch-ingesting the same file path twice should skip on idempotency, then update on change."""
+    import base64
+
+    api.memory.retain.side_effect = fake_retain_factory
+
+    file_path = tmp_path / 'test_doc.md'
+    file_key = str(file_path.absolute())
+
+    content_v1 = b'# Hello\n\nFirst version.'
+
+    # Patch resolve_document_title to avoid LLM calls
+    with patch(
+        'memex_core.services.ingestion.resolve_document_title',
+        new_callable=AsyncMock,
+        return_value='Hello',
+    ):
+        # First batch ingest
+        dto1 = NoteCreateDTO(
+            name='test_doc.md',
+            description=f'Imported from {file_path}',
+            content=base64.b64encode(content_v1),
+            note_key=file_key,
+        )
+
+        results = None
+        async for res in api.ingest_batch_internal(notes=[dto1]):
+            results = res
+
+        assert results is not None
+        assert results['processed_count'] == 1
+        assert results['skipped_count'] == 0
+
+        # Second batch ingest — same content, same key → should skip
+        dto2 = NoteCreateDTO(
+            name='test_doc.md',
+            description=f'Imported from {file_path}',
+            content=base64.b64encode(content_v1),
+            note_key=file_key,
+        )
+
+        results2 = None
+        async for res in api.ingest_batch_internal(notes=[dto2]):
+            results2 = res
+
+        assert results2 is not None
+        assert results2['skipped_count'] == 1
+        assert results2['processed_count'] == 0
+
+        # Third batch ingest — different content, same key → incremental update
+        content_v2 = b'# Hello\n\nSecond version with changes.'
+        dto3 = NoteCreateDTO(
+            name='test_doc.md',
+            description=f'Imported from {file_path}',
+            content=base64.b64encode(content_v2),
+            note_key=file_key,
+        )
+
+        results3 = None
+        async for res in api.ingest_batch_internal(notes=[dto3]):
+            results3 = res
+
+        assert results3 is not None
+        assert results3['processed_count'] == 1
+        assert results3['skipped_count'] == 0

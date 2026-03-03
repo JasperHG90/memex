@@ -88,7 +88,7 @@ def fake_retain_factory():
             filestore_path=payload.get('filestore_path'),
             assets=payload.get('assets', []),
         )
-        session.add(doc)
+        await session.merge(doc)
         unit = MemoryUnit(
             note_id=note_id,
             text='Extracted fact',
