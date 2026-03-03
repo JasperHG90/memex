@@ -13,7 +13,7 @@ Reflection is the mechanism that produces these synthesized observations. It run
 A mental model is a versioned, per-entity, per-vault summary of what Memex understands about a topic. Each mental model contains:
 
 - **Entity reference**: The entity this model describes (e.g., "PostgreSQL", "Authentication System")
-- **Observations**: A list of synthesized insights, each with a title, content, confidence score, evidence citations, and trend indicator
+- **Observations**: A list of synthesized insights, each with a title, content, evidence citations, and trend indicator
 - **Version number**: Incremented each time the model is updated
 - **Embedding**: A vector representation of the combined observations, used by the Mental Model retrieval strategy
 - **Last refreshed timestamp**: When reflection last ran for this entity
@@ -76,17 +76,14 @@ The LLM is given context about what observations already exist to avoid generati
 
 For each candidate observation, Memex performs a vector similarity search to find supporting and contradicting evidence in the knowledge graph. This is the "evidence gathering" phase.
 
-The search uses the reflection configuration's `search_limit` (default: 10 candidates) and `similarity_threshold` (default: 0.6) to filter results. Retrieved evidence is re-ranked by `similarity × confidence_weight()`, so well-supported facts are prioritized over disputed ones when building the evidence set.
+The search uses the reflection configuration's `search_limit` (default: 10 candidates) and `similarity_threshold` (default: 0.6) to filter results.
 
 ### Phase 3: Validate (LLM)
 
 The LLM evaluates each candidate observation against the gathered evidence:
 
-- Assigns a **confidence score** based on the strength and consistency of evidence
 - Generates **citations** linking the observation to specific memory units
 - Rejects candidates with insufficient or contradictory evidence
-
-The LLM receives confidence metadata for each piece of evidence (via the `ReflectMemoryContext` model), with guidance that scores ≥ 0.7 indicate well-supported facts and scores < 0.3 suggest contradicted information. This allows the LLM to weigh evidence appropriately when forming observations.
 
 This phase ensures that observations are grounded in actual evidence, not hallucinated by the seed phase.
 
@@ -130,7 +127,7 @@ Key reflection settings in `config.yaml`:
 server:
   memory:
     reflection:
-      background_reflection_enabled: true
+      background_reflection_enabled: false
       background_reflection_interval_seconds: 600
       background_reflection_batch_size: 10
       max_concurrency: 3

@@ -117,7 +117,7 @@ The plugin registers 9 tools using OpenClaw's `api.registerTool()` API, making t
 
 | Tool | Description |
 | :--- | :--- |
-| `memex_search` | Search long-term memories with query, limit, and token budget |
+| `memex_memory_search` | Search long-term memories with query, limit, and token budget |
 | `memex_add_note` | Save a new note (Markdown content, tags, vault) |
 | `memex_note_search` | Search source documents with reason/summarize options |
 | `memex_read_note` | Read a full note by UUID |
@@ -143,4 +143,4 @@ This design means the plugin works out of the box with a local Memex server (no 
 
 * [How to Integrate Memex with OpenClaw](../how-to/openclaw-integration.md) — installation and configuration steps
 * [About the Hindsight Framework](hindsight-framework.md) — the memory architecture the plugin interfaces with
-* [About Retrieval Strategies](retrieval-strategies.md) — how `memex_search` finds relevant memories
+* [About Retrieval Strategies](retrieval-strategies.md) — how `memex_memory_search` finds relevant memories

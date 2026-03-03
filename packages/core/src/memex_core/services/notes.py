@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlmodel import col
 
-from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError
+from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
 from memex_common.schemas import NodeDTO
 
 from memex_core.config import MemexConfig
@@ -50,8 +50,26 @@ class NoteService:
 
             return doc.model_dump()
 
+    async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
+        """Return just the metadata portion of the page index."""
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise ResourceNotFoundError(f'Document {note_id} not found.')
+            if doc.page_index is None:
+                return None
+            if not isinstance(doc.page_index, dict):
+                return None
+            return doc.page_index.get('metadata')
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
-        """Retrieve the page index (slim tree) for a document, or None if not indexed."""
+        """Retrieve the page index for a document, or None if not indexed.
+
+        Returns a dict with ``metadata`` (title, description, tags, etc.)
+        and ``toc`` (the slim tree hierarchy).
+        """
         from memex_core.memory.sql_models import Note
 
         async with self.metastore.session() as session:
@@ -91,7 +109,7 @@ class NoteService:
     ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the given vault_id(s), or the active vault if not provided.
+        Filters by the given vault_id(s), or returns all vaults if not provided.
         """
         from memex_core.memory.sql_models import Note
         from sqlmodel import select
@@ -104,11 +122,6 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
-            else:
-                target_vault_id = await self._vaults.resolve_vault_identifier(
-                    self.config.server.active_vault
-                )
-                stmt = stmt.where(col(Note.vault_id) == target_vault_id)
 
             stmt = stmt.offset(offset).limit(limit)
             return list((await session.exec(stmt)).all())
@@ -197,3 +210,156 @@ class NoteService:
                             await txn.db_session.delete(mm)
 
         return True
+
+    async def migrate_note(self, note_id: UUID, target_vault_id: UUID) -> dict[str, Any]:
+        """
+        Move a note and all associated data to a different vault.
+
+        Atomically updates vault_id on the note and all child records (chunks, nodes,
+        memory_units, unit_entities, memory_links), adjusts filestore paths, cleans up
+        orphaned EntityCooccurrence and MentalModel rows in the source vault, then moves
+        files in the filestore.
+        """
+        from sqlmodel import select, update
+
+        from memex_core.memory.sql_models import (
+            Chunk,
+            EntityCooccurrence,
+            MentalModel,
+            MemoryLink,
+            MemoryUnit,
+            Node,
+            Note,
+            UnitEntity,
+            Vault,
+        )
+
+        async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
+            session = txn.db_session
+
+            # Load note
+            note = await session.get(Note, note_id)
+            if not note:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            source_vault_id = note.vault_id
+            if source_vault_id == target_vault_id:
+                raise ValueError('Source and target vault are the same.')
+
+            # Validate target vault exists
+            target_vault = await session.get(Vault, target_vault_id)
+            if not target_vault:
+                raise VaultNotFoundError(f'Target vault {target_vault_id} not found.')
+
+            # Get source vault name for path rewriting
+            source_vault = await session.get(Vault, source_vault_id)
+            source_vault_name = source_vault.name if source_vault else str(source_vault_id)
+            target_vault_name = target_vault.name
+
+            # Collect unit_ids and entity_ids for this note
+            unit_ids_result = await session.exec(
+                select(MemoryUnit.id).where(col(MemoryUnit.note_id) == note_id)
+            )
+            unit_ids = list(unit_ids_result.all())
+
+            entity_ids_for_cleanup: set[UUID] = set()
+            if unit_ids:
+                entity_result = await session.exec(
+                    select(UnitEntity.entity_id).where(col(UnitEntity.unit_id).in_(unit_ids))
+                )
+                entity_ids_for_cleanup = set(entity_result.all())
+
+            # --- Bulk UPDATE vault_id on all child tables ---
+
+            # Note
+            note.vault_id = target_vault_id
+
+            # Rewrite filestore_path and assets
+            old_prefix = f'assets/{source_vault_name}/{note_id}'
+            new_prefix = f'assets/{target_vault_name}/{note_id}'
+            if note.filestore_path:
+                note.filestore_path = note.filestore_path.replace(old_prefix, new_prefix)
+            if note.assets:
+                note.assets = [a.replace(old_prefix, new_prefix) for a in note.assets]
+
+            # Chunks
+            await session.exec(
+                update(Chunk).where(col(Chunk.note_id) == note_id).values(vault_id=target_vault_id)
+            )
+
+            # Nodes
+            await session.exec(
+                update(Node).where(col(Node.note_id) == note_id).values(vault_id=target_vault_id)
+            )
+
+            # MemoryUnits
+            await session.exec(
+                update(MemoryUnit)
+                .where(col(MemoryUnit.note_id) == note_id)
+                .values(vault_id=target_vault_id)
+            )
+
+            if unit_ids:
+                # UnitEntities
+                await session.exec(
+                    update(UnitEntity)
+                    .where(col(UnitEntity.unit_id).in_(unit_ids))
+                    .values(vault_id=target_vault_id)
+                )
+
+                # MemoryLinks (from or to any of this note's units)
+                await session.exec(
+                    update(MemoryLink)
+                    .where(col(MemoryLink.from_unit_id).in_(unit_ids))
+                    .values(vault_id=target_vault_id)
+                )
+                await session.exec(
+                    update(MemoryLink)
+                    .where(col(MemoryLink.to_unit_id).in_(unit_ids))
+                    .values(vault_id=target_vault_id)
+                )
+
+            # --- Cleanup EntityCooccurrence in source vault for affected entities ---
+            if entity_ids_for_cleanup:
+                for eid in entity_ids_for_cleanup:
+                    co_stmt = select(EntityCooccurrence).where(
+                        col(EntityCooccurrence.vault_id) == source_vault_id,
+                        (col(EntityCooccurrence.entity_id_1) == eid)
+                        | (col(EntityCooccurrence.entity_id_2) == eid),
+                    )
+                    co_result = await session.exec(co_stmt)
+                    for co in co_result.all():
+                        await session.delete(co)
+
+            # --- Cleanup orphaned MentalModels in source vault ---
+            if entity_ids_for_cleanup:
+                await session.flush()
+                for eid in entity_ids_for_cleanup:
+                    remaining = await session.exec(
+                        select(UnitEntity.unit_id)
+                        .where(
+                            col(UnitEntity.entity_id) == eid,
+                            col(UnitEntity.vault_id) == source_vault_id,
+                        )
+                        .limit(1)
+                    )
+                    if remaining.first() is None:
+                        mm_stmt = select(MentalModel).where(
+                            col(MentalModel.entity_id) == eid,
+                            col(MentalModel.vault_id) == source_vault_id,
+                        )
+                        mm_result = await session.exec(mm_stmt)
+                        for mm in mm_result.all():
+                            await session.delete(mm)
+
+        # After transaction commits: move files in filestore
+        if await self.filestore.exists(old_prefix):
+            await self.filestore.move_file(old_prefix, new_prefix)
+
+        return {
+            'status': 'success',
+            'note_id': str(note_id),
+            'source_vault_id': str(source_vault_id),
+            'target_vault_id': str(target_vault_id),
+            'entities_affected': len(entity_ids_for_cleanup),
+        }

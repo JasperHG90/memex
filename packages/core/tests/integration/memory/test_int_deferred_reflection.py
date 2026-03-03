@@ -8,7 +8,6 @@ from memex_core.config import (
     MemexConfig,
     ExtractionConfig,
     SimpleTextSplitting,
-    ConfidenceConfig,
     PostgresMetaStoreConfig,
     PostgresInstanceConfig,
     SecretStr,
@@ -16,7 +15,6 @@ from memex_core.config import (
     ModelConfig,
     ServerConfig,
     MemoryConfig,
-    OpinionFormationConfig,
     ReflectionConfig,
 )
 from memex_core.memory.engine import MemoryEngine
@@ -60,7 +58,6 @@ async def test_deferred_reflection_workflow(session: AsyncSession, postgres_uri:
                     ),
                     max_concurrency=5,
                 ),
-                opinion_formation=OpinionFormationConfig(confidence=ConfidenceConfig()),
                 reflection=ReflectionConfig(),  # Enable reflection queue service
             ),
             meta_store=PostgresMetaStoreConfig(
@@ -83,7 +80,6 @@ async def test_deferred_reflection_workflow(session: AsyncSession, postgres_uri:
 
         extraction_engine = ExtractionEngine(
             config=config.server.memory.extraction,
-            confidence_config=config.server.memory.opinion_formation.confidence,
             lm=lm,
             predictor=predictor,
             embedding_model=embedding_model,

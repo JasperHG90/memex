@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 // --- Enums ---
 
-export const FactTypes = z.enum(['world', 'experience', 'opinion', 'observation']);
+export const FactTypes = z.enum(['world', 'event', 'observation']);
 export type FactTypes = z.infer<typeof FactTypes>;
 
 // --- Core DTOs ---
@@ -43,8 +43,6 @@ export const MemoryUnitDTO = z.object({
   source_note_ids: z.array(z.string().uuid()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   score: z.union([z.number(), z.null()]).optional(),
-  confidence_alpha: z.union([z.number(), z.null()]).optional(),
-  confidence_beta: z.union([z.number(), z.null()]).optional(),
   mentioned_at: z.union([z.string(), z.null()]).optional(),
   occurred_start: z.union([z.string(), z.null()]).optional(),
   occurred_end: z.union([z.string(), z.null()]).optional(),
@@ -123,7 +121,6 @@ export const RetrievalRequest = z.object({
   strategies: z.union([z.array(z.string()), z.null()]).optional(),
   include_vectors: z.boolean().optional().default(false),
   include_stale: z.boolean().optional().default(false),
-  skip_opinion_formation: z.boolean().optional().default(false),
 });
 export type RetrievalRequest = z.infer<typeof RetrievalRequest>;
 

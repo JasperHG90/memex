@@ -5,7 +5,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes
 ## Features
 
 Enables your AI assistant to:
-- **Search** your knowledge base — memory units (`memex_search`) and source notes (`memex_note_search`).
+- **Search** your knowledge base — memory units (`memex_memory_search`) and source notes (`memex_note_search`).
 - **Read** notes hierarchically — table of contents (`memex_get_page_index`) then sections (`memex_get_node`).
 - **Trace** the origin of facts via provenance chains (`memex_get_lineage`).
 - **Save** important context back to Memex (`memex_add_note`).
@@ -16,7 +16,7 @@ Enables your AI assistant to:
 
 | Category | Tools | Count |
 |:---------|:------|------:|
-| Search | `memex_search`, `memex_note_search` | 2 |
+| Search | `memex_memory_search`, `memex_note_search` | 2 |
 | Note Reading | `memex_get_page_index`, `memex_get_node`, `memex_read_note` | 3 |
 | Note Management | `memex_add_note`, `memex_get_template` | 2 |
 | Assets & Resources | `memex_list_assets`, `memex_get_resource` | 2 |

@@ -68,7 +68,6 @@ export function CommandPalette() {
         rerank: true,
         include_vectors: false,
         include_stale: false,
-        skip_opinion_formation: true,
       })
       noteMutate({
         query: searchQuery,

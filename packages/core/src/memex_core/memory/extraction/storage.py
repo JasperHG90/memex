@@ -6,7 +6,7 @@ Handles insertion of facts into the database using SQLModel.
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import case, type_coerce, update
@@ -70,8 +70,6 @@ async def insert_facts_batch(
             'mentioned_at': fact.mentioned_at,
             'context': fact.context,
             'fact_type': fact.fact_type,
-            'confidence_alpha': fact.confidence_alpha,
-            'confidence_beta': fact.confidence_beta,
             'access_count': 0,
             'unit_metadata': metadata_merged,
             'note_id': UUID(effective_doc_id) if effective_doc_id else None,
@@ -296,39 +294,6 @@ async def find_similar_facts(
 
     results = await session.exec(statement)
     return [(row[0], float(row[1])) for row in results.all()]
-
-
-async def update_fact_confidence(
-    session: AsyncSession,
-    unit_id: UUID,
-    alpha_delta: float,
-    beta_delta: float,
-) -> None:
-    """
-    Update the confidence alpha/beta of a MemoryUnit by adding deltas.
-    Also increments access_count and updates mentions.
-
-    Args:
-        session: Active database session.
-        unit_id: UUID of the unit to update.
-        alpha_delta: Amount to add to confidence_alpha.
-        beta_delta: Amount to add to confidence_beta.
-    """
-    # Use direct update for atomicity
-    # We coalesce with 1.0 (default prior) if null, though opinions should have it.
-
-    update_stmt = (
-        update(MemoryUnit)
-        .where(col(MemoryUnit.id) == unit_id)
-        .values(
-            confidence_alpha=func.coalesce(col(MemoryUnit.confidence_alpha), 1.0) + alpha_delta,
-            confidence_beta=func.coalesce(col(MemoryUnit.confidence_beta), 1.0) + beta_delta,
-            access_count=col(MemoryUnit.access_count) + 1,
-            mentioned_at=datetime.now(timezone.utc),
-        )
-    )
-
-    await session.exec(update_stmt)
 
 
 async def check_duplicates_in_window(

@@ -24,7 +24,41 @@ logger = logging.getLogger('memex.core.processing.titles')
 _TITLE_CHAR_LIMIT = 1500
 
 # Generic names that offer no useful information about document content
-_GENERIC_NAMES = frozenset({'untitled', 'note', 'document', 'file', 'page', 'text'})
+_GENERIC_NAMES = frozenset(
+    {
+        'untitled',
+        'note',
+        'document',
+        'file',
+        'page',
+        'text',
+        'content',
+        'readme',
+        'index',
+        'main',
+        'draft',
+    }
+)
+
+# File extensions to strip before checking against generic names
+_FILE_EXTENSIONS = frozenset(
+    {
+        '.md',
+        '.txt',
+        '.pdf',
+        '.html',
+        '.htm',
+        '.rst',
+        '.json',
+        '.yaml',
+        '.yml',
+        '.csv',
+        '.tsv',
+        '.xml',
+        '.doc',
+        '.docx',
+    }
+)
 
 _UUID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
@@ -152,14 +186,22 @@ def _is_meaningful_name(name: str | None) -> bool:
     A name is **not** meaningful when it is:
     - None or empty.
     - A plain UUID (e.g. ``"3f2504e0-4f89-11d3-9a0c-0305e82c3301"``).
-    - One of the generic placeholder words (case-insensitive).
+    - One of the generic placeholder words (case-insensitive), optionally
+      followed by a recognized file extension (e.g. ``"content.md"``).
     """
     if not name or not name.strip():
         return False
     stripped = name.strip()
     if _UUID_PATTERN.match(stripped):
         return False
-    if stripped.lower() in _GENERIC_NAMES:
+    # Strip recognized file extension before checking against generic names
+    stem = stripped
+    dot_idx = stripped.rfind('.')
+    if dot_idx > 0:
+        ext = stripped[dot_idx:].lower()
+        if ext in _FILE_EXTENSIONS:
+            stem = stripped[:dot_idx]
+    if stem.lower() in _GENERIC_NAMES:
         return False
     return True
 

@@ -24,7 +24,10 @@ from memex_common.schemas import (
     IngestURLRequest,
     LineageResponse,
     NoteCreateDTO,
+    PageIndexDTO,
+    PageMetadataDTO,
     ReflectionRequest,
+    TOCNodeDTO,
 )
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
@@ -36,13 +39,26 @@ persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex is a personal knowledge management system.
+    instructions="""Memex is a personal knowledge management system. Follow this retrieval workflow:
 
-Workflow:
-1. Discovery: `memex_search` for facts/entities; `memex_note_search` for source documents.
-2. Reading: `memex_get_page_index` → `memex_get_node`. Fall back to `memex_read_note` for small notes.
-3. Feedback: `memex_submit_evidence` to adjust opinion confidence; `memex_get_evidence_log` for audit trail.
-4. AVOID: `memex_list_notes` for discovery — use search tools instead.
+STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
+  - `memex_memory_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
+  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with snippets.
+  When unsure, run both in parallel and combine results (deduplicate by Note ID).
+
+STEP 2 — FILTER (parallel, per note): Call `memex_get_note_metadata` on each candidate Note ID.
+  - Cheap (~50 tokens). Use title, description, and tags to confirm relevance.
+  - Drop irrelevant notes BEFORE proceeding to Step 3.
+
+STEP 3 — READ (only confirmed-relevant notes):
+  - `memex_get_page_index` → get TOC and node IDs. Expensive — only after Step 2 confirms relevance.
+  - `memex_get_node` (parallel) → read specific sections by node ID.
+  - `memex_read_note` → fallback only, for very short notes.
+
+RULES:
+- Never skip Step 2. `memex_get_page_index` costs 5-10x more tokens than `memex_get_note_metadata`.
+- Never use `memex_list_notes` for discovery.
+- Parallelize aggressively: metadata calls together, node reads together.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -52,18 +68,15 @@ Workflow:
 
 @mcp.tool(
     name='memex_reflect',
-    description=(
-        'Trigger reflection on an entity to synthesize and update its mental model from recent memories. '
-        'Reflection runs automatically in the background, but calling this tool triggers it immediately.'
-    ),
+    description='Trigger immediate reflection on an entity to synthesize its mental model from recent memories.',
 )
 async def memex_reflect(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity to reflect upon.')],
-    limit: Annotated[int, Field(description='Limit recent memories to consider.')] = 20,
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
+    limit: Annotated[int, Field(description='Recent memories to consider.')] = 20,
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='The UUID of the vault. Defaults to Global Vault.'),
+        Field(default=None, description='Vault UUID. Defaults to Global Vault.'),
     ] = None,
 ):
     """Reflect on an entity to update its mental model."""
@@ -118,16 +131,14 @@ async def memex_reflect(
 
 @mcp.tool(
     name='memex_get_lineage',
-    description='Retrieve the provenance chain (lineage) of a memory unit, observation, note, or mental model.',
+    description='Get provenance chain of a memory unit, observation, note, or mental model.',
 )
 async def memex_get_lineage(
     ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit or observation.')],
+    unit_id: Annotated[str, Field(description='Unit or observation UUID.')],
     entity_type: Annotated[
         str,
-        Field(
-            description='Entity type. Valid: "memory_unit" (default), "observation", "note", "mental_model".'
-        ),
+        Field(description='Type: memory_unit (default), observation, note, mental_model.'),
     ] = 'memory_unit',
 ) -> str:
     """Retrieve the lineage of a memory unit."""
@@ -185,7 +196,10 @@ async def memex_get_lineage(
 )
 async def memex_list_assets(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Vault UUID or name filter.')
+    ] = None,
 ) -> str:
     """List assets for a note."""
     try:
@@ -195,10 +209,15 @@ async def memex_list_assets(
         except ValueError:
             raise ToolError(f'Invalid Note UUID: {note_id}')
 
+        if vault_id:
+            await api.resolve_vault_identifier(vault_id)
+
         try:
             note = await api.get_note(uuid_obj)
-        except FileNotFoundError:
-            raise ToolError(f'Note {note_id} not found.')
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Note {note_id} not found.')
+            raise
 
         assets = note.assets
 
@@ -231,14 +250,11 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description=(
-        'Retrieve the full content and metadata of a note by its UUID. '
-        'FALLBACK: Prefer memex_get_page_index + memex_get_node to read specific sections.'
-    ),
+    description='Read full note content. FALLBACK ONLY — prefer memex_get_page_index + memex_get_node for section-level reading.',
 )
 async def memex_read_note(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note to retrieve.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
 ) -> str:
     """Read a full note."""
     try:
@@ -274,7 +290,7 @@ async def memex_read_note(
     except FileNotFoundError:
         raise ToolError(
             f'Note with ID {note_id} not found. '
-            'Note: Retrieving full source notes is only available for fact, opinion, or experience units. '
+            'Note: Retrieving full source notes is only available for fact or event units. '
             'If you are attempting to read an observation, it does not have a single source note '
             'as it is a synthesized insight. Please check your search results for linkable unit types.'
         )
@@ -287,18 +303,22 @@ async def memex_read_note(
 
 @mcp.tool(
     name='memex_get_resource',
-    description=(
-        'Retrieve a file resource (image, audio, or document) by its path. '
-        'Get asset paths from `memex_list_assets` (for notes) or `memex_get_lineage` (for memory units).'
-    ),
+    description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets or memex_get_lineage.',
 )
 async def memex_get_resource(
     ctx: Context,
-    path: Annotated[str, Field(description='The path to the resource file.')],
+    path: Annotated[str, Field(description='Resource path.')],
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Vault UUID or name filter.')
+    ] = None,
 ) -> Image | Audio | File | str:
     """Retrieve a file resource. Returns an Image, Audio, or File object."""
     try:
         api = get_api(ctx)
+
+        if vault_id:
+            await api.resolve_vault_identifier(vault_id)
+
         content_bytes = await api.get_resource(path)
 
         mime_type, _ = mimetypes.guess_type(path)
@@ -322,27 +342,13 @@ async def memex_get_resource(
 
 @mcp.tool(
     name='memex_get_template',
-    description='Retrieve a markdown template for note creation. Use the returned template as the structure for `memex_add_note`.',
+    description='Get a markdown template for memex_add_note.',
 )
 def memex_get_template(
     type: Annotated[
         NoteTemplateType,
         Field(
-            description=(
-                'Template type. '
-                '`technical_brief`: structured technical summary. '
-                '`general_note`: flexible note on any topic. '
-                '`architectural_decision_record`: architectural decisions and rationale. '
-                '`request_for_comments`: RFC/proposal document. '
-                '`quick_note`: short informal note.'
-            ),
-            examples=[
-                'technical_brief',
-                'general_note',
-                'architectural_decision_record',
-                'request_for_comments',
-                'quick_note',
-            ],
+            description='Template type: technical_brief, general_note, architectural_decision_record, request_for_comments, quick_note.',
         ),
     ],
 ) -> str:
@@ -370,7 +376,7 @@ def memex_get_template(
 
 @mcp.tool(
     name='memex_active_vault',
-    description='Retrieve the currently active vault information.',
+    description='Get the active vault name and ID.',
 )
 async def memex_active_vault(ctx: Context) -> str:
     """Retrieve the currently active vault information."""
@@ -388,65 +394,53 @@ async def memex_active_vault(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_add_note',
-    description=(
-        'Add a note to the Memex knowledge base. '
-        'Confirm the target vault with the user before calling; '
-        'use `memex_active_vault` to check or `memex_list_vaults` to enumerate, '
-        'or pass vault_id explicitly.'
-    ),
+    description='Add a note to Memex. Confirm vault with user first, or pass vault_id.',
 )
 async def memex_add_note(
     ctx: Context,
     title: Annotated[
         str,
-        Field(
-            description='The title of the note being added.',
-            examples=['My First Note', 'Research on DuckDB'],
-        ),
+        Field(description='Note title.'),
     ],
     markdown_content: Annotated[
         str,
         Field(
-            description='Note content in markdown. Keep concise: 5-15 lines capturing the key insight, not a detailed report.',
+            description='Markdown content. Keep concise: 5-15 lines, key insight only.',
         ),
     ],
     description: Annotated[
         str,
         Field(
-            description='Summary of note content, max 250 words. Cover: (1) context and intent, (2) key insights.',
+            description='Summary, max 250 words. Cover context/intent and key insights.',
         ),
     ],
     author: Annotated[
         str,
-        Field(description='Name of the model authoring this note.'),
+        Field(description='Author name.'),
     ],
     tags: Annotated[
         list[str],
-        Field(
-            description='List of tags to associate with the note for easier retrieval.',
-            examples=[['research', 'duckdb', 'database']],
-        ),
+        Field(description='Tags for retrieval.'),
     ],
     supporting_files: Annotated[
         list[str] | None,
         Field(
             default=None,
-            description='List of file paths to any supporting files associated with the note.',
-            examples=['/path/to/image1.png', '/path/to/data.csv'],
+            description='Absolute paths to supporting files.',
         ),
     ] = None,
     vault_id: Annotated[
         str | None,
         Field(
             default=None,
-            description='The UUID of the vault to add the note to. Defaults to the active vault.',
+            description='Target vault UUID. Defaults to active vault.',
         ),
     ] = None,
     note_key: Annotated[
         str | None,
         Field(
             default=None,
-            description='A unique stable key for the note to enable incremental updates.',
+            description='Stable key for incremental updates.',
         ),
     ] = None,
     background: Annotated[
@@ -494,6 +488,8 @@ async def memex_add_note(
 {markdown_content}
         """.strip()
 
+        effective_note_key = note_key if note_key else f'mcp:add_note:{title}'
+
         note = NoteCreateDTO(
             name=title,
             description=description,
@@ -501,7 +497,7 @@ async def memex_add_note(
             files=files_content,
             tags=tags,
             vault_id=vault_id,
-            note_key=note_key,
+            note_key=effective_note_key,
         )
 
         result = await api.ingest(note, background=background)
@@ -517,39 +513,35 @@ async def memex_add_note(
 
 
 @mcp.tool(
-    name='memex_search',
-    description='Search memory units (facts, experiences, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs.',
+    name='memex_memory_search',
+    description=(
+        'Search extracted facts, events, and observations across all notes (memory search). '
+        'Best for broad/exploratory queries. '
+        'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
+    ),
 )
-async def memex_search(
+async def memex_memory_search(
     ctx: Context,
-    query: Annotated[str, Field(description='The search query.')],
+    query: Annotated[str, Field(description='Search query.')],
     limit: Annotated[
         int,
-        Field(description='Maximum number of results to return. Ignored when token_budget is set.'),
+        Field(description='Max results. Ignored when token_budget is set.'),
     ] = 10,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
+        Field(default=None, description='Vault UUIDs or names to search.'),
     ] = None,
     token_budget: Annotated[
         int | None,
         Field(
-            description=(
-                'Optional token budget for retrieval. '
-                'When set, this is the leading constraint — results are packed greedily '
-                'until the budget is reached and the limit parameter is ignored.'
-            )
+            description='Token budget. When set, overrides limit — packs results greedily to budget.',
         ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
         Field(
             default=None,
-            description=(
-                'Optional inclusion list of strategies to run. '
-                'Valid: semantic, keyword, graph, temporal, mental_model. '
-                'If omitted, all strategies are used.'
-            ),
+            description='Strategies: semantic, keyword, graph, temporal, mental_model. Default: all.',
         ),
     ] = None,
 ):
@@ -561,7 +553,6 @@ async def memex_search(
             query=query,
             limit=limit,
             vault_ids=cast(list[UUID | str] | None, vault_ids),
-            skip_opinion_formation=False,
             token_budget=token_budget,
             strategies=strategies,
         )
@@ -583,24 +574,14 @@ async def memex_search(
             date = res.mentioned_at or res.occurred_start
             date_str = f' ({date.isoformat()})' if date else ''
 
-            # Include confidence label for opinions
-            confidence = res.confidence_score if hasattr(res, 'confidence_score') else None
-            confidence_str = ''
-            if confidence is not None:
-                if confidence < 0.3:
-                    confidence_str = ' [CONTRADICTED — treat with skepticism]'
-                elif confidence < 0.5:
-                    confidence_str = ' [Disputed — mixed evidence]'
-                elif confidence < 0.7:
-                    confidence_str = ' [Opinion]'
-                else:
-                    confidence_str = ' [Well-supported opinion]'
-
             output.append(
                 f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
-                f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
+                f'{score_str}{date_str}\n   {snippet}\n'
             )
 
+        output.append(
+            'Tip: Use Note IDs above with memex_get_note_metadata to check relevance before deeper reading.'
+        )
         return '\n'.join(output)
 
     except Exception as e:
@@ -611,31 +592,23 @@ async def memex_search(
 @mcp.tool(
     name='memex_note_search',
     description=(
-        'Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). '
-        'Returns ranked notes with snippets. '
-        'Use for whole notes; use `memex_search` for atomic facts.'
+        'Search source notes by hybrid retrieval (note search). '
+        'Returns ranked notes with snippets. Best for targeted document lookup. '
+        'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
 )
 async def memex_note_search(
     ctx: Context,
-    query: Annotated[str, Field(description='The note search query.')],
-    limit: Annotated[int, Field(description='Maximum number of notes to return.')] = 5,
-    expand_query: Annotated[
-        bool, Field(description='Enable multi-query expansion via LLM.')
-    ] = False,
+    query: Annotated[str, Field(description='Search query.')],
+    limit: Annotated[int, Field(description='Max notes to return.')] = 5,
+    expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
     reason: Annotated[
         bool,
-        Field(
-            description=(
-                'Identify relevant sections with reasoning. '
-                'Note: prefer doing your own reasoning over search results rather than '
-                'relying on this flag.'
-            )
-        ),
+        Field(description='Annotate results with relevant section IDs and reasoning.'),
     ] = False,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
+        Field(default=None, description='Vault UUIDs or names to search.'),
     ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
@@ -682,7 +655,9 @@ async def memex_note_search(
                     lines.append(f'  - Node `{node_id}`: {reasoning_text}')
             lines.append('')
 
-        lines.append('Use memex_get_page_index / memex_get_node to read sections.')
+        lines.append(
+            'Next: call memex_get_note_metadata on each Note ID to confirm relevance before reading sections.'
+        )
         return '\n'.join(lines)
 
     except Exception as e:
@@ -692,14 +667,16 @@ async def memex_note_search(
 
 @mcp.tool(
     name='memex_get_page_index',
-    description='Get the hierarchical page index (table of contents) for a note. '
-    'Returns the note structure with section titles, summaries, and node IDs. '
-    'Use the node IDs with `memex_get_node` to retrieve specific section text.',
+    description=(
+        'Get note TOC: section titles, summaries, and node IDs. '
+        'Expensive \u2014 only call AFTER memex_get_note_metadata confirms relevance. '
+        'Use returned node IDs with memex_get_node.'
+    ),
 )
 async def memex_get_page_index(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note.')],
-) -> str:
+    note_id: Annotated[str, Field(description='Note UUID.')],
+) -> str | PageIndexDTO:
     """Get the hierarchical page index for a note."""
     try:
         api = get_api(ctx)
@@ -712,9 +689,10 @@ async def memex_get_page_index(
         if page_index is None:
             return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
-        import json as _json
-
-        return _json.dumps(page_index, default=str, indent=2)
+        return PageIndexDTO(
+            metadata=PageMetadataDTO(**(page_index.get('metadata') or {})),
+            toc=[TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])],
+        )
 
     except ToolError:
         raise
@@ -724,13 +702,44 @@ async def memex_get_page_index(
 
 
 @mcp.tool(
+    name='memex_get_note_metadata',
+    description=(
+        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. '
+        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes.'
+    ),
+)
+async def memex_get_note_metadata(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+) -> str | PageMetadataDTO:
+    """Get just the metadata from a note's page index."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        metadata = await api.get_note_metadata(uuid_obj)
+        if metadata is None:
+            return 'No metadata available for this note. The note may not have a page index.'
+
+        return PageMetadataDTO(**metadata)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Get note metadata failed: {e}', exc_info=True)
+        raise ToolError(f'Get note metadata failed: {e}')
+
+
+@mcp.tool(
     name='memex_get_node',
-    description='Retrieve the full text content of a specific note section (node) by its ID. '
-    'Node IDs can be found in search results (reasoning field) or via `memex_get_page_index`.',
+    description='Read a specific note section by node ID. Get node IDs from memex_get_page_index or memex_note_search reasoning. Call multiple in parallel when reading several sections.',
 )
 async def memex_get_node(
     ctx: Context,
-    node_id: Annotated[str, Field(description='The UUID of the node to retrieve.')],
+    node_id: Annotated[str, Field(description='Node UUID.')],
 ) -> str:
     """Retrieve the full text content of a specific note node."""
     try:
@@ -768,16 +777,16 @@ async def memex_get_node(
 
 @mcp.tool(
     name='memex_batch_ingest',
-    description='Asynchronously ingest multiple local files into Memex.',
+    description='Async batch ingest of local files.',
 )
 async def memex_batch_ingest(
     ctx: Context,
-    file_paths: Annotated[list[str], Field(description='List of absolute paths to local files.')],
+    file_paths: Annotated[list[str], Field(description='Absolute file paths.')],
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Optional UUID of the vault to ingest into.'),
+        Field(default=None, description='Target vault UUID.'),
     ] = None,
-    batch_size: Annotated[int, Field(description='Number of files to process per chunk.')] = 32,
+    batch_size: Annotated[int, Field(description='Files per batch chunk.')] = 32,
 ) -> str:
     """Submit a batch of local files for asynchronous ingestion."""
     try:
@@ -799,6 +808,7 @@ async def memex_batch_ingest(
                 description=f'Imported from {path}',
                 content=base64.b64encode(content),
                 vault_id=vault_id,
+                note_key=str(path.absolute()),
             )
             notes.append(note_dto)
 
@@ -824,11 +834,11 @@ async def memex_batch_ingest(
 
 @mcp.tool(
     name='memex_get_batch_status',
-    description='Retrieve the status and results of a batch ingestion job.',
+    description='Get batch ingestion job status.',
 )
 async def memex_get_batch_status(
     ctx: Context,
-    job_id: Annotated[str, Field(description='The UUID of the batch job.')],
+    job_id: Annotated[str, Field(description='Batch job UUID.')],
 ) -> str:
     """Check the status of a batch ingestion job."""
     try:
@@ -878,7 +888,7 @@ async def memex_get_batch_status(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all available vaults.',
+    description='List all vaults.',
 )
 async def memex_list_vaults(ctx: Context) -> str:
     """List all available vaults."""
@@ -903,17 +913,14 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_list_notes',
-    description=(
-        'List notes in the active vault. '
-        'NOT recommended for discovery — use memex_search or memex_note_search instead.'
-    ),
+    description='List notes in active vault. NOT for discovery — use memex_memory_search or memex_note_search.',
 )
 async def memex_list_notes(
     ctx: Context,
     limit: Annotated[int, Field(description='Max notes to return.')] = 20,
     offset: Annotated[int, Field(description='Pagination offset.')] = 0,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+        str | None, Field(default=None, description='Vault UUID or name filter.')
     ] = None,
 ) -> str:
     """List notes in the active vault."""
@@ -941,16 +948,16 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_list_entities',
-    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance.',
+    description='List or search entities. Without query, returns top entities by relevance.',
 )
 async def memex_list_entities(
     ctx: Context,
     query: Annotated[
-        str | None, Field(default=None, description='Optional search term to filter by name.')
+        str | None, Field(default=None, description='Search term to filter by name.')
     ] = None,
     limit: Annotated[int, Field(description='Max entities to return.')] = 20,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+        str | None, Field(default=None, description='Vault UUID or name filter.')
     ] = None,
 ) -> str:
     """List or search entities."""
@@ -983,11 +990,11 @@ async def memex_list_entities(
 
 @mcp.tool(
     name='memex_get_entity',
-    description='Get details for a specific entity by its UUID.',
+    description='Get entity details by UUID.',
 )
 async def memex_get_entity(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
 ) -> str:
     """Get entity details."""
     try:
@@ -1018,11 +1025,11 @@ async def memex_get_entity(
 
 @mcp.tool(
     name='memex_get_entity_mentions',
-    description='Get memory units that mention a specific entity.',
+    description='Get memory units mentioning an entity.',
 )
 async def memex_get_entity_mentions(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
     limit: Annotated[int, Field(description='Max mentions to return.')] = 10,
 ) -> str:
     """Get memory units mentioning an entity."""
@@ -1061,11 +1068,11 @@ async def memex_get_entity_mentions(
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
-    description='Get entities that frequently co-occur with a given entity.',
+    description='Get co-occurring entities for a given entity.',
 )
 async def memex_get_entity_cooccurrences(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
 ) -> str:
     """Get co-occurring entities."""
     try:
@@ -1099,11 +1106,11 @@ async def memex_get_entity_cooccurrences(
 
 @mcp.tool(
     name='memex_get_memory_unit',
-    description='Retrieve a specific memory unit by its UUID.',
+    description='Get a memory unit by UUID.',
 )
 async def memex_get_memory_unit(
     ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
 ) -> str:
     """Retrieve a memory unit by ID."""
     try:
@@ -1145,94 +1152,47 @@ async def memex_get_memory_unit(
 
 
 @mcp.tool(
-    name='memex_submit_evidence',
-    description=(
-        "Submit evidence to adjust an opinion's confidence score. "
-        "Performs a Bayesian update on the memory unit's confidence. "
-        'Valid evidence types: corroboration, contradiction, source_reliability, '
-        'temporal_consistency, cross_reference, user_validation, user_rejection, '
-        'llm_assessment, opinion_merge.'
-    ),
+    name='memex_migrate_note',
+    description='Move a note and all associated data to a different vault.',
 )
-async def memex_submit_evidence(
+async def memex_migrate_note(
     ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
-    evidence_type: Annotated[str, Field(description='The type of evidence to submit.')],
-    description: Annotated[
-        str | None,
-        Field(default=None, description='Optional description of the evidence.'),
-    ] = None,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    target_vault_id: Annotated[str, Field(description='Target vault UUID or name.')],
 ) -> str:
-    """Submit evidence to adjust an opinion's confidence score."""
+    """Migrate a note to a different vault."""
     try:
         api = get_api(ctx)
         try:
-            result = await api.adjust_belief(unit_id, evidence_type, description=description)
-        except ValueError as e:
-            return f'Error: {e}'
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
 
-        before_pct = int(round(result.confidence_before * 100))
-        after_pct = int(round(result.confidence_after * 100))
+        result = await api.migrate_note(uuid_obj, target_vault_id)
+        source = result.get('source_vault_id', 'unknown')
+        target = result.get('target_vault_id', 'unknown')
+        entities = result.get('entities_affected', 0)
         return (
-            f'Evidence recorded: {evidence_type}\n'
-            f'Confidence: {before_pct}% \u2192 {after_pct}%\n'
-            f'Parameters: \u03b1={result.alpha:.1f}, \u03b2={result.beta:.1f}'
+            f'Note {note_id} migrated successfully.\n'
+            f'Source vault: {source}\n'
+            f'Target vault: {target}\n'
+            f'Entities affected: {entities}'
         )
 
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Submit evidence failed: {e}', exc_info=True)
-        raise ToolError(f'Submit evidence failed: {e}')
-
-
-@mcp.tool(
-    name='memex_get_evidence_log',
-    description=(
-        'Retrieve the evidence audit trail for a memory unit. '
-        'Shows the history of confidence adjustments with before/after scores.'
-    ),
-)
-async def memex_get_evidence_log(
-    ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
-    limit: Annotated[int, Field(description='Max entries to return.')] = 20,
-) -> str:
-    """Retrieve the evidence audit trail for a memory unit."""
-    try:
-        api = get_api(ctx)
-        try:
-            logs = await api.get_evidence_log(unit_id, limit=limit)
-        except ValueError as e:
-            return f'Error: {e}'
-
-        if not logs:
-            return 'No evidence log entries found for this memory unit.'
-
-        lines = [f'Evidence log ({len(logs)} entries):']
-        for log in logs:
-            before_pct = int(round(log.confidence_before * 100))
-            after_pct = int(round(log.confidence_after * 100))
-            desc = f' \u2014 {log.description}' if log.description else ''
-            lines.append(
-                f'  [{log.created_at}] {log.evidence_type}: {before_pct}% \u2192 {after_pct}%{desc}'
-            )
-        return '\n'.join(lines)
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Get evidence log failed: {e}', exc_info=True)
-        raise ToolError(f'Get evidence log failed: {e}')
+        logging.error(f'Migrate note failed: {e}', exc_info=True)
+        raise ToolError(f'Migrate note failed: {e}')
 
 
 @mcp.tool(
     name='memex_ingest_url',
-    description='Ingest content from a URL into Memex.',
+    description='Ingest content from a URL.',
 )
 async def memex_ingest_url(
     ctx: Context,
-    url: Annotated[str, Field(description='The URL to ingest.')],
+    url: Annotated[str, Field(description='URL to ingest.')],
     vault_id: Annotated[
         str | None, Field(default=None, description='Target vault UUID. Defaults to active vault.')
     ] = None,

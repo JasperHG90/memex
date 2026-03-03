@@ -73,7 +73,6 @@ export default function MemorySearch() {
           include_stale: false,
           vault_ids: vaultIds.length > 0 ? vaultIds : undefined,
           strategies: strategies ?? undefined,
-          skip_opinion_formation: true,
           min_score: advancedParams.minScore ?? undefined,
           token_budget: advancedParams.tokenBudget ?? undefined,
         },
@@ -350,16 +349,6 @@ function ResultCard({ result, index, onViewDetails, onViewLineage }: ResultCardP
               <span className="text-xs text-muted-foreground">
                 {score.toFixed(2)}
               </span>
-              {(() => {
-                const conf = getConfidenceInfo(result.confidence_alpha, result.confidence_beta);
-                if (!conf) return null;
-                return (
-                  <div className="flex items-center gap-1.5 ml-2">
-                    <div className={`h-2 w-2 rounded-full ${conf.color}`} />
-                    <span className={`text-xs ${conf.textColor}`}>{(conf.mean * 100).toFixed(0)}%</span>
-                  </div>
-                );
-              })()}
             </div>
           )}
         </div>
@@ -395,12 +384,4 @@ function cleanFactType(raw: string): string {
     return raw.split('.').pop()?.toLowerCase() ?? raw;
   }
   return raw.toLowerCase();
-}
-
-function getConfidenceInfo(alpha: number | null | undefined, beta: number | null | undefined) {
-  if (alpha == null || beta == null || alpha + beta === 0) return null;
-  const mean = alpha / (alpha + beta);
-  if (mean > 0.7) return { mean, color: 'bg-emerald-500', textColor: 'text-emerald-500', label: 'High' };
-  if (mean > 0.4) return { mean, color: 'bg-amber-500', textColor: 'text-amber-500', label: 'Medium' };
-  return { mean, color: 'bg-red-500', textColor: 'text-red-500', label: 'Low' };
 }

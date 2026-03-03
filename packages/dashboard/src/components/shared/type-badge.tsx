@@ -18,8 +18,7 @@ const TYPE_COLORS: Record<string, string> = {
   asset: 'bg-violet-500/20 text-violet-400',
   // Fact types (memory search)
   world: 'bg-blue-500/20 text-blue-400',
-  experience: 'bg-purple-500/20 text-purple-400',
-  opinion: 'bg-amber-500/20 text-amber-400',
+  event: 'bg-purple-500/20 text-purple-400',
 }
 
 const DEFAULT_COLOR = 'bg-zinc-500/20 text-zinc-400'

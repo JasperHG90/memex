@@ -284,32 +284,6 @@ class DocSearchStrategiesConfig(BaseModel):
     temporal: bool = Field(default=True, description='Enable temporal search strategy.')
 
 
-class ConfidenceConfig(BaseModel):
-    """Configuration for Bayesian confidence scoring."""
-
-    damping_factor: float = Field(
-        default=0.1,
-        description='Factor by which neighbor confidence is dampened when inherited.',
-    )
-    max_inherited_mass: float = Field(
-        default=10.0,
-        description='Maximum combined alpha+beta that can be inherited from neighbors.',
-    )
-    similarity_threshold: float = Field(
-        default=0.8,
-        description='Minimum cosine similarity to consider a neighbor for inheritance.',
-    )
-
-
-class OpinionFormationConfig(BaseModel):
-    """Configuration for opinion formation settings."""
-
-    confidence: ConfidenceConfig = Field(
-        default_factory=ConfidenceConfig,
-        description='Global configuration for Bayesian confidence and opinion scoring.',
-    )
-
-
 class ReflectionConfig(BaseModel):
     """Configuration for the Hindsight Reflection Engine."""
 
@@ -464,7 +438,7 @@ class RetrievalConfig(BaseModel):
     """Configuration for retrieval settings."""
 
     token_budget: int = Field(
-        default=2000,
+        default=1000,
         description='Maximum token budget for retrieval results (greedy packing).',
     )
 
@@ -611,11 +585,6 @@ class MemoryConfig(BaseModel):
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
         description='Configuration for retrieval settings.',
-    )
-
-    opinion_formation: OpinionFormationConfig = Field(
-        default_factory=OpinionFormationConfig,
-        description='Configuration for opinion formation settings.',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(
@@ -846,8 +815,6 @@ __all__ = [
     'SearchStrategiesConfig',
     'DocSearchStrategiesConfig',
     'DocumentConfig',
-    'ConfidenceConfig',
-    'OpinionFormationConfig',
     'ReflectionConfig',
     'ExtractionConfig',
     'RetrievalConfig',

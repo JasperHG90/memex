@@ -174,6 +174,31 @@ async def test_deferred_delete(store: LocalAsyncFileStore) -> None:
     assert await store.exists(key) is False
 
 
+@pytest.mark.asyncio
+async def test_move_file_single(store: LocalAsyncFileStore) -> None:
+    """move_file works for a single file."""
+    await store.save('src.txt', b'data')
+    await store.move_file('src.txt', 'dst.txt')
+    assert await store.exists('dst.txt') is True
+    assert await store.exists('src.txt') is False
+    assert await store.load('dst.txt') == b'data'
+
+
+@pytest.mark.asyncio
+async def test_move_file_directory(store: LocalAsyncFileStore, tmp_path: Path) -> None:
+    """move_file moves an entire directory tree."""
+    await store.save('src/a.txt', b'aaa')
+    await store.save('src/sub/b.txt', b'bbb')
+
+    await store.move_file('src', 'dst')
+
+    assert await store.exists('dst/a.txt') is True
+    assert await store.exists('dst/sub/b.txt') is True
+    assert await store.load('dst/a.txt') == b'aaa'
+    assert await store.load('dst/sub/b.txt') == b'bbb'
+    assert await store.is_dir('src') is False
+
+
 class TestPathTraversalPrevention:
     """Tests for path traversal vulnerability fix in join_path()."""
 

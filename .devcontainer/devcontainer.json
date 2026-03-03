@@ -34,8 +34,8 @@
       }
     },
     "postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && git config --global --add credential.useHttpPath true",
-    // Symlink the cached .venv into the workspace folder so that Ty can find it there
-    "postCreateCommand": "rm -rf ${containerWorkspaceFolder}/.venv && ln -s /home/vscode/.cache/.venv ${containerWorkspaceFolder}/.venv",
+    // Symlink qmd cache from read-only bind mount so qmd finds it at its default ~/.cache/qmd path
+    "postCreateCommand": "ln -sfn /home/vscode/.embeddings/qmd /home/vscode/.cache/qmd",
     "runArgs": [
       "--env-file",
       ".devcontainer/.env"
@@ -48,9 +48,8 @@
     "containerUser": "vscode",
     "mounts": [
       "type=bind,source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,consistency=delegated",
-      "type=bind,source=${localEnv:HOME}/.gemini,target=/home/vscode/.gemini,consistency=delegated",
-      "type=bind,source=${localEnv:HOME}/.persona,target=/home/vscode/.persona,consistency=delegated",
-      "type=bind,source=${localEnv:HOME}/.persona.config.yaml,target=/home/vscode/.persona.config.yaml,consistency=delegated",
+      "type=bind,source=${localEnv:HOME}/.config/qmd,target=/home/vscode/.config/qmd,consistency=delegated",
+      "type=bind,source=${localEnv:HOME}/.cache/qmd,target=/home/vscode/.embeddings/qmd,consistency=delegated,readonly",
       // Cache (see dockerfile for UV/prek cache usage and pyproject for pytest cache)
       "source=memex-cache,target=/home/vscode/.cache,type=volume"
     ]

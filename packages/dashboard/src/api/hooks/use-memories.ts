@@ -30,23 +30,6 @@ export function useMemorySearch() {
   });
 }
 
-export function useAdjustBelief() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ unitId, adjustment }: { unitId: string; adjustment: 'confirm' | 'contradict' }) => {
-      const evidence_type_key = adjustment === 'confirm' ? 'user_validation' : 'user_rejection';
-      return api.patch<void>(`/memories/${unitId}/belief`, {
-        unit_uuid: unitId,
-        evidence_type_key,
-        description: `User ${adjustment}ed this fact via dashboard.`,
-      });
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['memories'] });
-    },
-  });
-}
-
 export function useDeleteMemory() {
   const queryClient = useQueryClient();
   return useMutation({

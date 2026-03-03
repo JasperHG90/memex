@@ -151,7 +151,7 @@ async def test_cli_memory_search(db_session: AsyncSession, setup_cli_e2e):
         mock_run_dspy.return_value = (mock_prediction, mock_usage)
         result = runner.invoke(
             app,
-            ['memory', 'search', 'Python', '--skip-opinions', '--token-budget', '1000'],
+            ['memory', 'search', 'Python', '--token-budget', '1000'],
             env=os.environ,
         )
 

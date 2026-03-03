@@ -74,7 +74,9 @@ async def test_mcp_search_tool(mock_api, mcp_client):
         )
     ]
 
-    result = await mcp_client.call_tool('memex_search', {'query': 'python language', 'limit': 5})
+    result = await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'python language', 'limit': 5}
+    )
 
     assert 'Found 1 results' in result.content[0].text
     assert '[world]' in result.content[0].text
@@ -104,7 +106,7 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
         )
     ]
 
-    result = await mcp_client.call_tool('memex_search', {'query': 'event'})
+    result = await mcp_client.call_tool('memex_memory_search', {'query': 'event'})
     text = result.content[0].text
 
     assert '(2025-06-15' in text
@@ -117,7 +119,7 @@ async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
     mock_api.search.return_value = []
 
     await mcp_client.call_tool(
-        'memex_search', {'query': 'secret project', 'vault_ids': [str(vault_id)]}
+        'memex_memory_search', {'query': 'secret project', 'vault_ids': [str(vault_id)]}
     )
 
     mock_api.search.assert_called_once()
@@ -129,7 +131,9 @@ async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
 async def test_mcp_search_invalid_vault_uuid(mock_api, mcp_client):
     """Test that search handles malformed vault UUIDs gracefully by passing them to the API."""
     mock_api.search.return_value = []
-    await mcp_client.call_tool('memex_search', {'query': 'test', 'vault_ids': ['not-a-uuid']})
+    await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'test', 'vault_ids': ['not-a-uuid']}
+    )
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
     assert call_args['vault_ids'] == ['not-a-uuid']
@@ -173,7 +177,7 @@ async def test_mcp_list_tools(mcp_client):
     names = [t.name for t in tools]
     assert 'memex_reflect' in names
     assert 'memex_add_note' in names
-    assert 'memex_search' in names
+    assert 'memex_memory_search' in names
     assert 'memex_note_search' in names
     assert 'memex_list_vaults' in names
     assert 'memex_list_notes' in names
@@ -186,6 +190,31 @@ async def test_mcp_list_tools(mcp_client):
     # Renamed tools should not exist
     assert 'memex_doc_search' not in names
     assert 'memex_adjust_belief' not in names
+
+
+@pytest.mark.asyncio
+async def test_mcp_batch_ingest_sets_note_key(mock_api, mcp_client, tmp_path):
+    """Test that memex_batch_ingest sets note_key to the absolute file path."""
+    from memex_common.schemas import BatchJobStatus, NoteCreateDTO
+
+    test_file = tmp_path / 'content.md'
+    test_file.write_text('# Hello World\n\nSome content here.')
+
+    mock_api.ingest.return_value = BatchJobStatus(
+        job_id=str(uuid4()), status='queued', progress='0/1'
+    )
+
+    await mcp_client.call_tool(
+        'memex_batch_ingest',
+        {'file_paths': [str(test_file)]},
+    )
+
+    mock_api.ingest.assert_called_once()
+    args, _ = mock_api.ingest.call_args
+    note_dto = args[0]
+    assert isinstance(note_dto, NoteCreateDTO)
+    assert note_dto.note_key == str(test_file.absolute())
+    assert note_dto.name == 'content.md'
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ The Memex MCP server exposes these tools to connected AI clients:
 
 | Tool | Purpose |
 | :--- | :--- |
-| `memex_search` | Search memory units (facts, opinions, observations) via TEMPR |
+| `memex_memory_search` | Search memory units (facts, events, observations) via TEMPR |
 | `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
 | `memex_add_note` | Save new knowledge to Memex |
 | `memex_read_note` | Read full note content (fallback — prefer `get_page_index` + `get_node`) |
@@ -141,7 +141,7 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 
 ## Best Practices for AI Agents
 
-- **Search before answering**: Use `memex_search` to ground responses in stored knowledge.
+- **Search before answering**: Use `memex_memory_search` to ground responses in stored knowledge.
 - **Use lineage for sources**: When asked for citations, call `memex_get_lineage` to trace facts back to source documents.
 - **Use templates for consistency**: Call `memex_get_template` before saving structured notes (ADRs, tech briefs).
 - **Check the active vault**: Call `memex_active_vault` before writing to confirm the target vault.
@@ -151,4 +151,4 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 
 * [Configuring Memex](configure-memex.md) — environment variables and YAML settings
 * [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for each tool
-* [Document Search vs. Memory Search](doc-search-vs-memory-search.md) — choosing between `memex_search` and `memex_note_search`
+* [Document Search vs. Memory Search](doc-search-vs-memory-search.md) — choosing between `memex_memory_search` and `memex_note_search`

@@ -6,53 +6,54 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       retries: 5
+    network_mode: "host"
 
-  api:
-    build:
-      context: .
-      dockerfile: docker/memex/Dockerfile
-    # CMD defaults to ["server"]
-    ports:
-      - "8000:8000"
-    environment:
-      MEMEX_SERVER__HOST: "0.0.0.0"
-      MEMEX_SERVER__META_STORE__TYPE: postgres
-      MEMEX_SERVER__META_STORE__INSTANCE__HOST: db
-      MEMEX_SERVER__META_STORE__INSTANCE__PORT: "5432"
-      MEMEX_SERVER__META_STORE__INSTANCE__DATABASE: postgres
-      MEMEX_SERVER__META_STORE__INSTANCE__USER: postgres
-      MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD: postgres
-      MEMEX_SERVER__FILE_STORE__TYPE: local
-      MEMEX_SERVER__FILE_STORE__ROOT: /data/memex
-    volumes:
-      - memex_data:/data/memex
-    depends_on:
-      db:
-        condition: service_healthy
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/memex/Dockerfile
+  #   # CMD defaults to ["server"]
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     MEMEX_SERVER__HOST: "0.0.0.0"
+  #     MEMEX_SERVER__META_STORE__TYPE: postgres
+  #     MEMEX_SERVER__META_STORE__INSTANCE__HOST: db
+  #     MEMEX_SERVER__META_STORE__INSTANCE__PORT: "5432"
+  #     MEMEX_SERVER__META_STORE__INSTANCE__DATABASE: postgres
+  #     MEMEX_SERVER__META_STORE__INSTANCE__USER: postgres
+  #     MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD: postgres
+  #     MEMEX_SERVER__FILE_STORE__TYPE: local
+  #     MEMEX_SERVER__FILE_STORE__ROOT: /data/memex
+  #   volumes:
+  #     - memex_data:/data/memex
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
 
-  mcp:
-    build:
-      context: .
-      dockerfile: docker/memex/Dockerfile
-    command: ["mcp"]
-    environment:
-      MEMEX_SERVER_URL: http://api:8000
-    depends_on:
-      - api
+  # mcp:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/memex/Dockerfile
+  #   command: ["mcp"]
+  #   environment:
+  #     MEMEX_SERVER_URL: http://api:8000
+  #   depends_on:
+  #     - api
 
-  dashboard:
-    build:
-      context: .
-      dockerfile: docker/dashboard/Dockerfile
-    ports:
-      - "5173:80"
-    depends_on:
-      - api
+  # dashboard:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/dashboard/Dockerfile
+  #   ports:
+  #     - "5173:80"
+  #   depends_on:
+  #     - api
 
 volumes:
   pgdata:

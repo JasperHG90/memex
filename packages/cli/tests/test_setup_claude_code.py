@@ -118,7 +118,7 @@ class TestTemplateContent:
 
     def test_recall_references_search_tools(self):
         content = _load_template('recall_skill.md')
-        assert 'memex_search' in content
+        assert 'memex_memory_search' in content
         assert 'memex_note_search' in content
         assert 'memex_list_entities' in content
 
@@ -140,7 +140,7 @@ class TestTemplateContent:
     def test_claude_md_section_references_tools(self):
         content = _load_template('claude_md_section.md')
         assert 'memex_add_note' in content
-        assert 'memex_search' in content
+        assert 'memex_memory_search' in content
 
     def test_claude_md_section_has_capture_constraint(self):
         content = _load_template('claude_md_section.md')
@@ -178,7 +178,7 @@ class TestSetupCreatesFiles:
         assert remember.exists()
         assert recall.exists()
         assert 'memex_add_note' in remember.read_text()
-        assert 'memex_search' in recall.read_text()
+        assert 'memex_memory_search' in recall.read_text()
 
         # .mcp.json
         mcp_json = tmp_path / '.mcp.json'
@@ -385,7 +385,8 @@ class TestSkillForce:
             in (tmp_path / '.claude' / 'skills' / 'remember' / 'SKILL.md').read_text()
         )
         assert (
-            'memex_search' in (tmp_path / '.claude' / 'skills' / 'recall' / 'SKILL.md').read_text()
+            'memex_memory_search'
+            in (tmp_path / '.claude' / 'skills' / 'recall' / 'SKILL.md').read_text()
         )
 
     def test_skips_one_overwrites_other(self, tmp_path):
@@ -399,7 +400,7 @@ class TestSkillForce:
         assert (remember_dir / 'SKILL.md').read_text() == 'custom remember'
         recall_file = tmp_path / '.claude' / 'skills' / 'recall' / 'SKILL.md'
         assert recall_file.exists()
-        assert 'memex_search' in recall_file.read_text()
+        assert 'memex_memory_search' in recall_file.read_text()
 
 
 # ===========================================================================

@@ -89,35 +89,24 @@ async def _extract_facts_from_chunk(
     lm: dspy.LM,
     predictor: dspy.Predict,
     agent_name: str | None = None,
-    extract_opinions: bool = False,
     semaphore: asyncio.Semaphore | None = None,
     vault_id: UUID | None = None,
 ) -> tuple[list[RawFact], TokenUsage]:
     """Extracts facts from a single chunk using DSPy."""
 
-    if extract_opinions:
-        rules = (
-            "Extract ONLY 'opinion' type facts (formed opinions, beliefs, and perspectives). "
-            "DO NOT extract 'world' or 'experience' facts.\n"
-            'LANGUAGE: All output MUST be in English. Translate if source is not English.\n'
-            "REASONING: In the 'why' field, explain the logic semantically. "
-            'DO NOT refer to facts by index or number (e.g. "Because of Fact 1").'
-        )
-    else:
-        # We explicitly add the Causal Logic here
-        rules = (
-            "1. Extract 'world' and 'experience' facts. DO NOT extract opinions.\n"
-            '2. CLASSIFICATION RULE: Classify facts describing "what something is", "how it works", "system states", or "outcomes" as WORLD. '
-            'Classify facts describing "what happened", "narrative events", or "specific interactions" as EXPERIENCE. '
-            'IMPORTANT: If a fact defines a state (e.g., "The system is push-based"), classify as WORLD even if described with past-tense verbs like "established" or "implemented".\n'
-            '3. Consolidate related statements into single facts.\n'
-            "4. Resolve coreferences (e.g. 'he' -> 'John').\n"
-            '5. LANGUAGE: All output MUST be in English. Translate if source is not English.\n'
-            '6. CAUSAL RELATIONS: Check for causal links between facts.\n'
-            "   - If Fact B happens BECAUSE OF Fact A, add a 'causal_relation' to Fact B.\n"
-            "   - 'target_index' must point to a PREVIOUS fact (target_index < current_index).\n"
-            "   - Types: 'caused_by', 'enabled_by', 'prevented_by'."
-        )
+    rules = (
+        "1. Extract 'world' and 'event' facts.\n"
+        '2. CLASSIFICATION RULE: Classify facts describing "what something is", "how it works", "system states", or "outcomes" as WORLD. '
+        'Classify facts describing "what happened", "narrative events", or "specific interactions" as EVENT. '
+        'IMPORTANT: If a fact defines a state (e.g., "The system is push-based"), classify as WORLD even if described with past-tense verbs like "established" or "implemented".\n'
+        '3. Consolidate related statements into single facts.\n'
+        "4. Resolve coreferences (e.g. 'he' -> 'John').\n"
+        '5. LANGUAGE: All output MUST be in English. Translate if source is not English.\n'
+        '6. CAUSAL RELATIONS: Check for causal links between facts.\n'
+        "   - If Fact B happens BECAUSE OF Fact A, add a 'causal_relation' to Fact B.\n"
+        "   - 'target_index' must point to a PREVIOUS fact (target_index < current_index).\n"
+        "   - Types: 'caused_by', 'enabled_by', 'prevented_by'."
+    )
 
     try:
         result, token_usage = await run_dspy_operation(
@@ -674,7 +663,6 @@ async def _extract_facts_with_auto_split(
     lm: dspy.LM,
     predictor: dspy.Predict,
     agent_name: str | None = None,
-    extract_opinions: bool = False,
     semaphore: asyncio.Semaphore | None = None,
     vault_id: UUID | None = None,
 ) -> tuple[list[RawFact], TokenUsage]:
@@ -691,7 +679,6 @@ async def _extract_facts_with_auto_split(
             lm=lm,
             predictor=predictor,
             agent_name=agent_name,
-            extract_opinions=extract_opinions,
             semaphore=semaphore,
             vault_id=vault_id,
         )
@@ -713,7 +700,6 @@ async def _extract_facts_with_auto_split(
                 lm=lm,
                 predictor=predictor,
                 agent_name=agent_name,
-                extract_opinions=extract_opinions,
                 semaphore=semaphore,
                 vault_id=vault_id,
             ),
@@ -726,7 +712,6 @@ async def _extract_facts_with_auto_split(
                 lm=lm,
                 predictor=predictor,
                 agent_name=agent_name,
-                extract_opinions=extract_opinions,
                 semaphore=semaphore,
                 vault_id=vault_id,
             ),
@@ -769,7 +754,6 @@ async def extract_facts_from_chunks(
     predictor: dspy.Predict,
     agent_name: str,
     context: str = '',
-    extract_opinions: bool = False,
     semaphore: asyncio.Semaphore | None = None,
     vault_id: UUID | None = None,
 ) -> tuple[list[RawFact], list[tuple[str, int]], TokenUsage]:
@@ -784,7 +768,6 @@ async def extract_facts_from_chunks(
             lm=lm,
             predictor=predictor,
             agent_name=agent_name,
-            extract_opinions=extract_opinions,
             semaphore=semaphore,
             vault_id=vault_id,
         )
@@ -814,7 +797,6 @@ async def extract_facts_from_text(
     chunk_max_chars: int,
     chunk_overlap: int,
     context: str = '',
-    extract_opinions: bool = False,
     semaphore: asyncio.Semaphore | None = None,
     vault_id: UUID | None = None,
 ) -> tuple[list[RawFact], list[tuple[str, int]], TokenUsage]:
@@ -831,7 +813,6 @@ async def extract_facts_from_text(
         predictor=predictor,
         agent_name=agent_name,
         context=context,
-        extract_opinions=extract_opinions,
         semaphore=semaphore,
         vault_id=vault_id,
     )

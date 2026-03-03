@@ -8,9 +8,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
-    AdjustBeliefRequest,
-    AdjustBeliefResponse,
-    EvidenceLogDTO,
     MemoryUnitDTO,
     SummaryRequest,
     SummaryResponse,
@@ -46,45 +43,6 @@ async def summarize_memories(
         return SummaryResponse(summary=summary)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summary generation failed')
-
-
-@router.patch('/memories/{unit_uuid}/belief')
-async def adjust_memory_belief(
-    unit_uuid: UUID,
-    request: Annotated[AdjustBeliefRequest, Body()],
-    api: Annotated[MemexAPI, Depends(get_api)],
-) -> AdjustBeliefResponse:
-    """Adjust belief confidence for a memory unit."""
-    try:
-        result = await api.adjust_belief(
-            unit_uuid=unit_uuid,
-            evidence_type_key=request.evidence_type_key,
-            description=request.description,
-        )
-        return AdjustBeliefResponse(
-            unit_id=unit_uuid,
-            evidence_type=request.evidence_type_key,
-            confidence_before=result['confidence_before'],
-            confidence_after=result['confidence_after'],
-            alpha=result['alpha'],
-            beta=result['beta'],
-        )
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
-        raise _handle_error(e, 'Belief adjustment failed')
-
-
-@router.get('/memories/{unit_id}/evidence-log')
-async def get_evidence_log(
-    unit_id: UUID,
-    limit: int = 20,
-    api: MemexAPI = Depends(get_api),
-) -> list[EvidenceLogDTO]:
-    """Retrieve the evidence audit trail for a memory unit."""
-    try:
-        logs = await api.get_evidence_log(unit_id, limit=limit)
-        return [EvidenceLogDTO(**log) for log in logs]
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
-        raise _handle_error(e, 'Failed to retrieve evidence log')
 
 
 @router.get('/memories/{id}', response_model=MemoryUnitDTO)

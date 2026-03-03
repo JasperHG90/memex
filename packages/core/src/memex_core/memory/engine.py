@@ -9,8 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import RetainContent
-from memex_core.memory.reflect.models import OpinionFormationRequest, ReflectionRequest
-from memex_core.memory.reflect.reasoning import ReasoningEngine
+from memex_core.memory.reflect.models import ReflectionRequest
 from memex_core.memory.reflect.reflection import ReflectionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
@@ -61,13 +60,10 @@ async def get_memory_engine(
             api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
         )
         predictor = dspy.Predict(ExtractSemanticFacts)
-        entity_resolver = EntityResolver(
-            resolution_threshold=config.server.memory.opinion_formation.confidence.similarity_threshold
-        )
+        entity_resolver = EntityResolver()
 
         extraction_engine = ExtractionEngine(
             config=config.server.memory.extraction,
-            confidence_config=config.server.memory.opinion_formation.confidence,
             lm=lm,
             predictor=predictor,
             embedding_model=embedding_model,
@@ -290,57 +286,6 @@ class MemoryEngine:
         """
         reflector = ReflectionEngine(session, self.config, embedder=self.extraction.embedding_model)
         return await reflector.reflect_on_entity(request)
-
-    async def form_opinions(
-        self,
-        session: AsyncSession,
-        request: OpinionFormationRequest,
-    ) -> list[str]:
-        """
-        Form new opinions based on an interaction (CARA framework).
-
-        This analyzes the interaction to detect user beliefs, preferences, or
-        corrections, and updates the "Opinions" layer of memory with Bayesian confidence.
-
-        Args:
-            session: Active DB session.
-            request: The interaction details (query, answer, context).
-
-        Returns:
-            List of created MemoryUnit IDs (opinions).
-        """
-        # Ensure we have an LM
-        lm = dspy.settings.lm
-        if not lm:
-            # Fallback to configuring from config if dspy global not set
-            # This is a safety net; ideally the app configures dspy globally.
-            try:
-                model_config = self.config.server.memory.extraction.model
-                lm = dspy.LM(
-                    model=model_config.model,
-                    api_base=str(model_config.base_url) if model_config.base_url else None,
-                    api_key=model_config.api_key.get_secret_value()
-                    if model_config.api_key
-                    else None,
-                )
-            except (ValueError, RuntimeError, OSError, KeyError, AttributeError) as e:
-                logger.warning(
-                    'No LM configured for reasoning (%s). Attempting to proceed, but may fail.', e
-                )
-
-        # If lm is still None, ReasoningEngine might fail if it doesn't handle it.
-        # But ReasoningEngine __init__ type hint says dspy.LM is required.
-        # We'll assume the caller (App/CLI) has set up dspy.
-
-        reasoner = ReasoningEngine(
-            session,
-            lm,
-            embedding_model=self.extraction.embedding_model,
-            retrieval_engine=self.retrieval,
-        )
-        results = await reasoner.form_opinions(request)
-        await session.commit()
-        return results
 
     async def process_reflection_queue(
         self,

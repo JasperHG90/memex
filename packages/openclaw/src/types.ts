@@ -31,7 +31,6 @@ export interface MemorySearchRequest {
   limit?: number;
   offset?: number;
   vault_ids?: string[] | null;
-  skip_opinion_formation?: boolean;
   token_budget?: number | null;
 }
 
@@ -112,6 +111,11 @@ export interface PageIndexNode {
 
 export interface PageIndexOutput {
   toc: PageIndexNode[];
+}
+
+export interface NoteMetadataOutput {
+  note_id: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface NodeDTO {

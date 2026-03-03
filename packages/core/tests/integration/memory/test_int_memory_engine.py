@@ -6,8 +6,7 @@ from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
-from memex_core.memory.reflect.models import OpinionFormationRequest
-from memex_core.memory.sql_models import MentalModel, MemoryUnit, TokenUsage
+from memex_core.memory.sql_models import MentalModel, TokenUsage
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.config import (
@@ -15,14 +14,12 @@ from memex_core.config import (
     ExtractionConfig,
     SimpleTextSplitting,
     ModelConfig,
-    ConfidenceConfig,
     ServerConfig,
     MemoryConfig,
-    OpinionFormationConfig,
 )
 import dspy
 import datetime as dt
-from sqlmodel import select, col
+from sqlmodel import select
 
 
 @pytest.mark.integration
@@ -31,7 +28,7 @@ from sqlmodel import select, col
 async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str):
     """
     Integration test for the full MemoryEngine lifecycle:
-    Retain -> Reflect (Triggered) -> Recall -> Form Opinions.
+    Retain -> Reflect (Triggered) -> Recall.
     """
 
     # 0. Setup Configuration & Dependencies
@@ -55,7 +52,6 @@ async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str)
                     ),
                     max_concurrency=10,
                 ),
-                opinion_formation=OpinionFormationConfig(confidence=ConfidenceConfig()),
             ),
             meta_store=PostgresMetaStoreConfig(
                 instance=PostgresInstanceConfig(
@@ -80,7 +76,6 @@ async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str)
         # Initialize Sub-Engines
         extraction_engine = ExtractionEngine(
             config=config.server.memory.extraction,
-            confidence_config=config.server.memory.opinion_formation.confidence,
             lm=lm,
             predictor=predictor,
             embedding_model=embedding_model,
@@ -153,37 +148,8 @@ async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str)
         combined_text = ' '.join([m.text for m in memories])
         assert '40%' in combined_text or 'CO2' in combined_text
 
-        # 3. Form Opinions (Reasoning)
+        # 3. Token Usage
         # ----------------------------
-        # Simulate a user interaction where the user expresses a view on the project
-
-        # Fetch the actual memory units from DB to pass as context
-        stmt_units = select(MemoryUnit).where(col(MemoryUnit.id).in_(result['unit_ids']))
-        context_units = list((await session.exec(stmt_units)).all())
-
-        opinion_request = OpinionFormationRequest(
-            query='Do you think Project Aether is viable despite the funding issues?',
-            context=context_units,  # Providing the memory context as list[MemoryUnit]
-            answer='Yes, the 40% efficiency gain implies a strong economic case once scaled, making it viable long-term.',
-            agent_name='integration_tester',
-        )
-        opinion_ids = await memory_engine.form_opinions(session, opinion_request)
-
-        # This is probabilistic (LLM might not form an opinion), but with this strong prompt it should.
-        if opinion_ids:
-            assert len(opinion_ids) > 0
-
-            # Verify the opinion in DB
-            stmt_op = select(MemoryUnit).where(col(MemoryUnit.id).in_(opinion_ids))
-            opinions = (await session.exec(stmt_op)).all()
-
-            assert len(opinions) > 0
-            assert opinions[0].fact_type == 'opinion'
-            assert opinions[0].confidence_alpha is not None
-            assert opinions[0].confidence_beta is not None
-            # Should be positive confidence (Alpha > Beta) given the answer
-            assert opinions[0].confidence_alpha > opinions[0].confidence_beta
-
         token_usage = (await session.exec(select(TokenUsage))).all()
         jsonl = [tu.model_dump() for tu in token_usage]
         assert len(jsonl) > 0, 'Expected token usage logs to be recorded.'

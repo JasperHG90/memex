@@ -111,7 +111,6 @@ async def search_memories(
     payload = {
         'query': query,
         'limit': limit,
-        'skip_opinion_formation': True,
     }
 
     response = await client.post(
