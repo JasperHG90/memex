@@ -36,7 +36,7 @@ function registerPlugin(configOverrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe('plugin registration', () => {
-  it('registers all 9 agent tools', () => {
+  it('registers all 10 agent tools', () => {
     const api = registerPlugin();
     const toolNames = [...api.tools.keys()];
     expect(toolNames).toEqual([
@@ -44,6 +44,7 @@ describe('plugin registration', () => {
       'memex_store',
       'memex_note_search',
       'memex_read_note',
+      'memex_get_note_metadata',
       'memex_get_page_index',
       'memex_get_node',
       'memex_get_lineage',
