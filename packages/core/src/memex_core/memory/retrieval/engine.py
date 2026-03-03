@@ -260,7 +260,7 @@ class RetrievalEngine:
                 sim_matrix = self._build_hybrid_similarity_matrix(
                     cosine_matrix, jaccard_matrix, w_emb, w_ent
                 )
-                mmr_limit = effective_limit if token_budget is not None else request.limit
+                mmr_limit = len(real_units) if token_budget is not None else request.limit
                 real_units = self._apply_mmr_diversity(
                     real_units, sim_matrix, mmr_lambda, mmr_limit
                 )
