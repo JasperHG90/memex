@@ -39,7 +39,7 @@ mcp = FastMCP(
     instructions="""Memex is a personal knowledge management system. Follow this retrieval workflow:
 
 STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
-  - `memex_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
+  - `memex_memory_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
   - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with snippets.
   When unsure, run both in parallel and combine results (deduplicate by Note ID).
 
@@ -493,14 +493,14 @@ async def memex_add_note(
 
 
 @mcp.tool(
-    name='memex_search',
+    name='memex_memory_search',
     description=(
         'Search extracted facts, events, and observations across all notes (memory search). '
         'Best for broad/exploratory queries. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
     ),
 )
-async def memex_search(
+async def memex_memory_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query.')],
     limit: Annotated[
@@ -574,7 +574,7 @@ async def memex_search(
     description=(
         'Search source notes by hybrid retrieval (note search). '
         'Returns ranked notes with snippets. Best for targeted document lookup. '
-        'For broad exploration, use memex_search. When unsure, run both in parallel.'
+        'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
 )
 async def memex_note_search(
@@ -893,7 +893,7 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_list_notes',
-    description='List notes in active vault. NOT for discovery — use memex_search or memex_note_search.',
+    description='List notes in active vault. NOT for discovery — use memex_memory_search or memex_note_search.',
 )
 async def memex_list_notes(
     ctx: Context,

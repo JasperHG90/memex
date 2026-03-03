@@ -125,7 +125,7 @@ A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 Session start context is automatic via hook. Do NOT redundantly search at session start.
 PROHIBITED: `memex_list_notes` for discovery.
 
-`memex_search` — atomic facts, observations, mental models across the knowledge graph.
+`memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
 `memex_note_search` — raw source notes via hybrid retrieval. `reason=True` annotates relevant sections.
 
 ### Note reading

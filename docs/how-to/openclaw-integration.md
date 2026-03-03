@@ -101,7 +101,7 @@ The plugin registers 9 tools that the agent can call during conversations:
 
 | Tool | Description |
 | :--- | :--- |
-| `memex_search` | Search long-term memories |
+| `memex_memory_search` | Search long-term memories |
 | `memex_add_note` | Save a new note to Memex |
 | `memex_note_search` | Search source documents |
 | `memex_read_note` | Read a full note by ID |
@@ -176,4 +176,4 @@ openclaw memex search "deployment architecture" --limit 5
 
 * [About the OpenClaw Plugin](../explanation/openclaw-plugin.md) — plugin architecture, circuit breaker, prompt injection protection
 * [Configuring Memex](configure-memex.md) — server-side configuration
-* [Document Search vs. Memory Search](doc-search-vs-memory-search.md) — understanding `memex_search` vs. `memex_note_search`
+* [Document Search vs. Memory Search](doc-search-vs-memory-search.md) — understanding `memex_memory_search` vs. `memex_note_search`

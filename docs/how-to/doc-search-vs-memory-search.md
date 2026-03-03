@@ -110,7 +110,7 @@ This shows the full provenance chain: Memory Unit -> Chunk -> Note -> Original F
 | **Scope** | Per-vault or per-document | Cross-vault knowledge graph |
 | **Best for** | "Find the PDF where X is mentioned" | "What do we know about X globally?" |
 | **CLI command** | `memex note search` | `memex memory search` |
-| **MCP tool** | `memex_note_search` | `memex_search` |
+| **MCP tool** | `memex_note_search` | `memex_memory_search` |
 
 ## Verification
 
@@ -127,4 +127,4 @@ Both should return results if the topic has been ingested and processed.
 
 * [About the Hindsight Framework](../explanation/hindsight-framework.md) — how extraction, retrieval, and reflection work
 * [About Retrieval Strategies](../explanation/retrieval-strategies.md) — TEMPR architecture in depth
-* [MCP Tools Reference](../reference/mcp-tools.md) — `memex_search` and `memex_note_search` parameters
+* [MCP Tools Reference](../reference/mcp-tools.md) — `memex_memory_search` and `memex_note_search` parameters

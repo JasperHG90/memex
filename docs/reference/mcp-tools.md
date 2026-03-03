@@ -17,7 +17,7 @@ memex mcp run --transport sse --port 8080
 Follow this three-step retrieval workflow:
 
 1. **Search** — Pick by query type, or run both in parallel when unsure:
-   - `memex_search` (memory search) for broad/exploratory queries
+   - `memex_memory_search` (memory search) for broad/exploratory queries
    - `memex_note_search` (note search) for targeted document retrieval
 2. **Filter** — Call `memex_get_note_metadata` on each candidate note (cheap, ~50 tokens). Check title, tags, description to confirm relevance before reading.
 3. **Read** — Only for confirmed-relevant notes: `memex_get_page_index` (TOC + node IDs) then `memex_get_node` (section text). Fall back to `memex_read_note` only for small notes.
@@ -27,7 +27,7 @@ Follow this three-step retrieval workflow:
 
 | Tool | Best for | Returns |
 |------|----------|---------|
-| `memex_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
+| `memex_memory_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
 | `memex_note_search` | Targeted document retrieval ("Which note describes X?"), deep-diving into a topic | Whole source notes ranked by relevance with snippets |
 
 When unsure which to use, run both in parallel and combine results (deduplicate by Note ID).
@@ -46,7 +46,7 @@ Always call `memex_get_note_metadata` before `memex_get_page_index` to avoid was
 
 ## Search Tools
 
-### `memex_search`
+### `memex_memory_search`
 
 Search memory units (facts, events, observations) via multi-strategy TEMPR retrieval. Best for broad exploration across all notes and precise factual recall.
 
@@ -323,7 +323,7 @@ Returns vault names, IDs, and descriptions.
 
 ### `memex_list_notes`
 
-List notes in the active vault. Not recommended for discovery -- use `memex_search` or `memex_note_search` instead.
+List notes in the active vault. Not recommended for discovery -- use `memex_memory_search` or `memex_note_search` instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|

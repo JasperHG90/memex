@@ -49,7 +49,7 @@ const memexPlugin = {
 
     api.registerTool(
       {
-        name: 'memex_search',
+        name: 'memex_memory_search',
         label: 'Memex Search',
         description:
           'Search Memex memories (facts, events, observations). Best for broad/exploratory queries. For targeted document lookup, use memex_note_search. When unsure, run both in parallel.',
@@ -96,7 +96,7 @@ const memexPlugin = {
           }
         },
       },
-      { name: 'memex_search' },
+      { name: 'memex_memory_search' },
     );
 
     api.registerTool(
@@ -150,7 +150,7 @@ const memexPlugin = {
         name: 'memex_note_search',
         label: 'Memex Note Search',
         description:
-          'Search source notes by hybrid retrieval. Returns ranked notes with snippets. Best for targeted document lookup. For broad exploration, use memex_search. When unsure, run both in parallel.',
+          'Search source notes by hybrid retrieval. Returns ranked notes with snippets. Best for targeted document lookup. For broad exploration, use memex_memory_search. When unsure, run both in parallel.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
