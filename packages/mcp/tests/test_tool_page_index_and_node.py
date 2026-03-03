@@ -36,10 +36,13 @@ def _make_node(
 async def test_memex_get_page_index_returns_json(mock_api, mcp_client):
     """Tool returns a JSON-formatted page index when one exists."""
     doc_id = uuid4()
-    page_index = [
-        {'id': str(uuid4()), 'title': 'Chapter 1', 'level': 1, 'children': []},
-        {'id': str(uuid4()), 'title': 'Chapter 2', 'level': 1, 'children': []},
-    ]
+    page_index = {
+        'metadata': {'title': 'Test Note', 'description': 'A test note'},
+        'toc': [
+            {'id': str(uuid4()), 'title': 'Chapter 1', 'level': 1, 'children': []},
+            {'id': str(uuid4()), 'title': 'Chapter 2', 'level': 1, 'children': []},
+        ],
+    }
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(doc_id)})

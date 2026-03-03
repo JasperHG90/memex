@@ -24,7 +24,10 @@ from memex_common.schemas import (
     IngestURLRequest,
     LineageResponse,
     NoteCreateDTO,
+    PageIndexDTO,
+    PageMetadataDTO,
     ReflectionRequest,
+    TOCNodeDTO,
 )
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
@@ -658,7 +661,7 @@ async def memex_note_search(
 async def memex_get_page_index(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
-) -> str:
+) -> str | PageIndexDTO:
     """Get the hierarchical page index for a note."""
     try:
         api = get_api(ctx)
@@ -671,9 +674,10 @@ async def memex_get_page_index(
         if page_index is None:
             return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
-        import json as _json
-
-        return _json.dumps(page_index, default=str, indent=2)
+        return PageIndexDTO(
+            metadata=PageMetadataDTO(**(page_index.get('metadata') or {})),
+            toc=[TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])],
+        )
 
     except ToolError:
         raise
@@ -692,7 +696,7 @@ async def memex_get_page_index(
 async def memex_get_note_metadata(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
-) -> str:
+) -> str | PageMetadataDTO:
     """Get just the metadata from a note's page index."""
     try:
         api = get_api(ctx)
@@ -705,9 +709,7 @@ async def memex_get_note_metadata(
         if metadata is None:
             return 'No metadata available for this note. The note may not have a page index.'
 
-        import json as _json
-
-        return _json.dumps(metadata, default=str, indent=2)
+        return PageMetadataDTO(**metadata)
 
     except ToolError:
         raise
