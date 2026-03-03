@@ -25,13 +25,16 @@ A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 Session start context is automatic via hook. Do NOT redundantly search at session start.
 PROHIBITED: `memex_list_notes` for discovery.
 
-`memex_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes via hybrid retrieval. `reason=True` annotates relevant sections.
+**Search** (pick by query type, or run both in parallel when unsure):
+- `memex_search` — memory search: atomic facts, observations, mental models. Best for broad queries.
+- `memex_note_search` — note search: ranked source notes via hybrid retrieval. Best for targeted doc lookup. `reason=True` annotates relevant sections.
 
-### Note reading
+**Filter** (parallel per note):
+- `memex_get_note_metadata` — cheap (~50 tokens). Check title/tags/description to confirm relevance before reading.
 
-1. `memex_get_page_index` (Note ID → table of contents)
-2. `memex_get_node` (node ID → section text)
+**Read** (only confirmed-relevant notes):
+1. `memex_get_page_index` (Note ID → TOC + node IDs) — expensive, skip for irrelevant notes
+2. `memex_get_node` (node ID → section text) — call multiple in parallel
 3. Fallback only: `memex_read_note`
 
 ### Slash commands

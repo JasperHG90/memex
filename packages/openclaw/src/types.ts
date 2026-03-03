@@ -113,6 +113,11 @@ export interface PageIndexOutput {
   toc: PageIndexNode[];
 }
 
+export interface NoteMetadataOutput {
+  note_id: string;
+  metadata: Record<string, unknown> | null;
+}
+
 export interface NodeDTO {
   id: string;
   note_id: string;
