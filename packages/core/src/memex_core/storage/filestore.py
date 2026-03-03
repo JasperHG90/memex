@@ -149,19 +149,27 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         src_key: str,
         dest_key: str,
     ) -> None:
-        """Move a file from src to dest using the provided filesystem.
+        """Move a file or directory from src to dest using the provided filesystem.
 
         Args:
-            fs (AsyncFileSystem | AsyncFileSystemWrapper): The filesystem to use.
-            src (str): Source file path.
-            dest (str): Destination file path.
+            src_key: Source path relative to root.
+            dest_key: Destination path relative to root.
         """
         src_fp = self.join_path(src_key)
         dest_fp = self.join_path(dest_key)
         self._logger.debug(f'Moving file from {src_fp} to {dest_fp}')
         async with self._semaphore:
-            await self._fs._cp_file(src_fp, dest_fp)
-            await self._fs._rm_file(src_fp)
+            if await self._fs._isdir(src_fp):
+                files = await self._fs._find(src_fp)
+                for f in files:
+                    rel = f[len(src_fp.rstrip('/')) + 1 :]
+                    target = posixpath.join(dest_fp, rel)
+                    await self._fs._makedirs(posixpath.dirname(target), exist_ok=True)
+                    await self._fs._cp_file(f, target)
+                await self._fs._rm(src_fp, recursive=True)
+            else:
+                await self._fs._cp_file(src_fp, dest_fp)
+                await self._fs._rm_file(src_fp)
 
     async def _save(self, key: str, data: bytes) -> None:
         """Save data to the storage backend without transaction logging."""
