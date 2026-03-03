@@ -5,7 +5,7 @@
  *   - Auto-recall: search relevant memories before each agent turn
  *   - Auto-capture: store conversation turns as Markdown notes
  *   - Circuit breaker: 3 failures -> 60s cooldown to avoid blocking the agent
- *   - 9 agent tools for full Memex access
+ *   - 10 agent tools for full Memex access
  *   - Slash commands: /recall and /remember
  *   - CLI: memex status, memex search
  */
