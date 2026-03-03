@@ -80,3 +80,19 @@ async def test_get_note_metadata_returns_none_when_no_metadata_key(note_service)
 
     result = await note_service.get_note_metadata(note_id)
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_note_metadata_returns_none_for_legacy_list_format(note_service):
+    """get_note_metadata returns None when page_index is a list (pre-envelope format)."""
+    note_id = uuid4()
+    mock_note = MagicMock()
+    mock_note.page_index = [{'level': 1, 'title': 'Intro', 'children': []}]
+
+    mock_session = AsyncMock()
+    mock_session.get.return_value = mock_note
+    note_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    note_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    result = await note_service.get_note_metadata(note_id)
+    assert result is None

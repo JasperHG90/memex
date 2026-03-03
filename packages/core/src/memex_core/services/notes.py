@@ -60,6 +60,8 @@ class NoteService:
                 raise ResourceNotFoundError(f'Document {note_id} not found.')
             if doc.page_index is None:
                 return None
+            if not isinstance(doc.page_index, dict):
+                return None
             return doc.page_index.get('metadata')
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
