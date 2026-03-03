@@ -320,7 +320,7 @@ class ReflectionConfig(BaseModel):
         description='Minimum similarity score for retrieving evidence.',
     )
     background_reflection_enabled: bool = Field(
-        default=False,
+        default=True,
         description='Whether to run the periodic reflection loop in the background.',
     )
     background_reflection_interval_seconds: int = Field(
@@ -438,7 +438,7 @@ class RetrievalConfig(BaseModel):
     """Configuration for retrieval settings."""
 
     token_budget: int = Field(
-        default=2000,
+        default=1000,
         description='Maximum token budget for retrieval results (greedy packing).',
     )
 
