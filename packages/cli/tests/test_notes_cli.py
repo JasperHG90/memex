@@ -13,6 +13,18 @@ def test_note_list(runner, mock_api, monkeypatch):
     result = runner.invoke(note_app, ['list'])
     assert result.exit_code == 0
     assert 'My Note' in result.stdout
+    mock_api.list_notes.assert_called_once_with(limit=50, offset=0, vault_ids=None)
+
+
+def test_note_list_with_vault(runner, mock_api, monkeypatch):
+    """list --vault passes vault_ids to the API."""
+    vault_id = str(uuid4())
+    mock_api.list_notes.return_value = []
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--vault', vault_id])
+    assert result.exit_code == 0
+    mock_api.list_notes.assert_called_once_with(limit=50, offset=0, vault_ids=[vault_id])
 
 
 def test_note_view(runner, mock_api, monkeypatch):

@@ -10,7 +10,6 @@ import memex_core.config
 from memex_core.config import (
     ExtractionConfig,
     ReflectionConfig,
-    ConfidenceConfig,
     PageIndexTextSplitting,
     SimpleTextSplitting,
     GLOBAL_VAULT_ID,
@@ -37,7 +36,7 @@ from memex_core.memory.extraction.utils import parse_datetime
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
     assemble_llm_chunks,
-    build_thin_tree,
+    build_page_index_with_metadata,
     diff_blocks,
     diff_page_index_blocks,
     find_node_hash,
@@ -53,7 +52,6 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     process_embeddings,
 )
 from memex_core.memory.entity_resolver import EntityResolver
-from memex_core.memory.confidence import ConfidenceEngine
 from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.context import get_session_id
@@ -76,7 +74,6 @@ def _make_lm(model_cfg: 'memex_core.config.ModelConfig') -> dspy.LM:
 
 async def get_extraction_engine(
     config: ExtractionConfig,
-    confidence_config: ConfidenceConfig,
     reflection_config: ReflectionConfig | None = None,
 ):
     """
@@ -101,7 +98,6 @@ async def get_extraction_engine(
 
     return ExtractionEngine(
         config=config,
-        confidence_config=confidence_config,
         lm=lm,
         predictor=predictor,
         embedding_model=embedding_model,
@@ -121,7 +117,6 @@ class ExtractionEngine:
     def __init__(
         self,
         config: ExtractionConfig,
-        confidence_config: ConfidenceConfig,
         lm: dspy.LM,
         predictor: dspy.Predict,
         embedding_model: embedding_processor.EmbeddingsModel,
@@ -134,11 +129,6 @@ class ExtractionEngine:
         self.predictor = predictor
         self.embedding_model = embedding_model
         self.entity_resolver = entity_resolver
-        self.confidence_engine = ConfidenceEngine(
-            damping_factor=confidence_config.damping_factor,
-            max_inherited_mass=confidence_config.max_inherited_mass,
-            similarity_threshold=confidence_config.similarity_threshold,
-        )
         self.queue_service = (
             ReflectionQueueService(config=reflection_config) if reflection_config else None
         )
@@ -152,7 +142,6 @@ class ExtractionEngine:
         agent_name: str = 'memex_agent',
         note_id: str | None = None,
         is_first_batch: bool = True,
-        extract_opinions: bool = False,
         content_fingerprint: str | None = None,
     ) -> tuple[list[str], TokenUsage, set[UUID]]:
         """
@@ -181,7 +170,6 @@ class ExtractionEngine:
                         note_id=note_id,
                         existing_blocks=existing_blocks,
                         vault_id=vault_id,
-                        extract_opinions=extract_opinions,
                         content_fingerprint=content_fingerprint,
                     )
                 return await self._extract_incremental(
@@ -191,7 +179,6 @@ class ExtractionEngine:
                     note_id=note_id,
                     existing_blocks=existing_blocks,
                     vault_id=vault_id,
-                    extract_opinions=extract_opinions,
                     content_fingerprint=content_fingerprint,
                 )
 
@@ -204,14 +191,11 @@ class ExtractionEngine:
                 note_id=note_id,
                 is_first_batch=is_first_batch,
                 vault_id=vault_id,
-                extract_opinions=extract_opinions,
                 content_fingerprint=content_fingerprint,
             )
 
         # --- Full extraction path (simple strategy or no page_index LM) ---
-        extracted_facts, chunks, usage = await self._extract_facts(
-            contents, agent_name, extract_opinions
-        )
+        extracted_facts, chunks, usage = await self._extract_facts(contents, agent_name)
 
         if chunks:
             chunk_texts = [c.chunk_text for c in chunks]
@@ -227,15 +211,6 @@ class ExtractionEngine:
             return [], usage, set()
 
         processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
-
-        # NB: Initialize informative priors for opinions
-        for fact in processed_facts:
-            if fact.fact_type == 'opinion':
-                alpha, beta = await self.confidence_engine.calculate_informative_prior(
-                    session, fact.embedding
-                )
-                fact.confidence_alpha = alpha
-                fact.confidence_beta = beta
 
         # Deduplication
         is_duplicate = await deduplication.check_duplicates_batch(
@@ -314,7 +289,6 @@ class ExtractionEngine:
         note_id: str,
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
-        extract_opinions: bool = False,
         content_fingerprint: str | None = None,
     ) -> tuple[list[str], TokenUsage, set[UUID]]:
         """Incremental extraction: diff blocks, extract only changed content.
@@ -326,7 +300,6 @@ class ExtractionEngine:
             note_id: Stable document identifier.
             existing_blocks: Current blocks from DB (via get_note_blocks).
             vault_id: Vault scope.
-            extract_opinions: Whether to extract opinions.
             content_fingerprint: Content fingerprint for document tracking.
 
         Returns:
@@ -385,7 +358,6 @@ class ExtractionEngine:
                     predictor=self.predictor,
                     agent_name=agent_name,
                     context=ctx,
-                    extract_opinions=extract_opinions,
                     semaphore=self.semaphore,
                     vault_id=vault_id,
                 )
@@ -408,8 +380,12 @@ class ExtractionEngine:
                         fact_text=raw_fact.formatted_text,
                         fact_type=raw_fact.fact_type,
                         entities=raw_fact.entities,
-                        occurred_start=None,
-                        occurred_end=None,
+                        occurred_start=parse_datetime(raw_fact.occurred_start)
+                        if raw_fact.occurred_start
+                        else None,
+                        occurred_end=parse_datetime(raw_fact.occurred_end)
+                        if raw_fact.occurred_end
+                        else None,
                         causal_relations=_convert_causal_relations(
                             relations_from_llm=raw_fact.causal_relations,
                             fact_start_idx=fact_start_idx,
@@ -431,14 +407,6 @@ class ExtractionEngine:
                 processed_facts = await process_embeddings(
                     self.embedding_model, all_extracted_facts
                 )
-
-                for fact in processed_facts:
-                    if fact.fact_type == 'opinion':
-                        alpha, beta = await self.confidence_engine.calculate_informative_prior(
-                            session, fact.embedding
-                        )
-                        fact.confidence_alpha = alpha
-                        fact.confidence_beta = beta
 
                 # Deduplication
                 is_duplicate = await deduplication.check_duplicates_batch(
@@ -534,7 +502,6 @@ class ExtractionEngine:
         note_id: str,
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
-        extract_opinions: bool = False,
         content_fingerprint: str | None = None,
     ) -> tuple[list[str], TokenUsage, set[UUID]]:
         """Incremental page-index extraction with node-level change detection.
@@ -553,7 +520,6 @@ class ExtractionEngine:
             note_id: Stable document identifier.
             existing_blocks: Current blocks from DB (via get_note_blocks).
             vault_id: Vault scope.
-            extract_opinions: Whether to extract opinions.
             content_fingerprint: Content fingerprint for document tracking.
 
         Returns:
@@ -692,7 +658,6 @@ class ExtractionEngine:
                 predictor=self.predictor,
                 agent_name=agent_name,
                 context='',
-                extract_opinions=extract_opinions,
                 semaphore=self.semaphore,
                 vault_id=vault_id,
             )
@@ -740,14 +705,6 @@ class ExtractionEngine:
                         self.embedding_model, extracted_facts
                     )
 
-                    for fact in processed_facts:
-                        if fact.fact_type == 'opinion':
-                            alpha, beta = await self.confidence_engine.calculate_informative_prior(
-                                session, fact.embedding
-                            )
-                            fact.confidence_alpha = alpha
-                            fact.confidence_beta = beta
-
                     # Deduplication
                     is_duplicate = await deduplication.check_duplicates_batch(
                         session,
@@ -781,12 +738,23 @@ class ExtractionEngine:
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
-        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
-        await storage.update_note_page_index(session, note_id, thin_tree)
+        retain_params = contents[0].payload if contents else {}
+        page_index = build_page_index_with_metadata(
+            page_index_output.toc,
+            metadata={
+                'title': retain_params.get('note_name'),
+                'description': retain_params.get('note_description'),
+                'tags': retain_params.get('tags', []),
+                'publish_date': str(event_date) if event_date else None,
+                'source_uri': retain_params.get('source_uri'),
+            },
+            min_node_tokens=min_tokens,
+        )
+        await storage.update_note_page_index(session, note_id, page_index)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
-            page_index_toc=thin_tree,
+            page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
             session=session,
@@ -825,7 +793,6 @@ class ExtractionEngine:
         note_id: str | None,
         is_first_batch: bool,
         vault_id: UUID,
-        extract_opinions: bool = False,
         content_fingerprint: str | None = None,
     ) -> tuple[list[str], TokenUsage, set[UUID]]:
         """Page-index extraction path: hierarchical TOC → nodes → blocks → facts.
@@ -876,15 +843,26 @@ class ExtractionEngine:
             min_node_tokens=min_tokens,
         )
 
-        # 3. Build hash-stable thin tree for storage
-        thin_tree = build_thin_tree(page_index_output.toc, min_node_tokens=min_tokens)
-        await storage.update_note_page_index(session, effective_doc_id, thin_tree)
+        # 3. Build hash-stable thin tree with metadata for storage
+        retain_params = contents[0].payload if contents else {}
+        page_index = build_page_index_with_metadata(
+            page_index_output.toc,
+            metadata={
+                'title': retain_params.get('note_name'),
+                'description': retain_params.get('note_description'),
+                'tags': retain_params.get('tags', []),
+                'publish_date': str(event_date) if event_date else None,
+                'source_uri': retain_params.get('source_uri'),
+            },
+            min_node_tokens=min_tokens,
+        )
+        await storage.update_note_page_index(session, effective_doc_id, page_index)
 
         # Resolve and store the document title from the TOC / block summaries.
         # This supersedes the rough title stored by _track_document above.
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
-            page_index_toc=thin_tree,
+            page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
             session=session,
@@ -904,7 +882,6 @@ class ExtractionEngine:
             predictor=self.predictor,
             agent_name=agent_name,
             context='',
-            extract_opinions=extract_opinions,
             semaphore=self.semaphore,
             vault_id=vault_id,
         )
@@ -949,14 +926,6 @@ class ExtractionEngine:
 
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
         processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
-
-        for fact in processed_facts:
-            if fact.fact_type == 'opinion':
-                alpha, beta = await self.confidence_engine.calculate_informative_prior(
-                    session, fact.embedding
-                )
-                fact.confidence_alpha = alpha
-                fact.confidence_beta = beta
 
         # Deduplication
         is_duplicate = await deduplication.check_duplicates_batch(
@@ -1094,28 +1063,10 @@ class ExtractionEngine:
 
         return node_ids, block_chunk_map
 
-    async def adjust_belief(
-        self,
-        session: AsyncSession,
-        unit_uuid: str,
-        evidence_type_key: str,
-        description: str | None = None,
-    ) -> dict[str, float]:
-        """
-        Adjust the confidence of a memory unit based on new evidence.
-        Delegates to the ConfidenceEngine.
-        """
-        result = await self.confidence_engine.adjust_belief(
-            session, unit_uuid, evidence_type_key, description
-        )
-        await session.commit()
-        return result
-
     async def _extract_facts(
         self,
         contents: list[RetainContent],
         agent_name: str,
-        extract_opinions: bool,
     ) -> tuple[list[ExtractedFact], list[ChunkMetadata], TokenUsage]:
         """Run LLM extraction in parallel with semaphore."""
 
@@ -1139,7 +1090,6 @@ class ExtractionEngine:
                 chunk_max_chars=chunk_max,
                 chunk_overlap=chunk_overlap,
                 context=content.context or '',
-                extract_opinions=extract_opinions,
                 semaphore=self.semaphore,
                 vault_id=content.vault_id,
             )

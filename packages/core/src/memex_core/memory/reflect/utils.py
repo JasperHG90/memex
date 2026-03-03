@@ -11,7 +11,7 @@ def build_memory_context(
     *,
     index_map: dict[UUID, int] | None = None,
 ) -> list[ReflectMemoryContext]:
-    """Convert MemoryUnits to ReflectMemoryContext with confidence populated.
+    """Convert MemoryUnits to ReflectMemoryContext.
 
     Args:
         memories: List of MemoryUnit objects.
@@ -26,7 +26,6 @@ def build_memory_context(
                 index_id=idx,
                 content=unit.formatted_fact_text,
                 occurred=(unit.event_date or datetime.now(timezone.utc)).isoformat(),
-                confidence=unit.confidence_score,
             )
         )
     return contexts

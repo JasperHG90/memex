@@ -6,7 +6,6 @@ import {
   useMemory,
   useMemorySearch,
   useDeleteMemory,
-  useAdjustBelief,
   useMemoryLineage,
 } from '@/api/hooks/use-memories'
 
@@ -71,39 +70,6 @@ describe('useMemorySearch', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data).toEqual(mockResults)
-  })
-})
-
-describe('useAdjustBelief', () => {
-  it('sends PATCH to confirm a memory', async () => {
-    fetchSpy.mockResolvedValue(
-      new Response(null, { status: 204, headers: { 'Content-Type': 'application/json' } }),
-    )
-
-    const { result } = renderHook(() => useAdjustBelief(), { wrapper: createWrapper() })
-
-    result.current.mutate({ unitId: 'mem-1', adjustment: 'confirm' })
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toContain('/memories/mem-1/belief')
-    expect(options.method).toBe('PATCH')
-    const body = JSON.parse(options.body)
-    expect(body.evidence_type_key).toBe('user_validation')
-  })
-
-  it('sends PATCH to contradict a memory', async () => {
-    fetchSpy.mockResolvedValue(
-      new Response(null, { status: 204, headers: { 'Content-Type': 'application/json' } }),
-    )
-
-    const { result } = renderHook(() => useAdjustBelief(), { wrapper: createWrapper() })
-
-    result.current.mutate({ unitId: 'mem-1', adjustment: 'contradict' })
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
-    expect(body.evidence_type_key).toBe('user_rejection')
   })
 })
 

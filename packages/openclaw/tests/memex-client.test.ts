@@ -39,7 +39,6 @@ describe('MemexClient', () => {
       const body = JSON.parse(init.body);
       expect(body.query).toBe('test query');
       expect(body.limit).toBe(5);
-      expect(body.skip_opinion_formation).toBe(true);
       expect(body.vault_ids).toEqual(['OpenClaw']);
     });
 

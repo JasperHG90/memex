@@ -9,7 +9,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.config import (
     ExtractionConfig,
-    ConfidenceConfig,
     PageIndexTextSplitting,
     ModelConfig,
 )
@@ -82,7 +81,6 @@ def extractor(
 ):
     return ExtractionEngine(
         config=page_index_config,
-        confidence_config=ConfidenceConfig(),
         lm=mock_lm,
         predictor=mock_predictor,
         embedding_model=mock_embedding_model,
@@ -418,7 +416,6 @@ class TestRouting:
         config = ExtractionConfig()
         engine = ExtractionEngine(
             config=config,
-            confidence_config=ConfidenceConfig(),
             lm=mock_lm,
             predictor=mock_predictor,
             embedding_model=mock_embedding_model,

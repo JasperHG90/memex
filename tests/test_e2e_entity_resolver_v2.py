@@ -39,7 +39,6 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         content_index=0,
         mentioned_at=now,
         vault_id=vault_id,
-        confidence=0.9,
     )
 
     with (
@@ -76,7 +75,6 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         content_index=0,
         mentioned_at=now,
         vault_id=vault_id,
-        confidence=0.9,
     )
 
     with (

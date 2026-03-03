@@ -12,7 +12,7 @@ from memex_common.config import (
 
 def test_retrieval_config_defaults():
     config = RetrievalConfig()
-    assert config.token_budget == 2000
+    assert config.token_budget == 1000
 
 
 def test_retrieval_config_override():
@@ -39,4 +39,4 @@ def test_memex_config_has_retrieval_defaults():
     )
 
     assert config.server.memory.retrieval is not None
-    assert config.server.memory.retrieval.token_budget == 2000
+    assert config.server.memory.retrieval.token_budget == 1000

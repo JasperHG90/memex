@@ -30,7 +30,7 @@ GOLDEN_FACTS: list[RawFact] = [
     ),
     RawFact(
         what='The user prefers Python for data analysis',
-        fact_type=FactTypes.EXPERIENCE,
+        fact_type=FactTypes.EVENT,
         fact_kind=FactKindTypes.CONVERSATION,
     ),
 ]
@@ -83,7 +83,7 @@ async def test_extract_facts_returns_golden_output(mock_dspy_lm):
     assert len(facts) == 2
     assert facts[0].what == 'Python is a popular programming language'
     assert facts[0].fact_type == FactTypes.WORLD
-    assert facts[1].fact_type == FactTypes.EXPERIENCE
+    assert facts[1].fact_type == FactTypes.EVENT
     assert usage.input_tokens == 150
     assert usage.total_tokens == 230
     assert mock_dspy_lm.call_count == 1
@@ -107,7 +107,7 @@ async def test_extract_facts_multiple_chunks(mock_dspy_lm):
         extracted_facts=[
             RawFact(
                 what='Fact from chunk 2',
-                fact_type=FactTypes.EXPERIENCE,
+                fact_type=FactTypes.EVENT,
                 fact_kind=FactKindTypes.CONVERSATION,
             )
         ],

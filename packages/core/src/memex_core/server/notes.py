@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
@@ -91,6 +92,16 @@ async def get_note_page_index(note_id: UUID, api: Annotated[MemexAPI, Depends(ge
         raise _handle_error(e, 'Failed to get page index')
 
 
+@router.get('/notes/{note_id}/metadata')
+async def get_note_metadata(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+    """Get just the metadata from a note's page index."""
+    try:
+        metadata = await api.get_note_metadata(note_id)
+        return {'note_id': note_id, 'metadata': metadata}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get note metadata')
+
+
 @router.get('/notes/{note_id}', response_model=NoteDTO)
 async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get a note by ID."""
@@ -123,3 +134,21 @@ async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)])
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note deletion failed')
+
+
+class MigrateNoteRequest(BaseModel):
+    target_vault_id: str
+
+
+@router.post('/notes/{note_id}/migrate')
+async def migrate_note(
+    note_id: UUID,
+    request: Annotated[MigrateNoteRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Move a note and all associated data to a different vault."""
+    try:
+        result = await api.migrate_note(note_id, request.target_vault_id)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Note migration failed')

@@ -59,7 +59,6 @@ class TestFactClassificationPrompts:
             context='',
             lm=mock_lm,
             predictor=mock_predictor,
-            extract_opinions=False,  # We are testing the standard extraction path
         )
 
         # Verify

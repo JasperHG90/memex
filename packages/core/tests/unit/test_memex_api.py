@@ -89,18 +89,11 @@ async def test_get_resource(api, mock_filestore):
 
 @pytest.mark.asyncio
 async def test_list_documents(api, mock_session):
-    from memex_core.memory.sql_models import Vault
-    from memex_common.config import GLOBAL_VAULT_ID
-
-    # 1. Vault lookup
-    mock_vault_res = MagicMock()
-    mock_vault_res.all.return_value = [Vault(id=GLOBAL_VAULT_ID, name='global')]
-
-    # 2. List documents
+    # list_notes delegates to NoteService which runs a single session.exec
     mock_docs_res = MagicMock()
     mock_docs_res.all.return_value = ['doc1', 'doc2']
 
-    mock_session.exec.side_effect = [mock_vault_res, mock_docs_res]
+    mock_session.exec.side_effect = [mock_docs_res]
 
     result = await api.list_notes()
 

@@ -50,7 +50,6 @@ class SearchService:
         self,
         query: str,
         limit: int = 10,
-        skip_opinion_formation: bool = False,
         vault_ids: list[UUID | str] | None = None,
         token_budget: int | None = None,
         strategies: list[str] | None = None,

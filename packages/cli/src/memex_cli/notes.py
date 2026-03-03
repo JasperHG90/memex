@@ -29,6 +29,7 @@ async def list_notes(
     ctx: typer.Context,
     limit: int = 50,
     offset: int = 0,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -44,7 +45,7 @@ async def list_notes(
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.list_notes(limit=limit, offset=offset)
+            notes = await api.list_notes(limit=limit, offset=offset, vault_ids=vault or None)
         except Exception as e:
             handle_api_error(e)
 
@@ -78,6 +79,7 @@ async def list_notes(
 async def list_recent(
     ctx: typer.Context,
     limit: int = 10,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -93,7 +95,7 @@ async def list_recent(
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.get_recent_notes(limit=limit)
+            notes = await api.get_recent_notes(limit=limit, vault_ids=vault or None)
         except Exception as e:
             handle_api_error(e)
 
@@ -168,6 +170,38 @@ async def delete_note(
         console.print(f'[red]Note {note_id} not found.[/red]')
 
 
+@app.command('migrate')
+@async_command
+async def migrate_note(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note to migrate.')],
+    target_vault: Annotated[str, typer.Argument(help='Target vault name or UUID.')],
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
+):
+    """
+    Move a note and all associated data to a different vault.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    if not force:
+        if not typer.confirm(f'Migrate note {note_id} to vault "{target_vault}"?'):
+            console.print('[yellow]Aborted.[/yellow]')
+            return
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.migrate_note(uuid_obj, target_vault)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(f'[green]Note {note_id} migrated successfully.[/green]')
+    console.print(f'  Source vault: {result.get("source_vault_id")}')
+    console.print(f'  Target vault: {result.get("target_vault_id")}')
+    console.print(f'  Entities affected: {result.get("entities_affected", 0)}')
+
+
 @app.command('view')
 @async_command
 async def view_note(
@@ -208,6 +242,45 @@ async def view_note(
 
     console.print('\n[bold]Content:[/bold]')
     console.print(Markdown(original_text))
+
+
+@app.command('metadata')
+@async_command
+async def view_metadata(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
+    """View the metadata (title, description, tags, etc.) of a note."""
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    async with get_api_context(config) as api:
+        try:
+            metadata = await api.get_note_metadata(uuid_obj)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if metadata is None:
+        console.print('[yellow]This note has no metadata.[/yellow]')
+        console.print('[dim]Only notes with a page index have metadata.[/dim]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps(metadata, default=str))
+        return
+
+    table = Table(title=f'Note Metadata ({note_id})')
+    table.add_column('Field', style='cyan')
+    table.add_column('Value', style='white')
+
+    for key, value in metadata.items():
+        if isinstance(value, list):
+            value = ', '.join(str(v) for v in value)
+        table.add_row(key, str(value) if value is not None else '-')
+
+    console.print(table)
 
 
 @app.command('page-index')

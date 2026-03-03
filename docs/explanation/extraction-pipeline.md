@@ -120,7 +120,7 @@ For a single ingested note, the pipeline produces:
 | **Note record** | Metadata, content hash, vault assignment |
 | **Chunks** | Text blocks with position and hash information |
 | **PageIndex nodes** | Hierarchical tree of sections (PageIndex only) |
-| **Memory units** | Atomic facts (type: fact, experience, opinion) with timestamps |
+| **Memory units** | Atomic facts (type: world, event) with timestamps |
 | **Entities** | Named entities with canonical names, aliases, phonetic codes |
 | **Entity links** | Connections between memory units and entities |
 | **Memory links** | Causal, temporal, and semantic relationships between units |

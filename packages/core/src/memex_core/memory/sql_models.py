@@ -28,7 +28,6 @@ from memex_core.memory.mixins import vault_id_field, created_at_field, updated_a
 from memex_common.schemas import MemoryUnitBase, FactTypes
 
 EMBEDDING_DIMENSION = 384
-CONTRADICTION_THRESHOLD = 0.3
 
 
 class ContentStatus(str, Enum):
@@ -510,13 +509,12 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
 
     text: str = Field(
         sa_column=Column(Text, nullable=False),
-        description='The textual content of the memory unit. '
-        'Can be a fact, opinion, or experience.',
+        description='The textual content of the memory unit.',
     )
 
     fact_type: FactTypes = Field(
         sa_column=Column(Text, nullable=False, server_default='world'),
-        description='The type/category of the memory unit: world, experience, or opinion.',
+        description='The type/category of the memory unit: world, event, or observation.',
     )
 
     occurred_start: datetime | None = Field(
@@ -568,20 +566,6 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='The date when the memory unit was created or is relevant.',
     )
 
-    confidence_alpha: float | None = Field(
-        default=None,
-        description="""The alpha parameter of the Beta distribution. Represents the accumulated positive evidence.""",
-        ge=0.0,
-        sa_column=Column(Float),
-    )
-
-    confidence_beta: float | None = Field(
-        default=None,
-        description="""The beta parameter of the Beta distribution. Represents the accumulated negative evidence.""",
-        ge=0.0,
-        sa_column=Column(Float),
-    )
-
     access_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
@@ -617,18 +601,6 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         },
     )
 
-    @property
-    def confidence_score(self) -> float | None:
-        """
-        Calculates the mean confidence score from the Beta distribution.
-        Returns None if confidence parameters are not set.
-        """
-        if self.confidence_alpha is not None and self.confidence_beta is not None:
-            total = self.confidence_alpha + self.confidence_beta
-            if total > 0:
-                return self.confidence_alpha / total
-        return None
-
     __table_args__ = (
         ForeignKeyConstraint(
             ['note_id'],
@@ -642,16 +614,8 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             name='memory_units_chunk_fkey',
             ondelete='SET NULL',
         ),
-        CheckConstraint("fact_type IN ('world', 'experience', 'opinion')"),
+        CheckConstraint("fact_type IN ('world', 'event', 'observation')"),
         CheckConstraint("status IN ('active', 'stale')", name='memory_units_status_check'),
-        CheckConstraint(
-            '(confidence_alpha IS NULL AND confidence_beta IS NULL) OR ((confidence_alpha IS NOT NULL AND confidence_beta IS NOT NULL) AND confidence_alpha >= 0.0 AND confidence_beta >= 0.0)',
-        ),
-        CheckConstraint(
-            "(fact_type = 'opinion' AND (confidence_alpha IS NOT NULL AND confidence_beta IS NOT NULL)) OR "
-            "(fact_type NOT IN ('opinion') AND confidence_alpha IS NULL AND confidence_beta IS NULL)",
-            name='confidence_score_fact_type_check',
-        ),
         Index('idx_memory_units_note_id', 'note_id'),
         Index('idx_memory_units_chunk_id', 'chunk_id'),
         Index('idx_memory_units_status', 'status'),
@@ -693,13 +657,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             self.occurred_start.strftime('%Y-%m-%d') if self.occurred_start else 'Unknown Date'
         )
         status_prefix = '[STALE] ' if self.status == ContentStatus.STALE else ''
-        confidence = self.confidence_score
-        contradiction_prefix = (
-            '[CONTRADICTED] '
-            if confidence is not None and confidence < CONTRADICTION_THRESHOLD
-            else ''
-        )
-        base_text = f'{status_prefix}{contradiction_prefix}[{date_str}] {self.text}'
+        base_text = f'{status_prefix}[{date_str}] {self.text}'
 
         # Append citations if present (from RetrievalEngine deduplication)
         citations = self.unit_metadata.get('citations', [])
@@ -1145,66 +1103,6 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
         # or we could use a partial index if strictly necessary.
         # For now, a composite index helps lookups.
         Index('idx_reflection_queue_entity_vault', 'entity_id', 'vault_id'),
-    )
-
-
-class EvidenceLog(SQLModel, table=True):  # type: ignore
-    """
-    Audit trail for Bayesian belief updates.
-    Tracks every adjustment to a MemoryUnit's confidence scores.
-    """
-
-    __tablename__ = 'evidence_log'
-
-    id: UUID = Field(
-        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
-        description='Unique identifier for the log entry.',
-    )
-
-    unit_id: UUID = Field(
-        sa_column=Column(
-            SA_UUID(), ForeignKey('memory_units.id', ondelete='CASCADE'), nullable=False
-        ),
-        description='Identifier of the memory unit that was updated.',
-    )
-
-    vault_id: UUID = vault_id_field()
-
-    evidence_type: str = Field(
-        sa_column=Column(Text, nullable=False),
-        description='The type of evidence that triggered the update.',
-    )
-
-    description: str | None = Field(
-        default=None,
-        sa_column=Column(Text),
-        description='Contextual note about the evidence.',
-    )
-
-    alpha_before: float = Field(
-        sa_column=Column(Float, nullable=False), description='Alpha value before update.'
-    )
-
-    beta_before: float = Field(
-        sa_column=Column(Float, nullable=False), description='Beta value before update.'
-    )
-
-    alpha_after: float = Field(
-        sa_column=Column(Float, nullable=False), description='Alpha value after update.'
-    )
-
-    beta_after: float = Field(
-        sa_column=Column(Float, nullable=False), description='Beta value after update.'
-    )
-
-    created_at: datetime = Field(
-        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
-        description='Timestamp when the log entry was created.',
-    )
-
-    __table_args__ = (
-        Index('idx_evidence_log_unit_id', 'unit_id'),
-        Index('idx_evidence_log_created_at', 'created_at'),
     )
 
 

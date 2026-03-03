@@ -18,7 +18,7 @@ def _make_facts(n: int) -> list[dict]:
         {
             'unit_id': str(uuid4()),
             'text': f'Fact {i}: Entity_{i % 50} performed action_{i % 20} on object_{i % 30}.',
-            'fact_type': ['world', 'experience', 'opinion'][i % 3],
+            'fact_type': ['world', 'event', 'observation'][i % 3],
             'context': f'Document {i // 10}',
             'event_date': base + timedelta(minutes=i * 5),
         }
@@ -39,7 +39,7 @@ def test_format_for_embedding_single(benchmark):
     benchmark(
         format_for_embedding,
         text='The user discussed project architecture decisions in the team meeting.',
-        fact_type='experience',
+        fact_type='event',
         context='Architecture Review',
     )
 
@@ -242,7 +242,7 @@ def test_format_facts_for_embedding_batch(benchmark):
     facts = [
         ProcessedFact(
             fact_text=f'Fact {i}: The system observed behavior pattern {i}.',
-            fact_type=[FactTypes.WORLD, FactTypes.EXPERIENCE, FactTypes.OPINION][i % 3],
+            fact_type=[FactTypes.WORLD, FactTypes.EVENT, FactTypes.OBSERVATION][i % 3],
             embedding=[0.0] * 10,
             context=f'Analysis session {i // 10}',
             mentioned_at=base + timedelta(hours=i),

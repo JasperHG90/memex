@@ -309,9 +309,6 @@ async def search_memory(
     answer: Annotated[
         bool, typer.Option('--answer', '-a', help='Generate an AI answer from results.')
     ] = False,
-    skip_opinions: Annotated[
-        bool, typer.Option('--skip-opinions', help='Skip automated opinion formation.')
-    ] = False,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[bool, typer.Option('--minimal', help='Output unit IDs only.')] = False,
     compact: Annotated[
@@ -371,7 +368,6 @@ async def search_memory(
             results = await api.search(
                 query=query,
                 limit=limit,
-                skip_opinion_formation=skip_opinions,
                 token_budget=token_budget,
                 strategies=strategies,
                 vault_ids=vault_ids,
@@ -392,9 +388,7 @@ async def search_memory(
         if compact:
             for unit in results:
                 text = unit.text.replace('\n', ' ')[:200]
-                cs = unit.confidence_score
-                marker = '[!] ' if cs is not None and cs < 0.3 else ''
-                print(f'- [{unit.fact_type}] {marker}{text}')
+                print(f'- [{unit.fact_type}] {text}')
             return
 
         if json_output:
@@ -412,21 +406,14 @@ async def search_memory(
             if len(content_preview) > 100:
                 content_preview = content_preview[:100] + '...'
 
-            # Visual indicator for contradicted results
-            cs = unit.confidence_score
-            marker = '[!] ' if cs is not None and cs < 0.3 else ''
-
             # Check unit_metadata for source info
             source = 'Unknown'
             if unit.metadata:
-                if unit.fact_type == 'opinion':
-                    source = unit.metadata.get('evidence_indices', 'Unknown')
-                else:
-                    source = unit.metadata.get('note_name', 'Unknown')
-                    if source == 'Unknown':
-                        source = unit.metadata.get('filestore_path', 'Unknown')
+                source = unit.metadata.get('note_name', 'Unknown')
+                if source == 'Unknown':
+                    source = unit.metadata.get('filestore_path', 'Unknown')
 
-            table.add_row(unit.fact_type, f'{marker}{content_preview}', str(source))
+            table.add_row(unit.fact_type, content_preview, str(source))
 
         console.print(table)
 
@@ -540,93 +527,6 @@ async def reflect(
                 )
         except Exception as e:
             handle_api_error(e)
-
-
-@app.command('submit-evidence')
-@async_command
-async def submit_evidence(
-    ctx: typer.Context,
-    unit_id: Annotated[str, typer.Argument(help='UUID of the opinion memory unit.')],
-    evidence_type: Annotated[
-        str,
-        typer.Argument(
-            help='Evidence type key: user_validation, user_rejection, corroboration, '
-            'logical_contradiction, execution_success, execution_failure, '
-            'catastrophic_failure, llm_consensus, minor_error.'
-        ),
-    ],
-    description: Annotated[
-        str | None, typer.Option('--description', '-d', help='Description of the evidence.')
-    ] = None,
-):
-    """
-    Submit evidence to adjust an opinion's confidence score (Bayesian update).
-    """
-    config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(unit_id, 'memory unit')
-
-    async with get_api_context(config) as api:
-        try:
-            result = await api.adjust_belief(uuid_obj, evidence_type, description=description)
-        except Exception as e:
-            handle_api_error(e)
-            return
-
-    before_pct = int(round(result.confidence_before * 100))
-    after_pct = int(round(result.confidence_after * 100))
-    console.print(f'[bold green]Evidence recorded:[/bold green] {evidence_type}')
-    console.print(f'Confidence: {before_pct}% → {after_pct}%')
-    console.print(f'[dim]Parameters: α={result.alpha:.1f}, β={result.beta:.1f}[/dim]')
-
-
-@app.command('evidence-log')
-@async_command
-async def evidence_log(
-    ctx: typer.Context,
-    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit.')],
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max entries to show.')] = 20,
-    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-):
-    """
-    Show the evidence audit trail for a memory unit.
-    """
-    config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(unit_id, 'memory unit')
-
-    async with get_api_context(config) as api:
-        try:
-            logs = await api.get_evidence_log(uuid_obj, limit=limit)
-        except Exception as e:
-            handle_api_error(e)
-            return
-
-    if not logs:
-        console.print('[yellow]No evidence log entries found.[/yellow]')
-        return
-
-    if json_output:
-        console.print_json(json.dumps([log.model_dump() for log in logs], default=str))
-        return
-
-    table = Table(title=f'Evidence Log ({len(logs)} entries)')
-    table.add_column('Time', style='dim')
-    table.add_column('Type', style='cyan')
-    table.add_column('Before', style='yellow', justify='right')
-    table.add_column('After', style='green', justify='right')
-    table.add_column('Description', style='white')
-
-    for log in logs:
-        before_pct = f'{int(round(log.confidence_before * 100))}%'
-        after_pct = f'{int(round(log.confidence_after * 100))}%'
-        table.add_row(
-            str(log.created_at.strftime('%Y-%m-%d %H:%M')),
-            log.evidence_type,
-            before_pct,
-            after_pct,
-            log.description or '',
-        )
-
-    console.print(table)
 
 
 @app.command('lineage')

@@ -37,9 +37,9 @@ class TestRetrievalReranking:
 
     async def _setup_scenario(self, session: AsyncSession, embedder, scenario_data):
         """
-        Helper to populate DB with mixed Facts, Opinions, and Mental Models.
+        Helper to populate DB with mixed Facts and Mental Models.
         scenario_data: list of dicts with keys:
-            - type ('fact', 'opinion', 'observation')
+            - type ('fact', 'observation')
             - text
             - is_target (bool, optional)
             - entities (list[str], optional): Canonical names of entities to link
@@ -89,19 +89,6 @@ class TestRetrievalReranking:
                 )
                 session.add(unit)
 
-            elif item['type'] == 'opinion':
-                unit = MemoryUnit(
-                    id=uuid4(),
-                    text=item['text'],
-                    embedding=embedding,
-                    fact_type=FactTypes.OPINION,
-                    confidence_alpha=2.0,
-                    confidence_beta=2.0,
-                    event_date=evt_date,
-                    note_id=doc.id,
-                )
-                session.add(unit)
-
             elif item['type'] == 'observation':
                 # Link to the first entity in the list, or a generic one if none
                 ent_names = item.get('entities', ['System'])
@@ -120,7 +107,7 @@ class TestRetrievalReranking:
                 )
                 session.add(mm)
 
-            # If we created a Unit (Fact/Opinion), link it to entities
+            # If we created a Unit (Fact), link it to entities
             if unit and 'entities' in item:
                 for name in item['entities']:
                     ent = await get_or_create_entity(name)
@@ -199,14 +186,14 @@ class TestRetrievalReranking:
         data = [
             # GOLD STANDARD (Recent)
             {
-                'type': 'opinion',
+                'type': 'fact',
                 'text': 'Over the last year, we are shifting away from fine-grained microservices towards a modular monolith to reduce operational complexity.',
                 'is_target': True,
                 'event_date': now,
             },
             # Distractor 1 (Old Stance - 1 year ago)
             {
-                'type': 'opinion',
+                'type': 'fact',
                 'text': 'Microservices are the future of our architecture and will allow us to scale infinitely.',
                 'event_date': one_year_ago,
             },
@@ -250,9 +237,9 @@ class TestRetrievalReranking:
                 'is_target': True,
                 'entities': ['Enterprise Customers', 'Dashboard UI'],
             },
-            # Distractor 1 (Internal Opinion)
+            # Distractor 1 (Internal Fact)
             {
-                'type': 'opinion',
+                'type': 'fact',
                 'text': 'I think the new dashboard UI looks great and is very modern.',
                 'entities': ['Dashboard UI'],
             },

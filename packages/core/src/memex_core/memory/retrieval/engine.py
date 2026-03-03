@@ -236,10 +236,7 @@ class RetrievalEngine:
         # 9. Deduplicate and Cite
         final_results = self._deduplicate_and_cite(final_results)
 
-        # 9b. Confidence-weighted reranking
-        final_results = self._apply_confidence_weighting(final_results)
-
-        # 9c. MMR diversity filtering
+        # 9b. MMR diversity filtering
         mmr_lambda = request.mmr_lambda
         if mmr_lambda is None and self.retrieval_config:
             mmr_lambda = self.retrieval_config.mmr_lambda
@@ -263,7 +260,7 @@ class RetrievalEngine:
                 sim_matrix = self._build_hybrid_similarity_matrix(
                     cosine_matrix, jaccard_matrix, w_emb, w_ent
                 )
-                mmr_limit = effective_limit if token_budget is not None else request.limit
+                mmr_limit = len(real_units) if token_budget is not None else request.limit
                 real_units = self._apply_mmr_diversity(
                     real_units, sim_matrix, mmr_lambda, mmr_limit
                 )
@@ -289,7 +286,7 @@ class RetrievalEngine:
         if token_budget is not None:
             final_results = self._filter_by_token_budget(final_results, token_budget)
 
-        if request.token_budget is not None:
+        if token_budget is not None:
             return final_results  # token_budget is the sole constraint
         return final_results[: request.limit]
 
@@ -697,21 +694,6 @@ class RetrievalEngine:
                 )
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Failed to update resonance priorities: {e}')
-
-    @staticmethod
-    def _apply_confidence_weighting(results: list[MemoryUnit]) -> list[MemoryUnit]:
-        """Reweight results by combining position score with confidence factor."""
-        from memex_core.memory.confidence import confidence_weight
-
-        n = len(results)
-        if n == 0:
-            return results
-        scored = []
-        for i, unit in enumerate(results):
-            position_score = (n - i) / n
-            scored.append((unit, position_score * confidence_weight(unit.confidence_score)))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [u for u, _ in scored]
 
     @staticmethod
     async def _compute_pairwise_cosine(

@@ -204,9 +204,6 @@ class RetrievalRequest(BaseModel):
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )
-    skip_opinion_formation: bool = Field(
-        default=False, description='Whether to skip the automated opinion formation loop.'
-    )
     debug: bool = Field(
         default=False,
         description=(
@@ -240,21 +237,6 @@ class ReflectionRequest(VaultMixin):
     )
 
 
-class OpinionFormationRequest(VaultMixin):
-    """
-    Request to form opinions based on an interaction.
-    """
-
-    query: str = Field(description="The user's original query.")
-    # In common, we use a simpler representation of MemoryUnit if possible
-    # or just use dict if we don't want to pull in MemoryUnit SQLModel.
-    context: list[dict[str, Any]] = Field(
-        description='Optional structured context with memory unit data.'
-    )
-    answer: str = Field(description="The agent's final answer.")
-    agent_name: str = Field(default='reasoning_agent', description='The identity of the agent.')
-
-
 class IngestURLRequest(VaultMixin):
     """Request to ingest content from a URL."""
 
@@ -275,41 +257,6 @@ class IngestFileRequest(VaultMixin):
     reflect_after: bool = Field(
         default=True, description='Whether to run reflection after ingestion.'
     )
-
-
-class AdjustBeliefRequest(BaseModel):
-    """Request to adjust belief confidence."""
-
-    unit_uuid: UUID = Field(..., description='The UUID of the memory unit.')
-    evidence_type_key: str = Field(..., description='The type of evidence (e.g. "confirm").')
-    description: str | None = Field(default=None, description='Optional explanation.')
-
-
-class AdjustBeliefResponse(BaseModel):
-    """Response from a belief adjustment."""
-
-    unit_id: UUID
-    evidence_type: str
-    confidence_before: float
-    confidence_after: float
-    alpha: float
-    beta: float
-
-
-class EvidenceLogDTO(BaseModel):
-    """DTO for an evidence log entry."""
-
-    id: UUID
-    unit_id: UUID
-    evidence_type: str
-    description: str | None
-    alpha_before: float
-    beta_before: float
-    alpha_after: float
-    beta_after: float
-    confidence_before: float
-    confidence_after: float
-    created_at: dt.datetime
 
 
 class CreateVaultRequest(BaseModel):
@@ -360,7 +307,7 @@ class MemoryUnitDTO(MemoryUnitBase):
 
     source_note_ids: list[UUID] = Field(
         default_factory=list,
-        description='List of source note IDs. For facts, typically single. For opinions, derived from evidence.',
+        description='List of source note IDs.',
         examples=[['123e4567-e89b-12d3-a456-426614174000']],
     )
 
@@ -376,39 +323,17 @@ class MemoryUnitDTO(MemoryUnitBase):
         examples=[0.95],
     )
 
-    confidence_alpha: float | None = Field(
-        default=None,
-        description='Alpha parameter of Beta distribution (positive evidence).',
-    )
-    confidence_beta: float | None = Field(
-        default=None,
-        description='Beta parameter of Beta distribution (negative evidence).',
-    )
-
     debug_info: list[StrategyDebugInfo] | None = Field(
         default=None,
         description='Per-strategy attribution when debug=True. None when debug is off.',
     )
 
     @property
-    def confidence_score(self) -> float | None:
-        """Compute confidence as mean of the Beta distribution."""
-        if self.confidence_alpha is not None and self.confidence_beta is not None:
-            total = self.confidence_alpha + self.confidence_beta
-            if total > 0:
-                return self.confidence_alpha / total
-        return None
-
-    @property
     def enriched_text(self) -> str:
-        """Text with contradiction/date metadata for LLM consumption."""
-        prefix = ''
-        cs = self.confidence_score
-        if cs is not None and cs < 0.3:
-            prefix = '[CONTRADICTED] '
+        """Text with date metadata for LLM consumption."""
         date = self.mentioned_at or self.occurred_start
         date_str = date.strftime('%Y-%m-%d') if date else 'Unknown'
-        return f'{prefix}[{date_str}] {self.text}'
+        return f'[{date_str}] {self.text}'
 
 
 class ObservationDTO(BaseModel):
@@ -852,3 +777,41 @@ class SummaryResponse(BaseModel):
     summary: str = Field(
         description='AI-generated summary with bracket citations (e.g. [0], [1]).',
     )
+
+
+class PageMetadataDTO(BaseModel):
+    """Metadata from a note's page index."""
+
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    publish_date: str | None = None
+    source_uri: str | None = None
+
+
+class SectionSummaryDTO(BaseModel):
+    """5W summary of a document section."""
+
+    who: str | None = None
+    what: str | None = None
+    how: str | None = None
+    when: str | None = None
+    where: str | None = None
+
+
+class TOCNodeDTO(BaseModel):
+    """A node in the page index table-of-contents."""
+
+    id: str
+    title: str
+    level: int
+    summary: SectionSummaryDTO | None = None
+    token_estimate: int | None = None
+    children: list['TOCNodeDTO'] = Field(default_factory=list)
+
+
+class PageIndexDTO(BaseModel):
+    """Full page index with metadata and TOC."""
+
+    metadata: PageMetadataDTO
+    toc: list[TOCNodeDTO]

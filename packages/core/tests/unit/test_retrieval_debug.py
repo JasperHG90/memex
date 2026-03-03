@@ -251,8 +251,6 @@ class TestBuildRetrievalDtosDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         if debug_info is not None:
             object.__setattr__(unit, '_debug_info', debug_info)
@@ -268,7 +266,7 @@ class TestBuildRetrievalDtosDebug:
                 )
             ]
         )
-        dtos = _build_retrieval_dtos([unit], {}, debug=False)
+        dtos = _build_retrieval_dtos([unit], debug=False)
         assert dtos[0].debug_info is None
 
     def test_debug_info_included_when_debug_true(self):
@@ -280,7 +278,7 @@ class TestBuildRetrievalDtosDebug:
             timing_ms=10.0,
         )
         unit = self._make_unit(debug_info=[contrib])
-        dtos = _build_retrieval_dtos([unit], {}, debug=True)
+        dtos = _build_retrieval_dtos([unit], debug=True)
         assert dtos[0].debug_info is not None
         assert len(dtos[0].debug_info) == 1
         info = dtos[0].debug_info[0]
@@ -292,7 +290,7 @@ class TestBuildRetrievalDtosDebug:
 
     def test_debug_info_none_when_no_debug_attr(self):
         unit = self._make_unit()  # no _debug_info attribute
-        dtos = _build_retrieval_dtos([unit], {}, debug=True)
+        dtos = _build_retrieval_dtos([unit], debug=True)
         assert dtos[0].debug_info is None
 
     def test_multiple_strategies_per_result(self):
@@ -314,7 +312,7 @@ class TestBuildRetrievalDtosDebug:
             ),
         ]
         unit = self._make_unit(debug_info=contribs)
-        dtos = _build_retrieval_dtos([unit], {}, debug=True)
+        dtos = _build_retrieval_dtos([unit], debug=True)
         assert len(dtos[0].debug_info) == 3
         strategy_names = {d.strategy_name for d in dtos[0].debug_info}
         assert strategy_names == {'semantic', 'keyword', 'graph'}
@@ -356,8 +354,6 @@ class TestSearchEndpointDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         mock_api.search.return_value = [unit]
         mock_api.resolve_source_notes.return_value = {}
@@ -399,8 +395,6 @@ class TestSearchEndpointDebug:
             vault_id=uuid4(),
             unit_metadata={},
             score=1.0,
-            confidence_alpha=None,
-            confidence_beta=None,
         )
         # Simulate engine attaching debug info
         object.__setattr__(

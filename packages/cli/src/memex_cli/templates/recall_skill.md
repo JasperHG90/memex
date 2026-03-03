@@ -15,7 +15,7 @@ You have been invoked via the `/recall` slash command.
    - If `$ARGUMENTS` is empty, ask the user what they would like to recall.
 
 2. **Search strategy** (execute in order, stop when you have useful results):
-   a. Call `memex_search` with the query to retrieve atomic facts and memory units.
+   a. Call `memex_memory_search` with the query to retrieve atomic facts and memory units.
    b. If the results are insufficient, call `memex_note_search` to search source documents.
    c. If keyword-based search yields nothing, call `memex_list_entities` to browse
       the knowledge graph for relevant entities.
