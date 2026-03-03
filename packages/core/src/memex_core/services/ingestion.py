@@ -354,12 +354,20 @@ ingested_at: {now}
                             await self.filestore.save(full_asset_key, raw_content)
                             asset_files_list.append(full_asset_key)
 
+                        resolved_title = await resolve_document_title(
+                            decoded_content,
+                            note_dto.name,
+                            self.lm,
+                            session=txn.db_session,
+                            vault_id=target_vault_id,
+                        )
+
                         retain_content = RetainContent(
                             content=decoded_content,
                             event_date=datetime.now(timezone.utc),
                             payload={
                                 'source': 'batch_note',
-                                'note_name': note_dto.name,
+                                'note_name': resolved_title,
                                 'note_description': note_dto.description,
                                 'uuid': str(note_uuid),
                                 'filestore_path': asset_path if asset_files_list else None,

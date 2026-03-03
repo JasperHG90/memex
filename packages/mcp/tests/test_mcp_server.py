@@ -193,6 +193,31 @@ async def test_mcp_list_tools(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_batch_ingest_sets_note_key(mock_api, mcp_client, tmp_path):
+    """Test that memex_batch_ingest sets note_key to the absolute file path."""
+    from memex_common.schemas import BatchJobStatus, NoteCreateDTO
+
+    test_file = tmp_path / 'content.md'
+    test_file.write_text('# Hello World\n\nSome content here.')
+
+    mock_api.ingest.return_value = BatchJobStatus(
+        job_id=str(uuid4()), status='queued', progress='0/1'
+    )
+
+    await mcp_client.call_tool(
+        'memex_batch_ingest',
+        {'file_paths': [str(test_file)]},
+    )
+
+    mock_api.ingest.assert_called_once()
+    args, _ = mock_api.ingest.call_args
+    note_dto = args[0]
+    assert isinstance(note_dto, NoteCreateDTO)
+    assert note_dto.note_key == str(test_file.absolute())
+    assert note_dto.name == 'content.md'
+
+
+@pytest.mark.asyncio
 async def test_mcp_list_prompts(mcp_client):
     """Verify that prompts are registered (if any)."""
     prompts = await mcp_client.list_prompts()
