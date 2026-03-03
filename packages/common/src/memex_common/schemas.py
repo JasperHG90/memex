@@ -777,3 +777,41 @@ class SummaryResponse(BaseModel):
     summary: str = Field(
         description='AI-generated summary with bracket citations (e.g. [0], [1]).',
     )
+
+
+class PageMetadataDTO(BaseModel):
+    """Metadata from a note's page index."""
+
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    publish_date: str | None = None
+    source_uri: str | None = None
+
+
+class SectionSummaryDTO(BaseModel):
+    """5W summary of a document section."""
+
+    who: str | None = None
+    what: str | None = None
+    how: str | None = None
+    when: str | None = None
+    where: str | None = None
+
+
+class TOCNodeDTO(BaseModel):
+    """A node in the page index table-of-contents."""
+
+    id: str
+    title: str
+    level: int
+    summary: SectionSummaryDTO | None = None
+    token_estimate: int | None = None
+    children: list['TOCNodeDTO'] = Field(default_factory=list)
+
+
+class PageIndexDTO(BaseModel):
+    """Full page index with metadata and TOC."""
+
+    metadata: PageMetadataDTO
+    toc: list[TOCNodeDTO]
