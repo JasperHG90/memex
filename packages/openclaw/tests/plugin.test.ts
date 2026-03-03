@@ -40,7 +40,7 @@ describe('plugin registration', () => {
     const api = registerPlugin();
     const toolNames = [...api.tools.keys()];
     expect(toolNames).toEqual([
-      'memex_search',
+      'memex_memory_search',
       'memex_store',
       'memex_note_search',
       'memex_read_note',
@@ -330,10 +330,10 @@ describe('agent_end hook', () => {
 });
 
 // ---------------------------------------------------------------------------
-// memex_search tool
+// memex_memory_search tool
 // ---------------------------------------------------------------------------
 
-describe('memex_search tool', () => {
+describe('memex_memory_search tool', () => {
   it('returns formatted results on success', async () => {
     const api = registerPlugin();
     const m1 = makeMemoryUnit({ text: 'fact one', fact_type: 'observation' });
@@ -341,7 +341,7 @@ describe('memex_search tool', () => {
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
 
-    const tool = api.tools.get('memex_search')!;
+    const tool = api.tools.get('memex_memory_search')!;
     const result = await tool.execute('call-1', { query: 'test' }) as {
       content: Array<{ text: string }>;
       details: { count: number };
@@ -357,7 +357,7 @@ describe('memex_search tool', () => {
     fetchSpy.mockResolvedValueOnce(vaultOkResponse());
     fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
-    const tool = api.tools.get('memex_search')!;
+    const tool = api.tools.get('memex_memory_search')!;
     const result = await tool.execute('call-1', { query: 'test' }) as {
       content: Array<{ text: string }>;
     };
@@ -369,7 +369,7 @@ describe('memex_search tool', () => {
     const api = registerPlugin();
     fetchSpy.mockRejectedValueOnce(new Error('server down'));
 
-    const tool = api.tools.get('memex_search')!;
+    const tool = api.tools.get('memex_memory_search')!;
     const result = await tool.execute('call-1', { query: 'test' }) as {
       content: Array<{ text: string }>;
     };

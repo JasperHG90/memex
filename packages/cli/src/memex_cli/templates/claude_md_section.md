@@ -26,7 +26,7 @@ Session start context is automatic via hook. Do NOT redundantly search at sessio
 PROHIBITED: `memex_list_notes` for discovery.
 
 **Search** (pick by query type, or run both in parallel when unsure):
-- `memex_search` — memory search: atomic facts, observations, mental models. Best for broad queries.
+- `memex_memory_search` — memory search: atomic facts, observations, mental models. Best for broad queries.
 - `memex_note_search` — note search: ranked source notes via hybrid retrieval. Best for targeted doc lookup. `reason=True` annotates relevant sections.
 
 **Filter** (parallel per note):

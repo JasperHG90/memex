@@ -21,7 +21,7 @@ Both hooks are guarded by a **circuit breaker** (3 consecutive failures open the
 
 | Tool | Description |
 |------|-------------|
-| `memex_search` | Search Memex memories by natural-language query. Accepts optional `limit` parameter. Returns ranked memory units (facts, observations, experiences). |
+| `memex_memory_search` | Search Memex memories by natural-language query. Accepts optional `limit` parameter. Returns ranked memory units (facts, observations, experiences). |
 | `memex_store` | Store a note in Memex. Accepts `text`, optional `name`, and optional `tags`. Ingestion runs in the background — the tool returns immediately. |
 | `memex_note_search` | Search source notes with optional synthesis. Accepts `query`, `limit`, `summarize`, `reason`, and `expand_query`. Returns ranked notes with snippets. |
 | `memex_read_note` | Retrieve the full content and metadata of a note by its UUID. |
@@ -231,7 +231,7 @@ openclaw agent --agent main -m "What do you know about Andrew?"
 openclaw agent --agent main -m "What do you know about Andrew?" --json
 
 # Ask the agent to use tools explicitly
-openclaw agent --agent main -m "Use your memex_search tool to find information about recent events"
+openclaw agent --agent main -m "Use your memex_memory_search tool to find information about recent events"
 
 # With a timeout (seconds)
 openclaw agent --agent main -m "Summarize what you remember" --timeout 120
