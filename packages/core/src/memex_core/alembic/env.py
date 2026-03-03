@@ -127,14 +127,19 @@ async def run_async_migrations() -> None:
     async with connectable.connect() as connection:
         # Acquire advisory lock to serialize migrations
         await connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
+        migration_failed = False
         try:
             await connection.run_sync(do_run_migrations)
+        except Exception:
+            migration_failed = True
+            raise
         finally:
-            # Rollback any aborted transaction so the unlock can succeed.
-            try:
-                await connection.rollback()
-            except Exception:
-                pass
+            if migration_failed:
+                # Rollback the aborted transaction so the unlock can succeed.
+                try:
+                    await connection.rollback()
+                except Exception:
+                    pass
             try:
                 await connection.execute(text(f'SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})'))
             except Exception:
