@@ -39,18 +39,18 @@ mcp = FastMCP(
     instructions="""Memex is a personal knowledge management system.
 
 Workflow:
-1. Discovery: `memex_search` for atomic facts/memories; `memex_note_search` for source documents.
-2. Reading: `memex_get_note_metadata` for quick note info (tags, title, dates). `memex_get_page_index` + `memex_get_node` for section-level reading. `memex_read_note` only as a fallback for small notes.
-3. AVOID: `memex_list_notes` for discovery — use search tools instead.
+1. Discovery: `memex_search` for facts across all notes; `memex_note_search` for specific documents.
+2. Reading: `memex_get_note_metadata` for tags/title/dates only. `memex_get_page_index` → `memex_get_node` for content. `memex_read_note` fallback for small notes.
+3. AVOID: `memex_list_notes` for discovery.
 
-When to use which search:
-- `memex_search`: broad exploration and factual recall. Returns individual facts, events, and observations extracted across all notes. Best for initial exploration ("What do I know about X?") and precise factual questions ("When did Y happen?").
-- `memex_note_search`: targeted document retrieval. Returns whole source notes ranked by relevance with snippets. Best for finding specific documents ("Which note describes the auth architecture?") or deep-diving into a topic once you know it exists.
+Search selection:
+- `memex_search` = broad exploration + factual recall. Returns extracted facts/events/observations spanning many notes. Use first.
+- `memex_note_search` = targeted document lookup. Returns ranked source notes with snippets. Use when you need a specific document.
 
-When to use which reading tool:
-- `memex_get_note_metadata`: quick check of a note's title, description, tags, publish date, or source URI. Use when you only need to identify or classify a note, not read its content.
-- `memex_get_page_index` → `memex_get_node`: read specific sections of a note. Use when you need actual content from a note.
-- `memex_read_note`: read the entire note at once. Only use for short notes or when you need the full text.
+Reading selection:
+- `memex_get_note_metadata` = title, description, tags, dates, source URI. No content.
+- `memex_get_page_index` → `memex_get_node` = section-level content reading.
+- `memex_read_note` = full note. Only for short notes.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -60,18 +60,15 @@ When to use which reading tool:
 
 @mcp.tool(
     name='memex_reflect',
-    description=(
-        'Trigger reflection on an entity to synthesize and update its mental model from recent memories. '
-        'Reflection runs automatically in the background, but calling this tool triggers it immediately.'
-    ),
+    description='Trigger immediate reflection on an entity to synthesize its mental model from recent memories.',
 )
 async def memex_reflect(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity to reflect upon.')],
-    limit: Annotated[int, Field(description='Limit recent memories to consider.')] = 20,
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
+    limit: Annotated[int, Field(description='Recent memories to consider.')] = 20,
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='The UUID of the vault. Defaults to Global Vault.'),
+        Field(default=None, description='Vault UUID. Defaults to Global Vault.'),
     ] = None,
 ):
     """Reflect on an entity to update its mental model."""
@@ -126,16 +123,14 @@ async def memex_reflect(
 
 @mcp.tool(
     name='memex_get_lineage',
-    description='Retrieve the provenance chain (lineage) of a memory unit, observation, note, or mental model.',
+    description='Get provenance chain of a memory unit, observation, note, or mental model.',
 )
 async def memex_get_lineage(
     ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit or observation.')],
+    unit_id: Annotated[str, Field(description='Unit or observation UUID.')],
     entity_type: Annotated[
         str,
-        Field(
-            description='Entity type. Valid: "memory_unit" (default), "observation", "note", "mental_model".'
-        ),
+        Field(description='Type: memory_unit (default), observation, note, mental_model.'),
     ] = 'memory_unit',
 ) -> str:
     """Retrieve the lineage of a memory unit."""
@@ -193,7 +188,7 @@ async def memex_get_lineage(
 )
 async def memex_list_assets(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
 ) -> str:
     """List assets for a note."""
     try:
@@ -239,14 +234,11 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description=(
-        'Retrieve the full content and metadata of a note by its UUID. '
-        'FALLBACK: Prefer memex_get_page_index + memex_get_node to read specific sections.'
-    ),
+    description='Read full note content. FALLBACK ONLY — prefer memex_get_page_index + memex_get_node for section-level reading.',
 )
 async def memex_read_note(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note to retrieve.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
 ) -> str:
     """Read a full note."""
     try:
@@ -295,14 +287,11 @@ async def memex_read_note(
 
 @mcp.tool(
     name='memex_get_resource',
-    description=(
-        'Retrieve a file resource (image, audio, or document) by its path. '
-        'Get asset paths from `memex_list_assets` (for notes) or `memex_get_lineage` (for memory units).'
-    ),
+    description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets or memex_get_lineage.',
 )
 async def memex_get_resource(
     ctx: Context,
-    path: Annotated[str, Field(description='The path to the resource file.')],
+    path: Annotated[str, Field(description='Resource path.')],
 ) -> Image | Audio | File | str:
     """Retrieve a file resource. Returns an Image, Audio, or File object."""
     try:
@@ -330,27 +319,13 @@ async def memex_get_resource(
 
 @mcp.tool(
     name='memex_get_template',
-    description='Retrieve a markdown template for note creation. Use the returned template as the structure for `memex_add_note`.',
+    description='Get a markdown template for memex_add_note.',
 )
 def memex_get_template(
     type: Annotated[
         NoteTemplateType,
         Field(
-            description=(
-                'Template type. '
-                '`technical_brief`: structured technical summary. '
-                '`general_note`: flexible note on any topic. '
-                '`architectural_decision_record`: architectural decisions and rationale. '
-                '`request_for_comments`: RFC/proposal document. '
-                '`quick_note`: short informal note.'
-            ),
-            examples=[
-                'technical_brief',
-                'general_note',
-                'architectural_decision_record',
-                'request_for_comments',
-                'quick_note',
-            ],
+            description='Template type: technical_brief, general_note, architectural_decision_record, request_for_comments, quick_note.',
         ),
     ],
 ) -> str:
@@ -378,7 +353,7 @@ def memex_get_template(
 
 @mcp.tool(
     name='memex_active_vault',
-    description='Retrieve the currently active vault information.',
+    description='Get the active vault name and ID.',
 )
 async def memex_active_vault(ctx: Context) -> str:
     """Retrieve the currently active vault information."""
@@ -396,65 +371,53 @@ async def memex_active_vault(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_add_note',
-    description=(
-        'Add a note to the Memex knowledge base. '
-        'Confirm the target vault with the user before calling; '
-        'use `memex_active_vault` to check or `memex_list_vaults` to enumerate, '
-        'or pass vault_id explicitly.'
-    ),
+    description='Add a note to Memex. Confirm vault with user first, or pass vault_id.',
 )
 async def memex_add_note(
     ctx: Context,
     title: Annotated[
         str,
-        Field(
-            description='The title of the note being added.',
-            examples=['My First Note', 'Research on DuckDB'],
-        ),
+        Field(description='Note title.'),
     ],
     markdown_content: Annotated[
         str,
         Field(
-            description='Note content in markdown. Keep concise: 5-15 lines capturing the key insight, not a detailed report.',
+            description='Markdown content. Keep concise: 5-15 lines, key insight only.',
         ),
     ],
     description: Annotated[
         str,
         Field(
-            description='Summary of note content, max 250 words. Cover: (1) context and intent, (2) key insights.',
+            description='Summary, max 250 words. Cover context/intent and key insights.',
         ),
     ],
     author: Annotated[
         str,
-        Field(description='Name of the model authoring this note.'),
+        Field(description='Author name.'),
     ],
     tags: Annotated[
         list[str],
-        Field(
-            description='List of tags to associate with the note for easier retrieval.',
-            examples=[['research', 'duckdb', 'database']],
-        ),
+        Field(description='Tags for retrieval.'),
     ],
     supporting_files: Annotated[
         list[str] | None,
         Field(
             default=None,
-            description='List of file paths to any supporting files associated with the note.',
-            examples=['/path/to/image1.png', '/path/to/data.csv'],
+            description='Absolute paths to supporting files.',
         ),
     ] = None,
     vault_id: Annotated[
         str | None,
         Field(
             default=None,
-            description='The UUID of the vault to add the note to. Defaults to the active vault.',
+            description='Target vault UUID. Defaults to active vault.',
         ),
     ] = None,
     note_key: Annotated[
         str | None,
         Field(
             default=None,
-            description='A unique stable key for the note to enable incremental updates.',
+            description='Stable key for incremental updates.',
         ),
     ] = None,
     background: Annotated[
@@ -527,41 +490,33 @@ async def memex_add_note(
 @mcp.tool(
     name='memex_search',
     description=(
-        'Search memory units (facts, events, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs. '
-        'Best for broad exploration across all notes ("What do I know about X?") and factual recall ("When did Y happen?"). '
-        'For targeted document retrieval, use `memex_note_search` instead.'
+        'Search extracted facts, events, and observations across all notes. '
+        'Use for broad exploration and factual recall. '
+        'For finding specific source documents, use memex_note_search.'
     ),
 )
 async def memex_search(
     ctx: Context,
-    query: Annotated[str, Field(description='The search query.')],
+    query: Annotated[str, Field(description='Search query.')],
     limit: Annotated[
         int,
-        Field(description='Maximum number of results to return. Ignored when token_budget is set.'),
+        Field(description='Max results. Ignored when token_budget is set.'),
     ] = 10,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
+        Field(default=None, description='Vault UUIDs or names to search.'),
     ] = None,
     token_budget: Annotated[
         int | None,
         Field(
-            description=(
-                'Optional token budget for retrieval. '
-                'When set, this is the leading constraint — results are packed greedily '
-                'until the budget is reached and the limit parameter is ignored.'
-            )
+            description='Token budget. When set, overrides limit — packs results greedily to budget.',
         ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
         Field(
             default=None,
-            description=(
-                'Optional inclusion list of strategies to run. '
-                'Valid: semantic, keyword, graph, temporal, mental_model. '
-                'If omitted, all strategies are used.'
-            ),
+            description='Strategies: semantic, keyword, graph, temporal, mental_model. Default: all.',
         ),
     ] = None,
 ):
@@ -609,32 +564,23 @@ async def memex_search(
 @mcp.tool(
     name='memex_note_search',
     description=(
-        'Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). '
-        'Returns ranked notes with snippets. '
-        'Use this for targeted document retrieval ("Which note describes X?") and deep-diving into a topic. '
-        'For broad exploration across all knowledge, use `memex_search` instead.'
+        'Search source notes by hybrid retrieval. Returns ranked notes with snippets. '
+        'Use for targeted document lookup and deep-diving. '
+        'For broad fact exploration, use memex_search.'
     ),
 )
 async def memex_note_search(
     ctx: Context,
-    query: Annotated[str, Field(description='The note search query.')],
-    limit: Annotated[int, Field(description='Maximum number of notes to return.')] = 5,
-    expand_query: Annotated[
-        bool, Field(description='Enable multi-query expansion via LLM.')
-    ] = False,
+    query: Annotated[str, Field(description='Search query.')],
+    limit: Annotated[int, Field(description='Max notes to return.')] = 5,
+    expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
     reason: Annotated[
         bool,
-        Field(
-            description=(
-                'Identify relevant sections with reasoning. '
-                'Note: prefer doing your own reasoning over search results rather than '
-                'relying on this flag.'
-            )
-        ),
+        Field(description='Annotate results with relevant section IDs and reasoning.'),
     ] = False,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Optional list of vault UUIDs or names to search in.'),
+        Field(default=None, description='Vault UUIDs or names to search.'),
     ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
@@ -692,15 +638,14 @@ async def memex_note_search(
 @mcp.tool(
     name='memex_get_page_index',
     description=(
-        'Get the hierarchical page index (table of contents) for a note. '
-        'Returns metadata plus the note structure with section titles, summaries, and node IDs. '
-        'Use the node IDs with `memex_get_node` to retrieve specific section text. '
-        'If you only need the note title, tags, or description, use `memex_get_note_metadata` instead.'
+        'Get note TOC: metadata + section titles, summaries, node IDs. '
+        'Use node IDs with memex_get_node to read sections. '
+        'For metadata only (title/tags/dates), use memex_get_note_metadata.'
     ),
 )
 async def memex_get_page_index(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
 ) -> str:
     """Get the hierarchical page index for a note."""
     try:
@@ -728,15 +673,13 @@ async def memex_get_page_index(
 @mcp.tool(
     name='memex_get_note_metadata',
     description=(
-        'Retrieve note metadata (title, description, tags, publish date, source URI) '
-        'without the full page index. '
-        'Use this for quick identification — checking tags, title, or dates — '
-        'without loading the TOC tree. Use `memex_get_page_index` when you need to browse sections.'
+        'Get note metadata only: title, description, tags, publish date, source URI. '
+        'No content or TOC. Use memex_get_page_index when you need sections.'
     ),
 )
 async def memex_get_note_metadata(
     ctx: Context,
-    note_id: Annotated[str, Field(description='The UUID of the note.')],
+    note_id: Annotated[str, Field(description='Note UUID.')],
 ) -> str:
     """Get just the metadata from a note's page index."""
     try:
@@ -763,12 +706,11 @@ async def memex_get_note_metadata(
 
 @mcp.tool(
     name='memex_get_node',
-    description='Retrieve the full text content of a specific note section (node) by its ID. '
-    'Node IDs can be found in search results (reasoning field) or via `memex_get_page_index`.',
+    description='Get full text of a note section by node ID. Get node IDs from memex_get_page_index or search reasoning.',
 )
 async def memex_get_node(
     ctx: Context,
-    node_id: Annotated[str, Field(description='The UUID of the node to retrieve.')],
+    node_id: Annotated[str, Field(description='Node UUID.')],
 ) -> str:
     """Retrieve the full text content of a specific note node."""
     try:
@@ -806,16 +748,16 @@ async def memex_get_node(
 
 @mcp.tool(
     name='memex_batch_ingest',
-    description='Asynchronously ingest multiple local files into Memex.',
+    description='Async batch ingest of local files.',
 )
 async def memex_batch_ingest(
     ctx: Context,
-    file_paths: Annotated[list[str], Field(description='List of absolute paths to local files.')],
+    file_paths: Annotated[list[str], Field(description='Absolute file paths.')],
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Optional UUID of the vault to ingest into.'),
+        Field(default=None, description='Target vault UUID.'),
     ] = None,
-    batch_size: Annotated[int, Field(description='Number of files to process per chunk.')] = 32,
+    batch_size: Annotated[int, Field(description='Files per batch chunk.')] = 32,
 ) -> str:
     """Submit a batch of local files for asynchronous ingestion."""
     try:
@@ -862,11 +804,11 @@ async def memex_batch_ingest(
 
 @mcp.tool(
     name='memex_get_batch_status',
-    description='Retrieve the status and results of a batch ingestion job.',
+    description='Get batch ingestion job status.',
 )
 async def memex_get_batch_status(
     ctx: Context,
-    job_id: Annotated[str, Field(description='The UUID of the batch job.')],
+    job_id: Annotated[str, Field(description='Batch job UUID.')],
 ) -> str:
     """Check the status of a batch ingestion job."""
     try:
@@ -916,7 +858,7 @@ async def memex_get_batch_status(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all available vaults.',
+    description='List all vaults.',
 )
 async def memex_list_vaults(ctx: Context) -> str:
     """List all available vaults."""
@@ -941,17 +883,14 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_list_notes',
-    description=(
-        'List notes in the active vault. '
-        'NOT recommended for discovery — use memex_search or memex_note_search instead.'
-    ),
+    description='List notes in active vault. NOT for discovery — use memex_search or memex_note_search.',
 )
 async def memex_list_notes(
     ctx: Context,
     limit: Annotated[int, Field(description='Max notes to return.')] = 20,
     offset: Annotated[int, Field(description='Pagination offset.')] = 0,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+        str | None, Field(default=None, description='Vault UUID or name filter.')
     ] = None,
 ) -> str:
     """List notes in the active vault."""
@@ -979,16 +918,16 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_list_entities',
-    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance.',
+    description='List or search entities. Without query, returns top entities by relevance.',
 )
 async def memex_list_entities(
     ctx: Context,
     query: Annotated[
-        str | None, Field(default=None, description='Optional search term to filter by name.')
+        str | None, Field(default=None, description='Search term to filter by name.')
     ] = None,
     limit: Annotated[int, Field(description='Max entities to return.')] = 20,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Optional vault UUID or name to filter by.')
+        str | None, Field(default=None, description='Vault UUID or name filter.')
     ] = None,
 ) -> str:
     """List or search entities."""
@@ -1021,11 +960,11 @@ async def memex_list_entities(
 
 @mcp.tool(
     name='memex_get_entity',
-    description='Get details for a specific entity by its UUID.',
+    description='Get entity details by UUID.',
 )
 async def memex_get_entity(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
 ) -> str:
     """Get entity details."""
     try:
@@ -1056,11 +995,11 @@ async def memex_get_entity(
 
 @mcp.tool(
     name='memex_get_entity_mentions',
-    description='Get memory units that mention a specific entity.',
+    description='Get memory units mentioning an entity.',
 )
 async def memex_get_entity_mentions(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
     limit: Annotated[int, Field(description='Max mentions to return.')] = 10,
 ) -> str:
     """Get memory units mentioning an entity."""
@@ -1099,11 +1038,11 @@ async def memex_get_entity_mentions(
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
-    description='Get entities that frequently co-occur with a given entity.',
+    description='Get co-occurring entities for a given entity.',
 )
 async def memex_get_entity_cooccurrences(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='The UUID of the entity.')],
+    entity_id: Annotated[str, Field(description='Entity UUID.')],
 ) -> str:
     """Get co-occurring entities."""
     try:
@@ -1137,11 +1076,11 @@ async def memex_get_entity_cooccurrences(
 
 @mcp.tool(
     name='memex_get_memory_unit',
-    description='Retrieve a specific memory unit by its UUID.',
+    description='Get a memory unit by UUID.',
 )
 async def memex_get_memory_unit(
     ctx: Context,
-    unit_id: Annotated[str, Field(description='The UUID of the memory unit.')],
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
 ) -> str:
     """Retrieve a memory unit by ID."""
     try:
@@ -1184,11 +1123,11 @@ async def memex_get_memory_unit(
 
 @mcp.tool(
     name='memex_ingest_url',
-    description='Ingest content from a URL into Memex.',
+    description='Ingest content from a URL.',
 )
 async def memex_ingest_url(
     ctx: Context,
-    url: Annotated[str, Field(description='The URL to ingest.')],
+    url: Annotated[str, Field(description='URL to ingest.')],
     vault_id: Annotated[
         str | None, Field(default=None, description='Target vault UUID. Defaults to active vault.')
     ] = None,
