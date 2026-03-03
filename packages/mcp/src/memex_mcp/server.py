@@ -36,21 +36,26 @@ persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex is a personal knowledge management system.
+    instructions="""Memex is a personal knowledge management system. Follow this retrieval workflow:
 
-Workflow:
-1. Discovery: `memex_search` for facts across all notes; `memex_note_search` for specific documents.
-2. Reading: `memex_get_note_metadata` for tags/title/dates only. `memex_get_page_index` → `memex_get_node` for content. `memex_read_note` fallback for small notes.
-3. AVOID: `memex_list_notes` for discovery.
+STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
+  - `memex_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
+  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with snippets.
+  When unsure, run both in parallel and combine results (deduplicate by Note ID).
 
-Search selection:
-- `memex_search` = broad exploration + factual recall. Returns extracted facts/events/observations spanning many notes. Use first.
-- `memex_note_search` = targeted document lookup. Returns ranked source notes with snippets. Use when you need a specific document.
+STEP 2 — FILTER (parallel, per note): Call `memex_get_note_metadata` on each candidate Note ID.
+  - Cheap (~50 tokens). Use title, description, and tags to confirm relevance.
+  - Drop irrelevant notes BEFORE proceeding to Step 3.
 
-Reading selection:
-- `memex_get_note_metadata` = title, description, tags, dates, source URI. No content.
-- `memex_get_page_index` → `memex_get_node` = section-level content reading.
-- `memex_read_note` = full note. Only for short notes.
+STEP 3 — READ (only confirmed-relevant notes):
+  - `memex_get_page_index` → get TOC and node IDs. Expensive — only after Step 2 confirms relevance.
+  - `memex_get_node` (parallel) → read specific sections by node ID.
+  - `memex_read_note` → fallback only, for very short notes.
+
+RULES:
+- Never skip Step 2. `memex_get_page_index` costs 5-10x more tokens than `memex_get_note_metadata`.
+- Never use `memex_list_notes` for discovery.
+- Parallelize aggressively: metadata calls together, node reads together.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -490,9 +495,9 @@ async def memex_add_note(
 @mcp.tool(
     name='memex_search',
     description=(
-        'Search extracted facts, events, and observations across all notes. '
-        'Use for broad exploration and factual recall. '
-        'For finding specific source documents, use memex_note_search.'
+        'Search extracted facts, events, and observations across all notes (memory search). '
+        'Best for broad/exploratory queries. '
+        'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
     ),
 )
 async def memex_search(
@@ -554,6 +559,9 @@ async def memex_search(
                 f'{score_str}{date_str}\n   {snippet}\n'
             )
 
+        output.append(
+            'Tip: Use Note IDs above with memex_get_note_metadata to check relevance before deeper reading.'
+        )
         return '\n'.join(output)
 
     except Exception as e:
@@ -564,9 +572,9 @@ async def memex_search(
 @mcp.tool(
     name='memex_note_search',
     description=(
-        'Search source notes by hybrid retrieval. Returns ranked notes with snippets. '
-        'Use for targeted document lookup and deep-diving. '
-        'For broad fact exploration, use memex_search.'
+        'Search source notes by hybrid retrieval (note search). '
+        'Returns ranked notes with snippets. Best for targeted document lookup. '
+        'For broad exploration, use memex_search. When unsure, run both in parallel.'
     ),
 )
 async def memex_note_search(
@@ -627,7 +635,9 @@ async def memex_note_search(
                     lines.append(f'  - Node `{node_id}`: {reasoning_text}')
             lines.append('')
 
-        lines.append('Use memex_get_page_index / memex_get_node to read sections.')
+        lines.append(
+            'Next: call memex_get_note_metadata on each Note ID to confirm relevance before reading sections.'
+        )
         return '\n'.join(lines)
 
     except Exception as e:
@@ -638,9 +648,9 @@ async def memex_note_search(
 @mcp.tool(
     name='memex_get_page_index',
     description=(
-        'Get note TOC: metadata + section titles, summaries, node IDs. '
-        'Use node IDs with memex_get_node to read sections. '
-        'For metadata only (title/tags/dates), use memex_get_note_metadata.'
+        'Get note TOC: section titles, summaries, and node IDs. '
+        'Expensive \u2014 only call AFTER memex_get_note_metadata confirms relevance. '
+        'Use returned node IDs with memex_get_node.'
     ),
 )
 async def memex_get_page_index(
@@ -673,8 +683,8 @@ async def memex_get_page_index(
 @mcp.tool(
     name='memex_get_note_metadata',
     description=(
-        'Get note metadata only: title, description, tags, publish date, source URI. '
-        'No content or TOC. Use memex_get_page_index when you need sections.'
+        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. '
+        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes.'
     ),
 )
 async def memex_get_note_metadata(
@@ -706,7 +716,7 @@ async def memex_get_note_metadata(
 
 @mcp.tool(
     name='memex_get_node',
-    description='Get full text of a note section by node ID. Get node IDs from memex_get_page_index or search reasoning.',
+    description='Read a specific note section by node ID. Get node IDs from memex_get_page_index or memex_note_search reasoning. Call multiple in parallel when reading several sections.',
 )
 async def memex_get_node(
     ctx: Context,

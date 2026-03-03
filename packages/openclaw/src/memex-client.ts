@@ -11,6 +11,7 @@ import type {
   MemoryUnitDTO,
   NodeDTO,
   NoteCreateRequest,
+  NoteMetadataOutput,
   NoteSearchResult,
   PageIndexOutput,
   PluginConfig,
@@ -241,6 +242,18 @@ export class MemexClient {
       throw new Error(`Memex getPageIndex failed: ${response.status} ${response.statusText}`);
     }
     return response.json() as Promise<PageIndexOutput>;
+  }
+
+  /** GET /api/v1/notes/{id}/metadata */
+  async getNoteMetadata(noteId: string, signal?: AbortSignal): Promise<NoteMetadataOutput> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/notes/${noteId}/metadata`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex getNoteMetadata failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<NoteMetadataOutput>;
   }
 
   /** GET /api/v1/nodes/{id} */

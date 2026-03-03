@@ -14,9 +14,13 @@ memex mcp run --transport sse --port 8080
 
 ## Recommended Workflow
 
-1. **Discovery**: `memex_search` for broad exploration and factual recall across all notes; `memex_note_search` for targeted document retrieval.
-2. **Quick info**: `memex_get_note_metadata` to check a note's title, tags, or dates without loading content.
-3. **Reading**: `memex_get_page_index` (table of contents) then `memex_get_node` (section text). Only fall back to `memex_read_note` for small notes.
+Follow this three-step retrieval workflow:
+
+1. **Search** — Pick by query type, or run both in parallel when unsure:
+   - `memex_search` (memory search) for broad/exploratory queries
+   - `memex_note_search` (note search) for targeted document retrieval
+2. **Filter** — Call `memex_get_note_metadata` on each candidate note (cheap, ~50 tokens). Check title, tags, description to confirm relevance before reading.
+3. **Read** — Only for confirmed-relevant notes: `memex_get_page_index` (TOC + node IDs) then `memex_get_node` (section text). Fall back to `memex_read_note` only for small notes.
 4. **Avoid**: Do not use `memex_list_notes` for discovery.
 
 ### When to use which search
@@ -26,13 +30,17 @@ memex mcp run --transport sse --port 8080
 | `memex_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
 | `memex_note_search` | Targeted document retrieval ("Which note describes X?"), deep-diving into a topic | Whole source notes ranked by relevance with snippets |
 
+When unsure which to use, run both in parallel and combine results (deduplicate by Note ID).
+
 ### When to use which reading tool
 
-| Tool | Best for | Returns |
-|------|----------|---------|
-| `memex_get_note_metadata` | Quick identification — checking tags, title, dates | Metadata dict only |
-| `memex_get_page_index` + `memex_get_node` | Section-level reading of note content | TOC tree, then section text |
-| `memex_read_note` | Reading a small note in full (fallback) | Full note content |
+| Tool | Cost | Best for | Returns |
+|------|------|----------|---------|
+| `memex_get_note_metadata` | ~50 tokens | Relevance filtering — checking tags, title, dates | Metadata dict only |
+| `memex_get_page_index` + `memex_get_node` | ~500+ tokens | Section-level reading of note content | TOC tree, then section text |
+| `memex_read_note` | Full note | Reading a small note in full (fallback) | Full note content |
+
+Always call `memex_get_note_metadata` before `memex_get_page_index` to avoid wasting tokens on irrelevant notes.
 
 ---
 
