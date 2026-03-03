@@ -125,25 +125,14 @@ async def run_async_migrations() -> None:
     )
 
     async with connectable.connect() as connection:
-        # Acquire advisory lock to serialize migrations
+        # Acquire session-level advisory lock to serialize migrations.
+        # Released automatically when the connection/session closes.
         await connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
-        migration_failed = False
-        try:
-            await connection.run_sync(do_run_migrations)
-        except Exception:
-            migration_failed = True
-            raise
-        finally:
-            if migration_failed:
-                # Rollback the aborted transaction so the unlock can succeed.
-                try:
-                    await connection.rollback()
-                except Exception:
-                    pass
-            try:
-                await connection.execute(text(f'SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})'))
-            except Exception:
-                logger.warning('Failed to release advisory lock %s', MIGRATION_LOCK_ID)
+        await connection.run_sync(do_run_migrations)
+        # Alembic's begin_transaction() creates a SAVEPOINT inside the
+        # implicit transaction from connect(). Releasing the savepoint
+        # does NOT commit the outer transaction — we must do it explicitly.
+        await connection.commit()
 
     await connectable.dispose()
 
