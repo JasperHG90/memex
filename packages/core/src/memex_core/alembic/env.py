@@ -130,7 +130,15 @@ async def run_async_migrations() -> None:
         try:
             await connection.run_sync(do_run_migrations)
         finally:
-            await connection.execute(text(f'SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})'))
+            # Rollback any aborted transaction so the unlock can succeed.
+            try:
+                await connection.rollback()
+            except Exception:
+                pass
+            try:
+                await connection.execute(text(f'SELECT pg_advisory_unlock({MIGRATION_LOCK_ID})'))
+            except Exception:
+                logger.warning('Failed to release advisory lock %s', MIGRATION_LOCK_ID)
 
     await connectable.dispose()
 
