@@ -210,3 +210,43 @@ def test_get_note_page_index_not_found(client, mock_api):
     response = client.get(f'/api/v1/notes/{doc_id}/page-index')
 
     assert response.status_code == 404
+
+
+def test_get_note_metadata_with_data(client, mock_api):
+    """GET /notes/{note_id}/metadata returns metadata when present."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000099')
+    metadata = {'title': 'Test', 'description': 'A note', 'tags': ['a', 'b']}
+    mock_api.get_note_metadata.return_value = metadata
+
+    response = client.get(f'/api/v1/notes/{doc_id}/metadata')
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['note_id'] == str(doc_id)
+    assert data['metadata'] == metadata
+    mock_api.get_note_metadata.assert_called_once_with(doc_id)
+
+
+def test_get_note_metadata_none(client, mock_api):
+    """GET /notes/{note_id}/metadata returns null when note has no page index."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000098')
+    mock_api.get_note_metadata.return_value = None
+
+    response = client.get(f'/api/v1/notes/{doc_id}/metadata')
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['note_id'] == str(doc_id)
+    assert data['metadata'] is None
+
+
+def test_get_note_metadata_not_found(client, mock_api):
+    """GET /notes/{note_id}/metadata returns 404 for missing notes."""
+    from memex_common.exceptions import ResourceNotFoundError
+
+    doc_id = UUID('00000000-0000-0000-0000-000000000097')
+    mock_api.get_note_metadata.side_effect = ResourceNotFoundError('Not found')
+
+    response = client.get(f'/api/v1/notes/{doc_id}/metadata')
+
+    assert response.status_code == 404

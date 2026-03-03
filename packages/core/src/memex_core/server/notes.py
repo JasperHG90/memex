@@ -91,6 +91,16 @@ async def get_note_page_index(note_id: UUID, api: Annotated[MemexAPI, Depends(ge
         raise _handle_error(e, 'Failed to get page index')
 
 
+@router.get('/notes/{note_id}/metadata')
+async def get_note_metadata(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+    """Get just the metadata from a note's page index."""
+    try:
+        metadata = await api.get_note_metadata(note_id)
+        return {'note_id': note_id, 'metadata': metadata}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get note metadata')
+
+
 @router.get('/notes/{note_id}', response_model=NoteDTO)
 async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get a note by ID."""

@@ -709,6 +709,38 @@ async def memex_get_page_index(
 
 
 @mcp.tool(
+    name='memex_get_note_metadata',
+    description='Retrieve note metadata (title, description, tags, publish date, source URI) '
+    'without the full page index.',
+)
+async def memex_get_note_metadata(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='The UUID of the note.')],
+) -> str:
+    """Get just the metadata from a note's page index."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        metadata = await api.get_note_metadata(uuid_obj)
+        if metadata is None:
+            return 'No metadata available for this note. The note may not have a page index.'
+
+        import json as _json
+
+        return _json.dumps(metadata, default=str, indent=2)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Get note metadata failed: {e}', exc_info=True)
+        raise ToolError(f'Get note metadata failed: {e}')
+
+
+@mcp.tool(
     name='memex_get_node',
     description='Retrieve the full text content of a specific note section (node) by its ID. '
     'Node IDs can be found in search results (reasoning field) or via `memex_get_page_index`.',

@@ -574,6 +574,10 @@ class MemexAPI:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)
 
+    async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
+        """Retrieve just the metadata from the page index. Delegates to NoteService."""
+        return await self._notes.get_note_metadata(note_id)
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index. Delegates to NoteService."""
         return await self._notes.get_note_page_index(note_id)
