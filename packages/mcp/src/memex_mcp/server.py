@@ -197,6 +197,9 @@ async def memex_get_lineage(
 async def memex_list_assets(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Vault UUID or name filter.')
+    ] = None,
 ) -> str:
     """List assets for a note."""
     try:
@@ -206,10 +209,15 @@ async def memex_list_assets(
         except ValueError:
             raise ToolError(f'Invalid Note UUID: {note_id}')
 
+        if vault_id:
+            await api.resolve_vault_identifier(vault_id)
+
         try:
             note = await api.get_note(uuid_obj)
-        except FileNotFoundError:
-            raise ToolError(f'Note {note_id} not found.')
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Note {note_id} not found.')
+            raise
 
         assets = note.assets
 
@@ -300,10 +308,17 @@ async def memex_read_note(
 async def memex_get_resource(
     ctx: Context,
     path: Annotated[str, Field(description='Resource path.')],
+    vault_id: Annotated[
+        str | None, Field(default=None, description='Vault UUID or name filter.')
+    ] = None,
 ) -> Image | Audio | File | str:
     """Retrieve a file resource. Returns an Image, Audio, or File object."""
     try:
         api = get_api(ctx)
+
+        if vault_id:
+            await api.resolve_vault_identifier(vault_id)
+
         content_bytes = await api.get_resource(path)
 
         mime_type, _ = mimetypes.guess_type(path)

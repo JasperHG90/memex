@@ -72,6 +72,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
             original_text=doc.get('original_text'),
             created_at=doc['created_at'],
             vault_id=doc['vault_id'],
+            assets=doc.get('assets', []),
             doc_metadata=metadata,
         )
 
@@ -84,6 +85,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
         original_text=doc.original_text,
         created_at=doc.created_at,
         vault_id=doc.vault_id,
+        assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
     )
 
