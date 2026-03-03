@@ -210,6 +210,45 @@ async def view_note(
     console.print(Markdown(original_text))
 
 
+@app.command('metadata')
+@async_command
+async def view_metadata(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
+    """View the metadata (title, description, tags, etc.) of a note."""
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    async with get_api_context(config) as api:
+        try:
+            metadata = await api.get_note_metadata(uuid_obj)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if metadata is None:
+        console.print('[yellow]This note has no metadata.[/yellow]')
+        console.print('[dim]Only notes with a page index have metadata.[/dim]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps(metadata, default=str))
+        return
+
+    table = Table(title=f'Note Metadata ({note_id})')
+    table.add_column('Field', style='cyan')
+    table.add_column('Value', style='white')
+
+    for key, value in metadata.items():
+        if isinstance(value, list):
+            value = ', '.join(str(v) for v in value)
+        table.add_row(key, str(value) if value is not None else '-')
+
+    console.print(table)
+
+
 @app.command('page-index')
 @async_command
 async def view_page_index(

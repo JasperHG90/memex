@@ -265,6 +265,11 @@ class RemoteMemexAPI:
         result = await self._get(f'notes/{note_id}')
         return NoteDTO(**result)
 
+    async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
+        """Get just the metadata from a note's page index."""
+        result = await self._get(f'notes/{note_id}/metadata')
+        return result.get('metadata')
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Get the page index (slim tree) for a note."""
         result = await self._get(f'notes/{note_id}/page-index')

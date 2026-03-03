@@ -50,6 +50,18 @@ class NoteService:
 
             return doc.model_dump()
 
+    async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
+        """Return just the metadata portion of the page index."""
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise ResourceNotFoundError(f'Document {note_id} not found.')
+            if doc.page_index is None:
+                return None
+            return doc.page_index.get('metadata')
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index for a document, or None if not indexed.
 

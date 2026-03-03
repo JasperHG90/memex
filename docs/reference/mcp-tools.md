@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 22 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 23 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -74,6 +74,18 @@ Retrieve the full text content of a specific note section (node) by its ID. Node
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `node_id` | string | Yes | The UUID of the node to retrieve. |
+
+---
+
+### `memex_get_note_metadata`
+
+Retrieve just the metadata (title, description, tags, publish date, source URI) from a note's page index without loading the full TOC tree.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | The UUID of the note. |
+
+Returns the metadata dict, or a message if no metadata is available.
 
 ---
 
