@@ -369,31 +369,9 @@ class RemoteMemexAPI:
         params: dict[str, Any] = {'q': query, 'limit': limit}
         if vault_id:
             params['vault_id'] = str(vault_id)
-        response = await self.client.get('entities', params=params)
-        response.raise_for_status()
-
-        try:
-            result = response.json()
-        except Exception as e:
-            # Fallback for legacy/stream response (NDJSON)
-            # If the server ignores 'q' and returns a stream, we parse lines
-            logger.debug('JSON parse failed, falling back to NDJSON parsing: %s', e)
-            result = []
-            import json
-
-            for line in response.text.splitlines():
-                if line:
-                    try:
-                        result.append(json.loads(line))
-                    except Exception as e:
-                        logger.debug('Skipping unparseable NDJSON line: %s', e)
-
-        # If result is not a list (e.g. single object or something else), handle it?
-        # Expecting list[dict]
+        result = await self._get('entities', params=params)
         if not isinstance(result, list):
-            # Should not happen for this endpoint unless schema changed
-            return []
-
+            result = [result]
         return [EntityDTO(**e) for e in result]
 
     async def list_entities_ranked(
