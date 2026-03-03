@@ -39,9 +39,18 @@ mcp = FastMCP(
     instructions="""Memex is a personal knowledge management system.
 
 Workflow:
-1. Discovery: `memex_search` for facts/entities; `memex_note_search` for source documents.
-2. Reading: `memex_get_page_index` → `memex_get_node`. Fall back to `memex_read_note` for small notes.
+1. Discovery: `memex_search` for atomic facts/memories; `memex_note_search` for source documents.
+2. Reading: `memex_get_note_metadata` for quick note info (tags, title, dates). `memex_get_page_index` + `memex_get_node` for section-level reading. `memex_read_note` only as a fallback for small notes.
 3. AVOID: `memex_list_notes` for discovery — use search tools instead.
+
+When to use which search:
+- `memex_search`: broad exploration and factual recall. Returns individual facts, events, and observations extracted across all notes. Best for initial exploration ("What do I know about X?") and precise factual questions ("When did Y happen?").
+- `memex_note_search`: targeted document retrieval. Returns whole source notes ranked by relevance with snippets. Best for finding specific documents ("Which note describes the auth architecture?") or deep-diving into a topic once you know it exists.
+
+When to use which reading tool:
+- `memex_get_note_metadata`: quick check of a note's title, description, tags, publish date, or source URI. Use when you only need to identify or classify a note, not read its content.
+- `memex_get_page_index` → `memex_get_node`: read specific sections of a note. Use when you need actual content from a note.
+- `memex_read_note`: read the entire note at once. Only use for short notes or when you need the full text.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -517,7 +526,11 @@ async def memex_add_note(
 
 @mcp.tool(
     name='memex_search',
-    description='Search memory units (facts, events, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs.',
+    description=(
+        'Search memory units (facts, events, observations) via multi-strategy retrieval. Returns Unit IDs and Note IDs. '
+        'Best for broad exploration across all notes ("What do I know about X?") and factual recall ("When did Y happen?"). '
+        'For targeted document retrieval, use `memex_note_search` instead.'
+    ),
 )
 async def memex_search(
     ctx: Context,
@@ -598,7 +611,8 @@ async def memex_search(
     description=(
         'Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). '
         'Returns ranked notes with snippets. '
-        'Use for whole notes; use `memex_search` for atomic facts.'
+        'Use this for targeted document retrieval ("Which note describes X?") and deep-diving into a topic. '
+        'For broad exploration across all knowledge, use `memex_search` instead.'
     ),
 )
 async def memex_note_search(
@@ -677,9 +691,12 @@ async def memex_note_search(
 
 @mcp.tool(
     name='memex_get_page_index',
-    description='Get the hierarchical page index (table of contents) for a note. '
-    'Returns the note structure with section titles, summaries, and node IDs. '
-    'Use the node IDs with `memex_get_node` to retrieve specific section text.',
+    description=(
+        'Get the hierarchical page index (table of contents) for a note. '
+        'Returns metadata plus the note structure with section titles, summaries, and node IDs. '
+        'Use the node IDs with `memex_get_node` to retrieve specific section text. '
+        'If you only need the note title, tags, or description, use `memex_get_note_metadata` instead.'
+    ),
 )
 async def memex_get_page_index(
     ctx: Context,
@@ -710,8 +727,12 @@ async def memex_get_page_index(
 
 @mcp.tool(
     name='memex_get_note_metadata',
-    description='Retrieve note metadata (title, description, tags, publish date, source URI) '
-    'without the full page index.',
+    description=(
+        'Retrieve note metadata (title, description, tags, publish date, source URI) '
+        'without the full page index. '
+        'Use this for quick identification — checking tags, title, or dates — '
+        'without loading the TOC tree. Use `memex_get_page_index` when you need to browse sections.'
+    ),
 )
 async def memex_get_note_metadata(
     ctx: Context,
