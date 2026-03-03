@@ -109,7 +109,7 @@ class NoteService:
     ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the given vault_id(s), or the active vault if not provided.
+        Filters by the given vault_id(s), or returns all vaults if not provided.
         """
         from memex_core.memory.sql_models import Note
         from sqlmodel import select
@@ -122,11 +122,6 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
-            else:
-                target_vault_id = await self._vaults.resolve_vault_identifier(
-                    self.config.server.active_vault
-                )
-                stmt = stmt.where(col(Note.vault_id) == target_vault_id)
 
             stmt = stmt.offset(offset).limit(limit)
             return list((await session.exec(stmt)).all())

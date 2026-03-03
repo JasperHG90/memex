@@ -220,12 +220,19 @@ class RemoteMemexAPI:
         return SummaryResponse(**result)
 
     async def list_notes(
-        self, limit: int = 100, offset: int = 0, vault_id: UUID | None = None
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        vault_id: UUID | None = None,
+        vault_ids: list[str | UUID] | None = None,
     ) -> list[NoteDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -332,11 +339,19 @@ class RemoteMemexAPI:
         result = await self._get('stats/token-usage')
         return TokenUsageResponse(**result)
 
-    async def get_recent_notes(self, limit: int = 5, vault_id: UUID | None = None) -> list[NoteDTO]:
+    async def get_recent_notes(
+        self,
+        limit: int = 5,
+        vault_id: UUID | None = None,
+        vault_ids: list[str | UUID] | None = None,
+    ) -> list[NoteDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
