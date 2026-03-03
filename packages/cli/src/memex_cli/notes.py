@@ -29,6 +29,7 @@ async def list_notes(
     ctx: typer.Context,
     limit: int = 50,
     offset: int = 0,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -44,7 +45,7 @@ async def list_notes(
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.list_notes(limit=limit, offset=offset)
+            notes = await api.list_notes(limit=limit, offset=offset, vault_ids=vault or None)
         except Exception as e:
             handle_api_error(e)
 
@@ -78,6 +79,7 @@ async def list_notes(
 async def list_recent(
     ctx: typer.Context,
     limit: int = 10,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -93,7 +95,7 @@ async def list_recent(
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.get_recent_notes(limit=limit)
+            notes = await api.get_recent_notes(limit=limit, vault_ids=vault or None)
         except Exception as e:
             handle_api_error(e)
 
