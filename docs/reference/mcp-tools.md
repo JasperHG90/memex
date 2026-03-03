@@ -14,9 +14,25 @@ memex mcp run --transport sse --port 8080
 
 ## Recommended Workflow
 
-1. **Discovery**: `memex_search` for global facts/entities; `memex_note_search` for source documents.
-2. **Reading**: `memex_get_page_index` (table of contents) then `memex_get_node` (section text). Only fall back to `memex_read_note` for small notes.
-3. **Avoid**: Do not use `memex_list_notes` for discovery.
+1. **Discovery**: `memex_search` for broad exploration and factual recall across all notes; `memex_note_search` for targeted document retrieval.
+2. **Quick info**: `memex_get_note_metadata` to check a note's title, tags, or dates without loading content.
+3. **Reading**: `memex_get_page_index` (table of contents) then `memex_get_node` (section text). Only fall back to `memex_read_note` for small notes.
+4. **Avoid**: Do not use `memex_list_notes` for discovery.
+
+### When to use which search
+
+| Tool | Best for | Returns |
+|------|----------|---------|
+| `memex_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
+| `memex_note_search` | Targeted document retrieval ("Which note describes X?"), deep-diving into a topic | Whole source notes ranked by relevance with snippets |
+
+### When to use which reading tool
+
+| Tool | Best for | Returns |
+|------|----------|---------|
+| `memex_get_note_metadata` | Quick identification — checking tags, title, dates | Metadata dict only |
+| `memex_get_page_index` + `memex_get_node` | Section-level reading of note content | TOC tree, then section text |
+| `memex_read_note` | Reading a small note in full (fallback) | Full note content |
 
 ---
 
@@ -24,7 +40,7 @@ memex mcp run --transport sse --port 8080
 
 ### `memex_search`
 
-Search memory units (facts, events, observations) via multi-strategy TEMPR retrieval.
+Search memory units (facts, events, observations) via multi-strategy TEMPR retrieval. Best for broad exploration across all notes and precise factual recall.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -40,7 +56,7 @@ Returns formatted text with Unit IDs, Note IDs, scores, and dates.
 
 ### `memex_note_search`
 
-Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). Returns ranked notes with snippets.
+Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). Returns ranked notes with snippets. Best for targeted document retrieval and deep-diving into a topic.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -57,9 +73,21 @@ Returns note titles, IDs, scores, snippets, relevant sections (when `reason=true
 
 ## Note Reading Tools
 
+### `memex_get_note_metadata`
+
+Retrieve just the metadata (title, description, tags, publish date, source URI) from a note's page index without loading the full TOC tree. Use for quick identification — checking tags, title, or dates — without loading section content. If you need to browse sections, use `memex_get_page_index` instead.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | The UUID of the note. |
+
+Returns the metadata dict, or `null` if the note has no page index (e.g., legacy notes ingested before the page index strategy).
+
+---
+
 ### `memex_get_page_index`
 
-Get the hierarchical page index (table of contents) for a note. Returns section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text.
+Get the hierarchical page index (table of contents) for a note. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text. If you only need the note's title, tags, or description, use `memex_get_note_metadata` instead.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -74,18 +102,6 @@ Retrieve the full text content of a specific note section (node) by its ID. Node
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `node_id` | string | Yes | The UUID of the node to retrieve. |
-
----
-
-### `memex_get_note_metadata`
-
-Retrieve just the metadata (title, description, tags, publish date, source URI) from a note's page index without loading the full TOC tree.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `note_id` | string | Yes | The UUID of the note. |
-
-Returns the metadata dict, or a message if no metadata is available.
 
 ---
 
