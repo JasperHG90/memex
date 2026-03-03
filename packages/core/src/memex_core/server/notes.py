@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
@@ -133,3 +134,21 @@ async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)])
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note deletion failed')
+
+
+class MigrateNoteRequest(BaseModel):
+    target_vault_id: str
+
+
+@router.post('/notes/{note_id}/migrate')
+async def migrate_note(
+    note_id: UUID,
+    request: Annotated[MigrateNoteRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Move a note and all associated data to a different vault."""
+    try:
+        result = await api.migrate_note(note_id, request.target_vault_id)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Note migration failed')

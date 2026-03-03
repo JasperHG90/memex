@@ -170,6 +170,38 @@ async def delete_note(
         console.print(f'[red]Note {note_id} not found.[/red]')
 
 
+@app.command('migrate')
+@async_command
+async def migrate_note(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note to migrate.')],
+    target_vault: Annotated[str, typer.Argument(help='Target vault name or UUID.')],
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
+):
+    """
+    Move a note and all associated data to a different vault.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    if not force:
+        if not typer.confirm(f'Migrate note {note_id} to vault "{target_vault}"?'):
+            console.print('[yellow]Aborted.[/yellow]')
+            return
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.migrate_note(uuid_obj, target_vault)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(f'[green]Note {note_id} migrated successfully.[/green]')
+    console.print(f'  Source vault: {result.get("source_vault_id")}')
+    console.print(f'  Target vault: {result.get("target_vault_id")}')
+    console.print(f'  Entities affected: {result.get("entities_affected", 0)}')
+
+
 @app.command('view')
 @async_command
 async def view_note(

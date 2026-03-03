@@ -302,6 +302,13 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    async def migrate_note(self, note_id: UUID, target_vault_id: UUID | str) -> dict[str, Any]:
+        """Move a note to a different vault."""
+        return await self._post(
+            f'notes/{note_id}/migrate',
+            {'target_vault_id': str(target_vault_id)},
+        )
+
     async def delete_entity(self, entity_id: UUID) -> bool:
         """Delete an entity and all associated data."""
         try:
