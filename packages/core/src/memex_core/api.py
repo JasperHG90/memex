@@ -746,6 +746,11 @@ class MemexAPI:
         """Delete a document and all associated data. Delegates to NoteService."""
         return await self._notes.delete_note(note_id)
 
+    async def migrate_note(self, note_id: UUID, target_vault_id: UUID | str) -> dict[str, Any]:
+        """Move a note to a different vault. Delegates to NoteService."""
+        resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
+        return await self._notes.migrate_note(note_id, resolved_id)
+
     async def delete_entity(self, entity_id: UUID) -> bool:
         """Delete an entity. Delegates to EntityService."""
         return await self._entities.delete_entity(entity_id)

@@ -1137,6 +1137,41 @@ async def memex_get_memory_unit(
 
 
 @mcp.tool(
+    name='memex_migrate_note',
+    description='Move a note and all associated data to a different vault.',
+)
+async def memex_migrate_note(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    target_vault_id: Annotated[str, Field(description='Target vault UUID or name.')],
+) -> str:
+    """Migrate a note to a different vault."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        result = await api.migrate_note(uuid_obj, target_vault_id)
+        source = result.get('source_vault_id', 'unknown')
+        target = result.get('target_vault_id', 'unknown')
+        entities = result.get('entities_affected', 0)
+        return (
+            f'Note {note_id} migrated successfully.\n'
+            f'Source vault: {source}\n'
+            f'Target vault: {target}\n'
+            f'Entities affected: {entities}'
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Migrate note failed: {e}', exc_info=True)
+        raise ToolError(f'Migrate note failed: {e}')
+
+
+@mcp.tool(
     name='memex_ingest_url',
     description='Ingest content from a URL.',
 )
