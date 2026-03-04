@@ -180,6 +180,7 @@ gemini-extension.json
 
 # Memex
 .memex.yaml
+docker-compose.override.yaml
 
 # OpenClaw plugin (TypeScript build artifacts)
 packages/openclaw/node_modules/

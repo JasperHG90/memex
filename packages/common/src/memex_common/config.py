@@ -693,6 +693,17 @@ class ServerConfig(BaseModel):
         description='List of additional read-only vaults to include in search/retrieval.',
     )
 
+    max_concurrent_jobs: int = Field(
+        default=1,
+        ge=1,
+        description='Max batch ingestion jobs running concurrently. 1 for local Ollama, higher for cloud APIs.',
+    )
+    llm_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description='Timeout per LLM inference call in seconds.',
+    )
+
     file_store: FileStoreBackend = Field(
         default_factory=lambda: LocalFileStoreConfig(),
         description='Configuration for the file storage backend. Defaults to local file storage.',
