@@ -10,7 +10,7 @@ def format_for_embedding(text: str, fact_type: str, context: str | None = None) 
 
     Args:
         text: The core narrative text.
-        fact_type: The epistemic type (world, experience, opinion, observation).
+        fact_type: The epistemic type (world, event, observation).
         context: Optional context string (e.g. "Maintenance").
 
     Returns:
@@ -37,7 +37,7 @@ def format_for_reranking(
     Args:
         text: The core narrative text.
         event_date: The date associated with the memory.
-        fact_type: The epistemic type (world, experience, opinion, observation).
+        fact_type: The epistemic type (world, event, observation).
         context: Optional context string.
 
     Returns:

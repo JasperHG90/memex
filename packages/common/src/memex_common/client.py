@@ -15,12 +15,9 @@ from memex_common.schemas import (
     ReflectionRequest,
     IngestURLRequest,
     IngestFileRequest,
-    AdjustBeliefRequest,
-    AdjustBeliefResponse,
     BatchJobStatus,
     CreateVaultRequest,
     DefaultVaultsResponse,
-    EvidenceLogDTO,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -199,7 +196,6 @@ class RemoteMemexAPI:
         limit: int = 10,
         offset: int = 0,
         vault_ids: list[UUID | str] | None = None,
-        skip_opinion_formation: bool = False,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
@@ -210,7 +206,6 @@ class RemoteMemexAPI:
             limit=limit,
             offset=offset,
             vault_ids=vault_ids,
-            skip_opinion_formation=skip_opinion_formation,
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
@@ -225,12 +220,19 @@ class RemoteMemexAPI:
         return SummaryResponse(**result)
 
     async def list_notes(
-        self, limit: int = 100, offset: int = 0, vault_id: UUID | None = None
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        vault_id: UUID | None = None,
+        vault_ids: list[str | UUID] | None = None,
     ) -> list[NoteDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -270,6 +272,11 @@ class RemoteMemexAPI:
         result = await self._get(f'notes/{note_id}')
         return NoteDTO(**result)
 
+    async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
+        """Get just the metadata from a note's page index."""
+        result = await self._get(f'notes/{note_id}/metadata')
+        return result.get('metadata')
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Get the page index (slim tree) for a note."""
         result = await self._get(f'notes/{note_id}/page-index')
@@ -294,6 +301,13 @@ class RemoteMemexAPI:
             if e.response.status_code == 404:
                 return False
             raise
+
+    async def migrate_note(self, note_id: UUID, target_vault_id: UUID | str) -> dict[str, Any]:
+        """Move a note to a different vault."""
+        return await self._post(
+            f'notes/{note_id}/migrate',
+            {'target_vault_id': str(target_vault_id)},
+        )
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """Delete an entity and all associated data."""
@@ -332,11 +346,19 @@ class RemoteMemexAPI:
         result = await self._get('stats/token-usage')
         return TokenUsageResponse(**result)
 
-    async def get_recent_notes(self, limit: int = 5, vault_id: UUID | None = None) -> list[NoteDTO]:
+    async def get_recent_notes(
+        self,
+        limit: int = 5,
+        vault_id: UUID | None = None,
+        vault_ids: list[str | UUID] | None = None,
+    ) -> list[NoteDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -347,31 +369,9 @@ class RemoteMemexAPI:
         params: dict[str, Any] = {'q': query, 'limit': limit}
         if vault_id:
             params['vault_id'] = str(vault_id)
-        response = await self.client.get('entities', params=params)
-        response.raise_for_status()
-
-        try:
-            result = response.json()
-        except Exception as e:
-            # Fallback for legacy/stream response (NDJSON)
-            # If the server ignores 'q' and returns a stream, we parse lines
-            logger.debug('JSON parse failed, falling back to NDJSON parsing: %s', e)
-            result = []
-            import json
-
-            for line in response.text.splitlines():
-                if line:
-                    try:
-                        result.append(json.loads(line))
-                    except Exception as e:
-                        logger.debug('Skipping unparseable NDJSON line: %s', e)
-
-        # If result is not a list (e.g. single object or something else), handle it?
-        # Expecting list[dict]
+        result = await self._get('entities', params=params)
         if not isinstance(result, list):
-            # Should not happen for this endpoint unless schema changed
-            return []
-
+            result = [result]
         return [EntityDTO(**e) for e in result]
 
     async def list_entities_ranked(
@@ -481,28 +481,6 @@ class RemoteMemexAPI:
             params['vault_id'] = str(vault_id)
         result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
-
-    async def adjust_belief(
-        self,
-        unit_uuid: UUID | str,
-        evidence_type_key: str,
-        description: str | None = None,
-    ) -> AdjustBeliefResponse:
-        """Adjust belief confidence for a memory unit."""
-        request = AdjustBeliefRequest(
-            unit_uuid=UUID(str(unit_uuid)),
-            evidence_type_key=evidence_type_key,
-            description=description,
-        )
-        result = await self._patch(f'memories/{unit_uuid}/belief', request)
-        return AdjustBeliefResponse(**result)
-
-    async def get_evidence_log(
-        self, unit_id: UUID | str, *, limit: int = 20
-    ) -> list[EvidenceLogDTO]:
-        """Retrieve the evidence audit trail for a memory unit."""
-        result = await self._get(f'memories/{unit_id}/evidence-log', params={'limit': limit})
-        return [EvidenceLogDTO(**item) for item in result]
 
     async def get_resource(self, path: str) -> bytes:
         """

@@ -27,7 +27,6 @@ def mock_config():
     from memex_core.config import (
         ServerConfig,
         MemoryConfig,
-        OpinionFormationConfig,
         ExtractionConfig,
         ModelConfig,
     )
@@ -43,7 +42,6 @@ def mock_config():
                 extraction=ExtractionConfig(
                     model=ModelConfig(model='gemini/gemini-3-flash-preview')
                 ),
-                opinion_formation=OpinionFormationConfig(),
             ),
             meta_store=PostgresMetaStoreConfig(
                 instance=PostgresInstanceConfig(

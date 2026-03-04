@@ -125,63 +125,6 @@ def test_deduplicate_missing_evidence(mock_retrieval_engine):
     assert deduplicated[0].unit_metadata.get('citations') is None
 
 
-def test_deduplicate_opinion_keeps_both(mock_retrieval_engine):
-    """
-    Test that _deduplicate_and_cite keeps BOTH a Fact and an Opinion that cites it,
-    and attaches citation metadata to the Opinion.
-    """
-    # 1. Setup Data
-    fact_id = uuid4()
-    fact_text = 'The user loves spicy curry.'
-    fact_date = datetime(2024, 1, 20, 10, 0, 0, tzinfo=timezone.utc)
-
-    fact_unit = MemoryUnit(
-        id=fact_id,
-        text=fact_text,
-        fact_type=FactTypes.WORLD,
-        event_date=fact_date,
-        note_id=uuid4(),
-        embedding=[0.1] * 384,
-    )
-
-    op_id = uuid4()
-    op_unit = MemoryUnit(
-        id=op_id,
-        text='It seems the user really likes Indian food.',
-        fact_type=FactTypes.OPINION,
-        event_date=datetime(2024, 1, 25, tzinfo=timezone.utc),
-        note_id=uuid4(),
-        embedding=[0.2] * 384,
-        unit_metadata={
-            # NO 'observation': True flag here!
-            # The actual key used by ReasoningEngine for opinions is 'supporting_evidence_ids'
-            'supporting_evidence_ids': [str(fact_id)]
-        },
-    )
-
-    # 2. Simulate Retrieval Result containing BOTH
-    results = [op_unit, fact_unit]
-
-    # 3. Apply Deduplication
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
-
-    # 4. Assertions — both items should remain
-    assert len(deduplicated) == 2, 'Both opinion and fact should remain in results'
-    result_ids = {u.id for u in deduplicated}
-    assert op_id in result_ids, 'Opinion should be in results'
-    assert fact_id in result_ids, 'Cited fact should also remain in results'
-
-    # Check that metadata was updated with citations on the opinion
-    op_result = next(u for u in deduplicated if u.id == op_id)
-    citations = op_result.unit_metadata.get('citations')
-    assert citations is not None, 'Citations should be added to metadata'
-    assert len(citations) == 1
-
-    citation = citations[0]
-    assert citation['id'] == str(fact_id)
-    assert citation['text'] == fact_text
-
-
 def test_deduplicate_self_reference_ignored(mock_retrieval_engine):
     """
     Test that a unit referencing itself in evidence_ids does not cause issues.

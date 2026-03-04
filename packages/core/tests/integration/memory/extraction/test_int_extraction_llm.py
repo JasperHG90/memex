@@ -3,7 +3,7 @@ import os
 import dspy
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.config import ExtractionConfig, SimpleTextSplitting, ConfidenceConfig, ModelConfig
+from memex_core.config import ExtractionConfig, SimpleTextSplitting, ModelConfig
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.models.embedding import get_embedding_model
@@ -33,7 +33,6 @@ async def test_extraction_enforces_english_from_dutch(session: AsyncSession):
 
     _ = ExtractionEngine(
         config=config,
-        confidence_config=ConfidenceConfig(),
         lm=lm,
         predictor=predictor,
         embedding_model=embedding_model,

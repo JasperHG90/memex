@@ -16,7 +16,7 @@ library_name: sentence-transformers
 
 # MiniLM-L12-v2 Memex Fine-tuned Embeddings
 
-A fine-tuned sentence embedding model optimized for semantic similarity matching of structured memory documents containing facts, opinions, observations, and experiences that are formatted according to the [Hindsight](https://arxiv.org/abs/2512.12818) memory architecture
+A fine-tuned sentence embedding model optimized for semantic similarity matching of structured memory documents containing facts, events, and observations that are formatted according to the [Hindsight](https://arxiv.org/abs/2512.12818) memory architecture
 
 ## Model Description
 
@@ -26,7 +26,7 @@ The model is trained with Quantization-Aware Training (QAT) and exported to ONNX
 
 ### Key Features
 
-- **Epistemic-Aware**: Optimized for documents with type labels (World, Experience, Opinion, Observation)
+- **Epistemic-Aware**: Optimized for documents with type labels (World, Event, Observation)
 - **Context-Sensitive**: Leverages contextual metadata for improved semantic matching
 - **Quantized**: INT8/INT4 quantization for efficient deployment
 - **ONNX Export**: Ready for production deployment
@@ -79,14 +79,12 @@ Documents should be formatted with type and context labels before embedding:
 
 Examples:
 - `World (Config): Production is pinned to Node 18.x LTS due to a dependency constraint.`
-- `Experience (Decision): We decided to implement a circuit breaker pattern to prevent cascading failures.`
-- `Opinion (Tech Preference): You strongly prefer PostgreSQL because of its JSONB support.`
+- `Event (Decision): We decided to implement a circuit breaker pattern to prevent cascading failures.`
 - `Observation (Contact Info): Mike Smith is the account manager; his email is mike@vendor.com.`
 
 **Supported Types:**
 - `World` - Facts about the world
-- `Experience` - Personal events and actions
-- `Opinion` - Subjective beliefs and preferences
+- `Event` - Personal events and actions
 - `Observation` - Derived or inferred information
 
 ## Training Details
@@ -112,12 +110,12 @@ Example:
   "query": "What is our stance on remote work?",
   "positive": {
     "text": "I believe remote work requires asynchronous communication discipline to be effective.",
-    "type": "Opinion",
+    "type": "World",
     "context": "Work Philosophy"
   },
   "negative": {
     "text": "The company policy allows for 3 days of remote work per week.",
-    "type": "World",
+    "type": "Event",
     "context": "HR Policy"
   }
 }

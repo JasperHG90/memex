@@ -262,6 +262,28 @@ def build_thin_tree(
     return _collect(toc)
 
 
+def build_page_index_with_metadata(
+    toc: list[TOCNode],
+    metadata: dict[str, Any],
+    min_node_tokens: int = 0,
+) -> dict[str, Any]:
+    """Build a page index dict with metadata envelope and thin tree TOC.
+
+    Wraps the output of ``build_thin_tree`` inside a dict that also
+    carries note-level metadata (title, description, tags, etc.).
+
+    Args:
+        toc: Root-level TOC nodes from a ``PageIndexOutput``.
+        metadata: Note-level metadata dict (title, description, tags, etc.).
+        min_node_tokens: Minimum token count for a node to be included.
+
+    Returns:
+        Dict with ``metadata`` and ``toc`` keys.
+    """
+    thin_tree = build_thin_tree(toc, min_node_tokens)
+    return {'metadata': metadata, 'toc': thin_tree}
+
+
 # ---------------------------------------------------------------------------
 # TOC tree flattening and lookup helpers
 # ---------------------------------------------------------------------------

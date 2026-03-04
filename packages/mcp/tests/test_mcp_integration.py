@@ -55,7 +55,9 @@ async def test_integration_search_lineage(mock_api):
 
     async with Client(mcp) as client:
         # Step 1: Search
-        search_result = await client.call_tool('memex_search', {'query': 'python preference'})
+        search_result = await client.call_tool(
+            'memex_memory_search', {'query': 'python preference'}
+        )
         search_text = search_result.content[0].text
 
         # Verify Search Output contains ID and Type
@@ -108,7 +110,7 @@ async def test_integration_search_assets_resource(mock_api):
 
     async with Client(mcp) as client:
         # Step 1: Search
-        search_result = await client.call_tool('memex_search', {'query': 'architecture'})
+        search_result = await client.call_tool('memex_memory_search', {'query': 'architecture'})
         search_text = search_result.content[0].text
 
         assert str(doc_id) in search_text

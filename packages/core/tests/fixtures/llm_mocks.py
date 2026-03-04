@@ -49,7 +49,7 @@ GOLDEN_EXTRACTION_FACTS: list[RawFact] = [
     ),
     RawFact(
         what='The user prefers Python for data analysis',
-        fact_type=FactTypes.EXPERIENCE,
+        fact_type=FactTypes.EVENT,
         fact_kind=FactKindTypes.CONVERSATION,
     ),
 ]

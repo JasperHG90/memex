@@ -8,14 +8,14 @@ from memex_core.types import CausalRelationshipTypes, FactKindTypes, FactTypes
 class TestRawFact:
     """Tests for RawFact model."""
 
-    def test_normalize_type_assistant_to_experience(self) -> None:
-        """Test that 'assistant' fact type is normalized to 'experience'."""
+    def test_normalize_type_assistant_to_event(self) -> None:
+        """Test that 'assistant' fact type is normalized to 'event'."""
         fact = RawFact(
             what='Test',
             fact_type='assistant',  # Testing string input normalization
             fact_kind=FactKindTypes.CONVERSATION,
         )
-        assert fact.fact_type == FactTypes.EXPERIENCE
+        assert fact.fact_type == FactTypes.EVENT
 
     def test_normalize_type_other_remains(self) -> None:
         """Test that other fact types remain unchanged."""

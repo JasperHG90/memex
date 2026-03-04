@@ -35,22 +35,13 @@ class FactItem(BaseModel):
     """A fact item in a narrative."""
 
     statement: str
-    confidence: float
     note_uuid: str
 
 
-class ExperienceItem(BaseModel):
-    """An experience item in a narrative."""
+class EventItem(BaseModel):
+    """An event item in a narrative."""
 
     statement: str
-    note_uuid: str
-
-
-class OpinionItem(BaseModel):
-    """An opinion item in a narrative."""
-
-    statement: str
-    reasoning: str
     note_uuid: str
 
 
@@ -58,6 +49,4 @@ class Narrative(BaseModel):
     """The model-generated narrative extracted from the note."""
 
     fact: List[FactItem] = Field(default_factory=list)
-    experience: List[ExperienceItem] = Field(default_factory=list)
-    opinion: List[OpinionItem] = Field(default_factory=list)
-    user_opinion: List[OpinionItem] = Field(default_factory=list)
+    event: List[EventItem] = Field(default_factory=list)

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 24 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 23 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -14,18 +14,41 @@ memex mcp run --transport sse --port 8080
 
 ## Recommended Workflow
 
-1. **Discovery**: `memex_search` for global facts/entities; `memex_note_search` for source documents.
-2. **Reading**: `memex_get_page_index` (table of contents) then `memex_get_node` (section text). Only fall back to `memex_read_note` for small notes.
-3. **Feedback**: `memex_submit_evidence` to adjust an opinion's confidence; `memex_get_evidence_log` to review the audit trail.
+Follow this three-step retrieval workflow:
+
+1. **Search** — Pick by query type, or run both in parallel when unsure:
+   - `memex_memory_search` (memory search) for broad/exploratory queries
+   - `memex_note_search` (note search) for targeted document retrieval
+2. **Filter** — Call `memex_get_note_metadata` on each candidate note (cheap, ~50 tokens). Check title, tags, description to confirm relevance before reading.
+3. **Read** — Only for confirmed-relevant notes: `memex_get_page_index` (TOC + node IDs) then `memex_get_node` (section text). Fall back to `memex_read_note` only for small notes.
 4. **Avoid**: Do not use `memex_list_notes` for discovery.
+
+### When to use which search
+
+| Tool | Best for | Returns |
+|------|----------|---------|
+| `memex_memory_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
+| `memex_note_search` | Targeted document retrieval ("Which note describes X?"), deep-diving into a topic | Whole source notes ranked by relevance with snippets |
+
+When unsure which to use, run both in parallel and combine results (deduplicate by Note ID).
+
+### When to use which reading tool
+
+| Tool | Cost | Best for | Returns |
+|------|------|----------|---------|
+| `memex_get_note_metadata` | ~50 tokens | Relevance filtering — checking tags, title, dates | Metadata dict only |
+| `memex_get_page_index` + `memex_get_node` | ~500+ tokens | Section-level reading of note content | TOC tree, then section text |
+| `memex_read_note` | Full note | Reading a small note in full (fallback) | Full note content |
+
+Always call `memex_get_note_metadata` before `memex_get_page_index` to avoid wasting tokens on irrelevant notes.
 
 ---
 
 ## Search Tools
 
-### `memex_search`
+### `memex_memory_search`
 
-Search memory units (facts, experiences, observations) via multi-strategy TEMPR retrieval.
+Search memory units (facts, events, observations) via multi-strategy TEMPR retrieval. Best for broad exploration across all notes and precise factual recall.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -35,13 +58,13 @@ Search memory units (facts, experiences, observations) via multi-strategy TEMPR 
 | `token_budget` | int | No | - | Token budget for retrieval. |
 | `strategies` | string[] | No | all | Strategies to run: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
 
-Returns formatted text with Unit IDs, Note IDs, scores, dates, and confidence annotations.
+Returns formatted text with Unit IDs, Note IDs, scores, and dates.
 
 ---
 
 ### `memex_note_search`
 
-Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). Returns ranked notes with snippets.
+Search source notes by hybrid retrieval (semantic + keyword + graph + temporal). Returns ranked notes with snippets. Best for targeted document retrieval and deep-diving into a topic.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -58,9 +81,21 @@ Returns note titles, IDs, scores, snippets, relevant sections (when `reason=true
 
 ## Note Reading Tools
 
+### `memex_get_note_metadata`
+
+Retrieve just the metadata (title, description, tags, publish date, source URI) from a note's page index without loading the full TOC tree. Use for quick identification — checking tags, title, or dates — without loading section content. If you need to browse sections, use `memex_get_page_index` instead.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | The UUID of the note. |
+
+Returns the metadata dict, or `null` if the note has no page index (e.g., legacy notes ingested before the page index strategy).
+
+---
+
 ### `memex_get_page_index`
 
-Get the hierarchical page index (table of contents) for a note. Returns section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text.
+Get the hierarchical page index (table of contents) for a note. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text. If you only need the note's title, tags, or description, use `memex_get_note_metadata` instead.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -203,37 +238,6 @@ Retrieve a specific memory unit by its UUID. Returns the unit text, type, status
 
 ---
 
-## Evidence & Confidence
-
-### `memex_submit_evidence`
-
-Submit evidence to adjust an opinion's Bayesian confidence score. Performs a Beta distribution update on the memory unit's alpha/beta parameters.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `unit_id` | string | Yes | - | The UUID of the memory unit (must be an opinion). |
-| `evidence_type` | string | Yes | - | Type of evidence (see below). |
-| `description` | string | No | - | Optional description of the evidence. |
-
-**Evidence types:** `corroboration`, `contradiction`, `source_reliability`, `temporal_consistency`, `cross_reference`, `user_validation`, `user_rejection`, `llm_assessment`, `opinion_merge`.
-
-`user_validation` carries the highest weight (10), making it the strongest signal. Most other types have weight 1-2.
-
----
-
-### `memex_get_evidence_log`
-
-Retrieve the evidence audit trail for a memory unit. Shows the history of confidence adjustments with before/after scores.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `unit_id` | string | Yes | - | The UUID of the memory unit. |
-| `limit` | int | No | `20` | Maximum entries to return. |
-
-Returns timestamped evidence entries with type, description, and the confidence score before and after each adjustment.
-
----
-
 ## Lineage & Provenance
 
 ### `memex_get_lineage`
@@ -319,7 +323,7 @@ Returns vault names, IDs, and descriptions.
 
 ### `memex_list_notes`
 
-List notes in the active vault. Not recommended for discovery -- use `memex_search` or `memex_note_search` instead.
+List notes in the active vault. Not recommended for discovery -- use `memex_memory_search` or `memex_note_search` instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|

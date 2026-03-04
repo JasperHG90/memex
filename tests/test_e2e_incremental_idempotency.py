@@ -83,7 +83,6 @@ def test_e2e_incremental_idempotency(client: TestClient):
         json={
             'query': 'quickly-moving jab excited a phantom',
             'limit': 10,
-            'skip_opinion_formation': True,
         },
     )
     results_wizard = parse_ndjson(search_wizard.text)
@@ -104,7 +103,6 @@ def test_e2e_incremental_idempotency(client: TestClient):
         json={
             'query': 'quickly-moving jab excited a phantom',
             'limit': 10,
-            'skip_opinion_formation': True,
             'include_stale': True,
         },
     )
@@ -127,7 +125,6 @@ def test_e2e_incremental_idempotency(client: TestClient):
         json={
             'query': 'giant robotic hamster',
             'limit': 10,
-            'skip_opinion_formation': True,
         },
     )
     results_hamster = parse_ndjson(search_hamster.text)
@@ -144,7 +141,6 @@ def test_e2e_incremental_idempotency(client: TestClient):
         json={
             'query': 'quick brown fox jumps over the lazy dog',
             'limit': 10,
-            'skip_opinion_formation': True,
         },
     )
     results_fox = parse_ndjson(search_fox.text)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.extraction.engine import ExtractionEngine
-from memex_core.config import ExtractionConfig, ConfidenceConfig
+from memex_core.config import ExtractionConfig
 from memex_core.memory.extraction.models import (
     RetainContent,
     ExtractedFact,
@@ -52,10 +52,8 @@ def mock_entity_resolver():
 @pytest.fixture
 def extractor(mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver):
     config = ExtractionConfig()
-    confidence_config = ConfidenceConfig()
     return ExtractionEngine(
         config,
-        confidence_config,
         mock_lm,
         mock_predictor,
         mock_embedding_model,

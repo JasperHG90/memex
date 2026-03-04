@@ -346,7 +346,6 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
   "vault_ids": ["550e8400-e29b-41d4-a716-446655440000"],
   "token_budget": 4000,
   "strategies": ["semantic", "keyword", "graph"],
-  "skip_opinion_formation": false,
   "include_stale": false,
   "debug": false
 }
@@ -359,7 +358,6 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
 | `vault_ids` | UUID[] | No | - | Filter by vault IDs. |
 | `token_budget` | int | No | - | Maximum tokens for retrieval context. |
 | `strategies` | string[] | No | all | Strategies to use: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
-| `skip_opinion_formation` | bool | No | `false` | Skip background opinion formation. |
 | `include_stale` | bool | No | `false` | Include stale/superseded units. |
 | `debug` | bool | No | `false` | Include per-strategy debug info in results. |
 
@@ -428,38 +426,6 @@ Returns a `MemoryUnitDTO`.
 | Status | Description |
 |--------|-------------|
 | `404` | Memory unit not found. |
-
----
-
-### `PATCH /api/v1/memories/{unit_uuid}/belief`
-
-Adjust the belief confidence for a memory unit by providing new evidence.
-
-#### Path Parameters
-
-| Name | Type | Description |
-|------|------|-------------|
-| `unit_uuid` | UUID | Memory unit ID. |
-
-#### Request Body
-
-```json
-{
-  "evidence_type_key": "corroboration",
-  "description": "Confirmed by second source."
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `evidence_type_key` | string | Yes | Type of evidence (e.g., `corroboration`, `contradiction`). |
-| `description` | string | Yes | Description of the evidence. |
-
-#### Response (200)
-
-```json
-{"status": "success"}
-```
 
 ---
 
