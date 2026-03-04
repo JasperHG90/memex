@@ -87,7 +87,7 @@ class ReflectionEngine:
                 model_config = self.config.server.memory.reflection.model
                 self.lm = dspy.LM(
                     model=model_config.model,
-                    api_base=str(model_config.base_url) if model_config.base_url else None,
+                    api_base=str(model_config.base_url).rstrip('/') if model_config.base_url else None,
                     api_key=model_config.api_key.get_secret_value()
                     if model_config.api_key
                     else None,
@@ -98,7 +98,7 @@ class ReflectionEngine:
                     model_config = self.config.server.memory.extraction.model
                     self.lm = dspy.LM(
                         model=model_config.model,
-                        api_base=str(model_config.base_url) if model_config.base_url else None,
+                        api_base=str(model_config.base_url).rstrip('/') if model_config.base_url else None,
                         api_key=model_config.api_key.get_secret_value()
                         if model_config.api_key
                         else None,
