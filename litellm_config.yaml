@@ -1,0 +1,36 @@
+# LiteLLM proxy config — 3-tier fallback for Memex LLM calls
+# Tier 1: Mac Ollama (fast, free, via Meshnet)
+# Tier 2: Windows Ollama (slower, free, local)
+# Tier 3: Gemini API (paid, last resort)
+
+model_list:
+  - model_name: "memex-default"
+    litellm_params:
+      model: "ollama_chat/gemma3:12b"
+      api_base: "http://100.90.52.188:11434"
+    model_info:
+      description: "Tier 1: Mac Ollama via Meshnet"
+
+  - model_name: "memex-default"
+    litellm_params:
+      model: "ollama_chat/gemma3:12b"
+      api_base: "http://host.docker.internal:11434"
+    model_info:
+      description: "Tier 2: Windows Ollama (local)"
+
+  - model_name: "memex-default"
+    litellm_params:
+      model: "gemini/gemini-2.0-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+    model_info:
+      description: "Tier 3: Gemini API (paid fallback)"
+
+router_settings:
+  routing_strategy: "latency-based-routing"
+  num_retries: 2
+  timeout: 120
+  allowed_fails: 2
+  cooldown_time: 30
+
+general_settings:
+  master_key: null
