@@ -5,7 +5,7 @@
  *   - Auto-recall: search relevant memories before each agent turn
  *   - Auto-capture: store conversation turns as Markdown notes
  *   - Circuit breaker: 3 failures -> 60s cooldown to avoid blocking the agent
- *   - 9 agent tools for full Memex access
+ *   - 10 agent tools for full Memex access
  *   - Slash commands: /recall and /remember
  *   - CLI: memex status, memex search
  */
@@ -49,10 +49,10 @@ const memexPlugin = {
 
     api.registerTool(
       {
-        name: 'memex_search',
+        name: 'memex_memory_search',
         label: 'Memex Search',
         description:
-          'Search through Memex long-term memories. Use when you need context about past conversations, facts, or relevant knowledge.',
+          'Search Memex memories (facts, events, observations). Best for broad/exploratory queries. For targeted document lookup, use memex_note_search. When unsure, run both in parallel.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 8)' })),
@@ -96,7 +96,7 @@ const memexPlugin = {
           }
         },
       },
-      { name: 'memex_search' },
+      { name: 'memex_memory_search' },
     );
 
     api.registerTool(
@@ -150,7 +150,7 @@ const memexPlugin = {
         name: 'memex_note_search',
         label: 'Memex Note Search',
         description:
-          'Search source notes with optional synthesis. Returns ranked notes with snippets.',
+          'Search source notes by hybrid retrieval. Returns ranked notes with snippets. Best for targeted document lookup. For broad exploration, use memex_memory_search. When unsure, run both in parallel.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
@@ -217,7 +217,7 @@ const memexPlugin = {
       {
         name: 'memex_read_note',
         label: 'Memex Read Note',
-        description: 'Retrieve the full content and metadata of a note by its UUID.',
+        description: 'Retrieve full content of a note by UUID. Prefer memex_get_note_metadata \u2192 memex_get_page_index \u2192 memex_get_node for selective reading.',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
         }),
@@ -243,10 +243,39 @@ const memexPlugin = {
 
     api.registerTool(
       {
+        name: 'memex_get_note_metadata',
+        label: 'Memex Note Metadata',
+        description:
+          'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. Call on search results before memex_get_page_index to filter out irrelevant notes.',
+        parameters: Type.Object({
+          note_id: Type.String({ description: 'The UUID of the note' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { note_id } = params as { note_id: string };
+
+          try {
+            const result = await client.getNoteMetadata(note_id);
+            return {
+              content: [{ type: 'text', text: JSON.stringify(result.metadata, null, 2) }],
+              details: { note_id },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to get note metadata: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_get_note_metadata' },
+    );
+
+    api.registerTool(
+      {
         name: 'memex_get_page_index',
         label: 'Memex Page Index',
         description:
-          'Get the hierarchical page index (table of contents) for a note. Returns section titles, summaries, and node IDs.',
+          'Get hierarchical page index (TOC) for a note. Expensive \u2014 only call after memex_get_note_metadata confirms relevance. Returns section titles, summaries, and node IDs.',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
         }),
@@ -290,7 +319,7 @@ const memexPlugin = {
       {
         name: 'memex_get_node',
         label: 'Memex Get Node',
-        description: 'Retrieve the full text content of a specific note section by its node ID.',
+        description: 'Read a specific note section by node ID. Call multiple in parallel when reading several sections.',
         parameters: Type.Object({
           node_id: Type.String({ description: 'The UUID of the node' }),
         }),

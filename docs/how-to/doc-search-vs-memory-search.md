@@ -75,10 +75,7 @@ memex memory search "What is our deployment strategy?"
    The production environment uses a blue-green deployment strategy
    with automated rollback triggers.
 
-2. [Type: opinion] (Score: 0.85) [Disputed]
-   Kubernetes migration should be completed by Q2 2025.
-
-3. [Type: experience] (Score: 0.78)
+2. [Type: event] (Score: 0.78)
    The last deployment to staging took 45 minutes due to database
    migration overhead.
 ```
@@ -107,13 +104,13 @@ This shows the full provenance chain: Memory Unit -> Chunk -> Note -> Original F
 
 | Feature | Note Search | Memory Search |
 | :--- | :--- | :--- |
-| **Granularity** | Chunks / Snippets / Nodes | Atomic facts / opinions |
+| **Granularity** | Chunks / Snippets / Nodes | Atomic facts / events |
 | **Architecture** | Hybrid RRF (semantic + BM25 + graph + temporal) | TEMPR (Temporal, Entity, Mental Model, Keyword, Semantic) |
-| **Output** | Document snippets with reasoning | Memory units with confidence scores |
+| **Output** | Document snippets with reasoning | Memory units with scores |
 | **Scope** | Per-vault or per-document | Cross-vault knowledge graph |
 | **Best for** | "Find the PDF where X is mentioned" | "What do we know about X globally?" |
 | **CLI command** | `memex note search` | `memex memory search` |
-| **MCP tool** | `memex_note_search` | `memex_search` |
+| **MCP tool** | `memex_note_search` | `memex_memory_search` |
 
 ## Verification
 
@@ -130,4 +127,4 @@ Both should return results if the topic has been ingested and processed.
 
 * [About the Hindsight Framework](../explanation/hindsight-framework.md) — how extraction, retrieval, and reflection work
 * [About Retrieval Strategies](../explanation/retrieval-strategies.md) — TEMPR architecture in depth
-* [MCP Tools Reference](../reference/mcp-tools.md) — `memex_search` and `memex_note_search` parameters
+* [MCP Tools Reference](../reference/mcp-tools.md) — `memex_memory_search` and `memex_note_search` parameters

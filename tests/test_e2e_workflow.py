@@ -43,7 +43,6 @@ def test_workflow_ingest_retrieve(client: TestClient):
             content_index=0,
             mentioned_at=now,
             vault_id=vault_id,
-            confidence=0.9,
         ),
         ExtractedFact(
             fact_text='Alice lives in Wonderland.',
@@ -53,7 +52,6 @@ def test_workflow_ingest_retrieve(client: TestClient):
             content_index=0,
             mentioned_at=now,
             vault_id=vault_id,
-            confidence=0.8,
         ),
     ]
     mock_chunks = [
@@ -114,7 +112,6 @@ def test_workflow_ingest_retrieve(client: TestClient):
                 'query': 'Alice',
                 'limit': 5,
                 'vault_ids': [vault_name],
-                'skip_opinion_formation': True,
             }
 
             retrieve_resp = client.post('/api/v1/memories/search', json=retrieve_payload)

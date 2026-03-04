@@ -128,7 +128,7 @@ show_memory_result() {
 sleep 0.5
 show_user_input "What were we working on last session?"
 show_thinking
-show_tool_call "memex_search" 'query="previous session work"'
+show_tool_call "memex_memory_search" 'query="previous session work"'
 printf '\n'
 show_response_line "Based on your memories from the last session, you were working on:"
 printf '\n'
@@ -153,7 +153,7 @@ sleep 2.5
 
 # === Scene 3 — Slash Commands ===
 show_user_input "/recall connection pool fix"
-show_tool_call "memex_search" 'query="connection pool fix"'
+show_tool_call "memex_memory_search" 'query="connection pool fix"'
 printf '\n'
 show_memory_result "0.92" "2h ago " "ReflectionWorker now uses pool.acquire() instead of direct connect()"
 show_memory_result "0.87" "2h ago " "Max pool size set to 20 for production workloads"

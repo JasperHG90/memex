@@ -1,4 +1,6 @@
 import pytest
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 
 @pytest.mark.asyncio
@@ -34,3 +36,21 @@ async def test_mcp_get_resource_text(mock_api, mcp_client):
     # FastMCP File -> EmbeddedResource
     assert content.type == 'resource'
     assert content.resource.mimeType == 'text/plain'
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_resource_with_vault_id(mock_api, mcp_client):
+    """Test memex_get_resource accepts vault_id parameter."""
+    vault_id = uuid4()
+
+    mock_api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    mock_api.get_resource.return_value = b'\x89PNG\r\n\x1a\n'
+
+    result = await mcp_client.call_tool(
+        'memex_get_resource', {'path': 'images/test.png', 'vault_id': str(vault_id)}
+    )
+
+    assert len(result.content) == 1
+    content = result.content[0]
+    assert content.type == 'image'
+    mock_api.resolve_vault_identifier.assert_called_once_with(str(vault_id))

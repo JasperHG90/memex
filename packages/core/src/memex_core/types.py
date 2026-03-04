@@ -5,7 +5,6 @@ from memex_common.types import (
     CausalRelationshipTypes,
     FactTypes,
     FactKindTypes,
-    EvidenceType,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     'CausalRelationshipTypes',
     'FactTypes',
     'FactKindTypes',
-    'EvidenceType',
 ]

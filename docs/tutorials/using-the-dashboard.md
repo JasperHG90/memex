@@ -64,7 +64,7 @@ This page lets us search across extracted facts and observations using Memex's T
 We should see a list of memory units (extracted facts) ranked by relevance. Each result shows:
 
 - The fact text
-- Its type (world, experience, opinion, or observation)
+- Its type (world, event, or observation)
 - A relevance score
 - The vault it belongs to
 

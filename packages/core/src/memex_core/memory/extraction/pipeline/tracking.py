@@ -51,8 +51,7 @@ async def track_document(
     if contents:
         first = contents[0]
         retain_params.update(first.payload)
-        if hasattr(first, 'tags') and first.tags:
-            tags = cast(list[str], first.tags)
+        tags = cast(list[str], first.payload.get('tags', []))
 
         # Extract assets list if present in payload
         if 'assets' in first.payload and isinstance(first.payload['assets'], list):

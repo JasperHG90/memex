@@ -20,7 +20,6 @@ from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
 
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
-from memex_core.memory.confidence import confidence_weight
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
 from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
@@ -564,10 +563,10 @@ class ReflectionEngine:
                 units_result = await self.session.exec(unit_stmt)
                 found_memories = list(units_result.all())
 
-            # Confidence-weighted re-ranking
+            # Similarity-based re-ranking
             similarity_map = {item[0]: item[1] for item in similar_items}
             found_memories.sort(
-                key=lambda m: similarity_map.get(m.id, 0.0) * confidence_weight(m.confidence_score),
+                key=lambda m: similarity_map.get(m.id, 0.0),
                 reverse=True,
             )
 
@@ -731,25 +730,6 @@ class ReflectionEngine:
         valid_uuids = sorted(evidence_data_map.keys())
         uuid_to_int, int_to_uuid = create_citation_map(valid_uuids)
 
-        # Fetch confidence scores for evidence units
-        confidence_map: dict[str, float | None] = {}
-        evidence_uuid_objs = []
-        for uid_str in valid_uuids:
-            try:
-                evidence_uuid_objs.append(UUID(uid_str))
-            except ValueError:
-                pass
-        if evidence_uuid_objs:
-            conf_stmt = select(
-                MemoryUnit.id, MemoryUnit.confidence_alpha, MemoryUnit.confidence_beta
-            ).where(col(MemoryUnit.id).in_(evidence_uuid_objs))
-            conf_rows = (await self.session.exec(conf_stmt)).all()
-            for uid, alpha, beta in conf_rows:
-                if alpha is not None and beta is not None:
-                    confidence_map[str(uid)] = alpha / (alpha + beta)
-                else:
-                    confidence_map[str(uid)] = None
-
         # 2. Build Structured Contexts
         evidence_context = []
         for idx in range(len(valid_uuids)):
@@ -760,7 +740,6 @@ class ReflectionEngine:
                     index_id=idx,
                     quote=data['quote'],
                     occurred=str(data['timestamp']),
-                    confidence=confidence_map.get(uid),
                 )
             )
 

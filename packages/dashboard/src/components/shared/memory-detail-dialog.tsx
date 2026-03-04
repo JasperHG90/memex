@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { ThumbsUp, ThumbsDown, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { TypeBadge } from '@/components/shared/type-badge';
 import { VaultBadge } from '@/components/shared/vault-badge';
-import { useAdjustBelief, useDeleteMemory } from '@/api/hooks/use-memories';
+import { useDeleteMemory } from '@/api/hooks/use-memories';
 import type { MemoryUnitDTO } from '@/api/generated';
 
 function cleanFactType(raw: string): string {
@@ -25,13 +25,6 @@ function cleanFactType(raw: string): string {
   return raw.toLowerCase();
 }
 
-function getConfidenceInfo(alpha: number | null | undefined, beta: number | null | undefined) {
-  if (alpha == null || beta == null || alpha + beta === 0) return null;
-  const mean = alpha / (alpha + beta);
-  if (mean > 0.7) return { mean, color: 'bg-emerald-500', textColor: 'text-emerald-500', label: 'High' };
-  if (mean > 0.4) return { mean, color: 'bg-amber-500', textColor: 'text-amber-500', label: 'Medium' };
-  return { mean, color: 'bg-red-500', textColor: 'text-red-500', label: 'Low' };
-}
 
 interface MemoryDetailDialogProps {
   unit: MemoryUnitDTO | null;
@@ -101,21 +94,6 @@ export function MemoryDetailDialog({ unit, open, onOpenChange }: MemoryDetailDia
                   <span className="text-foreground">{unit.score.toFixed(4)}</span>
                 </>
               )}
-              {(() => {
-                const conf = getConfidenceInfo(unit.confidence_alpha, unit.confidence_beta);
-                if (!conf) return null;
-                return (
-                  <>
-                    <span className="text-muted-foreground">Confidence</span>
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 w-24 overflow-hidden rounded-full bg-muted">
-                        <div className={`h-full rounded-full ${conf.color} transition-all`} style={{ width: `${conf.mean * 100}%` }} />
-                      </div>
-                      <span className={`text-xs ${conf.textColor}`}>{conf.label} ({(conf.mean * 100).toFixed(0)}%)</span>
-                    </div>
-                  </>
-                );
-              })()}
               {unit.mentioned_at && (
                 <>
                   <span className="text-muted-foreground">Mentioned At</span>
@@ -169,58 +147,19 @@ export function MemoryDetailDialog({ unit, open, onOpenChange }: MemoryDetailDia
           <Separator className="my-4" />
 
           {/* Belief adjustment and delete actions — keyed on unit.id to auto-reset state */}
-          <MemoryActions key={unit.id} unitId={unit.id} factType={factType} onDeleted={() => onOpenChange(false)} />
+          <MemoryActions key={unit.id} unitId={unit.id} onDeleted={() => onOpenChange(false)} />
         </ScrollArea>
       </DialogContent>
     </Dialog>
   );
 }
 
-function MemoryActions({ unitId, factType, onDeleted }: { unitId: string; factType: string; onDeleted: () => void }) {
+function MemoryActions({ unitId, onDeleted }: { unitId: string; onDeleted: () => void }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const adjustBelief = useAdjustBelief();
   const deleteMemory = useDeleteMemory();
-  const isOpinion = factType === 'opinion';
 
   return (
     <div className="flex items-center gap-2">
-      {isOpinion && (
-        <>
-          <span className="text-xs text-muted-foreground">Belief:</span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={adjustBelief.isPending}
-            onClick={async () => {
-              try {
-                await adjustBelief.mutateAsync({ unitId, adjustment: 'confirm' });
-                toast.success('Memory confirmed');
-              } catch (err) {
-                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-              }
-            }}
-          >
-            <ThumbsUp className="mr-1 h-3 w-3" />
-            Confirm
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={adjustBelief.isPending}
-            onClick={async () => {
-              try {
-                await adjustBelief.mutateAsync({ unitId, adjustment: 'contradict' });
-                toast.success('Memory contradicted');
-              } catch (err) {
-                toast.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
-              }
-            }}
-          >
-            <ThumbsDown className="mr-1 h-3 w-3" />
-            Contradict
-          </Button>
-        </>
-      )}
       {!showDeleteConfirm ? (
         <Button
           variant="outline"

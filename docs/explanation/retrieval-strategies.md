@@ -119,29 +119,9 @@ Each variation runs through all five strategies independently. Results are then 
 
 After RRF fusion produces a single ranked list, results pass through several post-processing steps before being returned. These steps refine the ranking based on signals that are orthogonal to relevance.
 
-### Confidence Weighting
-
-Memory units that are *opinions* (as opposed to facts) carry a Bayesian confidence score. After RRF fusion, the pipeline applies confidence weighting to adjust rankings:
-
-```
-final_score = position_score × confidence_weight(score)
-```
-
-Where `confidence_weight` is:
-- **Facts** (world, experience): weight = `1.0` — facts are trusted fully
-- **Opinions** with confidence score: weight = `0.3 + 0.7 × score` — a linear scale with a floor of 0.3
-
-This means a well-supported opinion (confidence 0.9) gets weight 0.93, while a contradicted opinion (confidence 0.1) gets weight 0.37. The floor of 0.3 ensures that even low-confidence opinions are never completely suppressed — they are demoted, not hidden.
-
-In search results, opinions are annotated with confidence labels:
-- `[CONTRADICTED — treat with skepticism]` — confidence < 30%
-- `[Disputed — mixed evidence]` — confidence 30-50%
-- `[Opinion]` — confidence 50-70%
-- `[Well-supported opinion]` — confidence ≥ 70%
-
 ### MMR Diversity Filtering
 
-After confidence weighting, Maximal Marginal Relevance (MMR) filtering removes near-duplicate results. This is especially important when multiple retrieval strategies surface the same cluster of facts — for example, 10 facts about Python classes from a single tutorial note.
+After RRF fusion, Maximal Marginal Relevance (MMR) filtering removes near-duplicate results. This is especially important when multiple retrieval strategies surface the same cluster of facts — for example, 10 facts about Python classes from a single tutorial note.
 
 **The MMR formula:**
 
