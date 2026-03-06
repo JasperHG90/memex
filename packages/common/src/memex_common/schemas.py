@@ -331,6 +331,16 @@ class MemoryUnitDTO(MemoryUnitBase):
         examples=['123e4567-e89b-12d3-a456-426614174000'],
     )
 
+    chunk_id: UUID | None = Field(
+        default=None,
+        description='The source chunk ID this memory unit was extracted from.',
+    )
+
+    node_ids: list[str] = Field(
+        default_factory=list,
+        description='Page-index node IDs linked to the source chunk.',
+    )
+
     source_note_ids: list[UUID] = Field(
         default_factory=list,
         description='List of source note IDs.',

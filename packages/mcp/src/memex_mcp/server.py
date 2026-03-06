@@ -299,6 +299,54 @@ async def memex_read_note(
 
 
 @mcp.tool(
+    name='memex_set_note_status',
+    description=(
+        'Set note lifecycle status: active, superseded, appended. '
+        'When superseded, all memory units are marked stale. '
+        'Optionally link to the replacing/parent note.'
+    ),
+)
+async def memex_set_note_status(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    status: Annotated[
+        str,
+        Field(description='New status: active, superseded, or appended.'),
+    ],
+    linked_note_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='UUID of the note that supersedes/contains this one.',
+        ),
+    ] = None,
+) -> str:
+    """Set note lifecycle status."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        linked_uuid = None
+        if linked_note_id:
+            try:
+                linked_uuid = UUID(linked_note_id)
+            except ValueError:
+                raise ToolError(f'Invalid linked Note UUID: {linked_note_id}')
+
+        await api.set_note_status(uuid_obj, status, linked_uuid)
+        return f'Note {note_id} status set to "{status}".'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Set note status failed: {e}', exc_info=True)
+        raise ToolError(f'Set note status failed: {e}')
+
+
+@mcp.tool(
     name='memex_rename_note',
     description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
 )
@@ -1241,6 +1289,9 @@ async def memex_get_memory_unit(
             f'**Status:** {unit.status}',
             f'**Note ID:** {unit.note_id}',
         ]
+        chunk_id = getattr(unit, 'chunk_id', None)
+        if chunk_id:
+            lines.append(f'**Chunk ID:** {chunk_id}')
         if unit.mentioned_at:
             lines.append(f'**Mentioned at:** {unit.mentioned_at}')
         if unit.occurred_start:

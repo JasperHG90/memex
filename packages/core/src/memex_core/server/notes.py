@@ -126,6 +126,25 @@ async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) ->
         raise _handle_error(e, 'Failed to get node')
 
 
+class SetNoteStatusRequest(BaseModel):
+    status: str
+    linked_note_id: UUID | None = None
+
+
+@router.patch('/notes/{note_id}/status')
+async def set_note_status(
+    note_id: UUID,
+    request: Annotated[SetNoteStatusRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Set note lifecycle status (active, superseded, appended)."""
+    try:
+        result = await api.set_note_status(note_id, request.status, request.linked_note_id)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to set note status')
+
+
 class RenameNoteRequest(BaseModel):
     new_title: str
 

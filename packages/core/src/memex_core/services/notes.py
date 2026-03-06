@@ -47,6 +47,52 @@ class NoteService:
             return self.filestore.join_path(path)
         return None
 
+    async def set_note_status(
+        self,
+        note_id: UUID,
+        status: str,
+        linked_note_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Set a note's lifecycle status and optionally link to another note.
+
+        When status is 'superseded', marks all memory units as stale.
+        """
+        from memex_core.memory.sql_models import MemoryUnit, Note
+
+        valid_statuses = ('active', 'superseded', 'appended')
+        if status not in valid_statuses:
+            raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            doc.status = status
+            if status == 'superseded':
+                doc.superseded_by = linked_note_id
+                # Cascade: mark all memory units as stale
+                from sqlmodel import select
+
+                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+                units = (await session.exec(units_stmt)).all()
+                for unit in units:
+                    unit.status = 'stale'
+                    session.add(unit)
+            elif status == 'appended':
+                doc.appended_to = linked_note_id
+            elif status == 'active':
+                doc.superseded_by = None
+                doc.appended_to = None
+
+            session.add(doc)
+            await session.commit()
+            return {
+                'note_id': str(note_id),
+                'status': status,
+                'linked_note_id': str(linked_note_id) if linked_note_id else None,
+            }
+
     async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
         """Update the title of a note, cascading to page_index and doc_metadata."""
         from memex_core.memory.sql_models import Note
