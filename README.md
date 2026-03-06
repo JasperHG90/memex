@@ -126,6 +126,76 @@ Search memories with multi-strategy retrieval and AI summaries.
 
 ![Dashboard memory search with results](assets/memex_dashboard_memory_search.gif)
 
+## Features
+
+### Ingest anything
+
+Feed Memex from any source — plain text, Markdown, PDFs, Word docs, PowerPoint, Excel, Outlook emails, web pages, or entire directories. File conversion is handled automatically via [MarkItDown](https://github.com/microsoft/markitdown) and [PyMuPDF](https://pymupdf.readthedocs.io/). Background and batch ingestion modes let you import large document collections without blocking.
+
+```bash
+memex memory add "Quick inline note"
+memex memory add --file ./research-papers/        # directory of PDFs
+memex memory add --url https://example.com/article
+memex memory add --file report.md --asset diagram.png --background
+```
+
+### Five-strategy retrieval (TEMPR)
+
+Every search runs five independent retrieval strategies in parallel and fuses them with Reciprocal Rank Fusion — no single strategy has to be "right":
+
+| Strategy | What it finds |
+|:---------|:--------------|
+| **Semantic** | Conceptually similar facts via pgvector cosine distance |
+| **Keyword** | Exact term matches via PostgreSQL full-text search |
+| **Graph** | Entity-linked facts via NER, phonetic matching, and co-occurrence traversal |
+| **Temporal** | Recent facts via exponential time-decay scoring |
+| **Mental Model** | High-level synthesized insights from the reflection engine |
+
+Post-fusion, MMR diversity filtering prunes near-duplicates using a hybrid cosine + entity Jaccard kernel. Optional `after`/`before` date bounds and `tags` filters let you scope any search.
+
+### Hierarchical page index
+
+Long documents are split into a structured table of contents with section-level summaries, token estimates, and unique node IDs. Read a 50-page PDF section by section instead of dumping the entire document into context. The page index powers skeleton-tree reasoning (`--reason`) and targeted answer synthesis (`--summarize`).
+
+### Incremental extraction
+
+When you update a note (via `note_key`), Memex diffs the content against the previous version and only re-extracts changed blocks. Unchanged facts, entities, and embeddings are preserved — saving LLM calls and keeping ingestion fast for living documents.
+
+### Contradiction detection
+
+New facts are automatically triaged for corrections and updates. When a newer note contradicts or supersedes an older one, confidence scores are adjusted and supersession links are recorded. Retrieval naturally favors the most current information without manual cleanup.
+
+### Reflection and mental models
+
+A background reflection loop periodically reviews entities with new evidence, synthesizes observations, and builds versioned mental models. Over time, Memex evolves from a collection of raw facts into structured understanding — "The team consistently prioritizes performance over feature velocity" emerges from dozens of individual meeting notes.
+
+### Vaults
+
+Isolate knowledge by project, team, or topic. Each vault is a self-contained scope for notes, memories, entities, and mental models. Attach multiple vaults as read-only for cross-project search, or keep them strictly separate.
+
+### Cloud-native storage
+
+The file store uses [fsspec](https://filesystem-spec.readthedocs.io/) for backend-agnostic storage. Swap between local disk, Amazon S3, and Google Cloud Storage with a config change:
+
+```yaml
+server:
+  file_store:
+    type: s3            # or 'gcs', 'local'
+    root: my-bucket/memex
+```
+
+### AI agent integration
+
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. The `memex setup claude-code` command generates MCP config, lifecycle hooks, and `/remember` + `/recall` slash commands in one step. 26 MCP tools cover the full API surface.
+
+### REST API and webhooks
+
+A full FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`note.created`, `reflection.completed`, etc.).
+
+### Dashboard
+
+A React + Vite web UI for exploring your knowledge graph — entity relationships, lineage trees, live ingestion activity, and memory search with AI summaries.
+
 ## 📚 Documentation
 
 Comprehensive guides and references are available in [`docs/`](./docs/index.md).
