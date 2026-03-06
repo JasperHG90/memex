@@ -481,6 +481,35 @@ class RetrievalConfig(BaseModel):
     )
 
 
+class ContradictionConfig(BaseModel):
+    """Configuration for retain-time contradiction detection."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable contradiction detection after extraction.',
+    )
+    alpha: float = Field(
+        default=0.1,
+        description='Hindsight step size for confidence adjustment.',
+    )
+    similarity_threshold: float = Field(
+        default=0.5,
+        description='Min cosine similarity for candidate retrieval.',
+    )
+    max_candidates_per_unit: int = Field(
+        default=15,
+        description='Max candidates per flagged unit.',
+    )
+    superseded_threshold: float = Field(
+        default=0.3,
+        description='Confidence below this = superseded.',
+    )
+    model: ModelConfig | None = Field(
+        default=None,
+        description='LLM model for classification. None = use extraction model.',
+    )
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration for API key-based auth."""
 
@@ -585,6 +614,11 @@ class MemoryConfig(BaseModel):
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
         description='Configuration for retrieval settings.',
+    )
+
+    contradiction: ContradictionConfig = Field(
+        default_factory=ContradictionConfig,
+        description='Configuration for contradiction detection.',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(
@@ -720,6 +754,8 @@ class ServerConfig(BaseModel):
             ts.model = dm
         if self.memory.reflection.model is None:
             self.memory.reflection.model = dm
+        if self.memory.contradiction.model is None:
+            self.memory.contradiction.model = dm
         if self.document.model is None:
             self.document.model = dm
         return self
@@ -818,6 +854,7 @@ __all__ = [
     'ReflectionConfig',
     'ExtractionConfig',
     'RetrievalConfig',
+    'ContradictionConfig',
     'MemoryConfig',
     'ServerConfig',
     'DashboardConfig',

@@ -204,6 +204,10 @@ class RetrievalRequest(BaseModel):
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )
+    include_superseded: bool = Field(
+        default=False,
+        description='Whether to include superseded (low-confidence) memory units in results.',
+    )
     debug: bool = Field(
         default=False,
         description=(
@@ -289,6 +293,15 @@ class MemoryUnitBase(VaultMixin):
     )
 
 
+class SupersessionInfo(BaseModel):
+    """Info about a unit that supersedes this one."""
+
+    unit_id: UUID
+    unit_text: str
+    note_title: str | None = None
+    relation: str  # 'contradicts' | 'weakens'
+
+
 class MemoryUnitDTO(MemoryUnitBase):
     """DTO for a Memory Unit (Fact/Experience)."""
 
@@ -326,6 +339,16 @@ class MemoryUnitDTO(MemoryUnitBase):
     debug_info: list[StrategyDebugInfo] | None = Field(
         default=None,
         description='Per-strategy attribution when debug=True. None when debug is off.',
+    )
+
+    confidence: float = Field(
+        default=1.0,
+        description='Confidence score (0.0-1.0).',
+    )
+
+    superseded_by: list[SupersessionInfo] | None = Field(
+        default=None,
+        description='Units that supersede this one.',
     )
 
     @property
@@ -721,6 +744,10 @@ class NoteSearchResult(BaseModel):
     answer: str | None = Field(
         default=None,
         description='LLM-generated answer when summarize=True.',
+    )
+    note_status: str | None = Field(
+        default=None,
+        description='Derived status: active, partially_superseded, superseded.',
     )
 
 
