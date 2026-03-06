@@ -616,10 +616,6 @@ async def memex_note_search(
     query: Annotated[str, Field(description='Search query.')],
     limit: Annotated[int, Field(description='Max notes to return.')] = 5,
     expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
-    reason: Annotated[
-        bool,
-        Field(description='Annotate results with relevant section IDs and reasoning.'),
-    ] = False,
     vault_ids: Annotated[
         list[str] | None,
         Field(default=None, description='Vault UUIDs or names to search.'),
@@ -639,7 +635,7 @@ async def memex_note_search(
             query=query,
             limit=limit,
             expand_query=expand_query,
-            reason=reason,
+            reason=False,
             summarize=False,
             vault_ids=vault_ids,
             strategies=strategies,
@@ -663,24 +659,24 @@ async def memex_note_search(
             lines.append(f'- **Score:** {doc.score:.3f}')
             if hasattr(doc, 'note_status') and doc.note_status:
                 lines.append(f'- **Status:** {doc.note_status}')
+            if desc := metadata.get('description'):
+                lines.append(f'- **Description:** {desc}')
+            if tags := metadata.get('tags'):
+                lines.append(f'- **Tags:** {", ".join(tags)}')
             if src := metadata.get('source_uri'):
                 lines.append(f'- **Source:** {src}')
+            if metadata.get('has_assets'):
+                lines.append('- **Has assets:** yes')
             if doc.snippets:
                 lines.append('- **Snippets:**')
                 for snippet in doc.snippets[:2]:
                     text = snippet.text.strip()[:200]
                     prefix = f'*[{snippet.node_title}]* ' if snippet.node_title else ''
                     lines.append(f'  - {prefix}{text}')
-            if doc.reasoning:
-                lines.append('- **Relevant Sections:**')
-                for section in doc.reasoning[:5]:
-                    node_id = section.get('node_id', '')
-                    reasoning_text = section.get('reasoning', '')
-                    lines.append(f'  - Node `{node_id}`: {reasoning_text}')
             lines.append('')
 
         lines.append(
-            'Next: call memex_get_note_metadata on each Note ID to confirm relevance before reading sections.'
+            'Next: use memex_get_page_index on relevant Note IDs to get section TOC, then memex_get_node to read.'
         )
         return '\n'.join(lines)
 
