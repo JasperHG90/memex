@@ -684,6 +684,9 @@ class MemexAPI:
         include_stale: bool = False,
         include_superseded: bool = False,
         debug: bool = False,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[MemoryUnit]:
         """Search with reranking. Delegates to SearchService."""
         return await self._search.search(
@@ -695,6 +698,9 @@ class MemexAPI:
             include_stale=include_stale,
             include_superseded=include_superseded,
             debug=debug,
+            after=after,
+            before=before,
+            tags=tags,
         )
 
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
@@ -713,6 +719,9 @@ class MemexAPI:
         reason: bool = False,
         summarize: bool = False,
         mmr_lambda: float | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         """Search notes. Delegates to SearchService."""
         return await self._search.search_notes(
@@ -726,6 +735,9 @@ class MemexAPI:
             reason=reason,
             summarize=summarize,
             mmr_lambda=mmr_lambda,
+            after=after,
+            before=before,
+            tags=tags,
         )
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
