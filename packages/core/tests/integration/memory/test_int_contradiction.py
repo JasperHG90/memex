@@ -4,6 +4,7 @@ Tests marked @pytest.mark.integration use real DB (testcontainers) but mock LLM 
 Tests marked @pytest.mark.llm use real DB AND real LLM calls (require GOOGLE_API_KEY).
 """
 
+import math
 import os
 import pytest
 from datetime import datetime, timezone
@@ -25,6 +26,16 @@ from memex_core.memory.sql_models import (
 )
 from memex_common.config import ContradictionConfig, GLOBAL_VAULT_ID
 from memex_common.types import FactTypes
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 @pytest.fixture
@@ -221,8 +232,13 @@ async def test_llm_contradict_decreases_confidence(
 
     note_old = _make_note(vault_id, title='Sprint Review Jan')
     note_new = _make_note(vault_id, title='Sprint Review Feb')
-    session.add_all([note_old, note_new])
+    note_noise = _make_note(vault_id, title='Unrelated Meeting')
+    session.add_all([note_old, note_new, note_noise])
     await session.flush()
+
+    # Use similar embeddings for related units, orthogonal for noise
+    related_embedding = [0.5] * 384
+    noise_embedding = [0.0] * 192 + [1.0] * 192
 
     old_unit = _make_unit(
         note_old.id,
@@ -230,6 +246,7 @@ async def test_llm_contradict_decreases_confidence(
         'The backlog has 15 items prioritized by impact.',
         confidence=1.0,
         event_date=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        embedding=related_embedding,
     )
     new_unit = _make_unit(
         note_new.id,
@@ -237,21 +254,39 @@ async def test_llm_contradict_decreases_confidence(
         'The backlog has 5 items, not 15. The count was corrected.',
         confidence=1.0,
         event_date=datetime(2025, 2, 15, tzinfo=timezone.utc),
+        embedding=related_embedding,
     )
-    session.add_all([old_unit, new_unit])
+    noise_unit = _make_unit(
+        note_noise.id,
+        vault_id,
+        f'The weather forecast predicts rain tomorrow {uuid4()}.',
+        confidence=1.0,
+        embedding=noise_embedding,
+    )
+    session.add_all([old_unit, new_unit, noise_unit])
     await session.flush()
 
     entity = _make_entity(f'backlog-{uuid4()}')
-    session.add(entity)
+    noise_entity = _make_entity(f'weather-{uuid4()}')
+    session.add_all([entity, noise_entity])
     await session.flush()
 
     session.add_all(
         [
             _make_unit_entity(old_unit.id, entity.id, vault_id),
             _make_unit_entity(new_unit.id, entity.id, vault_id),
+            _make_unit_entity(noise_unit.id, noise_entity.id, vault_id),
         ]
     )
     await session.commit()
+
+    # Verify candidate retrieval finds the related unit with meaningful similarity
+    candidates = await get_candidates(session, new_unit, vault_id, k=15, threshold=0.5)
+    candidate_ids = [c.id for c in candidates]
+    assert old_unit.id in candidate_ids, 'Related unit should appear as candidate'
+    assert noise_unit.id not in candidate_ids, 'Noise unit should not appear as candidate'
+    sim = _cosine_similarity(new_unit.embedding, old_unit.embedding)
+    assert sim >= 0.5, f'Related units should have cosine similarity >= 0.5, got {sim:.3f}'
 
     engine = _make_llm_engine(contradiction_config)
     await engine._detect(session, [new_unit.id], vault_id)
@@ -287,35 +322,58 @@ async def test_llm_reinforce_agreeing_statements(
     vault_id = GLOBAL_VAULT_ID
 
     note = _make_note(vault_id, title='Tech Stack Notes')
-    session.add(note)
+    note_noise = _make_note(vault_id, title='Lunch Menu')
+    session.add_all([note, note_noise])
     await session.flush()
+
+    runtime_embedding = [0.6] * 384
+    noise_embedding = [0.0] * 192 + [1.0] * 192
 
     unit_a = _make_unit(
         note.id,
         vault_id,
         'The team uses Python 3.12 as the standard runtime for all backend services.',
         confidence=0.8,
+        embedding=runtime_embedding,
     )
     unit_b = _make_unit(
         note.id,
         vault_id,
         'As confirmed in the latest review, Python 3.12 remains the standard runtime.',
         confidence=0.8,
+        embedding=runtime_embedding,
     )
-    session.add_all([unit_a, unit_b])
+    noise_unit = _make_unit(
+        note_noise.id,
+        vault_id,
+        f'Today lunch menu features grilled salmon {uuid4()}.',
+        confidence=1.0,
+        embedding=noise_embedding,
+    )
+    session.add_all([unit_a, unit_b, noise_unit])
     await session.flush()
 
     entity = _make_entity(f'python-runtime-{uuid4()}')
-    session.add(entity)
+    noise_entity = _make_entity(f'lunch-{uuid4()}')
+    session.add_all([entity, noise_entity])
     await session.flush()
 
     session.add_all(
         [
             _make_unit_entity(unit_a.id, entity.id, vault_id),
             _make_unit_entity(unit_b.id, entity.id, vault_id),
+            _make_unit_entity(noise_unit.id, noise_entity.id, vault_id),
         ]
     )
     await session.commit()
+
+    # Verify candidate retrieval finds the related unit, not noise
+    candidates = await get_candidates(session, unit_b, vault_id, k=15, threshold=0.5)
+    candidate_ids = [c.id for c in candidates]
+    assert unit_a.id in candidate_ids, 'Agreeing unit should appear as candidate'
+    assert noise_unit.id not in candidate_ids, 'Noise unit should not appear as candidate'
+    sim = _cosine_similarity(unit_a.embedding, unit_b.embedding)
+    assert sim >= 0.5, f'Agreeing units should have cosine similarity >= 0.5, got {sim:.3f}'
 
     engine = _make_llm_engine(contradiction_config)
     await engine._detect(session, [unit_b.id], vault_id)
@@ -375,8 +433,13 @@ async def test_llm_temporal_directionality(
     vault_id = GLOBAL_VAULT_ID
 
     note = _make_note(vault_id, title='Leadership Updates')
-    session.add(note)
+    note_noise = _make_note(vault_id, title='Kitchen Inventory')
+    session.add_all([note, note_noise])
     await session.flush()
+
+    # Use similar embeddings for CEO units, orthogonal for noise
+    ceo_embedding = [0.7] * 384
+    noise_embedding = [0.0] * 192 + [1.0] * 192
 
     old_unit = _make_unit(
         note.id,
@@ -384,6 +447,7 @@ async def test_llm_temporal_directionality(
         'The CEO of the company is Alice Johnson.',
         confidence=1.0,
         event_date=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
     )
     new_unit = _make_unit(
         note.id,
@@ -391,21 +455,39 @@ async def test_llm_temporal_directionality(
         'The CEO is now Bob Smith. Alice Johnson stepped down in December 2024.',
         confidence=1.0,
         event_date=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
     )
-    session.add_all([old_unit, new_unit])
+    noise_unit = _make_unit(
+        note_noise.id,
+        vault_id,
+        f'We need to restock paper towels in the kitchen {uuid4()}.',
+        confidence=1.0,
+        embedding=noise_embedding,
+    )
+    session.add_all([old_unit, new_unit, noise_unit])
     await session.flush()
 
     entity = _make_entity(f'ceo-{uuid4()}')
-    session.add(entity)
+    noise_entity = _make_entity(f'kitchen-{uuid4()}')
+    session.add_all([entity, noise_entity])
     await session.flush()
 
     session.add_all(
         [
             _make_unit_entity(old_unit.id, entity.id, vault_id),
             _make_unit_entity(new_unit.id, entity.id, vault_id),
+            _make_unit_entity(noise_unit.id, noise_entity.id, vault_id),
         ]
     )
     await session.commit()
+
+    # Verify candidate retrieval finds related unit, not noise
+    candidates = await get_candidates(session, new_unit, vault_id, k=15, threshold=0.5)
+    candidate_ids = [c.id for c in candidates]
+    assert old_unit.id in candidate_ids, 'Old CEO unit should appear as candidate'
+    assert noise_unit.id not in candidate_ids, 'Noise unit should not appear as candidate'
+    sim = _cosine_similarity(new_unit.embedding, old_unit.embedding)
+    assert sim >= 0.5, f'CEO units should have cosine similarity >= 0.5, got {sim:.3f}'
 
     engine = _make_llm_engine(contradiction_config)
     await engine._detect(session, [new_unit.id], vault_id)
