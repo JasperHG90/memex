@@ -78,6 +78,10 @@ async def search_notes(
             strategy_weights=request.strategy_weights,
             reason=request.reason,
             summarize=request.summarize,
+            mmr_lambda=request.mmr_lambda,
+            after=request.after,
+            before=request.before,
+            tags=request.tags,
         )
         return ndjson_response(results)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

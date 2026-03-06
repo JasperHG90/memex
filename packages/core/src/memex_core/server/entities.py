@@ -117,14 +117,17 @@ async def get_entity_mentions(
                     id=r['unit'].id,
                     text=r['unit'].text,
                     fact_type=r['unit'].fact_type,
+                    status=r['unit'].status,
                     metadata=r['unit'].unit_metadata,
                     note_id=r['unit'].note_id,
                     vault_id=r['unit'].vault_id,
                     mentioned_at=r['unit'].mentioned_at,
                     occurred_start=r['unit'].occurred_start,
                     occurred_end=r['unit'].occurred_end,
+                    chunk_id=getattr(r['unit'], 'chunk_id', None),
+                    confidence=getattr(r['unit'], 'confidence', 1.0) or 1.0,
                 ),
-                'document': build_note_dto(r['document']),
+                'note': build_note_dto(r['document']),
             }
             for r in results
         ]
