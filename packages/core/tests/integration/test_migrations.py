@@ -42,13 +42,27 @@ def _run_alembic(postgres_uri: str, *args: str) -> subprocess.CompletedProcess:
 
 @pytest_asyncio.fixture()
 async def clean_db(postgres_uri):
-    """Drop all tables so migrations start from scratch."""
+    """Drop all tables so migrations start from scratch, restore after."""
     engine = create_async_engine(postgres_uri, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(text('DROP SCHEMA public CASCADE'))
         await conn.execute(text('CREATE SCHEMA public'))
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+
+    yield
+
+    # Restore schema for other integration tests sharing the same DB
+    from sqlmodel import SQLModel
+
+    import memex_core.memory.sql_models  # noqa: F401
+
+    async with engine.begin() as conn:
+        await conn.execute(text('DROP SCHEMA public CASCADE'))
+        await conn.execute(text('CREATE SCHEMA public'))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+        await conn.run_sync(SQLModel.metadata.create_all)
     await engine.dispose()
 
 
@@ -171,7 +185,7 @@ class TestMigration002:
         engine = create_async_engine(postgres_uri, poolclass=NullPool)
         async with engine.connect() as conn:
             result = await conn.execute(text('SELECT version_num FROM alembic_version'))
-            assert result.scalar() == '002_remove_opinions_rename_event'
+            assert result.scalar() == '004_note_status'
         await engine.dispose()
 
     @pytest.mark.asyncio

@@ -238,7 +238,7 @@ async def test_llm_contradict_decreases_confidence(
 
     # Use similar embeddings for related units, orthogonal for noise
     related_embedding = [0.5] * 384
-    noise_embedding = [0.0] * 192 + [1.0] * 192
+    noise_embedding = [-1.0] * 192 + [1.0] * 192
 
     old_unit = _make_unit(
         note_old.id,
@@ -327,7 +327,7 @@ async def test_llm_reinforce_agreeing_statements(
     await session.flush()
 
     runtime_embedding = [0.6] * 384
-    noise_embedding = [0.0] * 192 + [1.0] * 192
+    noise_embedding = [-1.0] * 192 + [1.0] * 192
 
     unit_a = _make_unit(
         note.id,
@@ -439,7 +439,7 @@ async def test_llm_temporal_directionality(
 
     # Use similar embeddings for CEO units, orthogonal for noise
     ceo_embedding = [0.7] * 384
-    noise_embedding = [0.0] * 192 + [1.0] * 192
+    noise_embedding = [-1.0] * 192 + [1.0] * 192
 
     old_unit = _make_unit(
         note.id,

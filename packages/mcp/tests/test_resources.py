@@ -1,31 +1,27 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 
 @pytest.mark.asyncio
 async def test_mcp_get_resource_image(mock_api, mcp_client):
-    """Test retrieving an image resource."""
-    # Mock returning PNG bytes
-    mock_api.get_resource.return_value = b'\x89PNG\r\n\x1a\n'
+    """Test retrieving an image resource returns file:// URI for local stores."""
+    mock_api.get_resource_path = MagicMock(return_value='/data/images/test.png')
 
-    # We need to inspect the raw result or trust the client wrapper
     result = await mcp_client.call_tool('memex_get_resource', {'path': 'images/test.png'})
 
-    # FastMCP client should return a list of content
     assert len(result.content) == 1
     content = result.content[0]
 
-    # Check if it is an image content
-    assert content.type == 'image'
-    # The data is base64 encoded in the protocol, but the client might decode it or present it as is
-    # content.data should be the base64 string
-    assert content.mimeType == 'image/png'
+    # Local images now return file:// URI as text
+    assert content.type == 'text'
+    assert content.text == 'file:///data/images/test.png'
 
 
 @pytest.mark.asyncio
 async def test_mcp_get_resource_text(mock_api, mcp_client):
     """Test retrieving a text file (should be returned as File/EmbeddedResource)."""
+    mock_api.get_resource_path = MagicMock(return_value=None)
     mock_api.get_resource.return_value = b'Hello World'
 
     result = await mcp_client.call_tool('memex_get_resource', {'path': 'notes/test.txt'})
@@ -44,7 +40,7 @@ async def test_mcp_get_resource_with_vault_id(mock_api, mcp_client):
     vault_id = uuid4()
 
     mock_api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
-    mock_api.get_resource.return_value = b'\x89PNG\r\n\x1a\n'
+    mock_api.get_resource_path = MagicMock(return_value='/data/images/test.png')
 
     result = await mcp_client.call_tool(
         'memex_get_resource', {'path': 'images/test.png', 'vault_id': str(vault_id)}
@@ -52,5 +48,6 @@ async def test_mcp_get_resource_with_vault_id(mock_api, mcp_client):
 
     assert len(result.content) == 1
     content = result.content[0]
-    assert content.type == 'image'
+    assert content.type == 'text'
+    assert 'file://' in content.text
     mock_api.resolve_vault_identifier.assert_called_once_with(str(vault_id))
