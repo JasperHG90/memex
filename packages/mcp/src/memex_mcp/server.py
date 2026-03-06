@@ -394,7 +394,7 @@ async def memex_get_resource(
         mime_type, _ = mimetypes.guess_type(path)
 
         # For local stores, return file:// URI to avoid base64 overhead
-        local_path = api.get_resource_path(path)
+        local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
         if local_path and mime_type and mime_type.startswith('image/'):
             return f'file://{local_path}'
 

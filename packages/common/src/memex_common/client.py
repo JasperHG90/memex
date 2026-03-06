@@ -18,6 +18,7 @@ from memex_common.schemas import (
     IngestFileRequest,
     BatchJobStatus,
     CreateVaultRequest,
+    DeadLetterItemDTO,
     DefaultVaultsResponse,
     NoteCreateDTO,
     ReflectionResultDTO,
@@ -124,6 +125,19 @@ class RemoteMemexAPI:
             if e.response.status_code == 404:
                 return False
             raise
+
+    async def set_writer_vault(self, identifier: str) -> dict[str, Any]:
+        """Set the active (writer) vault for the current server session."""
+        response = await self.client.post(f'vaults/{identifier}/set-writer')
+        return await self._handle_response(response)
+
+    async def toggle_attached_vault(self, identifier: str, attach: bool = True) -> dict[str, Any]:
+        """Attach or detach a vault for read-only search inclusion."""
+        response = await self.client.post(
+            f'vaults/{identifier}/toggle-attached',
+            params={'attach': str(attach).lower()},
+        )
+        return await self._handle_response(response)
 
     # --- Memory ---
     async def ingest(
@@ -256,6 +270,9 @@ class RemoteMemexAPI:
         strategy_weights: dict[str, float] | None = None,
         reason: bool = False,
         summarize: bool = False,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         """Search for notes."""
         kwargs: dict[str, Any] = {}
@@ -263,6 +280,12 @@ class RemoteMemexAPI:
             kwargs['strategies'] = strategies
         if strategy_weights is not None:
             kwargs['strategy_weights'] = strategy_weights
+        if after is not None:
+            kwargs['after'] = after
+        if before is not None:
+            kwargs['before'] = before
+        if tags is not None:
+            kwargs['tags'] = tags
         request = NoteSearchRequest(
             query=query,
             limit=limit,
@@ -342,11 +365,18 @@ class RemoteMemexAPI:
             raise
 
     # --- Stats & Overview ---
-    async def get_stats_counts(self, vault_id: UUID | None = None) -> SystemStatsCountsDTO:
+    async def get_stats_counts(
+        self,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
+    ) -> SystemStatsCountsDTO:
         """Get total counts for notes, entities, and reflection queue."""
         params: dict[str, Any] = {}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('stats/counts', params=params or None)
         return SystemStatsCountsDTO(**result)
 
@@ -372,26 +402,40 @@ class RemoteMemexAPI:
         return [NoteDTO(**d) for d in result]
 
     async def search_entities(
-        self, query: str, limit: int = 20, vault_id: UUID | None = None
+        self,
+        query: str,
+        limit: int = 20,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> list[EntityDTO]:
         """Search for entities by name."""
         params: dict[str, Any] = {'q': query, 'limit': limit}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('entities', params=params)
         if not isinstance(result, list):
             result = [result]
         return [EntityDTO(**e) for e in result]
 
     async def list_entities_ranked(
-        self, limit: int = 100, q: str | None = None, vault_id: UUID | None = None
+        self,
+        limit: int = 100,
+        q: str | None = None,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> AsyncGenerator[EntityDTO, None]:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
         if q:
             params['q'] = q
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
 
         async with self.client.stream('GET', 'entities', params=params) as response:
             response.raise_for_status()
@@ -407,13 +451,20 @@ class RemoteMemexAPI:
         return EntityDTO(**result)
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20, vault_id: UUID | None = None
+        self,
+        entity_id: UUID | str,
+        limit: int = 20,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get mentions for an entity."""
         # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
         params: dict[str, Any] = {'limit': limit}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get(f'entities/{entity_id}/mentions', params=params)
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
@@ -429,22 +480,34 @@ class RemoteMemexAPI:
         return parsed
 
     async def get_bulk_cooccurrences(
-        self, ids: list[UUID], vault_id: UUID | None = None
+        self,
+        ids: list[UUID],
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get co-occurrences for a set of entity IDs."""
         ids_str = ','.join(str(i) for i in ids)
         params: dict[str, Any] = {'ids': ids_str}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        vid_list = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in vid_list:
+            vid_list.append(vault_id)
+        if vid_list:
+            params['vault_id'] = [str(v) for v in vid_list]
         return await self._get('cooccurrences', params=params)
 
     async def get_entity_cooccurrences(
-        self, entity_id: UUID | str, vault_id: UUID | None = None
+        self,
+        entity_id: UUID | str,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get co-occurrence edges for an entity."""
         params: dict[str, Any] = {}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         return await self._get(f'entities/{entity_id}/cooccurrences', params=params or None)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
@@ -481,15 +544,58 @@ class RemoteMemexAPI:
         result = await self._get('reflections', params={'limit': limit, 'status': 'queued'})
         return [ReflectionQueueDTO(**u) for u in result]
 
+    async def claim_reflection_queue_batch(self, limit: int = 10) -> list[ReflectionQueueDTO]:
+        """Claim reflection queue items for processing."""
+        response = await self.client.post('reflections/claim', params={'limit': limit})
+        result = await self._handle_response(response)
+        return [ReflectionQueueDTO(**u) for u in result]
+
+    async def get_dead_letter_items(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        vault_id: UUID | None = None,
+    ) -> list[DeadLetterItemDTO]:
+        """List dead-lettered reflection tasks."""
+        params: dict[str, Any] = {'limit': limit, 'offset': offset}
+        if vault_id:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('admin/reflection/dlq', params=params)
+        return [DeadLetterItemDTO(**item) for item in result]
+
+    async def retry_dead_letter_item(self, item_id: UUID) -> DeadLetterItemDTO:
+        """Reset a dead-lettered item back to pending for re-processing."""
+        result = await self._post(f'admin/reflection/dlq/{item_id}/retry', {})
+        return DeadLetterItemDTO(**result)
+
     async def get_top_entities(
-        self, limit: int = 5, vault_id: UUID | None = None
+        self,
+        limit: int = 5,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
     ) -> list[EntityDTO]:
         """Get top entities by mention count."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-mentions'}
-        if vault_id:
-            params['vault_id'] = str(vault_id)
+        ids = list(vault_ids) if vault_ids else []
+        if vault_id and vault_id not in ids:
+            ids.append(vault_id)
+        if ids:
+            params['vault_id'] = [str(v) for v in ids]
         result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
+
+    async def set_note_status(
+        self, note_id: UUID, status: str, linked_note_id: UUID | None = None
+    ) -> dict[str, Any]:
+        """Set note lifecycle status (active, superseded, appended)."""
+        return await self._patch(
+            f'notes/{note_id}/status',
+            {'status': status, 'linked_note_id': str(linked_note_id) if linked_note_id else None},
+        )
+
+    async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
+        """Rename a note (updates title in metadata, page index, and doc_metadata)."""
+        return await self._patch(f'notes/{note_id}/title', {'new_title': new_title})
 
     async def get_resource(self, path: str) -> bytes:
         """

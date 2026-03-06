@@ -45,6 +45,9 @@ class CausalRelationshipTypes(str, enum.Enum):
     CAUSED_BY = 'caused_by'
     ENABLES = 'enables'
     PREVENTS = 'prevents'
+    REINFORCES = 'reinforces'
+    WEAKENS = 'weakens'
+    CONTRADICTS = 'contradicts'
 
 
 class FactTypes(str, enum.Enum):
