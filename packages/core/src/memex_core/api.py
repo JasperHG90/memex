@@ -578,6 +578,15 @@ class MemexAPI:
         """Return absolute filesystem path for a resource, or None for remote stores."""
         return self._notes.get_resource_path(path)
 
+    async def set_note_status(
+        self,
+        note_id: UUID,
+        status: str,
+        linked_note_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Set a note's lifecycle status. Delegates to NoteService."""
+        return await self._notes.set_note_status(note_id, status, linked_note_id)
+
     async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
         """Update a note's title. Delegates to NoteService."""
         return await self._notes.update_note_title(note_id, new_title)

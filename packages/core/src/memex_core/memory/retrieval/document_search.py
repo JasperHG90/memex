@@ -650,7 +650,13 @@ class NoteSearchEngine:
                 else:
                     status_map[nid] = 'active'
             for result in final_results:
-                result.note_status = status_map.get(result.note_id, 'active')
+                # Prefer persisted note status over confidence-based derivation
+                doc = docs.get(result.note_id)
+                persisted = getattr(doc, 'status', None) if doc else None
+                if persisted and persisted != 'active':
+                    result.note_status = persisted
+                else:
+                    result.note_status = status_map.get(result.note_id, 'active')
 
         return final_results
 

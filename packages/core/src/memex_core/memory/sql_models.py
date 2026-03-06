@@ -303,6 +303,29 @@ class Note(SQLModel, table=True):  # type: ignore
         description='The publication or event date of the document content.',
     )
 
+    status: str = Field(
+        default='active',
+        sa_column=Column(
+            Text,
+            nullable=False,
+            server_default='active',
+            index=True,
+        ),
+        description='Note lifecycle status: active, superseded, appended.',
+    )
+
+    superseded_by: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='ID of the note that supersedes this one.',
+    )
+
+    appended_to: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='ID of the note this one was appended to.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -314,7 +337,13 @@ class Note(SQLModel, table=True):  # type: ignore
         back_populates='note', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
     )
 
-    __table_args__ = (Index('idx_notes_content_hash', 'content_hash'),)
+    __table_args__ = (
+        Index('idx_notes_content_hash', 'content_hash'),
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'appended')",
+            name='ck_notes_status',
+        ),
+    )
 
 
 class Chunk(SQLModel, table=True):  # type: ignore
