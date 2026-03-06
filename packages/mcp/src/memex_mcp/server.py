@@ -76,7 +76,7 @@ async def memex_reflect(
     limit: Annotated[int, Field(description='Recent memories to consider.')] = 20,
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Vault UUID. Defaults to Global Vault.'),
+        Field(default=None, description='Vault UUID or name. Defaults to Global Vault.'),
     ] = None,
 ):
     """Reflect on an entity to update its mental model."""
@@ -90,10 +90,7 @@ async def memex_reflect(
 
         v_uuid = None
         if vault_id:
-            try:
-                v_uuid = UUID(vault_id)
-            except ValueError:
-                raise ToolError(f'Invalid Vault UUID: {vault_id}')
+            v_uuid = await api.resolve_vault_identifier(vault_id)
 
         req_kwargs: dict = {
             'entity_id': e_uuid,
@@ -433,7 +430,7 @@ async def memex_add_note(
         str | None,
         Field(
             default=None,
-            description='Target vault UUID. Defaults to active vault.',
+            description='Target vault UUID or name. Defaults to active vault.',
         ),
     ] = None,
     note_key: Annotated[
@@ -627,6 +624,13 @@ async def memex_note_search(
         list[str] | None,
         Field(default=None, description='Vault UUIDs or names to search.'),
     ] = None,
+    strategies: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description='Retrieval strategies to use: semantic, keyword, graph, temporal. If None, all are used.',
+        ),
+    ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
     try:
@@ -638,6 +642,7 @@ async def memex_note_search(
             reason=reason,
             summarize=False,
             vault_ids=vault_ids,
+            strategies=strategies,
         )
 
         if not results:
@@ -708,9 +713,22 @@ async def memex_get_page_index(
         if page_index is None:
             return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
+        toc = [TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])]
+
+        def _sum_tokens(nodes: list[TOCNodeDTO]) -> int:
+            total = 0
+            for node in nodes:
+                if node.token_estimate is not None:
+                    total += node.token_estimate
+                total += _sum_tokens(node.children)
+            return total
+
+        total_tokens = _sum_tokens(toc) or None
+
         return PageIndexDTO(
             metadata=PageMetadataDTO(**(page_index.get('metadata') or {})),
-            toc=[TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])],
+            toc=toc,
+            total_tokens=total_tokens,
         )
 
     except ToolError:
@@ -803,7 +821,7 @@ async def memex_batch_ingest(
     file_paths: Annotated[list[str], Field(description='Absolute file paths.')],
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Target vault UUID.'),
+        Field(default=None, description='Target vault UUID or name.'),
     ] = None,
     batch_size: Annotated[int, Field(description='Files per batch chunk.')] = 32,
 ) -> str:
@@ -1270,7 +1288,8 @@ async def memex_ingest_url(
     ctx: Context,
     url: Annotated[str, Field(description='URL to ingest.')],
     vault_id: Annotated[
-        str | None, Field(default=None, description='Target vault UUID. Defaults to active vault.')
+        str | None,
+        Field(default=None, description='Target vault UUID or name. Defaults to active vault.'),
     ] = None,
     background: Annotated[
         bool, Field(default=True, description='Queue ingestion in background.')

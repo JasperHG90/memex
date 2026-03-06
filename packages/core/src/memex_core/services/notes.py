@@ -62,7 +62,11 @@ class NoteService:
                 return None
             if not isinstance(doc.page_index, dict):
                 return None
-            return doc.page_index.get('metadata')
+            metadata = doc.page_index.get('metadata')
+            if metadata is not None:
+                metadata = dict(metadata)
+                metadata.setdefault('has_assets', bool(doc.assets))
+            return metadata
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index for a document, or None if not indexed.
