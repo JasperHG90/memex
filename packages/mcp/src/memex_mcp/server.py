@@ -59,6 +59,7 @@ RULES:
 - Always filter before reading. Never call `memex_get_page_index` on notes you haven't confirmed relevant.
 - Never use `memex_list_notes` for discovery.
 - Parallelize aggressively.
+- CITE SOURCES: Use numbered citations [1], [2] etc. inline. Add a reference list at the end with title and note ID. For memory units, include both memory ID and source note ID.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,

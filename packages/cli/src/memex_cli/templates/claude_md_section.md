@@ -36,6 +36,12 @@ PROHIBITED: `memex_list_notes` for discovery.
 2. `memex_get_node` (node ID → section text) — call multiple in parallel
 3. Fallback only: `memex_read_note`
 
+### Citations
+
+When presenting information from Memex, use numbered citations [1], [2] etc. inline. Add a reference list at the end:
+- Notes: title + note ID
+- Memory units: title + memory ID + source note ID
+
 ### Slash commands
 
 - `/remember [text]` — save to memory
