@@ -535,6 +535,14 @@ class NoteCreateDTO(BaseModel):
         return {k: v.decode('utf-8') for k, v in files.items()}
 
 
+class OverlappingNote(BaseModel):
+    """A note that overlaps with the newly ingested one."""
+
+    note_id: UUID
+    similarity: float
+    title: str | None = None
+
+
 class IngestResponse(BaseModel):
     """Response from ingestion."""
 
@@ -559,6 +567,11 @@ class IngestResponse(BaseModel):
         default=None,
         description='Reason for skipping or failure, if applicable.',
         examples=['idempotency_check'],
+    )
+
+    overlapping_notes: list[OverlappingNote] = Field(
+        default_factory=list,
+        description='Notes with high similarity to the ingested content (>0.85).',
     )
 
 

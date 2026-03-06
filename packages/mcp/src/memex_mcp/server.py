@@ -580,7 +580,15 @@ async def memex_add_note(
         result = await api.ingest(note, background=background)
         if isinstance(result, BatchJobStatus):
             return f'Note queued. Job ID: {result.job_id}'
-        return f'Note added successfully. ID: {result.note_id}'
+
+        msg = f'Note added successfully. ID: {result.note_id}'
+        if result.overlapping_notes:
+            msg += '\n\n⚠️ Similar notes detected:'
+            for overlap in result.overlapping_notes:
+                similarity_pct = int(overlap.similarity * 100)
+                overlap_title = overlap.title or 'Untitled'
+                msg += f'\n  - {overlap_title} ({similarity_pct}% similar) [{overlap.note_id}]'
+        return msg
 
     except ToolError:
         raise
@@ -821,6 +829,17 @@ async def memex_note_search(
 async def memex_get_page_index(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
+    depth: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description='Max tree depth to return (0=roots only, 1=roots+children, etc).',
+        ),
+    ] = None,
+    parent_node_id: Annotated[
+        str | None,
+        Field(default=None, description='Return only the subtree under this node ID.'),
+    ] = None,
 ) -> str | PageIndexDTO:
     """Get the hierarchical page index for a note."""
     try:
@@ -834,7 +853,15 @@ async def memex_get_page_index(
         if page_index is None:
             return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
-        toc = [TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])]
+        raw_toc = page_index.get('toc', [])
+
+        # Apply depth/subtree filtering if requested
+        if depth is not None or parent_node_id is not None:
+            from memex_core.services.notes import NoteService
+
+            raw_toc = NoteService._filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
+
+        toc = [TOCNodeDTO.model_validate(n) for n in raw_toc]
 
         def _sum_tokens(nodes: list[TOCNodeDTO]) -> int:
             total = 0

@@ -395,6 +395,7 @@ class ExtractionEngine:
                         context=ctx,
                         mentioned_at=event_date or contents[0].event_date,
                         payload=contents[0].payload or {},
+                        who=raw_fact.who,
                         where=raw_fact.where,
                         vault_id=vault_id,
                     )
@@ -693,6 +694,7 @@ class ExtractionEngine:
                             context='',
                             mentioned_at=event_date or contents[0].event_date,
                             payload=contents[0].payload or {},
+                            who=f.who,
                             where=f.where,
                             vault_id=vault_id,
                         )
@@ -915,6 +917,7 @@ class ExtractionEngine:
                     context='',
                     mentioned_at=event_date or contents[0].event_date,
                     payload=contents[0].payload or {},
+                    who=f.who,
                     where=f.where,
                     vault_id=vault_id,
                 )
@@ -1167,6 +1170,9 @@ class ExtractionEngine:
 
         for i, fact in enumerate(facts):
             unit_id = unit_ids[i]
+            # Collect entity names already in the entities list
+            existing_names = {ent.text.lower() for ent in fact.entities}
+
             for ent in fact.entities:
                 entity_type = ent.entity_type or ner_type_map.get(ent.text.lower())
                 entities_data.append(
@@ -1178,6 +1184,26 @@ class ExtractionEngine:
                         'entity_type': entity_type,
                     }
                 )
+
+            # Fallback: discover person/location names from who/where via NER
+            for field_text, default_type in [
+                (getattr(fact, 'who', None), 'Person'),
+                (getattr(fact, 'where', None), 'Location'),
+            ]:
+                if not field_text or field_text.upper() in ('N/A', 'NONE'):
+                    continue
+                for name, ner_label in ner_type_map.items():
+                    if name in field_text.lower() and name not in existing_names:
+                        entities_data.append(
+                            {
+                                'text': name,
+                                'event_date': fact.occurred_start or fact.mentioned_at,
+                                'nearby_entities': [{'text': e.text} for e in fact.entities],
+                                'unit_id': unit_id,
+                                'entity_type': ner_label or default_type,
+                            }
+                        )
+                        existing_names.add(name)
 
         if not entities_data:
             return set()

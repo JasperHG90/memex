@@ -160,6 +160,47 @@ class NoteService:
                     metadata.setdefault('vault_name', vault.name)
             return metadata
 
+    @staticmethod
+    def _filter_toc(
+        toc: list[dict[str, Any]],
+        depth: int | None = None,
+        parent_node_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Filter a TOC tree by depth and/or parent node."""
+        if parent_node_id is not None:
+            # Find subtree rooted at parent_node_id
+            def _find_subtree(
+                nodes: list[dict[str, Any]], target_id: str
+            ) -> list[dict[str, Any]] | None:
+                for node in nodes:
+                    if node.get('id') == target_id:
+                        return node.get('children', [])
+                    found = _find_subtree(node.get('children', []), target_id)
+                    if found is not None:
+                        return found
+                return None
+
+            subtree = _find_subtree(toc, parent_node_id)
+            if subtree is None:
+                return []
+            toc = subtree
+
+        if depth is not None and depth >= 0:
+
+            def _trim_depth(nodes: list[dict[str, Any]], current: int) -> list[dict[str, Any]]:
+                if current >= depth:
+                    return []
+                result = []
+                for node in nodes:
+                    trimmed = dict(node)
+                    trimmed['children'] = _trim_depth(node.get('children', []), current + 1)
+                    result.append(trimmed)
+                return result
+
+            toc = _trim_depth(toc, 0)
+
+        return toc
+
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index for a document, or None if not indexed.
 
