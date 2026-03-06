@@ -3,6 +3,7 @@ Remote client for the Memex API.
 Used by the CLI to interact with a running Memex server.
 """
 
+import datetime as dt
 import logging
 from typing import Any, AsyncGenerator
 from uuid import UUID
@@ -199,6 +200,10 @@ class RemoteMemexAPI:
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
+        include_superseded: bool = False,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[MemoryUnitDTO]:
         """Search for memories."""
         request = RetrievalRequest(
@@ -209,6 +214,10 @@ class RemoteMemexAPI:
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
+            include_superseded=include_superseded,
+            after=after,
+            before=before,
+            tags=tags,
         )
         result = await self._post('memories/search', request)
         return [MemoryUnitDTO(**r) for r in result]
