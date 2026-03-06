@@ -60,6 +60,18 @@ RULES:
 - Never use `memex_list_notes` for discovery.
 - Parallelize aggressively.
 - CITE SOURCES: Use numbered citations [1], [2] etc. inline. Add a reference list at the end with title and note ID. For memory units, include both memory ID and source note ID.
+
+ENTITY EXPLORATION (when you need to find people, teams, or concepts):
+  1. `memex_list_entities` — browse or search entities by name.
+  2. `memex_get_entity` — get details (type, mention count).
+  3. `memex_get_entity_mentions` — find facts/observations that mention the entity.
+  4. `memex_get_entity_cooccurrences` — find related entities (people on the same team, concepts in the same docs).
+
+STRATEGY HINTS for `memex_memory_search`:
+  - `strategies: ["temporal"]` — chronological ordering (e.g. "what happened after X?")
+  - `strategies: ["graph"]` — entity-centric traversal (e.g. "what do we know about person X?")
+  - `strategies: ["mental_model"]` — synthesized observations (e.g. "what patterns exist around X?")
+  - Default (all strategies) is best for general queries.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -1165,7 +1177,8 @@ async def memex_list_entities(
 
         lines = [f'Found {len(entities)} entity/entities:\n']
         for i, e in enumerate(entities, 1):
-            lines.append(f'{i}. **{e.name}** (ID: {e.id}, mentions: {e.mention_count})')
+            type_str = f', type: {e.entity_type}' if e.entity_type else ''
+            lines.append(f'{i}. **{e.name}** (ID: {e.id}{type_str}, mentions: {e.mention_count})')
 
         return '\n'.join(lines)
 
@@ -1197,6 +1210,8 @@ async def memex_get_entity(
             f'**ID:** {entity.id}',
             f'**Mentions:** {entity.mention_count}',
         ]
+        if entity.entity_type:
+            lines.append(f'**Type:** {entity.entity_type}')
         if entity.vault_id:
             lines.append(f'**Vault:** {entity.vault_id}')
 
@@ -1233,12 +1248,12 @@ async def memex_get_entity_mentions(
 
         lines = [f'Found {len(mentions)} mention(s):\n']
         for i, m in enumerate(mentions, 1):
-            unit = m.get('unit', {})
-            note = m.get('note', {})
-            text = str(unit.get('text', ''))[:200]
-            unit_id = unit.get('id', 'N/A')
-            note_id = note.get('id', 'N/A')
-            fact_type = unit.get('fact_type', 'unknown')
+            unit = m.get('unit')
+            note = m.get('document')
+            text = str(unit.text if unit else '')[:200]
+            unit_id = unit.id if unit else 'N/A'
+            note_id = note.id if note else 'N/A'
+            fact_type = unit.fact_type if unit else 'unknown'
             lines.append(
                 f'{i}. [Type: {fact_type}] [Unit ID: {unit_id}] [Note ID: {note_id}]\n   {text}\n'
             )
@@ -1275,9 +1290,9 @@ async def memex_get_entity_cooccurrences(
 
         lines = [f'Found {len(cooccurrences)} co-occurring entity/entities:\n']
         for i, c in enumerate(cooccurrences, 1):
-            e1 = c.get('entity_id_1', 'N/A')
-            e2 = c.get('entity_id_2', 'N/A')
-            count = c.get('cooccurrence_count', 0)
+            e1 = c.entity_id_1
+            e2 = c.entity_id_2
+            count = c.cooccurrence_count
             other_id = e2 if str(e1) == entity_id else e1
             lines.append(f'{i}. Entity ID: {other_id} (co-occurrences: {count})')
 
