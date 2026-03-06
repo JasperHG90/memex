@@ -570,6 +570,14 @@ class NoteSearchEngine:
                     metadata['name'] = note_name
                     metadata['title'] = note_name
 
+            # Enrich with page_index metadata and asset info
+            if isinstance(doc.page_index, dict):
+                pi_meta = doc.page_index.get('metadata') or {}
+                for key in ('description', 'tags', 'publish_date', 'source_uri'):
+                    if key in pi_meta and pi_meta[key]:
+                        metadata.setdefault(key, pi_meta[key])
+            metadata.setdefault('has_assets', bool(doc.assets))
+
             final_results.append(
                 NoteSearchResult(
                     note_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
