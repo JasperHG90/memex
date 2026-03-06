@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 23 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 26 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -57,6 +57,10 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
 | `token_budget` | int | No | - | Token budget for retrieval. |
 | `strategies` | string[] | No | all | Strategies to run: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
+| `include_superseded` | bool | No | `false` | Include superseded (low-confidence) memory units. |
+| `after` | string | No | - | Only results after this ISO 8601 date (e.g. `2025-01-01`). |
+| `before` | string | No | - | Only results before this ISO 8601 date (e.g. `2025-12-31`). |
+| `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
 Returns formatted text with Unit IDs, Note IDs, scores, and dates.
 
@@ -74,6 +78,10 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `reason` | bool | No | `false` | Identify relevant sections with reasoning. |
 | `summarize` | bool | No | `false` | Synthesize an answer from retrieved sections (implies `reason=true`). |
 | `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
+| `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
+| `after` | string | No | - | Only notes created after this ISO 8601 date. |
+| `before` | string | No | - | Only notes created before this ISO 8601 date. |
+| `tags` | string[] | No | - | Only notes with ALL of these tags. |
 
 Returns note titles, IDs, scores, snippets, relevant sections (when `reason=true`), and a synthesized answer (when `summarize=true`).
 
@@ -97,9 +105,11 @@ Returns the metadata dict, or `null` if the note has no page index (e.g., legacy
 
 Get the hierarchical page index (table of contents) for a note. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text. If you only need the note's title, tags, or description, use `memex_get_note_metadata` instead.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `note_id` | string | Yes | The UUID of the note. |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `note_id` | string | Yes | - | The UUID of the note. |
+| `depth` | int | No | - | Max tree depth to return (0=roots only, 1=roots+children, etc). |
+| `parent_node_id` | string | No | - | Return only the subtree under this node ID. |
 
 ---
 
@@ -137,9 +147,34 @@ Add a note to the Memex knowledge base. Confirm the target vault with the user b
 | `author` | string | Yes | - | Name of the model authoring this note. |
 | `tags` | string[] | Yes | - | Tags for easier retrieval. |
 | `supporting_files` | string[] | No | - | Absolute paths to supporting files (images, CSVs). |
-| `vault_id` | string | No | Active vault | UUID of the vault to add the note to. |
+| `vault_id` | string | No | Active vault | UUID or name of the vault to add the note to. Defaults to active vault. |
 | `note_key` | string | No | - | Unique stable key for incremental updates. |
 | `background` | bool | No | `false` | Queue ingestion in background. |
+
+On success, returns the note ID. If similar notes already exist, includes overlap warnings with note titles, similarity percentages, and IDs.
+
+---
+
+### `memex_set_note_status`
+
+Set note lifecycle status: active, superseded, or appended. When superseded, all memory units are marked stale. Optionally link to the replacing/parent note.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `note_id` | string | Yes | - | The UUID of the note. |
+| `status` | string | Yes | - | New status: `active`, `superseded`, or `appended`. |
+| `linked_note_id` | string | No | - | UUID of the note that supersedes or contains this one. |
+
+---
+
+### `memex_rename_note`
+
+Rename a note. Updates title in metadata, page index, and doc_metadata.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | The UUID of the note. |
+| `new_title` | string | Yes | The new title for the note. |
 
 ---
 
@@ -230,11 +265,23 @@ Get entities that frequently co-occur with a given entity.
 
 ### `memex_get_memory_unit`
 
-Retrieve a specific memory unit by its UUID. Returns the unit text, type, status, dates, metadata, and source note ID.
+Retrieve a specific memory unit by its UUID. Returns the unit text, type, status, dates, metadata, source note ID, and chunk ID.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `unit_id` | string | Yes | The UUID of the memory unit. |
+
+---
+
+### `memex_get_memory_units`
+
+Batch lookup of memory units by ID. Includes contradiction links and supersession info.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `unit_ids` | string[] | Yes | List of memory unit UUIDs. |
+
+Returns unit text, type, confidence, note ID, and supersession context for each unit.
 
 ---
 

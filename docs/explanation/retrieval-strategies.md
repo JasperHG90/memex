@@ -119,6 +119,15 @@ Each variation runs through all five strategies independently. Results are then 
 
 After RRF fusion produces a single ranked list, results pass through several post-processing steps before being returned. These steps refine the ranking based on signals that are orthogonal to relevance.
 
+### Temporal and Tag Filtering
+
+Both memory search and note search support optional `after`, `before`, and `tags` filters. These operate independently of the TEMPR strategies:
+
+- **`after` / `before`**: ISO 8601 date bounds that restrict results to a time window. For memory search, this filters on the memory unit's event date; for note search, on the note's creation date. These are distinct from the Temporal *strategy*, which applies recency decay scoring — temporal filtering is a hard cutoff, while the temporal strategy is a soft ranking signal.
+- **`tags`**: Requires that results come from notes tagged with ALL specified tags. This uses the note metadata tags set at ingestion time.
+
+These filters are applied during retrieval (before fusion), reducing the candidate pool that strategies operate on.
+
 ### MMR Diversity Filtering
 
 After RRF fusion, Maximal Marginal Relevance (MMR) filtering removes near-duplicate results. This is especially important when multiple retrieval strategies surface the same cluster of facts — for example, 10 facts about Python classes from a single tutorial note.
