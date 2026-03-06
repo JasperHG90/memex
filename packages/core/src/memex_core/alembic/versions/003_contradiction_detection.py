@@ -17,29 +17,66 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _column_exists(table: str, column: str) -> bool:
+    """Check if a column already exists (handles baseline create_all)."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            'SELECT 1 FROM information_schema.columns '
+            'WHERE table_name = :table AND column_name = :col'
+        ),
+        {'table': table, 'col': column},
+    )
+    return result.scalar() is not None
+
+
+def _constraint_exists(name: str) -> bool:
+    """Check if a constraint already exists."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text('SELECT 1 FROM pg_constraint WHERE conname = :name'),
+        {'name': name},
+    )
+    return result.scalar() is not None
+
+
+def _index_exists(name: str) -> bool:
+    """Check if an index already exists."""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text('SELECT 1 FROM pg_indexes WHERE indexname = :name'),
+        {'name': name},
+    )
+    return result.scalar() is not None
+
+
 def upgrade() -> None:
     # 1. Add confidence column to memory_units
-    op.add_column(
-        'memory_units',
-        sa.Column('confidence', sa.Float(), nullable=False, server_default='1.0'),
-    )
-    op.create_check_constraint(
-        'memory_units_confidence_check',
-        'memory_units',
-        'confidence >= 0.0 AND confidence <= 1.0',
-    )
-    op.create_index('idx_memory_units_confidence', 'memory_units', ['confidence'])
+    if not _column_exists('memory_units', 'confidence'):
+        op.add_column(
+            'memory_units',
+            sa.Column('confidence', sa.Float(), nullable=False, server_default='1.0'),
+        )
+    if not _constraint_exists('memory_units_confidence_check'):
+        op.create_check_constraint(
+            'memory_units_confidence_check',
+            'memory_units',
+            'confidence >= 0.0 AND confidence <= 1.0',
+        )
+    if not _index_exists('idx_memory_units_confidence'):
+        op.create_index('idx_memory_units_confidence', 'memory_units', ['confidence'])
 
     # 2. Add link_metadata JSONB column to memory_links
-    op.add_column(
-        'memory_links',
-        sa.Column(
-            'link_metadata',
-            JSONB,
-            server_default=sa.text("'{}'::jsonb"),
-            nullable=True,
-        ),
-    )
+    if not _column_exists('memory_links', 'link_metadata'):
+        op.add_column(
+            'memory_links',
+            sa.Column(
+                'link_metadata',
+                JSONB,
+                server_default=sa.text("'{}'::jsonb"),
+                nullable=True,
+            ),
+        )
 
     # 3. Update link_type CHECK constraint
     op.execute('ALTER TABLE memory_links DROP CONSTRAINT IF EXISTS memory_links_link_type_check')
