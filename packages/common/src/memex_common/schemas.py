@@ -814,6 +814,7 @@ class PageMetadataDTO(BaseModel):
     tags: list[str] = Field(default_factory=list)
     publish_date: str | None = None
     source_uri: str | None = None
+    has_assets: bool = False
 
 
 class SectionSummaryDTO(BaseModel):
@@ -842,3 +843,4 @@ class PageIndexDTO(BaseModel):
 
     metadata: PageMetadataDTO
     toc: list[TOCNodeDTO]
+    total_tokens: int | None = None
