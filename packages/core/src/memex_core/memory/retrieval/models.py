@@ -63,6 +63,10 @@ class RetrievalRequest(SQLModel):
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )
+    include_superseded: bool = Field(
+        default=False,
+        description='Whether to include superseded (low-confidence) memory units in results.',
+    )
     debug: bool = Field(
         default=False,
         description=(

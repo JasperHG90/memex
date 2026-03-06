@@ -54,6 +54,7 @@ class SearchService:
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
+        include_superseded: bool = False,
         debug: bool = False,
     ) -> list[MemoryUnit]:
         """
@@ -79,6 +80,7 @@ class SearchService:
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
+            include_superseded=include_superseded,
             debug=debug,
         )
 

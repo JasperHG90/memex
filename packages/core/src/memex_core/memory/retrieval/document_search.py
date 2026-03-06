@@ -9,7 +9,7 @@ from uuid import UUID
 
 import dspy
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import extract, func, literal, union_all, text
+from sqlalchemy import extract, func, literal, union_all, text, Integer
 from sqlalchemy import cast as sql_cast, String
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
@@ -592,6 +592,35 @@ class NoteSearchEngine:
             )
         else:
             final_results = final_results[:effective_limit]
+
+        # Derive note_status from unit confidences
+        if final_results:
+            from memex_core.memory.sql_models import MemoryUnit as MU
+
+            note_ids = [r.note_id for r in final_results]
+            confidence_stmt = (
+                select(
+                    MU.note_id,
+                    func.count().label('total'),
+                    func.sum(func.cast(MU.confidence < 0.3, Integer)).label('low_conf'),
+                )
+                .where(col(MU.note_id).in_(note_ids))
+                .group_by(MU.note_id)
+            )
+            conf_rows = (await session.exec(confidence_stmt)).all()
+            status_map: dict[UUID, str] = {}
+            for row in conf_rows:
+                nid, total, low = row.note_id, row.total, row.low_conf
+                if total == 0:
+                    status_map[nid] = 'active'
+                elif low / total > 0.5:
+                    status_map[nid] = 'superseded'
+                elif low > 0:
+                    status_map[nid] = 'partially_superseded'
+                else:
+                    status_map[nid] = 'active'
+            for result in final_results:
+                result.note_status = status_map.get(result.note_id, 'active')
 
         return final_results
 

@@ -479,6 +479,10 @@ class RetrievalConfig(BaseModel):
         default=0.4,
         description='Entity Jaccard weight in hybrid similarity kernel.',
     )
+    superseded_threshold: float = Field(
+        default=0.3,
+        description='Confidence below this marks a unit as superseded. Used by contradiction detection.',
+    )
 
 
 class ContradictionConfig(BaseModel):

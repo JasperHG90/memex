@@ -30,7 +30,7 @@ from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.templates import MemexTemplateFromFile
 
 # Engines and Models
-from memex_core.memory.engine import MemoryEngine
+from memex_core.memory.engine import MemoryEngine, _build_contradiction_engine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
@@ -351,10 +351,14 @@ class MemexAPI:
             lm=self.lm,
         )
 
+        self._contradiction = _build_contradiction_engine(self.config)
+
         self.memory = MemoryEngine(
             config=self.config,
             extraction_engine=self._extraction,
             retrieval_engine=self._retrieval,
+            contradiction_engine=self._contradiction,
+            session_factory=self.metastore.session_maker(),
         )
 
         self.queue_service = ReflectionQueueService(self.config.server.memory.reflection)
@@ -670,6 +674,7 @@ class MemexAPI:
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
+        include_superseded: bool = False,
         debug: bool = False,
     ) -> list[MemoryUnit]:
         """Search with reranking. Delegates to SearchService."""
@@ -680,6 +685,7 @@ class MemexAPI:
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
+            include_superseded=include_superseded,
             debug=debug,
         )
 
