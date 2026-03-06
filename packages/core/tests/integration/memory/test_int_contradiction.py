@@ -517,3 +517,116 @@ async def test_llm_temporal_directionality(
     link = links[0]
     assert link.from_unit_id == new_unit.id, 'Authoritative unit should be from_unit'
     assert link.to_unit_id == old_unit.id, 'Superseded unit should be to_unit'
+
+
+@pytest.mark.integration
+@pytest.mark.llm
+@pytest.mark.asyncio
+async def test_llm_no_cross_contamination_between_similar_topics(
+    session: AsyncSession, contradiction_config: ContradictionConfig
+):
+    """Real LLM: CEO changes at different companies must not cross-link.
+
+    Two semantically similar statements share the 'CEO' entity type but refer
+    to different companies.  The LLM must recognise they are independent facts
+    and NOT create contradiction/weaken links between them.
+    """
+    _skip_without_api_key()
+    vault_id = GLOBAL_VAULT_ID
+
+    note_acme = _make_note(vault_id, title='Acme Corp Board Minutes')
+    note_globex = _make_note(vault_id, title='Globex Inc Leadership')
+    session.add_all([note_acme, note_globex])
+    await session.flush()
+
+    # Similar embeddings — both talk about CEO changes, so they look alike
+    ceo_embedding = [0.7] * 384
+
+    acme_old = _make_unit(
+        note_acme.id,
+        vault_id,
+        'The CEO of Acme Corp is Alice Johnson.',
+        confidence=1.0,
+        event_date=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    acme_new = _make_unit(
+        note_acme.id,
+        vault_id,
+        'Bob Smith replaced Alice Johnson as CEO of Acme Corp in January 2025.',
+        confidence=1.0,
+        event_date=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    globex_unit = _make_unit(
+        note_globex.id,
+        vault_id,
+        'The CEO of Globex Inc is Carol Williams. She was appointed in March 2024.',
+        confidence=1.0,
+        event_date=datetime(2024, 3, 1, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    session.add_all([acme_old, acme_new, globex_unit])
+    await session.flush()
+
+    # Shared 'CEO' entity — all three units are linked to it, making them candidates
+    ceo_entity = _make_entity(f'ceo-{uuid4()}')
+    acme_entity = _make_entity(f'acme-corp-{uuid4()}')
+    globex_entity = _make_entity(f'globex-inc-{uuid4()}')
+    session.add_all([ceo_entity, acme_entity, globex_entity])
+    await session.flush()
+
+    session.add_all(
+        [
+            # All share the CEO entity
+            _make_unit_entity(acme_old.id, ceo_entity.id, vault_id),
+            _make_unit_entity(acme_new.id, ceo_entity.id, vault_id),
+            _make_unit_entity(globex_unit.id, ceo_entity.id, vault_id),
+            # Company-specific entities
+            _make_unit_entity(acme_old.id, acme_entity.id, vault_id),
+            _make_unit_entity(acme_new.id, acme_entity.id, vault_id),
+            _make_unit_entity(globex_unit.id, globex_entity.id, vault_id),
+        ]
+    )
+    await session.commit()
+
+    # All three should appear as candidates for each other (same entity + same embedding)
+    candidates = await get_candidates(session, acme_new, vault_id, k=15, threshold=0.5)
+    candidate_ids = {c.id for c in candidates}
+    assert acme_old.id in candidate_ids, 'Same-company old unit should be a candidate'
+    assert globex_unit.id in candidate_ids, (
+        'Cross-company unit should be a candidate (shared CEO entity + similar embedding)'
+    )
+
+    engine = _make_llm_engine(contradiction_config)
+    await engine._detect(session, [acme_new.id], vault_id)
+    await session.commit()
+
+    await session.refresh(acme_old)
+    await session.refresh(globex_unit)
+
+    # Acme old unit should be superseded (same company, real contradiction)
+    assert acme_old.confidence < 1.0, (
+        f'Acme old CEO unit should be superseded, got confidence={acme_old.confidence}'
+    )
+
+    # Globex unit should be UNTOUCHED — different company, no contradiction
+    assert globex_unit.confidence == 1.0, (
+        f'Globex CEO unit should be untouched, got confidence={globex_unit.confidence}'
+    )
+
+    # Verify no cross-company links exist
+    links = (
+        await session.exec(
+            select(MemoryLink).where(
+                MemoryLink.link_type.in_(['contradicts', 'weakens'])  # type: ignore
+            )
+        )
+    ).all()
+    link_pairs = {(link.from_unit_id, link.to_unit_id) for link in links}
+    assert (acme_new.id, globex_unit.id) not in link_pairs, (
+        'Should not create cross-company contradiction link'
+    )
+    assert (globex_unit.id, acme_new.id) not in link_pairs, (
+        'Should not create cross-company contradiction link (reverse)'
+    )
