@@ -347,7 +347,11 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
   "token_budget": 4000,
   "strategies": ["semantic", "keyword", "graph"],
   "include_stale": false,
-  "debug": false
+  "debug": false,
+  "include_superseded": false,
+  "after": "2025-01-01T00:00:00Z",
+  "before": "2025-12-31T00:00:00Z",
+  "tags": ["research"]
 }
 ```
 
@@ -355,18 +359,22 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
 |-------|------|----------|---------|-------------|
 | `query` | string | Yes | - | Search query. |
 | `limit` | int | No | `5` | Maximum results. |
-| `vault_ids` | UUID[] | No | - | Filter by vault IDs. |
+| `vault_ids` | UUID[] | No | - | Filter by vault IDs or names. |
 | `token_budget` | int | No | - | Maximum tokens for retrieval context. |
 | `strategies` | string[] | No | all | Strategies to use: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
 | `include_stale` | bool | No | `false` | Include stale/superseded units. |
 | `debug` | bool | No | `false` | Include per-strategy debug info in results. |
+| `include_superseded` | bool | No | `false` | Include superseded (low-confidence) memory units. |
+| `after` | datetime | No | - | Only results after this date (ISO 8601). |
+| `before` | datetime | No | - | Only results before this date (ISO 8601). |
+| `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
 #### Response (200 — NDJSON)
 
 Each line is a `MemoryUnitDTO`:
 
 ```json
-{"id": "uuid", "text": "...", "fact_type": "fact", "score": 0.85, "note_id": "uuid", "source_note_ids": ["uuid"], "vault_id": "uuid", "metadata": {}, "mentioned_at": "2025-01-15T10:00:00Z"}
+{"id": "uuid", "text": "...", "fact_type": "fact", "score": 0.85, "note_id": "uuid", "source_note_ids": ["uuid"], "vault_id": "uuid", "chunk_id": "uuid", "confidence": 1.0, "metadata": {}, "mentioned_at": "2025-01-15T10:00:00Z"}
 ```
 
 #### Example
@@ -495,7 +503,10 @@ Search notes using multi-channel fusion (RRF). Returns an NDJSON stream.
   "strategies": ["semantic", "keyword"],
   "strategy_weights": null,
   "reason": false,
-  "summarize": false
+  "summarize": false,
+  "after": "2025-01-01T00:00:00Z",
+  "before": "2025-12-31T00:00:00Z",
+  "tags": ["architecture"]
 }
 ```
 
@@ -503,20 +514,24 @@ Search notes using multi-channel fusion (RRF). Returns an NDJSON stream.
 |-------|------|----------|---------|-------------|
 | `query` | string | Yes | - | Search query. |
 | `limit` | int | No | `5` | Maximum notes to return. |
-| `vault_ids` | UUID[] | No | - | Filter by vault IDs. |
+| `vault_ids` | UUID[] | No | - | Filter by vault IDs or names. |
 | `expand_query` | bool | No | `false` | Enable LLM-powered query expansion. |
 | `fusion_strategy` | string | No | `rrf` | Fusion strategy: `rrf` or `position_aware`. |
 | `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
 | `strategy_weights` | object | No | - | Custom weights per strategy. |
 | `reason` | bool | No | `false` | Identify relevant sections with reasoning. |
 | `summarize` | bool | No | `false` | Synthesize an answer (implies `reason=true`). |
+| `after` | datetime | No | - | Only notes created after this date (ISO 8601). |
+| `before` | datetime | No | - | Only notes created before this date (ISO 8601). |
+| `tags` | string[] | No | - | Only notes with ALL of these tags. |
+| `mmr_lambda` | float | No | - | MMR diversity lambda (0.0-1.0). `null` = use server config. |
 
 #### Response (200 — NDJSON)
 
 Each line is a `NoteSearchResult`:
 
 ```json
-{"note_id": "uuid", "score": 0.92, "snippets": [{"text": "..."}], "metadata": {"name": "..."}, "reasoning": [{"node_uuid": "...", "reasoning": "..."}], "answer": null}
+{"note_id": "uuid", "score": 0.92, "snippets": [{"text": "..."}], "metadata": {"name": "..."}, "vault_id": "uuid", "vault_name": "my-vault", "note_status": "active", "reasoning": [{"node_uuid": "...", "reasoning": "..."}], "answer": null}
 ```
 
 ---
@@ -534,6 +549,13 @@ Returns a `NoteDTO`.
 ### `GET /api/v1/notes/{note_id}/page-index`
 
 Get the page index (hierarchical table of contents) for a note.
+
+#### Query Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `depth` | int | - | Max tree depth to return (0=roots only, 1=roots+children, etc). |
+| `parent_node_id` | string | - | Return only the subtree under this node ID. |
 
 #### Response (200)
 
@@ -611,6 +633,44 @@ Delete a note and all associated data (memory units, chunks, links, assets).
 
 ```json
 {"status": "success"}
+```
+
+---
+
+### `PATCH /api/v1/notes/{note_id}/status`
+
+Set note lifecycle status (active, superseded, appended).
+
+#### Path Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `note_id` | UUID | Note ID. |
+
+#### Request Body
+
+```json
+{
+  "status": "superseded",
+  "linked_note_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `status` | string | Yes | New status: `active`, `superseded`, or `appended`. |
+| `linked_note_id` | UUID | No | UUID of the replacing/parent note. |
+
+#### Response (200)
+
+Returns the updated note status.
+
+#### Example
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/notes/550e8400-e29b-41d4-a716-446655440000/status \
+  -H "Content-Type: application/json" \
+  -d '{"status": "superseded", "linked_note_id": "660e8400-e29b-41d4-a716-446655440001"}'
 ```
 
 ---

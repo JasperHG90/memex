@@ -25,7 +25,7 @@ This generates all required files in one step:
 | `.mcp.json` | MCP server configuration connecting Claude Code to Memex |
 | `.claude/skills/remember/SKILL.md` | `/remember` slash command — save context to Memex |
 | `.claude/skills/recall/SKILL.md` | `/recall` slash command — search Memex memories |
-| `.claude/hooks/memex/*.sh` | Lifecycle hooks (SessionStart, PreCompact, PostToolUse, Stop) |
+| `.claude/hooks/memex/*.sh` | Lifecycle hooks (SessionStart, PreCompact, PostToolUse) |
 | `.claude/settings.local.json` | Claude Code settings with hook registration |
 | `CLAUDE.md` (appended) | Memory integration instructions for the LLM |
 
@@ -64,7 +64,6 @@ Try the generated slash commands:
 | `PreCompact` | Context window is about to be compressed | Saves important context before it's lost |
 | `PostToolUse (Bash)` | After a `git commit` | Captures commit details as a memory note |
 | `PostToolUse (Write/Edit)` | After file writes/edits | Tracks significant file changes |
-| `Stop` | End of each turn | Reminds the LLM to save notable findings to Memex |
 
 ## Common Options
 
@@ -97,5 +96,5 @@ memex setup claude-code --with-session-tracking
 ## See Also
 
 * [Using MCP](using-mcp.md) — manual MCP configuration for Claude Desktop, Cursor, and SSE transport
-* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all 22 MCP tools
+* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all 26 MCP tools
 * [CLI Commands — setup claude-code](../reference/cli-commands.md#setup-claude-code) — all flags and options

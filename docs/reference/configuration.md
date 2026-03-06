@@ -40,6 +40,7 @@ When the server starts, `default_model` is propagated to any sub-config whose `m
 - `server.memory.extraction.model`
 - `server.memory.extraction.text_splitting.model` (page_index strategy only)
 - `server.memory.reflection.model`
+- `server.memory.contradiction.model`
 - `server.document.model`
 
 Set a sub-config's `model` explicitly to override the default for that subsystem.
@@ -207,6 +208,21 @@ The three priority weights (`weight_urgency`, `weight_importance`, `weight_reson
 
 ---
 
+#### Contradiction Detection (`server.memory.contradiction`)
+
+Retain-time contradiction detection runs after extraction to identify and link contradictory, superseding, or updating memory units.
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `enabled` | bool | `true` | Enable contradiction detection after extraction. |
+| `alpha` | float | `0.1` | Hindsight step size for confidence adjustment. |
+| `similarity_threshold` | float | `0.5` | Minimum cosine similarity for candidate retrieval. |
+| `max_candidates_per_unit` | int | `15` | Maximum candidates to compare per flagged unit. |
+| `superseded_threshold` | float | `0.3` | Confidence below this marks a unit as superseded. |
+| `model` | [ModelConfig](#modelconfig) \| null | `null` (inherits `default_model`) | LLM for contradiction classification. |
+
+---
+
 #### Circuit Breaker (`server.memory.circuit_breaker`)
 
 Protects against cascading failures from LLM provider outages.
@@ -319,6 +335,10 @@ export MEMEX_SERVER__MEMORY__REFLECTION__BACKGROUND_REFLECTION_ENABLED=false
 
 # Circuit breaker
 export MEMEX_SERVER__MEMORY__CIRCUIT_BREAKER__FAILURE_THRESHOLD=10
+
+# Contradiction detection
+export MEMEX_SERVER__MEMORY__CONTRADICTION__ENABLED=true
+export MEMEX_SERVER__MEMORY__CONTRADICTION__ALPHA=0.1
 ```
 
 ### Special Environment Variables
@@ -436,6 +456,10 @@ server:
     circuit_breaker:
       failure_threshold: 10
       reset_timeout_seconds: 120
+
+    contradiction:
+      enabled: true
+      alpha: 0.1
 
   document:
     mmr_lambda: 0.7
