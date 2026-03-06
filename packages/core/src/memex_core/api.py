@@ -574,6 +574,14 @@ class MemexAPI:
         """Direct access to stored assets. Delegates to NoteService."""
         return await self._notes.get_resource(path)
 
+    def get_resource_path(self, path: str) -> str | None:
+        """Return absolute filesystem path for a resource, or None for remote stores."""
+        return self._notes.get_resource_path(path)
+
+    async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
+        """Update a note's title. Delegates to NoteService."""
+        return await self._notes.update_note_title(note_id, new_title)
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)

@@ -170,6 +170,29 @@ async def delete_note(
         console.print(f'[red]Note {note_id} not found.[/red]')
 
 
+@app.command('rename')
+@async_command
+async def rename_note(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note to rename.')],
+    new_title: Annotated[str, typer.Argument(help='New title for the note.')],
+):
+    """
+    Rename a note (updates title in metadata, page index, and doc_metadata).
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    async with get_api_context(config) as api:
+        try:
+            await api.update_note_title(uuid_obj, new_title)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(f'[green]Note {note_id} renamed to "{new_title}".[/green]')
+
+
 @app.command('migrate')
 @async_command
 async def migrate_note(

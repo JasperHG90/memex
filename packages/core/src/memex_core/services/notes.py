@@ -39,6 +39,46 @@ class NoteService:
         """Direct access to stored assets in the file store."""
         return await self.filestore.load(path)
 
+    def get_resource_path(self, path: str) -> str | None:
+        """Return the absolute filesystem path for a resource, or None for remote stores."""
+        from memex_core.storage.filestore import LocalAsyncFileStore
+
+        if isinstance(self.filestore, LocalAsyncFileStore):
+            return self.filestore.join_path(path)
+        return None
+
+    async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
+        """Update the title of a note, cascading to page_index and doc_metadata."""
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            doc.title = new_title
+
+            # Update doc_metadata
+            if doc.doc_metadata is None:
+                doc.doc_metadata = {}
+            meta = dict(doc.doc_metadata)
+            meta['name'] = new_title
+            meta['title'] = new_title
+            doc.doc_metadata = meta
+
+            # Update page_index metadata
+            if isinstance(doc.page_index, dict):
+                pi = dict(doc.page_index)
+                pi_meta = dict(pi.get('metadata') or {})
+                pi_meta['title'] = new_title
+                pi['metadata'] = pi_meta
+                doc.page_index = pi
+
+            session.add(doc)
+            await session.commit()
+            await session.refresh(doc)
+            return doc.model_dump()
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID."""
         from memex_core.memory.sql_models import Note

@@ -126,6 +126,24 @@ async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) ->
         raise _handle_error(e, 'Failed to get node')
 
 
+class RenameNoteRequest(BaseModel):
+    new_title: str
+
+
+@router.patch('/notes/{note_id}/title')
+async def rename_note(
+    note_id: UUID,
+    request: Annotated[RenameNoteRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Rename a note (updates title in metadata, page index, and doc_metadata)."""
+    try:
+        await api.update_note_title(note_id, request.new_title)
+        return {'status': 'success', 'note_id': str(note_id), 'new_title': request.new_title}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to rename note')
+
+
 @router.delete('/notes/{note_id}')
 async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a note and all associated data (memory units, chunks, links, assets)."""
