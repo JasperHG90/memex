@@ -35,6 +35,20 @@ from memex_core.memory.formatting import format_for_reranking
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
+
+def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
+    """Derive note-level status from unit confidences."""
+    if not units:
+        return 'active'
+    low_confidence = sum(1 for u in units if getattr(u, 'confidence', 1.0) < superseded_threshold)
+    ratio = low_confidence / len(units)
+    if ratio > 0.5:
+        return 'superseded'
+    elif low_confidence > 0:
+        return 'partially_superseded'
+    return 'active'
+
+
 # RRF Constant
 K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
@@ -221,6 +235,11 @@ class RetrievalEngine:
 
         # 6. Hydrate Objects
         final_results = await self._hydrate_results(session, fused_items)
+
+        # 6b. Filter superseded units
+        if not request.include_superseded:
+            threshold = self.retrieval_config.superseded_threshold
+            final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
         # 7. Rerank
         if use_reranker:
@@ -624,6 +643,48 @@ class RetrievalEngine:
                 )
             ).all()
             fetched_models = {m.id: m for m in models}
+
+        # Load supersession context for low-confidence units
+        low_conf_ids = [u.id for u in fetched_units.values() if getattr(u, 'confidence', 1.0) < 1.0]
+        if low_conf_ids:
+            from memex_core.memory.sql_models import MemoryLink
+
+            link_stmt = select(MemoryLink).where(
+                col(MemoryLink.to_unit_id).in_(low_conf_ids),
+                col(MemoryLink.link_type).in_(['contradicts', 'weakens']),
+            )
+            link_result = await session.exec(link_stmt)
+            links_by_target: dict[UUID, list[MemoryLink]] = defaultdict(list)
+            for link in link_result.all():
+                links_by_target[link.to_unit_id].append(link)
+
+            for uid, links_list in links_by_target.items():
+                if uid in fetched_units:
+                    unit = fetched_units[uid]
+                    supersession_info = []
+                    for link in links_list:
+                        auth_id = (
+                            UUID(link.link_metadata.get('authoritative_unit_id', ''))
+                            if link.link_metadata
+                            and link.link_metadata.get('authoritative_unit_id')
+                            else link.from_unit_id
+                        )
+                        auth_unit = fetched_units.get(auth_id)
+                        auth_text = auth_unit.text if auth_unit else ''
+                        note_title = (
+                            link.link_metadata.get('superseding_note_title')
+                            if link.link_metadata
+                            else None
+                        )
+                        supersession_info.append(
+                            {
+                                'unit_id': str(auth_id),
+                                'unit_text': auth_text[:200],
+                                'note_title': note_title,
+                                'relation': link.link_type,
+                            }
+                        )
+                    unit.unit_metadata['superseded_by'] = supersession_info
 
         final_results = []
         for row in ranked_items:
