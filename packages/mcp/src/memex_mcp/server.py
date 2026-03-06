@@ -544,6 +544,10 @@ async def memex_memory_search(
             description='Strategies: semantic, keyword, graph, temporal, mental_model. Default: all.',
         ),
     ] = None,
+    include_superseded: Annotated[
+        bool,
+        Field(default=False, description='Include superseded (low-confidence) memory units.'),
+    ] = False,
 ):
     """Search Memex for relevant information."""
     try:
@@ -555,6 +559,7 @@ async def memex_memory_search(
             vault_ids=cast(list[UUID | str] | None, vault_ids),
             token_budget=token_budget,
             strategies=strategies,
+            include_superseded=include_superseded,
         )
 
         if not results:
@@ -574,10 +579,22 @@ async def memex_memory_search(
             date = res.mentioned_at or res.occurred_start
             date_str = f' ({date.isoformat()})' if date else ''
 
+            confidence = getattr(res, 'confidence', 1.0)
+            confidence_str = f' [conf: {confidence:.1f}]' if confidence < 1.0 else ''
+
             output.append(
                 f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
-                f'{score_str}{date_str}\n   {snippet}\n'
+                f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
+
+            # Show supersession context if available
+            superseded_by = getattr(res, 'unit_metadata', {}).get('superseded_by')
+            if superseded_by:
+                for s in superseded_by:
+                    output.append(
+                        f'   \u26a0 Superseded by: {s.get("unit_text", "")[:100]}'
+                        f' ({s.get("relation")})'
+                    )
 
         output.append(
             'Tip: Use Note IDs above with memex_get_note_metadata to check relevance before deeper reading.'
@@ -639,6 +656,8 @@ async def memex_note_search(
             lines.append(f'## {i}. {title}')
             lines.append(f'- **Note ID:** {doc.note_id}')
             lines.append(f'- **Score:** {doc.score:.3f}')
+            if hasattr(doc, 'note_status') and doc.note_status:
+                lines.append(f'- **Status:** {doc.note_status}')
             if src := metadata.get('source_uri'):
                 lines.append(f'- **Source:** {src}')
             if doc.snippets:
@@ -1149,6 +1168,63 @@ async def memex_get_memory_unit(
     except Exception as e:
         logging.error(f'Get memory unit failed: {e}', exc_info=True)
         raise ToolError(f'Get memory unit failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_memory_units',
+    description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+)
+async def memex_get_memory_units(
+    ctx: Context,
+    unit_ids: Annotated[list[str], Field(description='List of memory unit UUIDs.')],
+) -> str:
+    """Retrieve multiple memory units with their contradiction context."""
+    try:
+        api = get_api(ctx)
+        lines: list[str] = []
+        for uid_str in unit_ids:
+            try:
+                uuid_obj = UUID(uid_str)
+            except ValueError:
+                lines.append(f'Invalid UUID: {uid_str}')
+                continue
+
+            unit = await api.get_memory_unit(uuid_obj)
+            if unit is None:
+                lines.append(f'Unit {uid_str}: not found')
+                continue
+
+            fact_type = getattr(unit.fact_type, 'value', unit.fact_type)
+            confidence = getattr(unit, 'confidence', 1.0)
+            conf_str = f' [confidence: {confidence:.2f}]' if confidence < 1.0 else ''
+
+            lines.append(f'## Unit {uid_str}')
+            lines.append(f'- **Type:** {fact_type}{conf_str}')
+            lines.append(f'- **Text:** {unit.text}')
+            if unit.note_id:
+                lines.append(f'- **Note ID:** {unit.note_id}')
+
+            # Show supersession info if available
+            meta = getattr(unit, 'metadata', {}) or getattr(unit, 'unit_metadata', {}) or {}
+            superseded_by = meta.get('superseded_by')
+
+            if superseded_by:
+                lines.append('- **Superseded by:**')
+                for s in superseded_by:
+                    s_text = s.get('unit_text', '')[:150]
+                    s_rel = s.get('relation', 'unknown')
+                    s_note = s.get('note_title', '')
+                    lines.append(f'  - [{s_rel}] {s_text}')
+                    if s_note:
+                        lines.append(f'    From note: {s_note}')
+
+            lines.append('')
+
+        return '\n'.join(lines) if lines else 'No units found.'
+
+    except Exception as e:
+        logging.error(f'Get memory units failed: {e}', exc_info=True)
+        raise ToolError(f'Get memory units failed: {e}')
 
 
 @mcp.tool(
