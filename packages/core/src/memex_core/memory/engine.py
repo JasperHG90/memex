@@ -96,19 +96,23 @@ async def get_memory_engine(
 
 def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | None:
     """Create a ContradictionEngine if enabled in config."""
-    contradiction_config = config.server.memory.contradiction
-    if not contradiction_config.enabled:
+    try:
+        contradiction_config = config.server.memory.contradiction
+        if not contradiction_config.enabled:
+            return None
+        model_config = contradiction_config.model
+        if model_config is None:
+            logger.warning('contradiction.model is None — skipping contradiction engine')
+            return None
+        lm = dspy.LM(
+            model=model_config.model,
+            api_base=str(model_config.base_url) if model_config.base_url else None,
+            api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
+        )
+        return ContradictionEngine(lm=lm, config=contradiction_config)
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        logger.warning('Failed to build contradiction engine: %s', e)
         return None
-    model_config = contradiction_config.model
-    assert model_config is not None, (
-        'contradiction.model must be set (via default_model propagation)'
-    )
-    lm = dspy.LM(
-        model=model_config.model,
-        api_base=str(model_config.base_url) if model_config.base_url else None,
-        api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
-    )
-    return ContradictionEngine(lm=lm, config=contradiction_config)
 
 
 class MemoryEngine:
