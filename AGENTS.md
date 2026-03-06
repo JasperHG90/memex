@@ -116,8 +116,6 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 5. Resolved a tricky configuration/environment issue
 
 **Keep notes concise** (hard maximum: 300 tokens). Capture the key insight, not a detailed report. No per-file changelogs.
-
-A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 </constraint>
 
 ### Retrieval
@@ -126,7 +124,7 @@ Session start context is automatic via hook. Do NOT redundantly search at sessio
 PROHIBITED: `memex_list_notes` for discovery.
 
 `memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes via hybrid retrieval. `reason=True` annotates relevant sections.
+`memex_note_search` — raw source notes with inline metadata (title, description, tags) via hybrid retrieval. Use the metadata to filter before reading.
 
 ### Note reading
 

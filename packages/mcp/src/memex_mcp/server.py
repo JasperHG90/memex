@@ -43,22 +43,22 @@ mcp = FastMCP(
 
 STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
   - `memex_memory_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
-  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with snippets.
+  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with metadata and snippets.
   When unsure, run both in parallel and combine results (deduplicate by Note ID).
 
-STEP 2 — FILTER (parallel, per note): Call `memex_get_note_metadata` on each candidate Note ID.
-  - Cheap (~50 tokens). Use title, description, and tags to confirm relevance.
-  - Drop irrelevant notes BEFORE proceeding to Step 3.
+STEP 2 — FILTER: Use metadata to drop irrelevant notes BEFORE reading.
+  - After `memex_memory_search`: call `memex_get_note_metadata` on each Note ID (cheap, ~50 tokens).
+  - After `memex_note_search`: metadata is already inline — use the returned title, description, and tags to filter. No extra calls needed.
 
 STEP 3 — READ (only confirmed-relevant notes):
-  - `memex_get_page_index` → get TOC and node IDs. Expensive — only after Step 2 confirms relevance.
+  - `memex_get_page_index` → get TOC and node IDs.
   - `memex_get_node` (parallel) → read specific sections by node ID.
   - `memex_read_note` → fallback only, for very short notes.
 
 RULES:
-- Never skip Step 2. `memex_get_page_index` costs 5-10x more tokens than `memex_get_note_metadata`.
+- Always filter before reading. Never call `memex_get_page_index` on notes you haven't confirmed relevant.
 - Never use `memex_list_notes` for discovery.
-- Parallelize aggressively: metadata calls together, node reads together.
+- Parallelize aggressively.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
