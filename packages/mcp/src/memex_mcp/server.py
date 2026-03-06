@@ -299,6 +299,33 @@ async def memex_read_note(
 
 
 @mcp.tool(
+    name='memex_rename_note',
+    description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+)
+async def memex_rename_note(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    new_title: Annotated[str, Field(description='New title for the note.')],
+) -> str:
+    """Rename a note by updating its title across all stored locations."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        await api.update_note_title(uuid_obj, new_title)
+        return f'Note {note_id} renamed to "{new_title}".'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Rename note failed: {e}', exc_info=True)
+        raise ToolError(f'Rename note failed: {e}')
+
+
+@mcp.tool(
     name='memex_get_resource',
     description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets or memex_get_lineage.',
 )
@@ -316,9 +343,14 @@ async def memex_get_resource(
         if vault_id:
             await api.resolve_vault_identifier(vault_id)
 
-        content_bytes = await api.get_resource(path)
-
         mime_type, _ = mimetypes.guess_type(path)
+
+        # For local stores, return file:// URI to avoid base64 overhead
+        local_path = api.get_resource_path(path)
+        if local_path and mime_type and mime_type.startswith('image/'):
+            return f'file://{local_path}'
+
+        content_bytes = await api.get_resource(path)
 
         if mime_type:
             if mime_type.startswith('image/'):
