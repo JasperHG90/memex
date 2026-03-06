@@ -1192,6 +1192,9 @@ class ExtractionEngine:
             ]:
                 if not field_text or field_text.upper() in ('N/A', 'NONE'):
                     continue
+
+                # Try NER-based discovery first
+                found_via_ner = False
                 for name, ner_label in ner_type_map.items():
                     if name in field_text.lower() and name not in existing_names:
                         entities_data.append(
@@ -1204,6 +1207,32 @@ class ExtractionEngine:
                             }
                         )
                         existing_names.add(name)
+                        found_via_ner = True
+
+                # Last resort: if NER found nothing, extract capitalized names
+                # from who/where fields (e.g. "Emily, Sarah" or "San Francisco")
+                if not found_via_ner:
+                    import re
+
+                    # Match sequences of capitalized words (e.g. "Emily Chen",
+                    # "San Francisco") but skip common words
+                    skip = {'the', 'and', 'for', 'with', 'from', 'via', 'n/a'}
+                    for match in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', field_text):
+                        candidate = match.group(1)
+                        if (
+                            candidate.lower() not in existing_names
+                            and candidate.lower() not in skip
+                        ):
+                            entities_data.append(
+                                {
+                                    'text': candidate,
+                                    'event_date': fact.occurred_start or fact.mentioned_at,
+                                    'nearby_entities': [{'text': e.text} for e in fact.entities],
+                                    'unit_id': unit_id,
+                                    'entity_type': default_type,
+                                }
+                            )
+                            existing_names.add(candidate.lower())
 
         if not entities_data:
             return set()
@@ -1231,7 +1260,7 @@ class ExtractionEngine:
     }
 
     async def _build_ner_type_map(self, facts: list[ProcessedFact]) -> dict[str, str]:
-        """Run NER on fact texts and build a lowercase entity name -> type mapping."""
+        """Run NER on fact texts AND who/where fields to build entity name -> type mapping."""
         try:
             from memex_core.memory.models.ner import get_ner_model
 
@@ -1241,10 +1270,20 @@ class ExtractionEngine:
             return {}
 
         type_map: dict[str, str] = {}
+
+        # Collect all texts to run NER on: fact_text + who + where
+        texts_to_scan: list[str] = []
         for fact in facts:
-            text = fact.fact_text
-            if not text:
-                continue
+            if fact.fact_text:
+                texts_to_scan.append(fact.fact_text)
+            who = getattr(fact, 'who', None)
+            where = getattr(fact, 'where', None)
+            if who and who.upper() not in ('N/A', 'NONE'):
+                texts_to_scan.append(who)
+            if where and where.upper() not in ('N/A', 'NONE'):
+                texts_to_scan.append(where)
+
+        for text in texts_to_scan:
             try:
                 ner_results = ner_model.predict(text)
                 for result in ner_results:
@@ -1254,6 +1293,6 @@ class ExtractionEngine:
                     if word and mapped_type and word not in type_map:
                         type_map[word] = mapped_type
             except (ValueError, RuntimeError, OSError) as e:
-                logger.debug('NER prediction failed for fact text: %s', e, exc_info=True)
+                logger.debug('NER prediction failed for text: %s', e, exc_info=True)
 
         return type_map
