@@ -172,12 +172,9 @@ async def test_get_entity_mentions_success(mock_api, mcp_client):
     eid = uuid4()
     uid = uuid4()
     nid = uuid4()
-    mock_api.get_entity_mentions.return_value = [
-        {
-            'unit': {'id': str(uid), 'text': 'Python is great', 'fact_type': 'world'},
-            'note': {'id': str(nid)},
-        }
-    ]
+    unit = type('Unit', (), {'id': str(uid), 'text': 'Python is great', 'fact_type': 'world'})()
+    doc = type('Doc', (), {'id': str(nid)})()
+    mock_api.get_entity_mentions.return_value = [{'unit': unit, 'document': doc}]
 
     result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
     text = result.content[0].text
@@ -210,9 +207,10 @@ async def test_get_entity_mentions_invalid_uuid(mock_api, mcp_client):
 async def test_get_entity_cooccurrences_success(mock_api, mcp_client):
     eid = uuid4()
     other_id = uuid4()
-    mock_api.get_entity_cooccurrences.return_value = [
-        {'entity_id_1': str(eid), 'entity_id_2': str(other_id), 'cooccurrence_count': 7}
-    ]
+    cooc = type(
+        'Cooc', (), {'entity_id_1': str(eid), 'entity_id_2': str(other_id), 'cooccurrence_count': 7}
+    )()
+    mock_api.get_entity_cooccurrences.return_value = [cooc]
 
     result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
     text = result.content[0].text
