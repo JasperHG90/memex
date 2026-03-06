@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from typing import Any
 from uuid import UUID
@@ -56,6 +57,9 @@ class SearchService:
         include_stale: bool = False,
         include_superseded: bool = False,
         debug: bool = False,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[MemoryUnit]:
         """
         Convenience method for search with reranking.
@@ -82,6 +86,9 @@ class SearchService:
             include_stale=include_stale,
             include_superseded=include_superseded,
             debug=debug,
+            after=after,
+            before=before,
+            tags=tags,
         )
 
         async with self.metastore.session() as session:
@@ -117,6 +124,9 @@ class SearchService:
         reason: bool = False,
         summarize: bool = False,
         mmr_lambda: float | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         """Search for documents containing relevant information using raw chunks."""
         vaults = []
@@ -143,6 +153,13 @@ class SearchService:
         if effective_mmr_lambda is not None:
             kwargs['mmr_lambda'] = effective_mmr_lambda
 
+        if after is not None:
+            kwargs['after'] = after
+        if before is not None:
+            kwargs['before'] = before
+        if tags is not None:
+            kwargs['tags'] = tags
+
         request = NoteSearchRequest(
             query=query,
             limit=limit,
@@ -155,7 +172,30 @@ class SearchService:
         )
 
         async with self.metastore.session() as session:
-            return await self._doc_search.search(session, request)
+            results = await self._doc_search.search(session, request)
+
+        # Enrich results with vault info (#7)
+        if results:
+            vault_names = await self._resolve_vault_names(vaults)
+            for r in results:
+                vid = r.metadata.get('vault_id')
+                if vid:
+                    r.vault_id = UUID(vid) if isinstance(vid, str) else vid
+                    r.vault_name = vault_names.get(r.vault_id)
+
+        return results
+
+    async def _resolve_vault_names(self, vault_ids: list[UUID]) -> dict[UUID, str]:
+        """Batch-resolve vault names for a list of vault IDs."""
+        from memex_core.memory.sql_models import Vault
+
+        result: dict[UUID, str] = {}
+        async with self.metastore.session() as session:
+            for vid in vault_ids:
+                vault = await session.get(Vault, vid)
+                if vault:
+                    result[vid] = vault.name
+        return result
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
         """

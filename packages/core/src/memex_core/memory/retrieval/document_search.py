@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
@@ -11,6 +12,7 @@ import dspy
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import extract, func, literal, union_all, text, Integer
 from sqlalchemy import cast as sql_cast, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -145,7 +147,14 @@ class NoteSearchEngine:
             return []
 
         results = await self._group_by_document(
-            session, merged, pool_size, mmr_lambda=request.mmr_lambda, final_limit=limit
+            session,
+            merged,
+            pool_size,
+            mmr_lambda=request.mmr_lambda,
+            final_limit=limit,
+            after=request.after,
+            before=request.before,
+            tags=request.tags,
         )
 
         # Skeleton-tree reasoning refinement
@@ -497,15 +506,27 @@ class NoteSearchEngine:
         limit: int,
         mmr_lambda: float | None = None,
         final_limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         # Group chunks by document
         doc_to_chunks: dict[UUID, list[tuple[Chunk, float]]] = {}
         for chunk, score in chunk_results:
             doc_to_chunks.setdefault(chunk.note_id, []).append((chunk, score))
 
-        # Fetch documents
+        # Fetch documents (with optional date/tag filters)
         doc_ids = list(doc_to_chunks.keys())
         doc_stmt = select(Note).where(col(Note.id).in_(doc_ids))
+        if after is not None:
+            doc_stmt = doc_stmt.where(col(Note.created_at) >= after)
+        if before is not None:
+            doc_stmt = doc_stmt.where(col(Note.created_at) <= before)
+        if tags:
+            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'
+            doc_stmt = doc_stmt.where(
+                col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+            )
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}
 
@@ -577,6 +598,7 @@ class NoteSearchEngine:
                     if key in pi_meta and pi_meta[key]:
                         metadata.setdefault(key, pi_meta[key])
             metadata.setdefault('has_assets', bool(doc.assets))
+            metadata['vault_id'] = str(doc.vault_id)
 
             final_results.append(
                 NoteSearchResult(

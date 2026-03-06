@@ -577,10 +577,29 @@ async def memex_memory_search(
         bool,
         Field(default=False, description='Include superseded (low-confidence) memory units.'),
     ] = False,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None, description='Only results before this ISO 8601 date (e.g. 2025-12-31).'
+        ),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(default=None, description='Only results from notes with ALL of these tags.'),
+    ] = None,
 ):
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
+
+        from datetime import datetime as _dt, timezone as _tz
+
+        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
+        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
 
         results = await api.search(
             query=query,
@@ -589,6 +608,9 @@ async def memex_memory_search(
             token_budget=token_budget,
             strategies=strategies,
             include_superseded=include_superseded,
+            after=after_dt,
+            before=before_dt,
+            tags=tags,
         )
 
         if not results:
@@ -659,10 +681,28 @@ async def memex_note_search(
             description='Retrieval strategies to use: semantic, keyword, graph, temporal. If None, all are used.',
         ),
     ] = None,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only notes created after this ISO 8601 date.'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(default=None, description='Only notes created before this ISO 8601 date.'),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(default=None, description='Only notes with ALL of these tags.'),
+    ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
+
+        from datetime import datetime as _dt, timezone as _tz
+
+        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
+        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
+
         results = await api.search_notes(
             query=query,
             limit=limit,
@@ -671,6 +711,9 @@ async def memex_note_search(
             summarize=False,
             vault_ids=vault_ids,
             strategies=strategies,
+            after=after_dt,
+            before=before_dt,
+            tags=tags,
         )
 
         if not results:
@@ -689,6 +732,8 @@ async def memex_note_search(
             lines.append(f'## {i}. {title}')
             lines.append(f'- **Note ID:** {doc.note_id}')
             lines.append(f'- **Score:** {doc.score:.3f}')
+            if doc.vault_name:
+                lines.append(f'- **Vault:** {doc.vault_name}')
             if hasattr(doc, 'note_status') and doc.note_status:
                 lines.append(f'- **Status:** {doc.note_status}')
             if desc := metadata.get('description'):

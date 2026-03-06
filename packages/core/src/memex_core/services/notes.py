@@ -104,8 +104,14 @@ class NoteService:
                 return None
             metadata = doc.page_index.get('metadata')
             if metadata is not None:
+                from memex_core.memory.sql_models import Vault
+
                 metadata = dict(metadata)
                 metadata.setdefault('has_assets', bool(doc.assets))
+                metadata.setdefault('vault_id', str(doc.vault_id))
+                vault = await session.get(Vault, doc.vault_id)
+                if vault:
+                    metadata.setdefault('vault_name', vault.name)
             return metadata
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:

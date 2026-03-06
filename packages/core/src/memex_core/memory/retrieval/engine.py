@@ -204,6 +204,12 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Thread temporal filters for strategy-level date filtering
+        if request.after:
+            filters['start_date'] = request.after
+        if request.before:
+            filters['end_date'] = request.before
+
         debug_ctx: DebugContext | None = DebugContext() if request.debug else None
 
         all_ranked_items = []
