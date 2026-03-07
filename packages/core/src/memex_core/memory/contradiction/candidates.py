@@ -86,7 +86,7 @@ async def _get_semantic_candidates(
     threshold: float,
 ) -> list[MemoryUnit]:
     """Find semantically similar units via pgvector cosine distance."""
-    if not unit.embedding or len(unit.embedding) == 0:
+    if unit.embedding is None or len(unit.embedding) == 0:
         return []
 
     max_distance = 1.0 - threshold
