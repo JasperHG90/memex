@@ -16,6 +16,7 @@ members = [
     "memex-cli",
     "memex-common",
     "memex-core",
+    "memex-eval",
     "memex-mcp",
 ]
 
@@ -2559,6 +2560,7 @@ dependencies = [
     { name = "memex-cli" },
     { name = "memex-common" },
     { name = "memex-core" },
+    { name = "memex-eval" },
     { name = "memex-mcp" },
 ]
 
@@ -2590,6 +2592,7 @@ requires-dist = [
     { name = "memex-cli", editable = "packages/cli" },
     { name = "memex-common", editable = "packages/common" },
     { name = "memex-core", editable = "packages/core" },
+    { name = "memex-eval", editable = "packages/eval" },
     { name = "memex-mcp", editable = "packages/mcp" },
 ]
 
@@ -2778,6 +2781,26 @@ provides-extras = ["cloud", "gcs", "s3"]
 
 [package.metadata.requires-dev]
 dev = []
+
+[[package]]
+name = "memex-eval"
+source = { editable = "packages/eval" }
+dependencies = [
+    { name = "dspy" },
+    { name = "httpx" },
+    { name = "memex-common" },
+    { name = "rich" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dspy", specifier = ">=2.6" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "memex-common", editable = "packages/common" },
+    { name = "rich", specifier = ">=13" },
+    { name = "typer", specifier = ">=0.12" },
+]
 
 [[package]]
 name = "memex-mcp"
