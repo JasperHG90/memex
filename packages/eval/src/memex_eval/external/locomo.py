@@ -1,7 +1,14 @@
 """LoCoMo benchmark runner.
 
 Evaluates Memex against the LoCoMo multi-session conversation benchmark.
-Reports accuracy by question type: Single-Hop, Multi-Hop, Open Domain, Temporal.
+Ingests a single conversation (multiple sessions as markdown notes), then
+evaluates QA pairs using LLM-as-a-judge.
+
+Dataset: https://github.com/snap-research/locomo
+Format: locomo10.json — 10 conversations, each with:
+  - conversation: dict with session_N keys (list of {speaker, text} turns)
+  - qa: list of {question, answer, evidence, category} where category is int:
+    1=single-hop, 2=multi-hop, 3=open-domain, 4=temporal, 5=adversarial
 """
 
 from __future__ import annotations
@@ -10,6 +17,8 @@ import asyncio
 import base64
 import json
 import logging
+import random
+import time
 from pathlib import Path
 
 import httpx
@@ -26,89 +35,162 @@ console = Console()
 
 VAULT_NAME = 'locomo-bench'
 
-QUESTION_TYPES = ['single_hop', 'multi_hop', 'open_domain', 'temporal']
-TYPE_NAMES = {
+CATEGORY_MAP = {
+    1: 'single_hop',
+    2: 'multi_hop',
+    3: 'open_domain',
+    4: 'temporal',
+    5: 'adversarial',
+}
+CATEGORY_NAMES = {
     'single_hop': 'Single-Hop',
     'multi_hop': 'Multi-Hop',
     'open_domain': 'Open Domain',
     'temporal': 'Temporal',
+    'adversarial': 'Adversarial',
 }
+QUESTION_TYPES = list(CATEGORY_NAMES.keys())
 
 
 def _load_dataset(dataset_path: str) -> list[dict]:
-    """Load the LoCoMo dataset.
-
-    Expected structure:
-        dataset_path/
-            conversations/
-                conv_001.json  — each has sessions + questions
-                conv_002.json
-                ...
-    OR:
-        dataset_path/
-            locomo.json  — single file with all conversations
-    """
+    """Load the LoCoMo dataset."""
     path = Path(dataset_path)
-
-    # Try single-file format
-    single_file = path / 'locomo.json'
-    if single_file.exists():
-        return json.loads(single_file.read_text())
-
-    # Try multi-file format
-    conv_dir = path / 'conversations'
-    if conv_dir.exists():
-        conversations = []
-        for f in sorted(conv_dir.glob('*.json')):
-            conversations.append(json.loads(f.read_text()))
-        return conversations
-
-    raise FileNotFoundError(f'Expected locomo.json or conversations/ directory in {path}')
+    for candidate in ['locomo.json', 'locomo10.json']:
+        f = path / candidate
+        if f.exists():
+            return json.loads(f.read_text())
+    if path.is_file() and path.suffix == '.json':
+        return json.loads(path.read_text())
+    raise FileNotFoundError(f'No LoCoMo dataset found in {path}.')
 
 
-async def _process_conversation(
+def _session_to_markdown(
+    turns: list[dict],
+    session_num: int,
+    date_time: str,
+    speaker_a: str,
+    speaker_b: str,
+) -> str:
+    """Convert a LoCoMo session (list of turns) to clean markdown."""
+    lines = [
+        f'# Conversation — Session {session_num}',
+        '',
+        f'**Date:** {date_time}' if date_time else '',
+        f'**Participants:** {speaker_a}, {speaker_b}',
+        '',
+        '---',
+        '',
+    ]
+
+    for turn in turns:
+        speaker = turn.get('speaker', 'Unknown')
+        text = turn.get('text', '')
+        lines.append(f'**{speaker}:** {text}')
+        lines.append('')
+
+    return '\n'.join(lines)
+
+
+async def _ingest_conversation(
     api: RemoteMemexAPI,
     vault_id: str,
-    conversation: dict,
-    conv_index: int,
+    conversation_data: dict,
+) -> int:
+    """Ingest all sessions from one conversation as markdown notes."""
+    conv = conversation_data['conversation']
+    sample_id = conversation_data.get('sample_id', 'unknown')
+    speaker_a = conv.get('speaker_a', 'Speaker A')
+    speaker_b = conv.get('speaker_b', 'Speaker B')
+
+    ingested = 0
+    session_num = 1
+    while f'session_{session_num}' in conv:
+        key = f'session_{session_num}'
+        date_key = f'session_{session_num}_date_time'
+        turns = conv[key]
+        date_time = conv.get(date_key, '')
+
+        markdown = _session_to_markdown(turns, session_num, date_time, speaker_a, speaker_b)
+
+        title = f'{speaker_a} & {speaker_b} — Session {session_num}'
+        description = (
+            f'Conversation between {speaker_a} and {speaker_b}, session {session_num}. {date_time}'
+        )
+
+        note = NoteCreateDTO(
+            name=title,
+            description=description,
+            content=base64.b64encode(markdown.encode('utf-8')),
+            tags=['locomo', 'conversation', f'conv-{sample_id}'],
+            vault_id=vault_id,
+            note_key=f'locomo-{sample_id}-session-{session_num}',
+        )
+
+        try:
+            response = await api.ingest(note)
+            if hasattr(response, 'status') and response.status == 'skipped':
+                logger.debug('  Session %d skipped (idempotent).', session_num)
+            else:
+                ingested += 1
+                logger.info('  Ingested session %d/%s.', session_num, key)
+        except Exception as e:
+            logger.warning('  Failed to ingest session %d: %s', session_num, e)
+
+        session_num += 1
+
+    return ingested
+
+
+async def _wait_for_extraction(api: RemoteMemexAPI, vault_id: str, timeout: int = 120) -> None:
+    """Poll stats until memory count stabilizes."""
+    last_count = -1
+    stable_rounds = 0
+    start = time.time()
+
+    while time.time() - start < timeout:
+        await asyncio.sleep(5)
+        try:
+            stats = await api.get_stats_counts(vault_ids=[vault_id])
+            current = stats.memories
+        except Exception:
+            current = 0
+
+        if current == last_count and current > 0:
+            stable_rounds += 1
+            if stable_rounds >= 2:
+                logger.info('  Extraction stable at %d memories.', current)
+                return
+        else:
+            stable_rounds = 0
+            last_count = current
+
+    logger.warning('  Extraction did not stabilize within %ds.', timeout)
+
+
+async def _evaluate_questions(
+    api: RemoteMemexAPI,
+    vault_id: str,
+    qa_items: list[dict],
     judge: Judge,
 ) -> dict[str, dict]:
-    """Process a single LoCoMo conversation: ingest sessions, evaluate questions."""
+    """Evaluate QA pairs using LLM judge."""
     results: dict[str, dict] = {
         qt: {'correct': 0, 'total': 0, 'details': []} for qt in QUESTION_TYPES
     }
 
-    # Ingest sessions
-    sessions = conversation.get('sessions', conversation.get('dialogues', []))
-    for j, session in enumerate(sessions):
-        content = session.get('content', session.get('text', json.dumps(session)))
-        title = session.get('title', f'Conv {conv_index + 1} Session {j + 1}')
+    for i, q in enumerate(qa_items):
+        cat_int = q.get('category', 1)
+        q_type = CATEGORY_MAP.get(cat_int, 'single_hop')
+        question_text = q['question']
+        expected = q.get('answer', q.get('adversarial_answer', ''))
 
-        note = NoteCreateDTO(
-            name=title,
-            description=f'LoCoMo conversation {conv_index + 1}, session {j + 1}',
-            content=base64.b64encode(content.encode('utf-8')),
-            tags=['locomo', 'benchmark'],
-            vault_id=vault_id,
-            note_key=f'locomo-c{conv_index}-s{j}',
+        logger.info(
+            '  [%d/%d] %s: %s',
+            i + 1,
+            len(qa_items),
+            CATEGORY_NAMES.get(q_type, q_type),
+            question_text[:60],
         )
-
-        response = await api.ingest(note)
-        if hasattr(response, 'status') and response.status != 'skipped':
-            logger.debug('  Session %d.%d ingested.', conv_index, j)
-
-    # Wait for extraction
-    await asyncio.sleep(5)
-
-    # Evaluate questions
-    questions = conversation.get('questions', conversation.get('qa_pairs', []))
-    for q in questions:
-        q_type = q.get('type', q.get('question_type', 'single_hop'))
-        question_text = q.get('question', q.get('query', ''))
-        expected = q.get('answer', q.get('expected_answer', ''))
-
-        if q_type not in results:
-            q_type = 'single_hop'
 
         try:
             memories = await api.search(
@@ -151,18 +233,51 @@ async def run_locomo(
     server_url: str,
     judge_model: str | None = None,
     limit: int | None = None,
+    seed: int = 42,
+    conversation_index: int = 0,
 ) -> dict:
-    """Run the full LoCoMo benchmark.
+    """Run the LoCoMo benchmark on a single conversation.
 
-    Returns a dict with per-type results and overall accuracy.
+    Args:
+        dataset_path: Path to directory containing locomo.json.
+        server_url: Memex API base URL.
+        judge_model: Override the LLM judge model.
+        limit: Randomly sample this many QA pairs (with seed).
+        seed: Random seed for reproducible sampling.
+        conversation_index: Which conversation to use (0-9).
     """
     judge = Judge(model=judge_model)
     conversations = _load_dataset(dataset_path)
 
-    if limit:
-        conversations = conversations[:limit]
+    if conversation_index >= len(conversations):
+        raise ValueError(
+            f'Conversation index {conversation_index} out of range (0-{len(conversations) - 1})'
+        )
 
-    async with httpx.AsyncClient(base_url=server_url, timeout=180.0) as client:
+    conv_data = conversations[conversation_index]
+    sample_id = conv_data.get('sample_id', conversation_index)
+    all_qa = conv_data.get('qa', [])
+    total_qa = len(all_qa)
+
+    logger.info(
+        'Using conversation %s (%d sessions, %d QA pairs).',
+        sample_id,
+        len(
+            [
+                k
+                for k in conv_data['conversation']
+                if k.startswith('session_') and not k.endswith('_date_time')
+            ]
+        ),
+        total_qa,
+    )
+
+    if limit and limit < total_qa:
+        rng = random.Random(seed)
+        all_qa = rng.sample(all_qa, limit)
+        logger.info('Sampled %d QA pairs (seed=%d).', limit, seed)
+
+    async with httpx.AsyncClient(base_url=server_url, timeout=300.0) as client:
         api = RemoteMemexAPI(client)
 
         # Setup vault
@@ -181,26 +296,36 @@ async def run_locomo(
 
         await api.set_writer_vault(vault_id)
 
-        # Process each conversation
-        aggregate: dict[str, dict] = {
-            qt: {'correct': 0, 'total': 0, 'details': []} for qt in QUESTION_TYPES
-        }
+        # Ingest
+        logger.info('Ingesting conversation sessions as markdown...')
+        t0 = time.time()
+        ingested = await _ingest_conversation(api, vault_id, conv_data)
+        ingest_time = time.time() - t0
+        logger.info('Ingested %d sessions in %.1fs.', ingested, ingest_time)
 
-        for i, conv in enumerate(conversations):
-            logger.info('Processing conversation %d/%d...', i + 1, len(conversations))
-            conv_results = await _process_conversation(api, vault_id, conv, i, judge)
+        # Wait for extraction
+        if ingested > 0:
+            await _wait_for_extraction(api, vault_id, timeout=max(120, ingested * 10))
 
-            for qt in QUESTION_TYPES:
-                aggregate[qt]['correct'] += conv_results[qt]['correct']
-                aggregate[qt]['total'] += conv_results[qt]['total']
-                aggregate[qt]['details'].extend(conv_results[qt]['details'])
+        # Evaluate
+        logger.info('Evaluating %d questions with LLM judge...', len(all_qa))
+        t1 = time.time()
+        results = await _evaluate_questions(api, vault_id, all_qa, judge)
+        eval_time = time.time() - t1
+        logger.info('Evaluation completed in %.1fs.', eval_time)
 
-    total_correct = sum(r['correct'] for r in aggregate.values())
-    total_questions = sum(r['total'] for r in aggregate.values())
+    total_correct = sum(r['correct'] for r in results.values())
+    total_questions = sum(r['total'] for r in results.values())
 
     return {
         'benchmark': 'LoCoMo',
-        'question_types': aggregate,
+        'conversation': sample_id,
+        'total_qa_in_conversation': total_qa,
+        'sampled': len(all_qa),
+        'seed': seed,
+        'ingest_time_s': round(ingest_time, 1),
+        'eval_time_s': round(eval_time, 1),
+        'question_types': results,
         'overall': {
             'correct': total_correct,
             'total': total_questions,
@@ -215,6 +340,15 @@ def print_locomo_report(results: dict) -> None:
     console.rule('[bold]LoCoMo Benchmark Results[/bold]')
     console.print()
 
+    console.print(
+        f'[dim]Conversation: {results.get("conversation", "?")} | '
+        f'{results["sampled"]}/{results["total_qa_in_conversation"]} QA pairs '
+        f'(seed={results["seed"]}) | '
+        f'Ingest: {results.get("ingest_time_s", "?")}s | '
+        f'Eval: {results.get("eval_time_s", "?")}s[/dim]'
+    )
+    console.print()
+
     table = Table(show_header=True, header_style='bold cyan')
     table.add_column('Question Type', style='white')
     table.add_column('Correct', justify='right')
@@ -225,10 +359,12 @@ def print_locomo_report(results: dict) -> None:
         data = results['question_types'].get(qt, {'correct': 0, 'total': 0})
         total = data['total']
         correct = data['correct']
-        acc = correct / total if total > 0 else 0.0
+        if total == 0:
+            continue
+        acc = correct / total
         style = 'green' if acc >= 0.7 else ('yellow' if acc >= 0.4 else 'red')
         table.add_row(
-            TYPE_NAMES.get(qt, qt),
+            CATEGORY_NAMES.get(qt, qt),
             str(correct),
             str(total),
             f'[{style}]{acc:.1%}[/{style}]',
