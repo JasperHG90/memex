@@ -59,47 +59,6 @@ def run(
 
 
 @app.command()
-def longmemeval(
-    dataset_path: str = typer.Option(
-        ..., '--dataset-path', '-d', help='Path to the LongMemEval dataset directory.'
-    ),
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    judge_model: str | None = typer.Option(
-        None, '--judge-model', help='Override the LLM judge model.'
-    ),
-    output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
-    limit: int | None = typer.Option(
-        None, '--limit', '-n', help='Limit number of questions to evaluate.'
-    ),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Run the LongMemEval benchmark against a Memex server."""
-    _setup_logging(verbose)
-
-    from memex_eval.external.longmemeval import run_longmemeval
-
-    result = asyncio.run(
-        run_longmemeval(
-            dataset_path=dataset_path,
-            server_url=server,
-            judge_model=judge_model,
-            limit=limit,
-        )
-    )
-
-    from memex_eval.external.longmemeval import print_longmemeval_report
-
-    print_longmemeval_report(result)
-
-    if output:
-        import json
-        from pathlib import Path
-
-        Path(output).write_text(json.dumps(result, indent=2))
-        console.print(f'[dim]Results exported to {output}[/dim]')
-
-
-@app.command()
 def locomo(
     dataset_path: str = typer.Option(
         ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
@@ -110,8 +69,10 @@ def locomo(
     ),
     output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
     limit: int | None = typer.Option(
-        None, '--limit', '-n', help='Limit number of conversations to evaluate.'
+        None, '--limit', '-n', help='Randomly sample this many QA pairs.'
     ),
+    seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
+    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Run the LoCoMo benchmark against a Memex server."""
@@ -125,6 +86,8 @@ def locomo(
             server_url=server,
             judge_model=judge_model,
             limit=limit,
+            seed=seed,
+            conversation_index=conversation,
         )
     )
 
