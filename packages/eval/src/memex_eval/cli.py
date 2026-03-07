@@ -1,4 +1,4 @@
-"""Typer CLI for memex-eval: `memex-eval run`, `memex-eval longmemeval`, etc."""
+"""Typer CLI for memex-eval: `memex-eval run`, `memex-eval locomo-*`, etc."""
 
 from __future__ import annotations
 
@@ -58,16 +58,12 @@ def run(
         raise typer.Exit(code=1)
 
 
-@app.command()
-def locomo(
+@app.command('locomo-export')
+def locomo_export_cmd(
     dataset_path: str = typer.Option(
         ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
     ),
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    judge_model: str | None = typer.Option(
-        None, '--judge-model', help='Override the LLM judge model.'
-    ),
-    output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
+    output: str = typer.Option('questions.jsonl', '--output', '-o', help='Output JSONL file.'),
     limit: int | None = typer.Option(
         None, '--limit', '-n', help='Randomly sample this many QA pairs.'
     ),
@@ -75,128 +71,73 @@ def locomo(
     conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
-    """Run the LoCoMo benchmark against a Memex server."""
+    """Phase 1: Export LoCoMo questions to JSONL."""
     _setup_logging(verbose)
 
-    from memex_eval.external.locomo import run_locomo
+    from memex_eval.external.locomo_export import export_questions
 
-    result = asyncio.run(
-        run_locomo(
-            dataset_path=dataset_path,
-            server_url=server,
-            judge_model=judge_model,
-            limit=limit,
-            seed=seed,
-            conversation_index=conversation,
-        )
+    export_questions(
+        dataset_path=dataset_path,
+        output=output,
+        limit=limit,
+        seed=seed,
+        conversation_index=conversation,
     )
 
-    from memex_eval.external.locomo import print_locomo_report
 
-    print_locomo_report(result)
-
-    if output:
-        import json
-        from pathlib import Path
-
-        Path(output).write_text(json.dumps(result, indent=2))
-        console.print(f'[dim]Results exported to {output}[/dim]')
-
-
-@app.command('locomo-eo')
-def locomo_eo(
-    dataset_path: str = typer.Option(
-        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
+@app.command('locomo-answer')
+def locomo_answer_cmd(
+    method: str = typer.Option(
+        'claude-code',
+        '--method',
+        '-m',
+        help='Answer method: "claude-code" or "gemini-cli".',
     ),
+    questions: str = typer.Option(
+        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
+    ),
+    output: str = typer.Option('answers.jsonl', '--output', '-o', help='Output answers JSONL.'),
     server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Phase 2: Answer LoCoMo questions using a curated CLI agent."""
+    _setup_logging(verbose)
+
+    from memex_eval.external.locomo_answer import AnswerMethod, answer_questions
+
+    answer_questions(
+        method=AnswerMethod(method),
+        questions_path=questions,
+        output_path=output,
+        server_url=server,
+    )
+
+
+@app.command('locomo-judge')
+def locomo_judge_cmd(
+    questions: str = typer.Option(
+        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
+    ),
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    output: str = typer.Option('report.json', '--output', '-o', help='Output report JSON.'),
     judge_model: str | None = typer.Option(
         None, '--judge-model', help='Override the LLM judge model.'
     ),
-    output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
-    event_limit: int | None = typer.Option(None, '--event-limit', help='Sample this many events.'),
-    obs_limit: int | None = typer.Option(
-        None, '--obs-limit', help='Sample this many observations.'
-    ),
-    seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
-    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
-    """Run the LoCoMo Events & Observations recall benchmark."""
+    """Phase 3: Judge LoCoMo answers and produce a graded report."""
     _setup_logging(verbose)
 
-    from memex_eval.external.locomo_eo import run_locomo_eo
+    from memex_eval.external.locomo_judge import judge_answers
 
-    result = asyncio.run(
-        run_locomo_eo(
-            dataset_path=dataset_path,
-            server_url=server,
+    asyncio.run(
+        judge_answers(
+            questions_path=questions,
+            answers_path=answers,
+            output_path=output,
             judge_model=judge_model,
-            event_limit=event_limit,
-            obs_limit=obs_limit,
-            seed=seed,
-            conversation_index=conversation,
         )
     )
-
-    from memex_eval.external.locomo_eo import print_locomo_eo_report
-
-    print_locomo_eo_report(result)
-
-    if output:
-        import json
-        from pathlib import Path
-
-        Path(output).write_text(json.dumps(result, indent=2))
-        console.print(f'[dim]Results exported to {output}[/dim]')
-
-
-@app.command('locomo-agent')
-def locomo_agent(
-    dataset_path: str = typer.Option(
-        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
-    ),
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    agent_model: str | None = typer.Option(
-        None, '--agent-model', help='LLM model for the retrieval agent.'
-    ),
-    judge_model: str | None = typer.Option(
-        None, '--judge-model', help='Override the LLM judge model.'
-    ),
-    output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
-    limit: int | None = typer.Option(
-        None, '--limit', '-n', help='Randomly sample this many QA pairs.'
-    ),
-    seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
-    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Run the LoCoMo agent-based benchmark (two-speed retrieval)."""
-    _setup_logging(verbose)
-
-    from memex_eval.external.locomo_agent import run_locomo_agent
-
-    result = asyncio.run(
-        run_locomo_agent(
-            dataset_path=dataset_path,
-            server_url=server,
-            agent_model=agent_model,
-            judge_model=judge_model,
-            limit=limit,
-            seed=seed,
-            conversation_index=conversation,
-        )
-    )
-
-    from memex_eval.external.locomo_agent import print_locomo_agent_report
-
-    print_locomo_agent_report(result)
-
-    if output:
-        import json
-        from pathlib import Path
-
-        Path(output).write_text(json.dumps(result, indent=2))
-        console.print(f'[dim]Results exported to {output}[/dim]')
 
 
 def _setup_logging(verbose: bool) -> None:
