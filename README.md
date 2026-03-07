@@ -190,7 +190,7 @@ First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compati
 
 ### REST API and webhooks
 
-A full FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`note.created`, `reflection.completed`, etc.).
+A full FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
 
 ### Dashboard
 
@@ -260,6 +260,23 @@ git push && git push --tags
 ```
 
 The `release.yaml` GitHub Action automatically builds all artifacts (Python, dashboard, OpenClaw) and creates a GitHub Release with auto-generated release notes.
+
+## Evaluation
+
+Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 60 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
+
+### Preliminary results (LoCoMo)
+
+| Category | Count | Score |
+|---|---|---|
+| Single-Hop | 11 | 0.886 |
+| Multi-Hop | 14 | 0.857 |
+| Open Domain | 3 | 0.833 |
+| Temporal | 18 | 0.986 |
+| Adversarial | 14 | 0.929 |
+| **Overall** | **60** | **0.917** |
+
+Answering model: Claude Opus 4. Judging model: Gemini 2.5 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. The 3 remaining errors are date-recall mistakes (off by one week). See [`packages/eval`](./packages/eval/README.md) for full methodology, scoring criteria, and review notes.
 
 ## 🏗️ Architecture
 
