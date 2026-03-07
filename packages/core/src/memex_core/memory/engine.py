@@ -2,8 +2,6 @@ from collections import defaultdict
 import logging
 from typing import Any
 
-import asyncio
-
 import dspy
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel import select, col
@@ -238,22 +236,24 @@ class MemoryEngine:
             # Note: extract_and_persist already called queue_service.handle_extraction_event,
             # so entities are already in the queue with PENDING status.
 
-        # 3. Contradiction Detection (Background Task)
+        # 3. Contradiction Detection — return as pending background work
+        #    The caller (server route) should schedule this via FastAPI BackgroundTasks
+        #    rather than asyncio.create_task, which is unreliable under gunicorn.
+        contradiction_task = None
         if self.contradiction and self._session_factory and unit_ids:
-            asyncio.create_task(
-                self.contradiction.detect_contradictions(
-                    session_factory=self._session_factory,
-                    document_id=note_id,
-                    unit_ids=unit_ids,
-                    vault_id=vault_id,
-                )
+            contradiction_task = self.contradiction.detect_contradictions(
+                session_factory=self._session_factory,
+                document_id=note_id,
+                unit_ids=unit_ids,
+                vault_id=vault_id,
             )
-            logger.info('Contradiction detection task scheduled for %d units.', len(unit_ids))
+            logger.info('Contradiction detection prepared for %d units.', len(unit_ids))
 
         return {
             'unit_ids': unit_ids,
             'usage': usage,
             'touched_entities': touched_entities,
+            'contradiction_task': contradiction_task,
         }
 
     async def recall(
