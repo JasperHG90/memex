@@ -492,6 +492,14 @@ class RetrievalConfig(BaseModel):
         default=True,
         description='Enable NLP-based temporal constraint extraction from queries using dateparser.',
     )
+    fact_type_partitioned_rrf: bool = Field(
+        default=False,
+        description='Run RRF independently per fact type, then interleave results.',
+    )
+    fact_type_budget: int = Field(
+        default=20,
+        description='Per-type candidate limit when fact_type_partitioned_rrf is enabled.',
+    )
 
 
 class ContradictionConfig(BaseModel):
