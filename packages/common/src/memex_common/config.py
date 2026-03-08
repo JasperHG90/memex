@@ -479,6 +479,16 @@ class RetrievalConfig(BaseModel):
         default=0.4,
         description='Entity Jaccard weight in hybrid similarity kernel.',
     )
+    reranking_recency_alpha: float = Field(
+        default=0.2,
+        description='Multiplicative recency boost strength for cross-encoder reranking. '
+        '0 = no boost (backward compatible).',
+    )
+    reranking_temporal_alpha: float = Field(
+        default=0.2,
+        description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
+        '0 = no boost (backward compatible).',
+    )
 
 
 class AuthConfig(BaseModel):
