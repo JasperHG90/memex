@@ -160,3 +160,75 @@ class TestDefaultBehaviorUnchanged:
         sql = str(stmt.compile())
         assert 'UNION ALL' in sql
         assert 'chunks' in sql
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and negative tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSeedEntityCteEdgeCases:
+    def test_empty_query_returns_cte(self) -> None:
+        """build_seed_entity_cte with an empty query still returns a valid CTE."""
+        cte = build_seed_entity_cte('')
+        assert isinstance(cte, CTE)
+        col_names = [c.name for c in cte.c]
+        assert 'id' in col_names
+        assert 'weight' in col_names
+
+    def test_ner_model_none_explicit(self) -> None:
+        """Explicitly passing ner_model=None uses the fallback similarity path."""
+        cte = build_seed_entity_cte('Alice and Bob', ner_model=None)
+        assert isinstance(cte, CTE)
+        sql = str(cte.compile())
+        assert 'similarity' in sql or 'LIKE' in sql
+
+    def test_ner_returns_empty_list_falls_back(self) -> None:
+        """When NER returns an empty list, fallback path is used."""
+
+        class EmptyNER:
+            def predict(self, text: str) -> list[dict[str, str]]:
+                return []
+
+        cte = build_seed_entity_cte('hello world', ner_model=EmptyNER())  # type: ignore[arg-type]
+        assert isinstance(cte, CTE)
+        sql = str(cte.compile())
+        # Should use fallback (similarity / LIKE), not NER path
+        assert 'similarity' in sql or 'LIKE' in sql
+
+    def test_ner_raises_exception_falls_back(self) -> None:
+        """When NER raises an exception, fallback path is used without propagating."""
+
+        class FailingNER:
+            def predict(self, text: str) -> list[dict[str, str]]:
+                raise RuntimeError('NER model failed')
+
+        cte = build_seed_entity_cte(
+            'Tell me about Alice',
+            ner_model=FailingNER(),  # type: ignore[arg-type]
+        )
+        assert isinstance(cte, CTE)
+
+
+class TestGetGraphStrategyEdgeCases:
+    def test_similarity_threshold_zero(self) -> None:
+        """similarity_threshold=0.0 is accepted (most permissive)."""
+        strategy = get_graph_strategy(similarity_threshold=0.0)
+        assert isinstance(strategy, EntityCooccurrenceGraphStrategy)
+        assert strategy.similarity_threshold == 0.0  # type: ignore[union-attr]
+
+    def test_similarity_threshold_one(self) -> None:
+        """similarity_threshold=1.0 is accepted (most restrictive)."""
+        strategy = get_graph_strategy(similarity_threshold=1.0)
+        assert isinstance(strategy, EntityCooccurrenceGraphStrategy)
+        assert strategy.similarity_threshold == 1.0  # type: ignore[union-attr]
+
+    def test_empty_type_string_raises(self) -> None:
+        """Empty type string raises ValueError."""
+        with pytest.raises(ValueError, match='Unknown graph retriever type'):
+            get_graph_strategy(type='')
+
+    def test_note_factory_empty_type_string_raises(self) -> None:
+        """Empty type string raises ValueError for note factory."""
+        with pytest.raises(ValueError, match='Unknown note graph retriever type'):
+            get_note_graph_strategy(type='')

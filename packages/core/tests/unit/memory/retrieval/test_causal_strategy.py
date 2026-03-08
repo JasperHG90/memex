@@ -144,3 +144,50 @@ def test_causal_note_graph_sql_contains_union_all():
     stmt = strategy.get_statement('test query', None)
     sql = str(stmt.compile())
     assert 'UNION ALL' in sql
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and negative tests
+# ---------------------------------------------------------------------------
+
+
+def test_causal_weight_threshold_zero():
+    """threshold=0.0 accepts all links (most permissive boundary)."""
+    strategy = CausalGraphStrategy(causal_weight_threshold=0.0)
+    stmt = strategy.get_statement('test', None)
+    sql = str(stmt.compile())
+    # SQL should still compile and contain link_type filter
+    assert 'link_type' in sql
+
+
+def test_causal_weight_threshold_one():
+    """threshold=1.0 filters out almost everything (most restrictive boundary)."""
+    strategy = CausalGraphStrategy(causal_weight_threshold=1.0)
+    stmt = strategy.get_statement('test', None)
+    sql = str(stmt.compile())
+    assert 'link_type' in sql
+
+
+def test_empty_query_compiles():
+    """Empty query string still produces valid SQL."""
+    strategy = CausalGraphStrategy()
+    stmt = strategy.get_statement('', None)
+    sql = str(stmt.compile())
+    assert sql  # non-empty
+
+
+def test_note_factory_kwargs_passthrough():
+    """Factory kwargs pass causal_weight_threshold to note strategy."""
+    strategy = get_note_graph_strategy('causal', causal_weight_threshold=0.8)
+    assert isinstance(strategy, CausalNoteGraphStrategy)
+    assert strategy.causal_weight_threshold == 0.8
+
+
+def test_causal_graph_strategy_with_embedding():
+    """CausalGraphStrategy works when query_embedding is provided."""
+    strategy = CausalGraphStrategy()
+    embedding = [0.1] * 384
+    stmt = strategy.get_statement('test query', embedding)
+    sql = str(stmt.compile())
+    assert sql
+    assert 'link_type' in sql
