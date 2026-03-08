@@ -27,6 +27,7 @@ from memex_core.memory.retrieval.strategies import (
     MentalModelStrategy,
 )
 from memex_core.memory.retrieval.expansion import QueryExpander
+from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
 from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
@@ -182,8 +183,26 @@ class RetrievalEngine:
         use_reranker = self.reranker is not None and request.rerank
         candidate_depth = max(effective_limit * 3, 50) if use_reranker else effective_limit
 
-        # 4. Perform Retrieval (Fused across all queries)
+        # 3b. NLP Temporal Extraction (upstream of RRF)
+        # Only extract if no explicit date filters were provided and feature is enabled.
         filters = request.filters or {}
+        if (
+            self.retrieval_config.temporal_extraction_enabled
+            and 'start_date' not in filters
+            and 'end_date' not in filters
+        ):
+            temporal_range = extract_temporal_constraint(request.query)
+            if temporal_range is not None:
+                filters['start_date'] = temporal_range[0]
+                filters['end_date'] = temporal_range[1]
+                logger.debug(
+                    'Temporal extraction: %s -> %s to %s',
+                    request.query,
+                    temporal_range[0],
+                    temporal_range[1],
+                )
+
+        # 4. Perform Retrieval (Fused across all queries)
         if request.vault_ids:
             filters['vault_ids'] = request.vault_ids
 
