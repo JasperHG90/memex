@@ -500,6 +500,16 @@ class RetrievalConfig(BaseModel):
         default=20,
         description='Per-type candidate limit when fact_type_partitioned_rrf is enabled.',
     )
+    reranking_recency_alpha: float = Field(
+        default=0.2,
+        description='Multiplicative recency boost strength for cross-encoder reranking. '
+        '0 = no boost (backward compatible).',
+    )
+    reranking_temporal_alpha: float = Field(
+        default=0.2,
+        description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
+        '0 = no boost (backward compatible).',
+    )
 
 
 class ContradictionConfig(BaseModel):

@@ -380,12 +380,9 @@ class RetrievalEngine:
         Rank 4-10: 60/40
         Rank 11+: 40/60
         """
-        # Note: input 'results' is already sorted by reranker if reranking was used.
-        # However, position-aware blending usually implies we have two different orders.
-        # For simplicity in this implementation, we assume 'results' maintains reranker order
-        # and we use it as is, or we could pass original RRF order too.
-        # Given the task mandate: "Position-Aware Blending: Rank 1-3 (75% retrieval / 25% reranker)..."
-        # We'll just return results for now as reranking is already the dominant signal in modern RAG.
+        # TODO(T6): This is a NO-OP. Either implement position-aware blending
+        # with dual orderings (RRF + reranker) or remove this method. Kept because
+        # callers reference `fusion_strategy='position_aware'` in RetrievalRequest.
         return results
 
     def _resolve_active_strategies(
@@ -815,7 +812,7 @@ class RetrievalEngine:
     def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
-        """Re-ranks results using a Cross-Encoder."""
+        """Re-ranks results using a Cross-Encoder with recency and temporal boosts."""
         if not self.reranker or not results:
             return results
 
@@ -835,15 +832,41 @@ class RetrievalEngine:
 
             scores = self.reranker.score(query, formatted_texts)
 
+            # Normalize cross-encoder scores to [0, 1] via sigmoid
+            normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
+
+            # Apply multiplicative recency and temporal proximity boosts
+            now = datetime.now(timezone.utc)
+            recency_alpha = self.retrieval_config.reranking_recency_alpha
+            temporal_alpha = self.retrieval_config.reranking_temporal_alpha
+
+            boosted_scores: list[float] = []
+            for unit, ce_score in zip(results, normalized_scores):
+                # Recency boost
+                if unit.event_date is not None:
+                    days_ago = (now - unit.event_date).days
+                    recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
+                else:
+                    recency = 0.5  # neutral when no event_date
+
+                recency_boost = 1.0 + recency_alpha * (recency - 0.5)
+
+                # Temporal proximity boost
+                temporal: float | None = getattr(unit, 'temporal_proximity', None)
+                if temporal is None:
+                    temporal = 0.5  # neutral
+                temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)
+
+                boosted_scores.append(ce_score * recency_boost * temporal_boost)
+
             scored_results = []
-            for unit, score in zip(results, scores):
-                # Apply sigmoid threshold if requested
+            for unit, boosted, raw_score in zip(results, boosted_scores, scores):
+                # Apply sigmoid threshold on raw score if requested
                 if min_score is not None:
-                    # sigmoid(x) = 1 / (1 + exp(-x))
-                    prob = 1.0 / (1.0 + math.exp(-score))
+                    prob = 1.0 / (1.0 + math.exp(-raw_score))
                     if prob < min_score:
                         continue
-                scored_results.append((unit, score))
+                scored_results.append((unit, boosted))
 
             scored_results.sort(key=lambda x: x[1], reverse=True)
             return [item[0] for item in scored_results]
