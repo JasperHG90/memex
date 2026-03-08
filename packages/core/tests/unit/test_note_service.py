@@ -23,17 +23,30 @@ def note_service():
 async def test_get_note_metadata_returns_metadata(note_service):
     """get_note_metadata returns the metadata dict when page_index has one."""
     note_id = uuid4()
+    vault_id = uuid4()
     metadata = {'title': 'Test', 'description': 'Desc', 'tags': ['a']}
     mock_note = MagicMock()
     mock_note.page_index = {'metadata': metadata, 'toc': []}
+    mock_note.assets = ['file.png']
+    mock_note.vault_id = vault_id
+
+    mock_vault = MagicMock()
+    mock_vault.name = 'test-vault'
 
     mock_session = AsyncMock()
-    mock_session.get.return_value = mock_note
+    mock_session.get = AsyncMock(
+        side_effect=lambda model, id: mock_note if id == note_id else mock_vault
+    )
     note_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
     note_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
 
     result = await note_service.get_note_metadata(note_id)
-    assert result == metadata
+    assert result['title'] == 'Test'
+    assert result['description'] == 'Desc'
+    assert result['tags'] == ['a']
+    assert result['has_assets'] is True
+    assert result['vault_id'] == str(vault_id)
+    assert result['vault_name'] == 'test-vault'
 
 
 @pytest.mark.asyncio

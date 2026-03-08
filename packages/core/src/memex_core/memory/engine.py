@@ -3,10 +3,12 @@ import logging
 from typing import Any
 
 import dspy
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
+from memex_core.memory.contradiction import ContradictionEngine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.reflect.models import ReflectionRequest
@@ -80,11 +82,35 @@ async def get_memory_engine(
             retrieval_config=config.server.memory.retrieval,
         )
 
+    contradiction_engine = _build_contradiction_engine(config)
+
     return MemoryEngine(
         config=config,
         extraction_engine=extraction_engine,
         retrieval_engine=retrieval_engine,
+        contradiction_engine=contradiction_engine,
     )
+
+
+def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | None:
+    """Create a ContradictionEngine if enabled in config."""
+    try:
+        contradiction_config = config.server.memory.contradiction
+        if not contradiction_config.enabled:
+            return None
+        model_config = contradiction_config.model
+        if model_config is None:
+            logger.warning('contradiction.model is None — skipping contradiction engine')
+            return None
+        lm = dspy.LM(
+            model=model_config.model,
+            api_base=str(model_config.base_url) if model_config.base_url else None,
+            api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
+        )
+        return ContradictionEngine(lm=lm, config=contradiction_config)
+    except (AttributeError, TypeError, ValueError, RuntimeError) as e:
+        logger.warning('Failed to build contradiction engine: %s', e)
+        return None
 
 
 class MemoryEngine:
@@ -109,6 +135,8 @@ class MemoryEngine:
         config: MemexConfig,
         extraction_engine: ExtractionEngine,
         retrieval_engine: RetrievalEngine,
+        contradiction_engine: ContradictionEngine | None = None,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ):
         """
         Initialize the MemoryEngine.
@@ -117,10 +145,14 @@ class MemoryEngine:
             config: The global configuration.
             extraction_engine: Pre-configured ExtractionEngine instance.
             retrieval_engine: Pre-configured RetrievalEngine instance.
+            contradiction_engine: Optional ContradictionEngine for retain-time detection.
+            session_factory: Session factory for background tasks (contradiction detection).
         """
         self.config = config
         self.extraction = extraction_engine
         self.retrieval = retrieval_engine
+        self.contradiction = contradiction_engine
+        self._session_factory = session_factory
 
     async def retain(
         self,
@@ -204,10 +236,24 @@ class MemoryEngine:
             # Note: extract_and_persist already called queue_service.handle_extraction_event,
             # so entities are already in the queue with PENDING status.
 
+        # 3. Contradiction Detection — return as pending background work
+        #    The caller (server route) should schedule this via FastAPI BackgroundTasks
+        #    rather than asyncio.create_task, which is unreliable under gunicorn.
+        contradiction_task = None
+        if self.contradiction and self._session_factory and unit_ids:
+            contradiction_task = self.contradiction.detect_contradictions(
+                session_factory=self._session_factory,
+                document_id=note_id,
+                unit_ids=unit_ids,
+                vault_id=vault_id,
+            )
+            logger.info('Contradiction detection prepared for %d units.', len(unit_ids))
+
         return {
             'unit_ids': unit_ids,
             'usage': usage,
             'touched_entities': touched_entities,
+            'contradiction_task': contradiction_task,
         }
 
     async def recall(

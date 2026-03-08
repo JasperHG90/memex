@@ -96,7 +96,7 @@ async def test_get_entity_mentions(api, metastore, init_global_vault):
         data = [json.loads(line) for line in response.text.splitlines() if line.strip()]
         assert len(data) == 1
         assert data[0]['unit']['text'] == 'Target mentioned here'
-        assert 'document' in data[0]
+        assert 'note' in data[0]
 
 
 @pytest.mark.integration

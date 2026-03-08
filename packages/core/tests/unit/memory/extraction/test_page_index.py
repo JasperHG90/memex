@@ -13,6 +13,7 @@ from memex_core.memory.extraction.models import (
     content_hash_md5,
     estimate_token_count,
 )
+from memex_core.memory.extraction.pipeline.diffing import build_page_index_with_metadata
 from memex_core.memory.extraction.utils import (
     assess_structure_quality,
     build_tree_from_regex_headers,
@@ -615,3 +616,78 @@ def _collect_nodes_with_content(nodes: list[TOCNode]) -> list[TOCNode]:
             result.append(node)
         result.extend(_collect_nodes_with_content(node.children))
     return result
+
+
+# ---------------------------------------------------------------------------
+# build_page_index_with_metadata — total_tokens injection
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPageIndexWithMetadataTotalTokens:
+    def test_total_tokens_included_in_metadata(self) -> None:
+        """build_page_index_with_metadata should inject total_tokens into metadata."""
+        headers = detect_markdown_headers_regex(STRUCTURED_DOC)
+        tree = build_tree_from_regex_headers(headers)
+        hydrate_tree(tree, headers, STRUCTURED_DOC)
+        for node in tree:
+            node._assign_content_hash_ids()
+
+        metadata = {'title': 'ML Overview', 'description': 'A doc'}
+        result = build_page_index_with_metadata(tree, metadata)
+
+        assert 'total_tokens' in result['metadata']
+        assert isinstance(result['metadata']['total_tokens'], int)
+        assert result['metadata']['total_tokens'] > 0
+
+    def test_total_tokens_sums_all_nodes(self) -> None:
+        """total_tokens should equal the recursive sum of all node token_estimates."""
+        headers = detect_markdown_headers_regex(STRUCTURED_DOC)
+        tree = build_tree_from_regex_headers(headers)
+        hydrate_tree(tree, headers, STRUCTURED_DOC)
+        for node in tree:
+            node._assign_content_hash_ids()
+
+        metadata = {'title': 'Test'}
+        result = build_page_index_with_metadata(tree, metadata)
+
+        # Manually sum token_estimate from the thin tree
+        def _sum(nodes: list[dict]) -> int:
+            total = 0
+            for n in nodes:
+                total += n.get('token_estimate', 0) or 0
+                total += _sum(n.get('children', []))
+            return total
+
+        expected = _sum(result['toc'])
+        assert result['metadata']['total_tokens'] == expected
+
+    def test_does_not_mutate_caller_metadata(self) -> None:
+        """The original metadata dict should not be modified."""
+        node = TOCNode(
+            original_header_id=0,
+            title='Root',
+            level=1,
+            reasoning='test',
+            content='Some content here.',
+            token_estimate=10,
+        )
+        node._assign_content_hash_ids()
+
+        original_metadata = {'title': 'Immutable'}
+        build_page_index_with_metadata([node], original_metadata)
+
+        assert 'total_tokens' not in original_metadata
+
+    def test_total_tokens_zero_when_no_estimates(self) -> None:
+        """total_tokens should be 0 when nodes have no token_estimate."""
+        node = TOCNode(
+            original_header_id=0,
+            title='Empty',
+            level=1,
+            reasoning='test',
+            content=None,
+        )
+        node._assign_content_hash_ids()
+
+        result = build_page_index_with_metadata([node], {'title': 'Test'})
+        assert result['metadata']['total_tokens'] == 0

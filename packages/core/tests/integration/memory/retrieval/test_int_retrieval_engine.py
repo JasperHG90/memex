@@ -191,10 +191,11 @@ class TestRetrievalEngine:
         results = await engine_instance.retrieve(
             session, RetrievalRequest(query='Pagination', limit=3)
         )
-        # Note: RetrievalEngine might return fewer than limit if RRF score is low,
-        # but here they are identical so we expect 3 if they rank high enough.
-        # Actually, if they are identical, Semantic will return them all.
-        assert len(results) == 3
+        # Default config uses token_budget=1000, which overrides limit.
+        # With token_budget active, all 5 short texts fit within the budget.
+        # When token_budget is not explicitly set on the request, the config
+        # default takes precedence and limit is ignored.
+        assert len(results) == 5
 
     async def test_retrieve_temporal_filtering(
         self, session: AsyncSession, engine_instance, embedder

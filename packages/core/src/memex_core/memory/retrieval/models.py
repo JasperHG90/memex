@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 from typing import Any, Self
 from pydantic import Field, model_validator
@@ -63,6 +64,10 @@ class RetrievalRequest(SQLModel):
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )
+    include_superseded: bool = Field(
+        default=False,
+        description='Whether to include superseded (low-confidence) memory units in results.',
+    )
     debug: bool = Field(
         default=False,
         description=(
@@ -72,6 +77,17 @@ class RetrievalRequest(SQLModel):
     mmr_lambda: float | None = Field(
         default=None,
         description='Per-request MMR lambda override. None=use config default.',
+    )
+
+    # Temporal filtering
+    after: datetime | None = Field(default=None, description='Only return results after this date.')
+    before: datetime | None = Field(
+        default=None, description='Only return results before this date.'
+    )
+
+    # Tag filtering
+    tags: list[str] | None = Field(
+        default=None, description='Only return results from notes with ALL of these tags.'
     )
 
     @model_validator(mode='after')

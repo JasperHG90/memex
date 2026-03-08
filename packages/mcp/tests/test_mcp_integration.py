@@ -1,6 +1,6 @@
 import datetime as dt
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from fastmcp import Client
@@ -106,6 +106,7 @@ async def test_integration_search_assets_resource(mock_api):
     )
 
     # 3. Setup Resource Data (for Get Resource)
+    mock_api.get_resource_path = MagicMock(return_value='/data/assets/arch.png')
     mock_api.get_resource.return_value = b'fake_image_bytes'
 
     async with Client(mcp) as client:
@@ -125,5 +126,5 @@ async def test_integration_search_assets_resource(mock_api):
         # Step 3: Get Resource
         await client.call_tool('memex_get_resource', {'path': 'assets/arch.png'})
 
-        # Verify it returns Image or Data
-        mock_api.get_resource.assert_called_once_with('assets/arch.png')
+        # Verify it returns file:// URI for local images
+        mock_api.get_resource_path.assert_called_once_with('assets/arch.png')

@@ -30,6 +30,47 @@ export function formatEntityContext(entities: EntityDTO[]): string {
 }
 
 /**
+ * Format a single memory unit for tool output, including confidence and
+ * supersession context when available.
+ */
+export function formatMemoryUnit(m: MemoryUnitDTO, index: number): string {
+  const parts: string[] = [];
+
+  // Main line: index, type, text
+  let line = `${index}. [${m.fact_type}] ${m.text}`;
+
+  // Confidence indicator (only when < 1.0)
+  if (m.confidence != null && m.confidence < 1.0) {
+    line += ` [conf: ${m.confidence}]`;
+  }
+
+  // Score
+  if (m.score != null) {
+    line += ` (score: ${m.score})`;
+  }
+
+  // Date
+  if (m.mentioned_at) {
+    line += ` (${m.mentioned_at})`;
+  }
+
+  parts.push(line);
+
+  // Unit/Note IDs for citation
+  parts.push(`   Unit: ${m.id} | Note: ${m.document_id ?? m.source_document_ids[0] ?? 'unknown'}`);
+
+  // Supersession context
+  const supersessions = m.unit_metadata?.superseded_by;
+  if (supersessions && supersessions.length > 0) {
+    for (const s of supersessions) {
+      parts.push(`   ⚠ Superseded by: ${s.unit_text} (${s.relation})`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/**
  * Format memory units as XML-tagged context for injection into prompts.
  * Includes a safety preamble to prevent prompt injection from stored memories.
  * Optionally appends entity context when entities are provided.

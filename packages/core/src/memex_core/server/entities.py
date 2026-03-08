@@ -19,6 +19,7 @@ from memex_core.server.common import (
     get_api,
     ndjson_openapi,
     ndjson_response,
+    resolve_vault_ids,
 )
 
 router = APIRouter(prefix='/api/v1')
@@ -36,7 +37,7 @@ async def list_entities(
     sort: Literal['-mentions'] | None = Query(
         None, description='Sort option: -mentions for top by mention count'
     ),
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """
     List entities.
@@ -45,9 +46,9 @@ async def list_entities(
     - limit: Maximum number of entities to return
     - q: Optional search query for name-based search
     - sort: Optional sort option. Use '-mentions' for top entities by mention count.
-    - vault_id: Optional vault ID(s) to filter by. Repeat for multiple vaults.
+    - vault_id: Optional vault ID(s) or name(s) to filter by. Repeat for multiple vaults.
     """
-    vault_ids = vault_id if vault_id else None
+    vault_ids = await resolve_vault_ids(api, vault_id)
     if q:
         try:
             entities = await api.search_entities(query=q, limit=limit, vault_ids=vault_ids)
@@ -74,12 +75,12 @@ async def list_entities(
 async def get_bulk_cooccurrences(
     ids: str,
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get co-occurrences for a set of entity IDs."""
     try:
         id_list = [UUID(i.strip()) for i in ids.split(',') if i.strip()]
-        vault_ids = vault_id if vault_id else None
+        vault_ids = await resolve_vault_ids(api, vault_id)
         cos = await api.get_bulk_cooccurrences(id_list, vault_ids=vault_ids)
         items = [
             {
@@ -104,11 +105,11 @@ async def get_entity_mentions(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: int = 20,
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get mentions for an entity."""
     try:
-        vault_ids = vault_id if vault_id else None
+        vault_ids = await resolve_vault_ids(api, vault_id)
         results = await api.get_entity_mentions(id, limit=limit, vault_ids=vault_ids)
         items = [
             {
@@ -116,14 +117,17 @@ async def get_entity_mentions(
                     id=r['unit'].id,
                     text=r['unit'].text,
                     fact_type=r['unit'].fact_type,
+                    status=r['unit'].status,
                     metadata=r['unit'].unit_metadata,
                     note_id=r['unit'].note_id,
                     vault_id=r['unit'].vault_id,
                     mentioned_at=r['unit'].mentioned_at,
                     occurred_start=r['unit'].occurred_start,
                     occurred_end=r['unit'].occurred_end,
+                    chunk_id=getattr(r['unit'], 'chunk_id', None),
+                    confidence=getattr(r['unit'], 'confidence', 1.0) or 1.0,
                 ),
-                'document': build_note_dto(r['document']),
+                'note': build_note_dto(r['document']),
             }
             for r in results
         ]
@@ -152,11 +156,11 @@ async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
 async def get_entity_cooccurrences(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get co-occurrence edges for an entity."""
     try:
-        vault_ids = vault_id if vault_id else None
+        vault_ids = await resolve_vault_ids(api, vault_id)
         cos = await api.get_entity_cooccurrences(id, vault_ids=vault_ids)
         items = [
             {
@@ -209,7 +213,7 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
 async def delete_mental_model(
     entity_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    vault_id: UUID | None = None,
+    vault_id: str | None = None,
 ):
     """Delete a mental model for a specific entity in a specific vault."""
     try:

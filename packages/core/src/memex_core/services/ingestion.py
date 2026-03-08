@@ -266,6 +266,13 @@ ingested_at: {now}
             result['note_id'] = note_uuid
             result['status'] = 'success'
 
+            # Overlap detection: find similar existing notes via chunk embeddings
+            overlapping = await self._detect_overlapping_notes(
+                txn.db_session, note_uuid, target_vault_id
+            )
+            if overlapping:
+                result['overlapping_notes'] = overlapping
+
             return result
 
     async def ingest_batch_internal(
@@ -396,3 +403,64 @@ ingested_at: {now}
                 results['errors'].append({'chunk_start': i, 'error': str(e)})
 
             yield results
+
+    async def _detect_overlapping_notes(
+        self,
+        session: Any,
+        note_id: UUID,
+        vault_id: UUID,
+        similarity_threshold: float = 0.85,
+        max_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Find existing notes with high chunk-level similarity to the newly ingested note."""
+        from sqlalchemy import text as sql_text
+
+        # Use raw SQL for pgvector cosine distance aggregation
+        query = sql_text("""
+            WITH new_chunks AS (
+                SELECT embedding
+                FROM chunks
+                WHERE note_id = :note_id AND embedding IS NOT NULL
+            ),
+            similarities AS (
+                SELECT
+                    c.note_id,
+                    AVG(1 - (c.embedding <=> nc.embedding)) AS avg_similarity
+                FROM chunks c
+                CROSS JOIN new_chunks nc
+                WHERE c.note_id != :note_id
+                  AND c.vault_id = :vault_id
+                  AND c.status = 'active'
+                  AND c.embedding IS NOT NULL
+                GROUP BY c.note_id
+                HAVING AVG(1 - (c.embedding <=> nc.embedding)) >= :threshold
+                ORDER BY avg_similarity DESC
+                LIMIT :max_results
+            )
+            SELECT s.note_id, s.avg_similarity, n.title
+            FROM similarities s
+            JOIN notes n ON n.id = s.note_id
+        """)
+
+        try:
+            result = await session.exec(
+                query,
+                params={
+                    'note_id': str(note_id),
+                    'vault_id': str(vault_id),
+                    'threshold': similarity_threshold,
+                    'max_results': max_results,
+                },
+            )
+            rows = result.all()
+            return [
+                {
+                    'note_id': str(row[0]),
+                    'similarity': round(float(row[1]), 4),
+                    'title': row[2],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.warning(f'Overlap detection failed (non-fatal): {e}')
+            return []
