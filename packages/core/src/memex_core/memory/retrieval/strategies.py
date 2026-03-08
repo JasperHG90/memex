@@ -890,8 +890,6 @@ class CausalNoteGraphStrategy:
 # Link-expansion graph strategies (T4)
 # ---------------------------------------------------------------------------
 
-_CAUSAL_LINK_TYPES = ('causes', 'caused_by', 'enables', 'prevents')
-
 
 class LinkExpansionGraphStrategy:
     """Graph retrieval expanding through 3 link signals with additive scoring.
@@ -993,7 +991,7 @@ class LinkExpansionGraphStrategy:
             )
             .select_from(MemoryLink)
             .join(first_order, col(MemoryLink.from_unit_id) == first_order.c.unit_id)
-            .where(col(MemoryLink.link_type).in_(_CAUSAL_LINK_TYPES))
+            .where(col(MemoryLink.link_type).in_(CAUSAL_LINK_TYPES))
             .where(col(MemoryLink.weight) >= self.causal_threshold)
         )
 
