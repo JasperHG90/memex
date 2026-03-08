@@ -185,7 +185,7 @@ class RetrievalEngine:
 
         # 3b. NLP Temporal Extraction (upstream of RRF)
         # Only extract if no explicit date filters were provided and feature is enabled.
-        filters = request.filters or {}
+        filters = dict(request.filters) if request.filters else {}
         if (
             self.retrieval_config.temporal_extraction_enabled
             and 'start_date' not in filters

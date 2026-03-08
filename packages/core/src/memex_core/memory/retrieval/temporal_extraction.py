@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -105,8 +106,6 @@ _MONTH_NAMES = {
 
 def _last_day_of_month(year: int, month: int) -> int:
     """Return the last day of a given month/year."""
-    import calendar
-
     return calendar.monthrange(year, month)[1]
 
 
@@ -189,7 +188,9 @@ def _try_regex_patterns(
     if m:
         num_str = m.group(1).lower()
         unit = m.group(2).lower().rstrip('s')
-        num = _WORD_TO_NUM.get(num_str) or int(num_str)
+        num = _WORD_TO_NUM.get(num_str)
+        if num is None:
+            num = int(num_str)
 
         if unit == 'day':
             target = reference_date - timedelta(days=num)
@@ -199,15 +200,37 @@ def _try_regex_patterns(
             start = end - timedelta(days=6)
             return (_start_of_day(start), _end_of_day(end))
         elif unit == 'month':
-            target = reference_date - timedelta(days=num * 30)
-            start = target - timedelta(days=15)
-            end = target + timedelta(days=15)
-            return (_start_of_day(start), _end_of_day(end))
+            # Single calendar month window: go back num months
+            target_month = reference_date.month - num
+            target_year = reference_date.year
+            while target_month <= 0:
+                target_month += 12
+                target_year -= 1
+            tz = reference_date.tzinfo
+            start = datetime(target_year, target_month, 1, 0, 0, 0, tzinfo=tz)
+            last_day = _last_day_of_month(target_year, target_month)
+            end = datetime(target_year, target_month, last_day, 23, 59, 59, 999999, tzinfo=tz)
+            return (start, end)
         elif unit == 'year':
-            target = reference_date - timedelta(days=num * 365)
-            start = target - timedelta(days=182)
-            end = target + timedelta(days=182)
-            return (_start_of_day(start), _end_of_day(end))
+            # Quarter (3 months) centered on the target date
+            target_year = reference_date.year - num
+            target_month = reference_date.month
+            tz = reference_date.tzinfo
+            # 1.5 months before and after the target month
+            start_month = target_month - 1
+            start_year = target_year
+            if start_month <= 0:
+                start_month += 12
+                start_year -= 1
+            end_month = target_month + 1
+            end_year = target_year
+            if end_month > 12:
+                end_month -= 12
+                end_year += 1
+            start = datetime(start_year, start_month, 1, 0, 0, 0, tzinfo=tz)
+            last_day = _last_day_of_month(end_year, end_month)
+            end = datetime(end_year, end_month, last_day, 23, 59, 59, 999999, tzinfo=tz)
+            return (start, end)
 
     # "in March 2024" or "in March"
     m = _MONTH_PATTERN.search(query)
