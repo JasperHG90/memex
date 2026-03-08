@@ -344,7 +344,7 @@ ingested_at: {now}
                         asset_path = f'assets/{vault_name}/{note_uuid}'
                         asset_files_list = []
 
-                        decoded_content = note_dto.content_decoded
+                        decoded_content = note_dto.content_decoded.decode('utf-8')
 
                         for filename, content in note_dto.files.items():
                             try:
