@@ -1,11 +1,14 @@
 """Tests for entity discovery from who/where fields in _resolve_entities.
 
 Validates that person names from 'who' and location names from 'where' are
-discovered and linked even when the LLM omits them from the entities list.
+discovered via capitalized-name regex and linked even when the LLM omits
+them from the entities list.
+
+NER is NOT used in the extraction pipeline (only in retrieval).
 """
 
 import datetime as dt
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -41,12 +44,12 @@ def _make_engine() -> ExtractionEngine:
     return engine
 
 
-class TestNerBasedDiscovery:
-    """Test entity discovery when NER model is available."""
+class TestWhoWhereDiscovery:
+    """Test entity discovery from who/where fields using capitalized-name regex."""
 
     @pytest.mark.asyncio
-    async def test_who_names_discovered_via_ner(self):
-        """Names in 'who' field are discovered via NER and added as Person entities."""
+    async def test_who_names_discovered(self):
+        """Capitalized names in 'who' field are discovered and added as Person entities."""
         engine = _make_engine()
         unit_id = str(uuid4())
         resolved_id = str(uuid4())
@@ -55,41 +58,27 @@ class TestNerBasedDiscovery:
         fact = _make_fact(
             text='The project was completed successfully.',
             who='Emily Chen (lead engineer)',
-            entities=[],  # LLM missed the entity
+            entities=[],
         )
 
-        # NER finds "Emily Chen" in the who field
-        mock_ner = MagicMock()
-        mock_ner.predict.side_effect = lambda text: (
-            [{'word': 'Emily Chen', 'type': 'PER'}] if 'Emily' in text else []
-        )
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            new_callable=AsyncMock,
-            return_value=mock_ner,
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
-
-        # Verify entity was resolved
         engine.entity_resolver.resolve_entities_batch.assert_awaited_once()
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
 
-        # Should have discovered "emily chen" from who field
         texts = [e['text'] for e in entities_data]
-        assert any('emily chen' in t.lower() for t in texts), (
+        assert any('Emily Chen' in t for t in texts), (
             f'Expected "Emily Chen" in entities, got: {texts}'
         )
 
-        # Verify entity type is Person
         person_entities = [e for e in entities_data if e['entity_type'] == 'Person']
         assert len(person_entities) >= 1
 
     @pytest.mark.asyncio
-    async def test_where_locations_discovered_via_ner(self):
-        """Locations in 'where' field are discovered via NER."""
+    async def test_where_locations_discovered(self):
+        """Capitalized names in 'where' field are discovered as Location entities."""
         engine = _make_engine()
         unit_id = str(uuid4())
         resolved_id = str(uuid4())
@@ -101,24 +90,14 @@ class TestNerBasedDiscovery:
             entities=[],
         )
 
-        mock_ner = MagicMock()
-        mock_ner.predict.side_effect = lambda text: (
-            [{'word': 'San Francisco', 'type': 'LOC'}] if 'San Francisco' in text else []
-        )
-
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            new_callable=AsyncMock,
-            return_value=mock_ner,
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
 
         texts = [e['text'] for e in entities_data]
-        assert any('san francisco' in t.lower() for t in texts), (
+        assert any('San Francisco' in t for t in texts), (
             f'Expected "San Francisco" in entities, got: {texts}'
         )
 
@@ -139,16 +118,8 @@ class TestNerBasedDiscovery:
             entities=[Entity(text='Emily Chen', entity_type='Person')],
         )
 
-        mock_ner = MagicMock()
-        mock_ner.predict.return_value = [{'word': 'Emily Chen', 'type': 'PER'}]
-
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            new_callable=AsyncMock,
-            return_value=mock_ner,
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
@@ -171,30 +142,18 @@ class TestNerBasedDiscovery:
             entities=[],
         )
 
-        mock_ner = MagicMock()
-        mock_ner.predict.return_value = []
-
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            new_callable=AsyncMock,
-            return_value=mock_ner,
-        ):
-            session = AsyncMock()
-            result = await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        result = await engine._resolve_entities(session, [unit_id], [fact])
 
         assert result == set()
 
-
-class TestRegexFallback:
-    """Test entity discovery when NER model is unavailable."""
-
     @pytest.mark.asyncio
     async def test_capitalized_names_extracted_from_who(self):
-        """When NER is unavailable, capitalized names in 'who' are extracted."""
+        """Multiple capitalized names in 'who' are all extracted."""
         engine = _make_engine()
         unit_id = str(uuid4())
-        resolved_id = str(uuid4())
-        engine.entity_resolver.resolve_entities_batch.return_value = [resolved_id]
+        resolved_ids = [str(uuid4()), str(uuid4())]
+        engine.entity_resolver.resolve_entities_batch.return_value = resolved_ids
 
         fact = _make_fact(
             text='The project launched.',
@@ -202,12 +161,8 @@ class TestRegexFallback:
             entities=[],
         )
 
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            side_effect=ImportError('no ner model'),
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
@@ -216,17 +171,16 @@ class TestRegexFallback:
         assert 'emily chen' in texts, f'Expected "Emily Chen" in {texts}'
         assert 'sarah johnson' in texts, f'Expected "Sarah Johnson" in {texts}'
 
-        # All should be typed as Person (from who field default)
         for e in entities_data:
             assert e['entity_type'] == 'Person'
 
     @pytest.mark.asyncio
     async def test_capitalized_locations_extracted_from_where(self):
-        """When NER is unavailable, capitalized names in 'where' are extracted as Location."""
+        """Capitalized names in 'where' are extracted as Location."""
         engine = _make_engine()
         unit_id = str(uuid4())
-        resolved_id = str(uuid4())
-        engine.entity_resolver.resolve_entities_batch.return_value = [resolved_id]
+        resolved_ids = [str(uuid4()), str(uuid4())]
+        engine.entity_resolver.resolve_entities_batch.return_value = resolved_ids
 
         fact = _make_fact(
             text='The event happened.',
@@ -234,12 +188,8 @@ class TestRegexFallback:
             entities=[],
         )
 
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            side_effect=ImportError('no ner model'),
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
@@ -263,12 +213,8 @@ class TestRegexFallback:
             entities=[],
         )
 
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            side_effect=ImportError('no ner model'),
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         if engine.entity_resolver.resolve_entities_batch.call_args:
             entities_data = engine.entity_resolver.resolve_entities_batch.call_args[0][1]
@@ -276,35 +222,43 @@ class TestRegexFallback:
             assert 'the' not in texts, f'"The" should not be extracted, got: {texts}'
 
     @pytest.mark.asyncio
-    async def test_regex_fallback_skipped_when_ner_finds_entities(self):
-        """Regex fallback should NOT run when NER already found entities in who/where."""
+    async def test_entity_type_from_llm_preserved(self):
+        """Entity type provided by LLM extraction is used as-is (no NER override)."""
         engine = _make_engine()
         unit_id = str(uuid4())
         resolved_id = str(uuid4())
         engine.entity_resolver.resolve_entities_batch.return_value = [resolved_id]
 
         fact = _make_fact(
-            text='Project update.',
-            who='Emily Chen (lead engineer)',
-            entities=[],
+            text='Google announced new features.',
+            entities=[Entity(text='Google', entity_type='Organization')],
         )
 
-        mock_ner = MagicMock()
-        mock_ner.predict.side_effect = lambda text: (
-            [{'word': 'Emily Chen', 'type': 'PER'}] if 'Emily' in text else []
-        )
-
-        with patch(
-            'memex_core.memory.models.ner.get_ner_model',
-            new_callable=AsyncMock,
-            return_value=mock_ner,
-        ):
-            session = AsyncMock()
-            await engine._resolve_entities(session, [unit_id], [fact])
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
 
         call_args = engine.entity_resolver.resolve_entities_batch.call_args
         entities_data = call_args[0][1]
 
-        # Should only have "emily chen" from NER, not duplicated by regex
-        emily_entries = [e for e in entities_data if 'emily' in e['text'].lower()]
-        assert len(emily_entries) == 1
+        assert entities_data[0]['entity_type'] == 'Organization'
+
+    @pytest.mark.asyncio
+    async def test_entity_without_type_passes_none(self):
+        """Entities without a type from LLM get None (no NER fallback)."""
+        engine = _make_engine()
+        unit_id = str(uuid4())
+        resolved_id = str(uuid4())
+        engine.entity_resolver.resolve_entities_batch.return_value = [resolved_id]
+
+        fact = _make_fact(
+            text='Something about Acme Corp.',
+            entities=[Entity(text='Acme Corp')],
+        )
+
+        session = AsyncMock()
+        await engine._resolve_entities(session, [unit_id], [fact])
+
+        call_args = engine.entity_resolver.resolve_entities_batch.call_args
+        entities_data = call_args[0][1]
+
+        assert entities_data[0]['entity_type'] is None
