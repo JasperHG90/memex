@@ -221,15 +221,15 @@ GROUP_BASIC = ScenarioGroup(
 
 _DOC_TECH_STACK_V1 = SyntheticDoc(
     filename='tech-stack-v1.md',
-    title='Engineering Tech Stack (January 2025)',
-    description='Current engineering technology stack as of January 2025.',
-    tags=['tech-stack', 'engineering', 'infrastructure'],
+    title='Project Nexus Tech Stack (January 2025)',
+    description='Project Nexus technology stack as of January 2025.',
+    tags=['tech-stack', 'project-nexus', 'infrastructure'],
     content="""\
-# Engineering Tech Stack — January 2025
+# Project Nexus — Tech Stack (January 2025)
 
 ## Current Stack
 
-Our engineering team uses the following technologies:
+Project Nexus uses the following technologies:
 
 - **Language:** Python 3.11
 - **Web Framework:** Django 4.2
@@ -248,15 +248,15 @@ Our engineering team uses the following technologies:
 
 _DOC_TECH_STACK_V2 = SyntheticDoc(
     filename='tech-stack-v2.md',
-    title='Engineering Tech Stack (July 2025)',
-    description='Updated engineering technology stack after migration in July 2025.',
-    tags=['tech-stack', 'engineering', 'infrastructure', 'migration'],
+    title='Project Nexus Tech Stack (July 2025)',
+    description='Project Nexus technology stack after migration in July 2025.',
+    tags=['tech-stack', 'project-nexus', 'infrastructure', 'migration'],
     content="""\
-# Engineering Tech Stack — July 2025
+# Project Nexus — Tech Stack (July 2025)
 
 ## Updated Stack
 
-Following the Q2 2025 migration initiative, our stack has been updated:
+Following the Q2 2025 migration, Project Nexus has updated its stack:
 
 - **Language:** Python 3.12 (upgraded from 3.11)
 - **Web Framework:** FastAPI (migrated from Django 4.2)
@@ -283,28 +283,28 @@ GROUP_CONTRADICTION = ScenarioGroup(
         GroundTruthCheck(
             name='latest_python_version',
             description='Query about Python version should rank 3.12 above 3.11.',
-            query='What Python version does the engineering team use?',
+            query='What Python version does Project Nexus use?',
             check_type='result_ordering',
             expected=['Python 3.12', 'Python 3.11'],
         ),
         GroundTruthCheck(
             name='current_framework',
             description='Current web framework should be FastAPI.',
-            query='What web framework does the team use?',
+            query='What web framework does Project Nexus use?',
             check_type='keyword_in_results',
             expected=['FastAPI'],
         ),
         GroundTruthCheck(
             name='current_database',
             description='Current database should be PostgreSQL.',
-            query='What database does the engineering team use?',
+            query='What database does Project Nexus use?',
             check_type='keyword_in_results',
             expected=['PostgreSQL 16'],
         ),
         GroundTruthCheck(
             name='superseded_filtered',
             description='With include_superseded=False, old facts should be downranked.',
-            query='What CI/CD system is used?',
+            query='What CI/CD system does Project Nexus use?',
             check_type='keyword_in_results',
             expected=['GitHub Actions'],
             include_superseded=False,
@@ -312,9 +312,9 @@ GROUP_CONTRADICTION = ScenarioGroup(
         GroundTruthCheck(
             name='llm_judge_migration',
             description='LLM judge: does the response correctly describe the migration?',
-            query='Describe the tech stack migration that happened in 2025.',
+            query='Describe the Project Nexus tech stack migration that happened in 2025.',
             check_type='llm_judge',
-            expected='The team migrated from Django to FastAPI, MySQL to PostgreSQL, '
+            expected='Project Nexus migrated from Django to FastAPI, MySQL to PostgreSQL, '
             'Jenkins to GitHub Actions, and Python 3.11 to 3.12 in Q2 2025.',
         ),
     ],
