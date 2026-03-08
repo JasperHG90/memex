@@ -221,6 +221,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [REST API](./docs/reference/rest-api.md)
 - [MCP Tools](./docs/reference/mcp-tools.md)
 - [Configuration](./docs/reference/configuration.md)
+- [Evaluation Report](./docs/reference/evaluation-report.md): LoCoMo benchmark results, retrieval efficiency, and per-question analysis.
 
 ### Explanation
 - [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
