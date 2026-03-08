@@ -349,6 +349,7 @@ class MemexAPI:
             embedder=self.embedding_model,
             ner_model=self.ner_model,
             lm=self.lm,
+            retrieval_config=self.config.server.memory.retrieval,
         )
 
         self.memory = MemoryEngine(
