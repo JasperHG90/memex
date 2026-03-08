@@ -276,7 +276,7 @@ Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an acad
 | Adversarial | 14 | 0.929 |
 | **Overall** | **60** | **0.917** |
 
-Answering model: Claude Opus 4. Judging model: Gemini 2.5 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. The 3 remaining errors are date-recall mistakes (off by one week). See [`packages/eval`](./packages/eval/README.md) for full methodology, scoring criteria, and review notes.
+Answering model: Claude Opus 4.6. Judging model: Gemini 2.5 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. The 3 remaining errors are date-recall mistakes (off by one week). See [`packages/eval`](./packages/eval/README.md) for full methodology, scoring criteria, and review notes.
 
 ## 🏗️ Architecture
 

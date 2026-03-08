@@ -49,7 +49,7 @@
     "mounts": [
       "type=bind,source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,consistency=delegated",
       "type=bind,source=${localEnv:HOME}/.config/qmd,target=/home/vscode/.config/qmd,consistency=delegated",
-      "type=bind,source=${localEnv:HOME}/.cache/qmd,target=/home/vscode/.embeddings/qmd,consistency=delegated,readonly",
+      "type=bind,source=${localEnv:HOME}/.cache/qmd,target=/home/vscode/.embeddings/qmd,readonly",
       // Cache (see dockerfile for UV/prek cache usage and pyproject for pytest cache)
       "source=memex-cache,target=/home/vscode/.cache,type=volume"
     ]
