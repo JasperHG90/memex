@@ -106,7 +106,7 @@ async def _get_semantic_candidates(
         {
             'vault_id': str(vault_id),
             'unit_id': str(unit.id),
-            'embedding': str(unit.embedding),
+            'embedding': '[' + ','.join(str(float(x)) for x in unit.embedding) + ']',
             'max_distance': max_distance,
         },
     )

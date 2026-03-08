@@ -24,8 +24,9 @@ def test_e2e_incremental_idempotency(client: TestClient):
     # which produces deterministic block boundaries across document versions.
     block1 = '# Section One\n\n' + ('The quick brown fox jumps over the lazy dog.\n' * 40)
     block2 = '# Section Two\n\n' + ("A wizard's quickly-moving jab excited a phantom.\n" * 40)
+    block3 = '# Section Three\n\n' + ('Bright vixens jump; dozy fowl quack.\n' * 40)
 
-    content_v1 = block1 + '\n\n' + block2
+    content_v1 = block1 + '\n\n' + block2 + '\n\n' + block3
 
     # We use note_key for stable document identification across calls
     note_key = f'incremental-test-{uuid4()}'
@@ -60,7 +61,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
     block2_mod = '# Section Two\n\n' + (
         'The wizard was replaced by a giant robotic hamster.\n' * 40
     )
-    content_v2 = block1 + '\n\n' + block2_mod
+    content_v2 = block1 + '\n\n' + block2_mod + '\n\n' + block3
 
     payload_v2 = {
         'name': 'Incremental Test Doc',
