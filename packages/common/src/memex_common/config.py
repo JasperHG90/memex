@@ -479,6 +479,14 @@ class RetrievalConfig(BaseModel):
         default=0.4,
         description='Entity Jaccard weight in hybrid similarity kernel.',
     )
+    fact_type_partitioned_rrf: bool = Field(
+        default=False,
+        description='Run RRF independently per fact type, then interleave results.',
+    )
+    fact_type_budget: int = Field(
+        default=20,
+        description='Per-type candidate limit when fact_type_partitioned_rrf is enabled.',
+    )
 
 
 class AuthConfig(BaseModel):

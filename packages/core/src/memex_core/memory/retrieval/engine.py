@@ -192,18 +192,32 @@ class RetrievalEngine:
 
         debug_ctx: DebugContext | None = DebugContext() if request.debug else None
 
+        use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
+
         all_ranked_items = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
-            items = await self._perform_rrf_retrieval(
-                session,
-                q,
-                q_emb.tolist(),
-                candidate_depth,
-                filters,
-                strategies=request.strategies,
-                strategy_weights=request.strategy_weights,
-                debug_ctx=debug_ctx,
-            )
+            if use_partitioned:
+                items = await self._perform_partitioned_rrf(
+                    session,
+                    q,
+                    q_emb.tolist(),
+                    candidate_depth,
+                    filters,
+                    strategies=request.strategies,
+                    strategy_weights=request.strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
+            else:
+                items = await self._perform_rrf_retrieval(
+                    session,
+                    q,
+                    q_emb.tolist(),
+                    candidate_depth,
+                    filters,
+                    strategies=request.strategies,
+                    strategy_weights=request.strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
 
@@ -499,6 +513,84 @@ class RetrievalEngine:
 
         result = await session.exec(final_stmt)
         return result.all()
+
+    async def _perform_partitioned_rrf(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        filters: dict[str, Any],
+        strategies: list[str] | None = None,
+        strategy_weights: dict[str, float] | None = None,
+        debug_ctx: DebugContext | None = None,
+    ) -> Sequence[Any]:
+        """Run RRF independently per fact type, then interleave results."""
+        fact_types = [ft.value for ft in FactTypes]
+        per_type_budget = self.retrieval_config.fact_type_budget
+
+        # Resolve which strategies to run so we can handle mental models separately
+        active_strategies, include_mm = self._resolve_active_strategies(strategies)
+
+        # If mental_model was explicitly requested, exclude it from unit strategies list
+        unit_only_strategies = (
+            [s for s in (strategies or []) if s != 'mental_model']
+            if strategies is not None
+            else None
+        )
+
+        tasks = [
+            self._perform_rrf_retrieval(
+                session,
+                query,
+                query_embedding,
+                per_type_budget,
+                {**filters, 'fact_type': ft},
+                strategies=unit_only_strategies,
+                strategy_weights=strategy_weights,
+                debug_ctx=debug_ctx,
+            )
+            for ft in fact_types
+        ]
+
+        per_type_results: list[Sequence[Any]] = list(await asyncio.gather(*tasks))
+
+        # Collect mental model results separately (mental models have no fact_type)
+        mm_results: Sequence[Any] = []
+        if include_mm:
+            mm_items = await self._perform_rrf_retrieval(
+                session,
+                query,
+                query_embedding,
+                per_type_budget,
+                filters,
+                strategies=['mental_model'],
+                strategy_weights=strategy_weights,
+                debug_ctx=debug_ctx,
+            )
+            mm_results = mm_items
+
+        # Interleave: round-robin across fact types
+        merged: list[Any] = []
+        seen: set[UUID] = set()
+
+        # Include mental model results as an additional "type bucket"
+        all_buckets: list[Sequence[Any]] = list(per_type_results)
+        if mm_results:
+            all_buckets.append(mm_results)
+
+        max_len = max((len(r) for r in all_buckets), default=0)
+        for i in range(max_len):
+            for results in all_buckets:
+                if i < len(results) and results[i].id not in seen:
+                    merged.append(results[i])
+                    seen.add(results[i].id)
+                    if len(merged) >= limit:
+                        break
+            if len(merged) >= limit:
+                break
+
+        return merged[:limit]
 
     async def _perform_rrf_retrieval_debug(
         self,
