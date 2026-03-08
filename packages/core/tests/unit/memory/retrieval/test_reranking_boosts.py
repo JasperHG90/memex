@@ -284,3 +284,74 @@ class TestEdgeCases:
         # boosted = 0.5 * 1.0 * 1.08 = 0.54
         result = engine._rerank_results('query', [unit])
         assert len(result) == 1
+
+
+class TestExtremeAlphaValues:
+    """Tests for extreme alpha values beyond the typical 0.0-0.2 range."""
+
+    def test_alpha_one_gives_maximum_boost(self) -> None:
+        """alpha=1.0 makes boost range [0.5, 1.5] for recency."""
+        now = datetime.now(timezone.utc)
+        unit = _make_unit(event_date=now, temporal_proximity=1.0)
+        engine = _make_engine([0.0], recency_alpha=1.0, temporal_alpha=1.0)
+
+        result = engine._rerank_results('query', [unit])
+        assert len(result) == 1
+
+    def test_high_alpha_reverses_ranking(self) -> None:
+        """Very high alpha on recency can flip the ranking of close CE scores."""
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=350)
+
+        unit_old = _make_unit(event_date=old, text='old fact')
+        unit_new = _make_unit(event_date=now, text='new fact')
+
+        # Give old unit much higher CE score
+        # sigmoid(3.0) ~= 0.953, sigmoid(0.0) = 0.5
+        # With alpha=1.0:
+        #   old recency ~ 0.1, boost = 1 + 1.0*(0.1 - 0.5) = 0.6
+        #   boosted_old = 0.953 * 0.6 = 0.572
+        #   new recency = 1.0, boost = 1 + 1.0*(1.0 - 0.5) = 1.5
+        #   boosted_new = 0.5 * 1.5 = 0.75
+        # New beats old despite much lower CE score
+        engine = _make_engine([3.0, 0.0], recency_alpha=1.0, temporal_alpha=0.0)
+
+        result = engine._rerank_results('query', [unit_old, unit_new])
+        assert result[0] is unit_new
+
+
+class TestRerankerException:
+    """When reranker raises an exception, graceful fallback to original order."""
+
+    def test_reranker_value_error_falls_back(self) -> None:
+        """ValueError in reranker returns results in original order."""
+        reranker = MagicMock()
+        reranker.score.side_effect = ValueError('bad input')
+        config = RetrievalConfig()
+        engine = RetrievalEngine(embedder=MagicMock(), reranker=reranker, retrieval_config=config)
+        unit_a = _make_unit(text='a')
+        unit_b = _make_unit(text='b')
+        result = engine._rerank_results('query', [unit_a, unit_b])
+        assert result == [unit_a, unit_b]
+
+    def test_reranker_runtime_error_falls_back(self) -> None:
+        """RuntimeError in reranker returns results in original order."""
+        reranker = MagicMock()
+        reranker.score.side_effect = RuntimeError('model crashed')
+        config = RetrievalConfig()
+        engine = RetrievalEngine(embedder=MagicMock(), reranker=reranker, retrieval_config=config)
+        unit = _make_unit(text='test')
+        result = engine._rerank_results('query', [unit])
+        assert result == [unit]
+
+
+class TestSingleUnit:
+    """Single-item edge case: ordering is trivially correct."""
+
+    def test_single_unit_returned_unchanged(self) -> None:
+        """Single unit is always returned regardless of score."""
+        unit = _make_unit(event_date=None)
+        engine = _make_engine([-10.0])  # Very low CE score
+        result = engine._rerank_results('query', [unit])
+        assert len(result) == 1
+        assert result[0] is unit

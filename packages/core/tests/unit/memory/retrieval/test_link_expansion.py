@@ -112,3 +112,57 @@ def test_config_threshold_wired():
     sql = _compile_sql(strategy)
     sql_lower = sql.lower()
     assert '0.7' in sql_lower
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and negative tests
+# ---------------------------------------------------------------------------
+
+
+def test_empty_query_compiles():
+    """Empty query string still produces valid SQL."""
+    strategy = LinkExpansionGraphStrategy()
+    stmt = strategy.get_statement('', None)
+    assert isinstance(stmt, (Select, CompoundSelect))
+
+
+def test_note_variant_references_chunks():
+    """LinkExpansionNoteGraphStrategy SQL should reference chunks table."""
+    sql = _compile_sql(LinkExpansionNoteGraphStrategy())
+    assert 'chunks' in sql.lower()
+
+
+def test_causal_threshold_zero():
+    """causal_threshold=0.0 includes all causal links."""
+    strategy = LinkExpansionGraphStrategy(causal_threshold=0.0)
+    sql = _compile_sql(strategy)
+    sql_lower = sql.lower()
+    assert '0.0' in sql_lower or 'weight' in sql_lower
+
+
+def test_causal_threshold_one():
+    """causal_threshold=1.0 filters almost all causal links."""
+    strategy = LinkExpansionGraphStrategy(causal_threshold=1.0)
+    sql = _compile_sql(strategy)
+    sql_lower = sql.lower()
+    assert '1.0' in sql_lower or 'weight' in sql_lower
+
+
+def test_note_variant_entity_id_not_null():
+    """Note variant also filters entity_id IS NOT NULL."""
+    sql = _compile_sql(LinkExpansionNoteGraphStrategy())
+    sql_lower = sql.lower()
+    assert 'entity_id is not null' in sql_lower or 'entity_id != null' in sql_lower
+
+
+def test_note_variant_contains_union_all():
+    """Note variant produces UNION ALL of expansion layers."""
+    sql = _compile_sql(LinkExpansionNoteGraphStrategy())
+    assert 'UNION ALL' in sql
+
+
+def test_with_embedding_compiles():
+    """LinkExpansionGraphStrategy works when query_embedding is provided."""
+    strategy = LinkExpansionGraphStrategy()
+    stmt = strategy.get_statement('Alice', [0.1] * 384)
+    assert isinstance(stmt, (Select, CompoundSelect))

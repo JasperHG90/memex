@@ -303,3 +303,94 @@ class TestLimitEnforcement:
             result = await engine._perform_partitioned_rrf(session, 'q', [0.1], 5, {})
 
         assert len(result) == 5
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and negative tests
+# ---------------------------------------------------------------------------
+
+
+class TestAllFactTypesEmpty:
+    """When all fact types return no results."""
+
+    @pytest.mark.asyncio
+    async def test_all_types_empty_returns_empty(self):
+        """No results from any fact type yields an empty list."""
+        engine = _make_engine(partitioned=True, budget=10)
+        session = AsyncMock()
+
+        async def _fake_rrf(session, query, emb, limit, filters, **kw):
+            return []
+
+        with patch.object(engine, '_perform_rrf_retrieval', side_effect=_fake_rrf):
+            result = await engine._perform_partitioned_rrf(session, 'q', [0.1], 20, {})
+
+        assert result == []
+
+
+class TestBudgetBoundary:
+    """Tests for boundary budget values."""
+
+    @pytest.mark.asyncio
+    async def test_budget_one(self):
+        """budget=1 limits each per-type call to 1 result."""
+        engine = _make_engine(partitioned=True, budget=1)
+        session = AsyncMock()
+
+        captured_limits: list[int] = []
+
+        async def _fake_rrf(session, query, emb, limit, filters, **kw):
+            captured_limits.append(limit)
+            return [Item(id=uuid4(), type='unit')]
+
+        with patch.object(engine, '_perform_rrf_retrieval', side_effect=_fake_rrf):
+            result = await engine._perform_partitioned_rrf(session, 'q', [0.1], 20, {})
+
+        assert all(lim == 1 for lim in captured_limits)
+        # Should get one result per type that returns data
+        assert len(result) >= 1
+
+
+class TestLimitZero:
+    """When requested limit is 0."""
+
+    @pytest.mark.asyncio
+    async def test_limit_zero_returns_empty(self):
+        """limit=0 returns no results even if types have data."""
+        engine = _make_engine(partitioned=True, budget=10)
+        session = AsyncMock()
+
+        async def _fake_rrf(session, query, emb, limit, filters, **kw):
+            return [Item(id=uuid4(), type='unit') for _ in range(5)]
+
+        with patch.object(engine, '_perform_rrf_retrieval', side_effect=_fake_rrf):
+            result = await engine._perform_partitioned_rrf(session, 'q', [0.1], 0, {})
+
+        assert len(result) == 0
+
+
+class TestFiltersPassthrough:
+    """Verify that caller-supplied filters are preserved per type call."""
+
+    @pytest.mark.asyncio
+    async def test_caller_filters_preserved(self):
+        """vault_ids and other filters from caller are passed to each per-type call."""
+        engine = _make_engine(partitioned=True, budget=5)
+        session = AsyncMock()
+
+        call_filters: list[dict] = []
+
+        async def _fake_rrf(session, query, emb, limit, filters, **kw):
+            call_filters.append(dict(filters))
+            return []
+
+        with patch.object(engine, '_perform_rrf_retrieval', side_effect=_fake_rrf):
+            await engine._perform_partitioned_rrf(
+                session, 'q', [0.1], 20, {'vault_ids': ['v1'], 'include_stale': True}
+            )
+
+        # Each call should have the original filters plus the injected fact_type
+        for f in call_filters:
+            if 'fact_type' in f:
+                assert f.get('vault_ids') == ['v1']
+                assert f.get('include_stale') is True

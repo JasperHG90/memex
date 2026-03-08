@@ -156,3 +156,83 @@ def test_config_fields_exist_with_correct_defaults():
     assert config.graph_semantic_seeding is True
     assert config.graph_semantic_seed_top_k == 5
     assert config.graph_semantic_seed_weight == 0.7
+
+
+# ---------------------------------------------------------------------------
+# Edge cases and negative tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_seed_entity_cte_no_embedding_no_vault():
+    """query_embedding=None and vault_id=None: no semantic seeds, no error."""
+    cte = build_seed_entity_cte(
+        query='test query',
+        ner_model=None,
+        query_embedding=None,
+        vault_id=None,
+        enable_semantic_seeding=True,
+    )
+    assert isinstance(cte, CTE)
+    sql = str(cte.compile())
+    # No semantic seeds should be generated without embedding
+    assert 'semantic_seeds' not in sql
+
+
+def test_build_semantic_seed_cte_top_k_zero():
+    """top_k=0 produces a CTE that would return no rows."""
+    cte = build_semantic_seed_cte(
+        query_embedding=FAKE_EMBEDDING,
+        vault_id=FAKE_VAULT_ID,
+        top_k=0,
+        weight=0.7,
+    )
+    assert isinstance(cte, CTE)
+
+
+def test_build_semantic_seed_cte_weight_zero():
+    """weight=0.0 produces a CTE with zero-weight seeds."""
+    cte = build_semantic_seed_cte(
+        query_embedding=FAKE_EMBEDDING,
+        vault_id=FAKE_VAULT_ID,
+        weight=0.0,
+    )
+    compiled = cte.compile()
+    params = compiled.params
+    param_values = list(params.values())
+    assert 0.0 in param_values
+
+
+def test_build_semantic_seed_cte_weight_one():
+    """weight=1.0 makes semantic seeds equal to NER seeds."""
+    cte = build_semantic_seed_cte(
+        query_embedding=FAKE_EMBEDDING,
+        vault_id=FAKE_VAULT_ID,
+        weight=1.0,
+    )
+    compiled = cte.compile()
+    params = compiled.params
+    param_values = list(params.values())
+    assert 1.0 in param_values
+
+
+def test_graph_strategy_semantic_disabled_no_semantic_cte():
+    """enable_semantic_seeding=False with embedding: no semantic_seeds CTE."""
+    strategy = EntityCooccurrenceGraphStrategy(
+        enable_semantic_seeding=False,
+    )
+    stmt = strategy.get_statement(
+        'test query',
+        FAKE_EMBEDDING,
+        vault_ids=[FAKE_VAULT_ID],
+    )
+    sql = str(stmt.compile())
+    assert 'semantic_seeds' not in sql
+
+
+def test_empty_embedding_list():
+    """An empty embedding list is accepted by build_semantic_seed_cte."""
+    cte = build_semantic_seed_cte(
+        query_embedding=[],
+        vault_id=FAKE_VAULT_ID,
+    )
+    assert isinstance(cte, CTE)

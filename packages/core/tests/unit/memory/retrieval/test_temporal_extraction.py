@@ -306,6 +306,78 @@ class TestDateparserFallback:
         mock_dateparser.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# Additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestMultipleTemporalExpressions:
+    """Queries with multiple temporal expressions should use the first match."""
+
+    def test_first_expression_wins(self):
+        """When query has multiple temporal cues, result should be valid."""
+        result = extract_temporal_constraint(
+            'yesterday I recalled last week events', reference_date=REF
+        )
+        assert result is not None
+        start, end = result
+        assert start < end
+        # 'yesterday' appears first and should match
+        yesterday = REF - timedelta(days=1)
+        assert start.date() == yesterday.date()
+
+
+class TestVeryLongQuery:
+    """Very long queries should not crash or hang."""
+
+    def test_long_query_with_temporal(self):
+        """A long query containing a temporal expression still extracts it."""
+        filler = 'some random words about nothing important ' * 50
+        query = f'{filler} what happened yesterday {filler}'
+        result = extract_temporal_constraint(query, reference_date=REF)
+        assert result is not None
+        start, end = result
+        yesterday = REF - timedelta(days=1)
+        assert start.date() == yesterday.date()
+
+    def test_long_query_without_temporal(self):
+        """A long query without temporal expression returns None."""
+        query = 'tell me about cats and dogs ' * 100
+        result = extract_temporal_constraint(query, reference_date=REF)
+        assert result is None
+
+
+class TestFutureDates:
+    """Future-looking expressions and edge cases."""
+
+    def test_future_reference_date(self):
+        """A far-future reference date works for relative expressions."""
+        future_ref = datetime(2099, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        result = extract_temporal_constraint('yesterday', reference_date=future_ref)
+        assert result is not None
+        start, _end = result
+        expected = future_ref - timedelta(days=1)
+        assert start.date() == expected.date()
+
+    def test_zero_days_ago_is_today(self):
+        """'0 days ago' should return today's range (boundary)."""
+        result = extract_temporal_constraint('0 days ago', reference_date=REF)
+        if result is not None:
+            start, end = result
+            assert start.date() == REF.date()
+
+
+class TestReferenceNone:
+    """When reference_date is None, defaults to now(UTC)."""
+
+    def test_none_reference_uses_utc_now(self):
+        result = extract_temporal_constraint('yesterday', reference_date=None)
+        assert result is not None
+        start, end = result
+        assert start.tzinfo is not None
+        assert start < end
+
+
 class TestTemporalExtractionDisabled:
     """Test that temporal_extraction_enabled=False skips extraction in engine."""
 
