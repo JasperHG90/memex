@@ -3,6 +3,7 @@ Note Management Commands.
 """
 
 import json
+import pathlib
 from typing import Annotated, Any
 import typer
 from rich.console import Console
@@ -12,6 +13,8 @@ from rich.table import Table
 from rich.tree import Tree
 
 from memex_common.config import MemexConfig
+from memex_common.client import RemoteMemexAPI
+from memex_common.schemas import NoteDTO
 from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
 
 console = Console()
@@ -535,3 +538,117 @@ async def search_notes(
         if answer_text:
             console.print(Panel(Markdown(answer_text), title='Answer', border_style='green'))
             console.print()
+
+
+def _sanitize_filename(name: str) -> str:
+    """Convert a note title to a safe filename."""
+    # Replace path-unsafe chars with underscores
+    safe = name.replace('/', '_').replace('\\', '_').replace(':', '_')
+    safe = safe.replace('<', '_').replace('>', '_').replace('"', '_')
+    safe = safe.replace('|', '_').replace('?', '_').replace('*', '_')
+    # Collapse runs of underscores / whitespace
+    import re
+
+    safe = re.sub(r'[\s_]+', '_', safe).strip('_')
+    return safe[:200] if safe else 'untitled'
+
+
+async def _export_note(
+    api: RemoteMemexAPI,
+    note: NoteDTO,
+    output_dir: pathlib.Path,
+) -> int:
+    """Export a single note and its assets to output_dir.
+
+    Returns the number of assets exported.
+    """
+    title = note.title or note.name or 'Untitled'
+    safe_name = _sanitize_filename(title)
+    note_dir = output_dir / f'{safe_name}_{note.id}'
+    note_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write markdown content
+    content = note.original_text or ''
+    (note_dir / 'note.md').write_text(content, encoding='utf-8')
+
+    # Write metadata
+    metadata = {
+        'id': str(note.id),
+        'title': title,
+        'created_at': str(note.created_at),
+        'vault_id': str(note.vault_id),
+        'doc_metadata': note.doc_metadata,
+    }
+    (note_dir / 'metadata.json').write_text(
+        json.dumps(metadata, indent=2, default=str), encoding='utf-8'
+    )
+
+    # Export assets
+    asset_count = 0
+    if note.assets:
+        assets_dir = note_dir / 'assets'
+        assets_dir.mkdir(exist_ok=True)
+        for asset_path in note.assets:
+            try:
+                data = await api.get_resource(asset_path)
+                # Use the filename from the asset path
+                filename = pathlib.PurePosixPath(asset_path).name
+                (assets_dir / filename).write_bytes(data)
+                asset_count += 1
+            except Exception as e:
+                console.print(f'[yellow]Warning: failed to export asset {asset_path}: {e}[/yellow]')
+
+    return asset_count
+
+
+@app.command('export')
+@async_command
+async def export_notes(
+    ctx: typer.Context,
+    note_id: Annotated[
+        str | None, typer.Argument(help='UUID of a specific note to export. Omit to export all.')
+    ] = None,
+    output: Annotated[
+        str,
+        typer.Option('--output', '-o', help='Output directory path.'),
+    ] = './memex-export',
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+):
+    """
+    Export notes (and their assets) to a local directory.
+
+    Each note is written to a subdirectory containing note.md, metadata.json,
+    and an assets/ folder (if the note has attached files).
+    """
+    config: MemexConfig = ctx.obj
+    output_dir = pathlib.Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    async with get_api_context(config) as api:
+        if note_id:
+            uuid_obj = parse_uuid(note_id, 'note')
+            try:
+                note = await api.get_note(uuid_obj)
+            except Exception as e:
+                handle_api_error(e)
+            notes = [note]
+        else:
+            try:
+                notes = await api.list_notes(limit=10000, vault_ids=vault or None)
+            except Exception as e:
+                handle_api_error(e)
+
+        total_assets = 0
+        for i, note_obj in enumerate(notes):
+            # list_notes returns ORM objects (dicts via model_dump), get_note returns NoteDTO
+            if not isinstance(note_obj, NoteDTO):
+                note_obj = NoteDTO.model_validate(note_obj, from_attributes=True)
+            title = note_obj.title or note_obj.name or 'Untitled'
+            console.print(f'[dim]({i + 1}/{len(notes)})[/dim] Exporting "{title}"...')
+            asset_count = await _export_note(api, note_obj, output_dir)
+            total_assets += asset_count
+
+    console.print(
+        f'\n[green]Exported {len(notes)} note(s) and {total_assets} asset(s) '
+        f'to {output_dir.resolve()}[/green]'
+    )
