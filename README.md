@@ -1,4 +1,6 @@
-# Memex
+<p align="center">
+  <img src="assets/memex-banner.jpg" alt="Memex" width="500">
+</p>
 
 Memex is a long-term memory system designed to give LLMs persistent, evolving knowledge. It captures unstructured data (notes, docs, chats), extracts structured facts, and synthesizes high-level mental models over time.
 
