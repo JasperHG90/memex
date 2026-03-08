@@ -1023,7 +1023,8 @@ class RetrievalEngine:
                 elif abs(mmr_score - best_score) <= eps:
                     # Temporal tiebreaker: prefer newer event_date
                     current_best = remaining[best_idx]
-                    if candidate.event_date > current_best.event_date:
+                    _min = datetime.min
+                    if (candidate.event_date or _min) > (current_best.event_date or _min):
                         best_score = mmr_score
                         best_idx = idx
 

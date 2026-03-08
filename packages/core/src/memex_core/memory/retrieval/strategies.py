@@ -721,12 +721,18 @@ class CausalGraphStrategy:
         temporal_decay_days: float = 30.0,
         temporal_decay_base: float = 2.0,
         causal_weight_threshold: float = 0.3,
+        enable_semantic_seeding: bool = True,
+        semantic_seed_top_k: int = 5,
+        semantic_seed_weight: float = 0.7,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
         self.temporal_decay_days = temporal_decay_days
         self.temporal_decay_base = temporal_decay_base
         self.causal_weight_threshold = causal_weight_threshold
+        self.enable_semantic_seeding = enable_semantic_seeding
+        self.semantic_seed_top_k = semantic_seed_top_k
+        self.semantic_seed_weight = semantic_seed_weight
 
     def get_statement(
         self,
@@ -735,12 +741,20 @@ class CausalGraphStrategy:
         limit: int = 60,
         **kwargs: Any,
     ) -> Select | CompoundSelect:
+        vault_ids = kwargs.get('vault_ids')
+        vault_id = vault_ids[0] if vault_ids else None
+
         seed_entities = build_seed_entity_cte(
-            query,
-            self.ner_model,
-            self.similarity_threshold,
+            query=query,
+            ner_model=self.ner_model,
+            similarity_threshold=self.similarity_threshold,
             include_ilike=True,
             cte_name='causal_seed_entities',
+            query_embedding=query_embedding,
+            vault_id=vault_id,
+            semantic_seed_top_k=self.semantic_seed_top_k,
+            semantic_seed_weight=self.semantic_seed_weight,
+            enable_semantic_seeding=self.enable_semantic_seeding,
         )
 
         # -- 1st order: seed -> UnitEntity -> MemoryUnit --------------------
@@ -813,12 +827,18 @@ class CausalNoteGraphStrategy:
         temporal_decay_days: float = 30.0,
         temporal_decay_base: float = 2.0,
         causal_weight_threshold: float = 0.3,
+        enable_semantic_seeding: bool = True,
+        semantic_seed_top_k: int = 5,
+        semantic_seed_weight: float = 0.7,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
         self.temporal_decay_days = temporal_decay_days
         self.temporal_decay_base = temporal_decay_base
         self.causal_weight_threshold = causal_weight_threshold
+        self.enable_semantic_seeding = enable_semantic_seeding
+        self.semantic_seed_top_k = semantic_seed_top_k
+        self.semantic_seed_weight = semantic_seed_weight
 
     def get_statement(
         self,
@@ -827,12 +847,20 @@ class CausalNoteGraphStrategy:
         limit: int = 60,
         **kwargs: Any,
     ) -> Select | CompoundSelect:
+        vault_ids = kwargs.get('vault_ids')
+        vault_id = vault_ids[0] if vault_ids else None
+
         seed_entities = build_seed_entity_cte(
-            query,
-            self.ner_model,
-            self.similarity_threshold,
+            query=query,
+            ner_model=self.ner_model,
+            similarity_threshold=self.similarity_threshold,
             include_ilike=True,
             cte_name='causal_note_seed_entities',
+            query_embedding=query_embedding,
+            vault_id=vault_id,
+            semantic_seed_top_k=self.semantic_seed_top_k,
+            semantic_seed_weight=self.semantic_seed_weight,
+            enable_semantic_seeding=self.enable_semantic_seeding,
         )
 
         include_stale = kwargs.get('include_stale', False)
@@ -912,10 +940,16 @@ class LinkExpansionGraphStrategy:
         ner_model: FastNERModel | None = None,
         similarity_threshold: float = 0.3,
         causal_threshold: float = 0.3,
+        enable_semantic_seeding: bool = True,
+        semantic_seed_top_k: int = 5,
+        semantic_seed_weight: float = 0.7,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
         self.causal_threshold = causal_threshold
+        self.enable_semantic_seeding = enable_semantic_seeding
+        self.semantic_seed_top_k = semantic_seed_top_k
+        self.semantic_seed_weight = semantic_seed_weight
 
     def get_statement(
         self,
@@ -924,13 +958,21 @@ class LinkExpansionGraphStrategy:
         limit: int = 60,
         **kwargs: Any,
     ) -> Select | CompoundSelect:
+        vault_ids = kwargs.get('vault_ids')
+        vault_id = vault_ids[0] if vault_ids else None
+
         # Seed entities -------------------------------------------------
         seed_entities = build_seed_entity_cte(
-            query,
+            query=query,
             ner_model=self.ner_model,
             similarity_threshold=self.similarity_threshold,
             include_ilike=True,
             cte_name='le_seed_entities',
+            query_embedding=query_embedding,
+            vault_id=vault_id,
+            semantic_seed_top_k=self.semantic_seed_top_k,
+            semantic_seed_weight=self.semantic_seed_weight,
+            enable_semantic_seeding=self.enable_semantic_seeding,
         )
 
         # First-order units (seed -> UnitEntity -> MemoryUnit) -----------
@@ -1027,10 +1069,16 @@ class LinkExpansionNoteGraphStrategy:
         ner_model: FastNERModel | None = None,
         similarity_threshold: float = 0.3,
         causal_threshold: float = 0.3,
+        enable_semantic_seeding: bool = True,
+        semantic_seed_top_k: int = 5,
+        semantic_seed_weight: float = 0.7,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
         self.causal_threshold = causal_threshold
+        self.enable_semantic_seeding = enable_semantic_seeding
+        self.semantic_seed_top_k = semantic_seed_top_k
+        self.semantic_seed_weight = semantic_seed_weight
 
     def get_statement(
         self,
@@ -1044,6 +1092,9 @@ class LinkExpansionNoteGraphStrategy:
             ner_model=self.ner_model,
             similarity_threshold=self.similarity_threshold,
             causal_threshold=self.causal_threshold,
+            enable_semantic_seeding=self.enable_semantic_seeding,
+            semantic_seed_top_k=self.semantic_seed_top_k,
+            semantic_seed_weight=self.semantic_seed_weight,
         )
         unit_result = unit_strategy.get_statement(
             query, query_embedding, limit=limit * 2, **kwargs
