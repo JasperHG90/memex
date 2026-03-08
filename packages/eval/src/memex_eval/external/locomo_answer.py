@@ -12,6 +12,7 @@ import enum
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -258,6 +259,67 @@ def _run_claude_code(question: str, workdir: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Session trace capture
+# ---------------------------------------------------------------------------
+
+
+def _collect_session_trace(
+    workdir: str, output_dir: str, question_id: str
+) -> dict[str, str | None]:
+    """Copy the Claude Code session trace file for a question.
+
+    Reads ``~/.claude/history.jsonl`` to find the last session ID, then copies
+    the session trace from ``~/.claude/projects/<slug>/<session_id>.jsonl``
+    into ``<output_dir>/traces/<question_id>.jsonl``.
+
+    Returns dict with ``session_id`` and ``trace_file`` (both may be None on failure).
+    """
+    result: dict[str, str | None] = {'session_id': None, 'trace_file': None}
+
+    try:
+        history_path = Path.home() / '.claude' / 'history.jsonl'
+        if not history_path.exists():
+            logger.warning('No history.jsonl found at %s', history_path)
+            return result
+
+        # Read last line to get most recent session
+        lines = history_path.read_text().strip().splitlines()
+        if not lines:
+            logger.warning('history.jsonl is empty')
+            return result
+
+        last_entry = json.loads(lines[-1])
+        session_id = last_entry.get('session_id') or last_entry.get('sessionId')
+        if not session_id:
+            logger.warning('No session_id in last history entry')
+            return result
+
+        result['session_id'] = session_id
+
+        # Compute project slug: absolute workdir path with / replaced by -,
+        # leading - stripped
+        slug = workdir.replace('/', '-').lstrip('-')
+        trace_src = Path.home() / '.claude' / 'projects' / slug / f'{session_id}.jsonl'
+
+        if not trace_src.exists():
+            logger.warning('Session trace not found at %s', trace_src)
+            return result
+
+        # Copy to output traces dir
+        traces_dir = Path(output_dir) / 'traces'
+        traces_dir.mkdir(parents=True, exist_ok=True)
+        trace_dst = traces_dir / f'{question_id}.jsonl'
+        shutil.copy2(str(trace_src), str(trace_dst))
+        result['trace_file'] = str(trace_dst)
+        logger.info('Captured session trace -> %s', trace_dst)
+
+    except Exception:
+        logger.warning('Failed to collect session trace', exc_info=True)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -303,7 +365,16 @@ def answer_questions(
 
         result = _run_claude_code(q['question'], workdir=workdir)
 
-        record = {'id': q['id'], **result}
+        # Capture session trace
+        output_dir = str(Path(output_path).parent)
+        trace_info = _collect_session_trace(workdir, output_dir, q['id'])
+
+        record = {
+            'id': q['id'],
+            **result,
+            'session_id': trace_info['session_id'],
+            'trace_file': trace_info['trace_file'],
+        }
         append_jsonl(output_path, record)
         answered += 1
 

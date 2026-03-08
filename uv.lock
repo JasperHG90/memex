@@ -2795,6 +2795,7 @@ dependencies = [
     { name = "memex-common" },
     { name = "rich" },
     { name = "sh" },
+    { name = "tiktoken" },
     { name = "typer" },
 ]
 
@@ -2805,6 +2806,7 @@ requires-dist = [
     { name = "memex-common", editable = "packages/common" },
     { name = "rich", specifier = ">=13" },
     { name = "sh", specifier = ">=2.2.2" },
+    { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
 

@@ -100,7 +100,7 @@ The benchmark runs in three decoupled phases, each resumable:
 
 2. **Answer** (`locomo_answer.py`): Feeds each question to an agent CLI (currently Claude Code) with access to Memex MCP tools. The agent operates against a pre-ingested vault containing all conversation sessions. Each question runs in an isolated temp directory with a minimal `CLAUDE.md` instructing the agent to search the vault. Captures: answer text, tool call sequence, token usage, duration, and cost.
 
-3. **Judge** (`locomo_judge.py`): An LLM judge (Gemini 2.5 Flash via dspy) grades each answer on a 5-point scale (0.0 / 0.25 / 0.5 / 0.75 / 1.0) by comparing the model response against the expected answer. The judge also analyzes tool call patterns (memory search, note search, two-speed verification).
+3. **Judge** (`locomo_judge.py`): An LLM judge (Gemini 3 Flash via dspy) grades each answer on a 5-point scale (0.0 / 0.25 / 0.5 / 0.75 / 1.0) by comparing the model response against the expected answer. The judge also analyzes tool call patterns (memory search, note search, two-speed verification).
 
 ### Scoring
 
@@ -122,7 +122,7 @@ The benchmark runs in three decoupled phases, each resumable:
 ### Configuration
 
 - **Model (answering)**: Claude Opus 4 via Claude Code CLI
-- **Model (judging)**: Gemini 2.5 Flash
+- **Model (judging)**: Gemini 3 Flash
 - **Dataset**: LoCoMo conversation 0 (19 sessions, 60 QA pairs)
 - **Vault**: Pre-ingested with full extraction + reflection pipeline
 

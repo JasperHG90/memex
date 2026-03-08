@@ -140,6 +140,27 @@ def locomo_judge_cmd(
     )
 
 
+@app.command('locomo-efficiency')
+def locomo_efficiency_cmd(
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    traces_dir: str = typer.Option(
+        ..., '--traces-dir', '-t', help='Directory with trace JSONL files.'
+    ),
+    output: str = typer.Option('efficiency.json', '--output', '-o', help='Output efficiency JSON.'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Analyze LoCoMo answer efficiency: latency, tokens, tool usage, retrieval cost."""
+    _setup_logging(verbose)
+
+    from memex_eval.external.locomo_efficiency import analyze_efficiency
+
+    analyze_efficiency(
+        answers_path=answers,
+        output_path=output,
+        traces_dir=traces_dir,
+    )
+
+
 def _setup_logging(verbose: bool) -> None:
     """Configure logging for the benchmark run."""
     level = logging.DEBUG if verbose else logging.INFO
