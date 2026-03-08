@@ -59,6 +59,8 @@ In the 4 failed adversarial cases, the retrieval system found correct, relevant 
 
 `memory_search` is the primary retrieval tool (67% of retrieval tokens, 1.5 calls/question). `get_page_index` is called frequently (0.8/q) but returns compact TOC data (3.1% of tokens).
 
+> **Note on `read_note`:** All 19 `read_note` calls come from a single question (q-010), which asks about a book title that only appears in a shared image — effectively an unanswerable question. The agent exhausted `memory_search`, `note_search`, and `get_page_index` without finding the title, then fell back to reading every session note in full as a last resort. No answerable question required `read_note`; the `get_page_index` + `get_node` two-speed pattern was sufficient in all other cases.
+
 ![Retrieval token breakdown](evaluation-plots/retrieval_token_breakdown.png)
 
 ### Efficiency by category
