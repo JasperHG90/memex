@@ -510,6 +510,26 @@ class RetrievalConfig(BaseModel):
         description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
         '0 = no boost (backward compatible).',
     )
+    causal_weight_threshold: float = Field(
+        default=0.3,
+        description='Minimum link weight for causal graph expansion in memory_links.',
+    )
+    graph_semantic_seeding: bool = Field(
+        default=True,
+        description='Enable semantic seeding for graph retrieval strategies.',
+    )
+    graph_semantic_seed_top_k: int = Field(
+        default=5,
+        description='Number of top-K memory units for semantic seed entity discovery.',
+    )
+    graph_semantic_seed_weight: float = Field(
+        default=0.7,
+        description='Weight for semantic seed entities (lower than NER weight of 1.0).',
+    )
+    link_expansion_causal_threshold: float = Field(
+        default=0.3,
+        description='Minimum weight for causal links in link-expansion graph strategy.',
+    )
 
 
 class ContradictionConfig(BaseModel):
