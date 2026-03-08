@@ -479,6 +479,10 @@ class RetrievalConfig(BaseModel):
         default=0.4,
         description='Entity Jaccard weight in hybrid similarity kernel.',
     )
+    temporal_extraction_enabled: bool = Field(
+        default=True,
+        description='Enable NLP-based temporal constraint extraction from queries using dateparser.',
+    )
 
 
 class AuthConfig(BaseModel):
