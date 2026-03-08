@@ -32,18 +32,43 @@ class TestPartitionedRRFDisabled:
         engine = _make_engine(partitioned=False)
         session = AsyncMock()
 
-        expected = [Item(id=uuid4(), type='unit')]
+        rrf_result = [Item(id=uuid4(), type='unit')]
         with (
             patch.object(
-                engine, '_perform_rrf_retrieval', new_callable=AsyncMock, return_value=expected
-            ),
+                engine,
+                '_perform_rrf_retrieval',
+                new_callable=AsyncMock,
+                return_value=rrf_result,
+            ) as mock_rrf,
             patch.object(
                 engine, '_perform_partitioned_rrf', new_callable=AsyncMock
             ) as mock_partitioned,
+            patch.object(engine, '_hydrate_results', new_callable=AsyncMock, return_value=[]),
+            patch.object(engine, '_update_resonance', new_callable=AsyncMock),
         ):
-            result = await engine._perform_rrf_retrieval(session, 'test', [0.1], 10, {})
+            request = MagicMock()
+            request.query = 'test'
+            request.vault_ids = []
+            request.expand_query = False
+            request.limit = 10
+            request.token_budget = None
+            request.filters = {}
+            request.rerank = False
+            request.strategies = None
+            request.strategy_weights = None
+            request.debug = False
+            request.include_stale = False
+            request.fusion_strategy = None
+            request.mmr_lambda = None
+            request.min_score = None
+
+            with patch.object(
+                engine.embedder, 'encode', return_value=[MagicMock(tolist=lambda: [0.1])]
+            ):
+                await engine.retrieve(session, request)
+
+            mock_rrf.assert_called_once()
             mock_partitioned.assert_not_called()
-            assert result == expected
 
 
 class TestPartitionedRRFEnabled:
@@ -55,13 +80,41 @@ class TestPartitionedRRFEnabled:
         engine = _make_engine(partitioned=True)
         session = AsyncMock()
 
-        expected = [Item(id=uuid4(), type='unit')]
-        with patch.object(
-            engine, '_perform_partitioned_rrf', new_callable=AsyncMock, return_value=expected
-        ) as mock_part:
-            result = await engine._perform_partitioned_rrf(session, 'test', [0.1], 10, {})
-            mock_part.assert_called_once()
-            assert result == expected
+        partitioned_result = [Item(id=uuid4(), type='unit')]
+        with (
+            patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf,
+            patch.object(
+                engine,
+                '_perform_partitioned_rrf',
+                new_callable=AsyncMock,
+                return_value=partitioned_result,
+            ) as mock_partitioned,
+            patch.object(engine, '_hydrate_results', new_callable=AsyncMock, return_value=[]),
+            patch.object(engine, '_update_resonance', new_callable=AsyncMock),
+        ):
+            request = MagicMock()
+            request.query = 'test'
+            request.vault_ids = []
+            request.expand_query = False
+            request.limit = 10
+            request.token_budget = None
+            request.filters = {}
+            request.rerank = False
+            request.strategies = None
+            request.strategy_weights = None
+            request.debug = False
+            request.include_stale = False
+            request.fusion_strategy = None
+            request.mmr_lambda = None
+            request.min_score = None
+
+            with patch.object(
+                engine.embedder, 'encode', return_value=[MagicMock(tolist=lambda: [0.1])]
+            ):
+                await engine.retrieve(session, request)
+
+            mock_partitioned.assert_called_once()
+            mock_rrf.assert_not_called()
 
 
 class TestPerTypeIsolation:
@@ -166,7 +219,7 @@ class TestDeduplication:
             ft = filters.get('fact_type')
             if ft == 'world':
                 return [Item(id=shared_id, type='unit'), Item(id=unique_id, type='unit')]
-            if ft == 'experience':
+            if ft == 'event':
                 return [Item(id=shared_id, type='unit')]  # duplicate
             return []
 
