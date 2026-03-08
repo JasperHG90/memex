@@ -539,8 +539,10 @@ class RetrievalEngine:
             else None
         )
 
-        tasks = [
-            self._perform_rrf_retrieval(
+        # Run per-type queries sequentially — AsyncSession is not safe for concurrent use
+        per_type_results: list[Sequence[Any]] = []
+        for ft in fact_types:
+            result = await self._perform_rrf_retrieval(
                 session,
                 query,
                 query_embedding,
@@ -550,10 +552,7 @@ class RetrievalEngine:
                 strategy_weights=strategy_weights,
                 debug_ctx=debug_ctx,
             )
-            for ft in fact_types
-        ]
-
-        per_type_results: list[Sequence[Any]] = list(await asyncio.gather(*tasks))
+            per_type_results.append(result)
 
         # Collect mental model results separately (mental models have no fact_type)
         mm_results: Sequence[Any] = []
