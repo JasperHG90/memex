@@ -1163,6 +1163,8 @@ class ExtractionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> set[UUID]:
         """Resolve entities and link them to units. Returns set of touched entity IDs."""
+        import re
+
         # Run NER on all fact texts to get entity type information
         ner_type_map = await self._build_ner_type_map(facts)
 
@@ -1196,7 +1198,10 @@ class ExtractionEngine:
                 # Try NER-based discovery first
                 found_via_ner = False
                 for name, ner_label in ner_type_map.items():
-                    if name in field_text.lower() and name not in existing_names:
+                    if (
+                        re.search(r'\b' + re.escape(name) + r'\b', field_text, re.IGNORECASE)
+                        and name not in existing_names
+                    ):
                         entities_data.append(
                             {
                                 'text': name,
@@ -1212,8 +1217,6 @@ class ExtractionEngine:
                 # Last resort: if NER found nothing, extract capitalized names
                 # from who/where fields (e.g. "Emily, Sarah" or "San Francisco")
                 if not found_via_ner:
-                    import re
-
                     # Match sequences of capitalized words (e.g. "Emily Chen",
                     # "San Francisco") but skip common words
                     skip = {'the', 'and', 'for', 'with', 'from', 'via', 'n/a'}
@@ -1290,7 +1293,7 @@ class ExtractionEngine:
                     word = result.get('word', '').lower()
                     raw_type = result.get('type', '')
                     mapped_type = self.NER_TYPE_MAP.get(raw_type)
-                    if word and mapped_type and word not in type_map:
+                    if len(word) >= 2 and mapped_type and word not in type_map:
                         type_map[word] = mapped_type
             except (ValueError, RuntimeError, OSError) as e:
                 logger.debug('NER prediction failed for text: %s', e, exc_info=True)
