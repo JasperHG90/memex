@@ -1,4 +1,6 @@
-# Memex
+<p align="center">
+  <img src="assets/memex-banner.jpg" alt="Memex" width="500">
+</p>
 
 Memex is a long-term memory system designed to give LLMs persistent, evolving knowledge. It captures unstructured data (notes, docs, chats), extracts structured facts, and synthesizes high-level mental models over time.
 
@@ -126,6 +128,76 @@ Search memories with multi-strategy retrieval and AI summaries.
 
 ![Dashboard memory search with results](assets/memex_dashboard_memory_search.gif)
 
+## Features
+
+### Ingest anything
+
+Feed Memex from any source — plain text, Markdown, PDFs, Word docs, PowerPoint, Excel, Outlook emails, web pages, or entire directories. File conversion is handled automatically via [MarkItDown](https://github.com/microsoft/markitdown) and [PyMuPDF](https://pymupdf.readthedocs.io/). Background and batch ingestion modes let you import large document collections without blocking.
+
+```bash
+memex memory add "Quick inline note"
+memex memory add --file ./research-papers/        # directory of PDFs
+memex memory add --url https://example.com/article
+memex memory add --file report.md --asset diagram.png --background
+```
+
+### Five-strategy retrieval (TEMPR)
+
+Every search runs five independent retrieval strategies in parallel and fuses them with Reciprocal Rank Fusion — no single strategy has to be "right":
+
+| Strategy | What it finds |
+|:---------|:--------------|
+| **Semantic** | Conceptually similar facts via pgvector cosine distance |
+| **Keyword** | Exact term matches via PostgreSQL full-text search |
+| **Graph** | Entity-linked facts via NER, phonetic matching, and co-occurrence traversal |
+| **Temporal** | Recent facts via exponential time-decay scoring |
+| **Mental Model** | High-level synthesized insights from the reflection engine |
+
+Post-fusion, MMR diversity filtering prunes near-duplicates using a hybrid cosine + entity Jaccard kernel. Optional `after`/`before` date bounds and `tags` filters let you scope any search.
+
+### Hierarchical page index
+
+Long documents are split into a structured table of contents with section-level summaries, token estimates, and unique node IDs. Read a 50-page PDF section by section instead of dumping the entire document into context. The page index powers skeleton-tree reasoning (`--reason`) and targeted answer synthesis (`--summarize`).
+
+### Incremental extraction
+
+When you update a note (via `note_key`), Memex diffs the content against the previous version and only re-extracts changed blocks. Unchanged facts, entities, and embeddings are preserved — saving LLM calls and keeping ingestion fast for living documents.
+
+### Contradiction detection
+
+New facts are automatically triaged for corrections and updates. When a newer note contradicts or supersedes an older one, confidence scores are adjusted and supersession links are recorded. Retrieval naturally favors the most current information without manual cleanup.
+
+### Reflection and mental models
+
+A background reflection loop periodically reviews entities with new evidence, synthesizes observations, and builds versioned mental models. Over time, Memex evolves from a collection of raw facts into structured understanding — "The team consistently prioritizes performance over feature velocity" emerges from dozens of individual meeting notes.
+
+### Vaults
+
+Isolate knowledge by project, team, or topic. Each vault is a self-contained scope for notes, memories, entities, and mental models. Attach multiple vaults as read-only for cross-project search, or keep them strictly separate.
+
+### Cloud-native storage
+
+The file store uses [fsspec](https://filesystem-spec.readthedocs.io/) for backend-agnostic storage. Swap between local disk, Amazon S3, and Google Cloud Storage with a config change:
+
+```yaml
+server:
+  file_store:
+    type: s3            # or 'gcs', 'local'
+    root: my-bucket/memex
+```
+
+### AI agent integration
+
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. The `memex setup claude-code` command generates MCP config, lifecycle hooks, and `/remember` + `/recall` slash commands in one step. 26 MCP tools cover the full API surface.
+
+### REST API and webhooks
+
+A full FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
+
+### Dashboard
+
+A React + Vite web UI for exploring your knowledge graph — entity relationships, lineage trees, live ingestion activity, and memory search with AI summaries.
+
 ## 📚 Documentation
 
 Comprehensive guides and references are available in [`docs/`](./docs/index.md).
@@ -151,6 +223,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [REST API](./docs/reference/rest-api.md)
 - [MCP Tools](./docs/reference/mcp-tools.md)
 - [Configuration](./docs/reference/configuration.md)
+- [Evaluation Report](./docs/reference/evaluation-report.md): LoCoMo benchmark results, retrieval efficiency, and per-question analysis.
 
 ### Explanation
 - [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
@@ -190,6 +263,39 @@ git push && git push --tags
 ```
 
 The `release.yaml` GitHub Action automatically builds all artifacts (Python, dashboard, OpenClaw) and creates a GitHub Release with auto-generated release notes.
+
+## Evaluation
+
+Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 60 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
+
+### LoCoMo results
+
+| Category | Count | Mean Score |
+|---|---|---|
+| Single-Hop | 10 | 0.900 |
+| Multi-Hop | 14 | 1.000 |
+| Open Domain | 3 | 1.000 |
+| Temporal | 18 | 1.000 |
+| **Non-adversarial** | **45** | **0.978** |
+| Adversarial (unweighted) | 12 | 0.667 |
+
+Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
+
+### Retrieval efficiency
+
+Memex retrieval adds minimal overhead to agent workflows. Across the 60-question benchmark:
+
+| Metric | Value |
+|---|---|
+| Retrieval tokens per question (median) | **3,440** |
+| Retrieval tokens per question (mean) | 5,495 |
+| Retrieval as % of total tokens | **4.6%** |
+| Median response time | 27.8s |
+| Median turns per question | 4 |
+| Memex tool calls per question (median) | 2 |
+| Cost per question (median) | ~$0.08 |
+
+95% of token usage is agent overhead (system prompt, tool definitions, conversation history). The Memex MCP tools themselves return compact results — a typical question needs just one `memory_search` call (~2.4K tokens) or a two-stage `memory_search` + `note_search` (~3.4K tokens). Complex multi-hop questions that drill into specific note sections via the page index cost ~6K retrieval tokens.
 
 ## 🏗️ Architecture
 

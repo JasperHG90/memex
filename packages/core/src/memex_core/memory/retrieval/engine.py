@@ -19,14 +19,15 @@ from memex_core.memory.models.embedding import FastEmbedder, get_embedding_model
 from memex_core.memory.models.reranking import FastReranker, get_reranking_model
 from memex_core.memory.models.ner import FastNERModel, get_ner_model
 from memex_core.memory.retrieval.strategies import (
-    GraphStrategy,
     KeywordStrategy,
     RetrievalStrategy,
     SemanticStrategy,
     TemporalStrategy,
     MentalModelStrategy,
+    get_graph_strategy,
 )
 from memex_core.memory.retrieval.expansion import QueryExpander
+from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
 from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
@@ -34,6 +35,20 @@ from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.formatting import format_for_reranking
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
+
+
+def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
+    """Derive note-level status from unit confidences."""
+    if not units:
+        return 'active'
+    low_confidence = sum(1 for u in units if getattr(u, 'confidence', 1.0) < superseded_threshold)
+    ratio = low_confidence / len(units)
+    if ratio > 0.5:
+        return 'superseded'
+    elif low_confidence > 0:
+        return 'partially_superseded'
+    return 'active'
+
 
 # RRF Constant
 K_RRF = 60
@@ -132,7 +147,8 @@ class RetrievalEngine:
             'semantic': (SemanticStrategy(), False),  # False = ASC (Distance)
             'keyword': (KeywordStrategy(), True),  # True = DESC (Score)
             'graph': (
-                GraphStrategy(
+                get_graph_strategy(
+                    type=self.retrieval_config.graph_retriever_type,
                     ner_model=self.ner_model,
                     similarity_threshold=self.retrieval_config.similarity_threshold,
                     temporal_decay_days=self.retrieval_config.temporal_decay_days,
@@ -182,28 +198,66 @@ class RetrievalEngine:
         use_reranker = self.reranker is not None and request.rerank
         candidate_depth = max(effective_limit * 3, 50) if use_reranker else effective_limit
 
+        # 3b. NLP Temporal Extraction (upstream of RRF)
+        # Only extract if no explicit date filters were provided and feature is enabled.
+        filters = dict(request.filters) if request.filters else {}
+        if (
+            self.retrieval_config.temporal_extraction_enabled
+            and 'start_date' not in filters
+            and 'end_date' not in filters
+        ):
+            temporal_range = extract_temporal_constraint(request.query)
+            if temporal_range is not None:
+                filters['start_date'] = temporal_range[0]
+                filters['end_date'] = temporal_range[1]
+                logger.debug(
+                    'Temporal extraction: %s -> %s to %s',
+                    request.query,
+                    temporal_range[0],
+                    temporal_range[1],
+                )
+
         # 4. Perform Retrieval (Fused across all queries)
-        filters = request.filters or {}
         if request.vault_ids:
             filters['vault_ids'] = request.vault_ids
 
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Thread temporal filters for strategy-level date filtering
+        if request.after:
+            filters['start_date'] = request.after
+        if request.before:
+            filters['end_date'] = request.before
+
         debug_ctx: DebugContext | None = DebugContext() if request.debug else None
+
+        use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
 
         all_ranked_items = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
-            items = await self._perform_rrf_retrieval(
-                session,
-                q,
-                q_emb.tolist(),
-                candidate_depth,
-                filters,
-                strategies=request.strategies,
-                strategy_weights=request.strategy_weights,
-                debug_ctx=debug_ctx,
-            )
+            if use_partitioned:
+                items = await self._perform_partitioned_rrf(
+                    session,
+                    q,
+                    q_emb.tolist(),
+                    candidate_depth,
+                    filters,
+                    strategies=request.strategies,
+                    strategy_weights=request.strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
+            else:
+                items = await self._perform_rrf_retrieval(
+                    session,
+                    q,
+                    q_emb.tolist(),
+                    candidate_depth,
+                    filters,
+                    strategies=request.strategies,
+                    strategy_weights=request.strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
 
@@ -221,6 +275,11 @@ class RetrievalEngine:
 
         # 6. Hydrate Objects
         final_results = await self._hydrate_results(session, fused_items)
+
+        # 6b. Filter superseded units
+        if not request.include_superseded:
+            threshold = self.retrieval_config.superseded_threshold
+            final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
         # 7. Rerank
         if use_reranker:
@@ -321,12 +380,9 @@ class RetrievalEngine:
         Rank 4-10: 60/40
         Rank 11+: 40/60
         """
-        # Note: input 'results' is already sorted by reranker if reranking was used.
-        # However, position-aware blending usually implies we have two different orders.
-        # For simplicity in this implementation, we assume 'results' maintains reranker order
-        # and we use it as is, or we could pass original RRF order too.
-        # Given the task mandate: "Position-Aware Blending: Rank 1-3 (75% retrieval / 25% reranker)..."
-        # We'll just return results for now as reranking is already the dominant signal in modern RAG.
+        # TODO(T6): This is a NO-OP. Either implement position-aware blending
+        # with dual orderings (RRF + reranker) or remove this method. Kept because
+        # callers reference `fusion_strategy='position_aware'` in RetrievalRequest.
         return results
 
     def _resolve_active_strategies(
@@ -500,6 +556,91 @@ class RetrievalEngine:
         result = await session.exec(final_stmt)
         return result.all()
 
+    async def _perform_partitioned_rrf(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        filters: dict[str, Any],
+        strategies: list[str] | None = None,
+        strategy_weights: dict[str, float] | None = None,
+        debug_ctx: DebugContext | None = None,
+    ) -> Sequence[Any]:
+        """Run RRF independently per fact type, then interleave results.
+
+        Each fact type (from ``FactTypes``) gets its own RRF pass limited to
+        ``RetrievalConfig.fact_type_budget`` candidates. Results are merged via
+        round-robin interleaving across type buckets (plus mental models as an
+        extra bucket when enabled).
+
+        Enabled by ``RetrievalConfig.fact_type_partitioned_rrf``.
+        """
+        fact_types = [ft.value for ft in FactTypes]
+        per_type_budget = self.retrieval_config.fact_type_budget
+
+        # Resolve which strategies to run so we can handle mental models separately
+        active_strategies, include_mm = self._resolve_active_strategies(strategies)
+
+        # If mental_model was explicitly requested, exclude it from unit strategies list
+        unit_only_strategies = (
+            [s for s in (strategies or []) if s != 'mental_model']
+            if strategies is not None
+            else None
+        )
+
+        # Run per-type queries sequentially — AsyncSession is not safe for concurrent use
+        per_type_results: list[Sequence[Any]] = []
+        for ft in fact_types:
+            result = await self._perform_rrf_retrieval(
+                session,
+                query,
+                query_embedding,
+                per_type_budget,
+                {**filters, 'fact_type': ft},
+                strategies=unit_only_strategies,
+                strategy_weights=strategy_weights,
+                debug_ctx=debug_ctx,
+            )
+            per_type_results.append(result)
+
+        # Collect mental model results separately (mental models have no fact_type)
+        mm_results: Sequence[Any] = []
+        if include_mm:
+            mm_items = await self._perform_rrf_retrieval(
+                session,
+                query,
+                query_embedding,
+                per_type_budget,
+                filters,
+                strategies=['mental_model'],
+                strategy_weights=strategy_weights,
+                debug_ctx=debug_ctx,
+            )
+            mm_results = mm_items
+
+        # Interleave: round-robin across fact types
+        merged: list[Any] = []
+        seen: set[UUID] = set()
+
+        # Include mental model results as an additional "type bucket"
+        all_buckets: list[Sequence[Any]] = list(per_type_results)
+        if mm_results:
+            all_buckets.append(mm_results)
+
+        max_len = max((len(r) for r in all_buckets), default=0)
+        for i in range(max_len):
+            for results in all_buckets:
+                if i < len(results) and results[i].id not in seen:
+                    merged.append(results[i])
+                    seen.add(results[i].id)
+                    if len(merged) >= limit:
+                        break
+            if len(merged) >= limit:
+                break
+
+        return merged[:limit]
+
     async def _perform_rrf_retrieval_debug(
         self,
         session: AsyncSession,
@@ -625,6 +766,48 @@ class RetrievalEngine:
             ).all()
             fetched_models = {m.id: m for m in models}
 
+        # Load supersession context for low-confidence units
+        low_conf_ids = [u.id for u in fetched_units.values() if getattr(u, 'confidence', 1.0) < 1.0]
+        if low_conf_ids:
+            from memex_core.memory.sql_models import MemoryLink
+
+            link_stmt = select(MemoryLink).where(
+                col(MemoryLink.to_unit_id).in_(low_conf_ids),
+                col(MemoryLink.link_type).in_(['contradicts', 'weakens']),
+            )
+            link_result = await session.exec(link_stmt)
+            links_by_target: dict[UUID, list[MemoryLink]] = defaultdict(list)
+            for link in link_result.all():
+                links_by_target[link.to_unit_id].append(link)
+
+            for uid, links_list in links_by_target.items():
+                if uid in fetched_units:
+                    unit = fetched_units[uid]
+                    supersession_info = []
+                    for link in links_list:
+                        auth_id = (
+                            UUID(link.link_metadata.get('authoritative_unit_id', ''))
+                            if link.link_metadata
+                            and link.link_metadata.get('authoritative_unit_id')
+                            else link.from_unit_id
+                        )
+                        auth_unit = fetched_units.get(auth_id)
+                        auth_text = auth_unit.text if auth_unit else ''
+                        note_title = (
+                            link.link_metadata.get('superseding_note_title')
+                            if link.link_metadata
+                            else None
+                        )
+                        supersession_info.append(
+                            {
+                                'unit_id': str(auth_id),
+                                'unit_text': auth_text[:200],
+                                'note_title': note_title,
+                                'relation': link.link_type,
+                            }
+                        )
+                    unit.unit_metadata['superseded_by'] = supersession_info
+
         final_results = []
         for row in ranked_items:
             if row.type == 'unit' and row.id in fetched_units:
@@ -637,7 +820,17 @@ class RetrievalEngine:
     def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
-        """Re-ranks results using a Cross-Encoder."""
+        """Re-rank results using a cross-encoder with multiplicative boosts.
+
+        Applies sigmoid-normalized cross-encoder scores, then multiplies by:
+        * **recency boost** -- scaled by ``RetrievalConfig.reranking_recency_alpha``
+          (linear decay over 365 days)
+        * **temporal proximity boost** -- scaled by
+          ``RetrievalConfig.reranking_temporal_alpha`` (uses ``unit.temporal_proximity``
+          when available)
+
+        Set both alphas to 0 to disable boosts (backward compatible).
+        """
         if not self.reranker or not results:
             return results
 
@@ -657,15 +850,41 @@ class RetrievalEngine:
 
             scores = self.reranker.score(query, formatted_texts)
 
+            # Normalize cross-encoder scores to [0, 1] via sigmoid
+            normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
+
+            # Apply multiplicative recency and temporal proximity boosts
+            now = datetime.now(timezone.utc)
+            recency_alpha = self.retrieval_config.reranking_recency_alpha
+            temporal_alpha = self.retrieval_config.reranking_temporal_alpha
+
+            boosted_scores: list[float] = []
+            for unit, ce_score in zip(results, normalized_scores):
+                # Recency boost
+                if unit.event_date is not None:
+                    days_ago = (now - unit.event_date).days
+                    recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
+                else:
+                    recency = 0.5  # neutral when no event_date
+
+                recency_boost = 1.0 + recency_alpha * (recency - 0.5)
+
+                # Temporal proximity boost
+                temporal: float | None = getattr(unit, 'temporal_proximity', None)
+                if temporal is None:
+                    temporal = 0.5  # neutral
+                temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)
+
+                boosted_scores.append(ce_score * recency_boost * temporal_boost)
+
             scored_results = []
-            for unit, score in zip(results, scores):
-                # Apply sigmoid threshold if requested
+            for unit, boosted, raw_score in zip(results, boosted_scores, scores):
+                # Apply sigmoid threshold on raw score if requested
                 if min_score is not None:
-                    # sigmoid(x) = 1 / (1 + exp(-x))
-                    prob = 1.0 / (1.0 + math.exp(-score))
+                    prob = 1.0 / (1.0 + math.exp(-raw_score))
                     if prob < min_score:
                         continue
-                scored_results.append((unit, score))
+                scored_results.append((unit, boosted))
 
             scored_results.sort(key=lambda x: x[1], reverse=True)
             return [item[0] for item in scored_results]
@@ -804,7 +1023,8 @@ class RetrievalEngine:
                 elif abs(mmr_score - best_score) <= eps:
                     # Temporal tiebreaker: prefer newer event_date
                     current_best = remaining[best_idx]
-                    if candidate.event_date > current_best.event_date:
+                    _min = datetime.min
+                    if (candidate.event_date or _min) > (current_best.event_date or _min):
                         best_score = mmr_score
                         best_idx = idx
 

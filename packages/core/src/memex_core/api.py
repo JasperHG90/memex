@@ -30,7 +30,7 @@ from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.templates import MemexTemplateFromFile
 
 # Engines and Models
-from memex_core.memory.engine import MemoryEngine
+from memex_core.memory.engine import MemoryEngine, _build_contradiction_engine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
@@ -349,12 +349,17 @@ class MemexAPI:
             embedder=self.embedding_model,
             ner_model=self.ner_model,
             lm=self.lm,
+            retrieval_config=self.config.server.memory.retrieval,
         )
+
+        self._contradiction = _build_contradiction_engine(self.config)
 
         self.memory = MemoryEngine(
             config=self.config,
             extraction_engine=self._extraction,
             retrieval_engine=self._retrieval,
+            contradiction_engine=self._contradiction,
+            session_factory=self.metastore.session_maker(),
         )
 
         self.queue_service = ReflectionQueueService(self.config.server.memory.reflection)
@@ -570,6 +575,23 @@ class MemexAPI:
         """Direct access to stored assets. Delegates to NoteService."""
         return await self._notes.get_resource(path)
 
+    def get_resource_path(self, path: str) -> str | None:
+        """Return absolute filesystem path for a resource, or None for remote stores."""
+        return self._notes.get_resource_path(path)
+
+    async def set_note_status(
+        self,
+        note_id: UUID,
+        status: str,
+        linked_note_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Set a note's lifecycle status. Delegates to NoteService."""
+        return await self._notes.set_note_status(note_id, status, linked_note_id)
+
+    async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
+        """Update a note's title. Delegates to NoteService."""
+        return await self._notes.update_note_title(note_id, new_title)
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)
@@ -670,7 +692,11 @@ class MemexAPI:
         token_budget: int | None = None,
         strategies: list[str] | None = None,
         include_stale: bool = False,
+        include_superseded: bool = False,
         debug: bool = False,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[MemoryUnit]:
         """Search with reranking. Delegates to SearchService."""
         return await self._search.search(
@@ -680,7 +706,11 @@ class MemexAPI:
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
+            include_superseded=include_superseded,
             debug=debug,
+            after=after,
+            before=before,
+            tags=tags,
         )
 
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
@@ -699,6 +729,9 @@ class MemexAPI:
         reason: bool = False,
         summarize: bool = False,
         mmr_lambda: float | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         """Search notes. Delegates to SearchService."""
         return await self._search.search_notes(
@@ -712,6 +745,9 @@ class MemexAPI:
             reason=reason,
             summarize=summarize,
             mmr_lambda=mmr_lambda,
+            after=after,
+            before=before,
+            tags=tags,
         )
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:

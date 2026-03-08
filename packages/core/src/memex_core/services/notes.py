@@ -39,6 +39,92 @@ class NoteService:
         """Direct access to stored assets in the file store."""
         return await self.filestore.load(path)
 
+    def get_resource_path(self, path: str) -> str | None:
+        """Return the absolute filesystem path for a resource, or None for remote stores."""
+        from memex_core.storage.filestore import LocalAsyncFileStore
+
+        if isinstance(self.filestore, LocalAsyncFileStore):
+            return self.filestore.join_path(path)
+        return None
+
+    async def set_note_status(
+        self,
+        note_id: UUID,
+        status: str,
+        linked_note_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Set a note's lifecycle status and optionally link to another note.
+
+        When status is 'superseded', marks all memory units as stale.
+        """
+        from memex_core.memory.sql_models import MemoryUnit, Note
+
+        valid_statuses = ('active', 'superseded', 'appended')
+        if status not in valid_statuses:
+            raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            doc.status = status
+            if status == 'superseded':
+                doc.superseded_by = linked_note_id
+                # Cascade: mark all memory units as stale
+                from sqlmodel import select
+
+                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+                units = (await session.exec(units_stmt)).all()
+                for unit in units:
+                    unit.status = 'stale'
+                    session.add(unit)
+            elif status == 'appended':
+                doc.appended_to = linked_note_id
+            elif status == 'active':
+                doc.superseded_by = None
+                doc.appended_to = None
+
+            session.add(doc)
+            await session.commit()
+            return {
+                'note_id': str(note_id),
+                'status': status,
+                'linked_note_id': str(linked_note_id) if linked_note_id else None,
+            }
+
+    async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
+        """Update the title of a note, cascading to page_index and doc_metadata."""
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            doc.title = new_title
+
+            # Update doc_metadata
+            if doc.doc_metadata is None:
+                doc.doc_metadata = {}
+            meta = dict(doc.doc_metadata)
+            meta['name'] = new_title
+            meta['title'] = new_title
+            doc.doc_metadata = meta
+
+            # Update page_index metadata
+            if isinstance(doc.page_index, dict):
+                pi = dict(doc.page_index)
+                pi_meta = dict(pi.get('metadata') or {})
+                pi_meta['title'] = new_title
+                pi['metadata'] = pi_meta
+                doc.page_index = pi
+
+            session.add(doc)
+            await session.commit()
+            await session.refresh(doc)
+            return doc.model_dump()
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID."""
         from memex_core.memory.sql_models import Note
@@ -62,7 +148,58 @@ class NoteService:
                 return None
             if not isinstance(doc.page_index, dict):
                 return None
-            return doc.page_index.get('metadata')
+            metadata = doc.page_index.get('metadata')
+            if metadata is not None:
+                from memex_core.memory.sql_models import Vault
+
+                metadata = dict(metadata)
+                metadata.setdefault('has_assets', bool(doc.assets))
+                metadata.setdefault('vault_id', str(doc.vault_id))
+                vault = await session.get(Vault, doc.vault_id)
+                if vault:
+                    metadata.setdefault('vault_name', vault.name)
+            return metadata
+
+    @staticmethod
+    def _filter_toc(
+        toc: list[dict[str, Any]],
+        depth: int | None = None,
+        parent_node_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Filter a TOC tree by depth and/or parent node."""
+        if parent_node_id is not None:
+            # Find subtree rooted at parent_node_id
+            def _find_subtree(
+                nodes: list[dict[str, Any]], target_id: str
+            ) -> list[dict[str, Any]] | None:
+                for node in nodes:
+                    if node.get('id') == target_id:
+                        return node.get('children', [])
+                    found = _find_subtree(node.get('children', []), target_id)
+                    if found is not None:
+                        return found
+                return None
+
+            subtree = _find_subtree(toc, parent_node_id)
+            if subtree is None:
+                return []
+            toc = subtree
+
+        if depth is not None and depth >= 0:
+
+            def _trim_depth(nodes: list[dict[str, Any]], current: int) -> list[dict[str, Any]]:
+                if current >= depth:
+                    return []
+                result = []
+                for node in nodes:
+                    trimmed = dict(node)
+                    trimmed['children'] = _trim_depth(node.get('children', []), current + 1)
+                    result.append(trimmed)
+                return result
+
+            toc = _trim_depth(toc, 0)
+
+        return toc
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index for a document, or None if not indexed.

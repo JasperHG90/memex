@@ -124,7 +124,7 @@ async def test_int_list_documents_vault_filter(
         config=memex_config,
     )
 
-    docs_a = await api_a.list_notes()
+    docs_a = await api_a.list_notes(vault_id=vault_a)
     assert len(docs_a) == 1
     assert docs_a[0].vault_id == vault_a
 
@@ -139,6 +139,6 @@ async def test_int_list_documents_vault_filter(
         config=memex_config,
     )
 
-    docs_global = await api_global.list_notes()
+    docs_global = await api_global.list_notes(vault_id=GLOBAL_VAULT_ID)
     assert len(docs_global) == 1
     assert docs_global[0].vault_id == GLOBAL_VAULT_ID

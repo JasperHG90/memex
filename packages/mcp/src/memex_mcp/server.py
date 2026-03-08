@@ -43,22 +43,36 @@ mcp = FastMCP(
 
 STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
   - `memex_memory_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
-  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with snippets.
+  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with metadata and snippets.
   When unsure, run both in parallel and combine results (deduplicate by Note ID).
 
-STEP 2 — FILTER (parallel, per note): Call `memex_get_note_metadata` on each candidate Note ID.
-  - Cheap (~50 tokens). Use title, description, and tags to confirm relevance.
-  - Drop irrelevant notes BEFORE proceeding to Step 3.
+STEP 2 — FILTER: Use metadata to drop irrelevant notes BEFORE reading.
+  - After `memex_memory_search`: call `memex_get_note_metadata` on each Note ID (cheap, ~50 tokens).
+  - After `memex_note_search`: metadata is already inline — use the returned title, description, and tags to filter. No extra calls needed.
 
 STEP 3 — READ (only confirmed-relevant notes):
-  - `memex_get_page_index` → get TOC and node IDs. Expensive — only after Step 2 confirms relevance.
+  - `memex_get_page_index` → get TOC and node IDs.
+    - If total_tokens from metadata > 3000: use `depth=0` first, then `parent_node_id` to drill down.
   - `memex_get_node` (parallel) → read specific sections by node ID.
   - `memex_read_note` → fallback only, for very short notes.
 
 RULES:
-- Never skip Step 2. `memex_get_page_index` costs 5-10x more tokens than `memex_get_note_metadata`.
+- Always filter before reading. Never call `memex_get_page_index` on notes you haven't confirmed relevant.
 - Never use `memex_list_notes` for discovery.
-- Parallelize aggressively: metadata calls together, node reads together.
+- Parallelize aggressively.
+- CITE SOURCES: Use numbered citations [1], [2] etc. inline. Add a reference list at the end with title and note ID. For memory units, include both memory ID and source note ID.
+
+ENTITY EXPLORATION (when you need to find people, teams, or concepts):
+  1. `memex_list_entities` — browse or search entities by name.
+  2. `memex_get_entity` — get details (type, mention count).
+  3. `memex_get_entity_mentions` — find facts/observations that mention the entity.
+  4. `memex_get_entity_cooccurrences` — find related entities (people on the same team, concepts in the same docs).
+
+STRATEGY HINTS for `memex_memory_search`:
+  - `strategies: ["temporal"]` — chronological ordering (e.g. "what happened after X?")
+  - `strategies: ["graph"]` — entity-centric traversal (e.g. "what do we know about person X?")
+  - `strategies: ["mental_model"]` — synthesized observations (e.g. "what patterns exist around X?")
+  - Default (all strategies) is best for general queries.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -76,7 +90,7 @@ async def memex_reflect(
     limit: Annotated[int, Field(description='Recent memories to consider.')] = 20,
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Vault UUID. Defaults to Global Vault.'),
+        Field(default=None, description='Vault UUID or name. Defaults to Global Vault.'),
     ] = None,
 ):
     """Reflect on an entity to update its mental model."""
@@ -90,10 +104,7 @@ async def memex_reflect(
 
         v_uuid = None
         if vault_id:
-            try:
-                v_uuid = UUID(vault_id)
-            except ValueError:
-                raise ToolError(f'Invalid Vault UUID: {vault_id}')
+            v_uuid = await api.resolve_vault_identifier(vault_id)
 
         req_kwargs: dict = {
             'entity_id': e_uuid,
@@ -302,6 +313,81 @@ async def memex_read_note(
 
 
 @mcp.tool(
+    name='memex_set_note_status',
+    description=(
+        'Set note lifecycle status: active, superseded, appended. '
+        'When superseded, all memory units are marked stale. '
+        'Optionally link to the replacing/parent note.'
+    ),
+)
+async def memex_set_note_status(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    status: Annotated[
+        str,
+        Field(description='New status: active, superseded, or appended.'),
+    ],
+    linked_note_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='UUID of the note that supersedes/contains this one.',
+        ),
+    ] = None,
+) -> str:
+    """Set note lifecycle status."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        linked_uuid = None
+        if linked_note_id:
+            try:
+                linked_uuid = UUID(linked_note_id)
+            except ValueError:
+                raise ToolError(f'Invalid linked Note UUID: {linked_note_id}')
+
+        await api.set_note_status(uuid_obj, status, linked_uuid)
+        return f'Note {note_id} status set to "{status}".'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Set note status failed: {e}', exc_info=True)
+        raise ToolError(f'Set note status failed: {e}')
+
+
+@mcp.tool(
+    name='memex_rename_note',
+    description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+)
+async def memex_rename_note(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    new_title: Annotated[str, Field(description='New title for the note.')],
+) -> str:
+    """Rename a note by updating its title across all stored locations."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        await api.update_note_title(uuid_obj, new_title)
+        return f'Note {note_id} renamed to "{new_title}".'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Rename note failed: {e}', exc_info=True)
+        raise ToolError(f'Rename note failed: {e}')
+
+
+@mcp.tool(
     name='memex_get_resource',
     description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets or memex_get_lineage.',
 )
@@ -319,9 +405,14 @@ async def memex_get_resource(
         if vault_id:
             await api.resolve_vault_identifier(vault_id)
 
-        content_bytes = await api.get_resource(path)
-
         mime_type, _ = mimetypes.guess_type(path)
+
+        # For local stores, return file:// URI to avoid base64 overhead
+        local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
+        if local_path and mime_type and mime_type.startswith('image/'):
+            return f'file://{local_path}'
+
+        content_bytes = await api.get_resource(path)
 
         if mime_type:
             if mime_type.startswith('image/'):
@@ -433,7 +524,7 @@ async def memex_add_note(
         str | None,
         Field(
             default=None,
-            description='Target vault UUID. Defaults to active vault.',
+            description='Target vault UUID or name. Defaults to active vault.',
         ),
     ] = None,
     note_key: Annotated[
@@ -503,7 +594,15 @@ async def memex_add_note(
         result = await api.ingest(note, background=background)
         if isinstance(result, BatchJobStatus):
             return f'Note queued. Job ID: {result.job_id}'
-        return f'Note added successfully. ID: {result.note_id}'
+
+        msg = f'Note added successfully. ID: {result.note_id}'
+        if result.overlapping_notes:
+            msg += '\n\n⚠️ Similar notes detected:'
+            for overlap in result.overlapping_notes:
+                similarity_pct = int(overlap.similarity * 100)
+                overlap_title = overlap.title or 'Untitled'
+                msg += f'\n  - {overlap_title} ({similarity_pct}% similar) [{overlap.note_id}]'
+        return msg
 
     except ToolError:
         raise
@@ -544,10 +643,33 @@ async def memex_memory_search(
             description='Strategies: semantic, keyword, graph, temporal, mental_model. Default: all.',
         ),
     ] = None,
+    include_superseded: Annotated[
+        bool,
+        Field(default=False, description='Include superseded (low-confidence) memory units.'),
+    ] = False,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None, description='Only results before this ISO 8601 date (e.g. 2025-12-31).'
+        ),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(default=None, description='Only results from notes with ALL of these tags.'),
+    ] = None,
 ):
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
+
+        from datetime import datetime as _dt, timezone as _tz
+
+        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
+        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
 
         results = await api.search(
             query=query,
@@ -555,6 +677,10 @@ async def memex_memory_search(
             vault_ids=cast(list[UUID | str] | None, vault_ids),
             token_budget=token_budget,
             strategies=strategies,
+            include_superseded=include_superseded,
+            after=after_dt,
+            before=before_dt,
+            tags=tags,
         )
 
         if not results:
@@ -574,10 +700,22 @@ async def memex_memory_search(
             date = res.mentioned_at or res.occurred_start
             date_str = f' ({date.isoformat()})' if date else ''
 
+            confidence = getattr(res, 'confidence', 1.0)
+            confidence_str = f' [conf: {confidence:.1f}]' if confidence < 1.0 else ''
+
             output.append(
                 f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
-                f'{score_str}{date_str}\n   {snippet}\n'
+                f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
+
+            # Show supersession context if available
+            superseded_by = getattr(res, 'unit_metadata', {}).get('superseded_by')
+            if superseded_by:
+                for s in superseded_by:
+                    output.append(
+                        f'   \u26a0 Superseded by: {s.get("unit_text", "")[:100]}'
+                        f' ({s.get("relation")})'
+                    )
 
         output.append(
             'Tip: Use Note IDs above with memex_get_note_metadata to check relevance before deeper reading.'
@@ -602,25 +740,50 @@ async def memex_note_search(
     query: Annotated[str, Field(description='Search query.')],
     limit: Annotated[int, Field(description='Max notes to return.')] = 5,
     expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
-    reason: Annotated[
-        bool,
-        Field(description='Annotate results with relevant section IDs and reasoning.'),
-    ] = False,
     vault_ids: Annotated[
         list[str] | None,
         Field(default=None, description='Vault UUIDs or names to search.'),
+    ] = None,
+    strategies: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description='Retrieval strategies to use: semantic, keyword, graph, temporal. If None, all are used.',
+        ),
+    ] = None,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only notes created after this ISO 8601 date.'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(default=None, description='Only notes created before this ISO 8601 date.'),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(default=None, description='Only notes with ALL of these tags.'),
     ] = None,
 ) -> str:
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
+
+        from datetime import datetime as _dt, timezone as _tz
+
+        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
+        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
+
         results = await api.search_notes(
             query=query,
             limit=limit,
             expand_query=expand_query,
-            reason=reason,
+            reason=False,
             summarize=False,
             vault_ids=vault_ids,
+            strategies=strategies,
+            after=after_dt,
+            before=before_dt,
+            tags=tags,
         )
 
         if not results:
@@ -639,24 +802,28 @@ async def memex_note_search(
             lines.append(f'## {i}. {title}')
             lines.append(f'- **Note ID:** {doc.note_id}')
             lines.append(f'- **Score:** {doc.score:.3f}')
+            if doc.vault_name:
+                lines.append(f'- **Vault:** {doc.vault_name}')
+            if hasattr(doc, 'note_status') and doc.note_status:
+                lines.append(f'- **Status:** {doc.note_status}')
+            if desc := metadata.get('description'):
+                lines.append(f'- **Description:** {desc}')
+            if tags := metadata.get('tags'):
+                lines.append(f'- **Tags:** {", ".join(tags)}')
             if src := metadata.get('source_uri'):
                 lines.append(f'- **Source:** {src}')
+            if metadata.get('has_assets'):
+                lines.append('- **Has assets:** yes')
             if doc.snippets:
                 lines.append('- **Snippets:**')
                 for snippet in doc.snippets[:2]:
                     text = snippet.text.strip()[:200]
                     prefix = f'*[{snippet.node_title}]* ' if snippet.node_title else ''
                     lines.append(f'  - {prefix}{text}')
-            if doc.reasoning:
-                lines.append('- **Relevant Sections:**')
-                for section in doc.reasoning[:5]:
-                    node_id = section.get('node_id', '')
-                    reasoning_text = section.get('reasoning', '')
-                    lines.append(f'  - Node `{node_id}`: {reasoning_text}')
             lines.append('')
 
         lines.append(
-            'Next: call memex_get_note_metadata on each Note ID to confirm relevance before reading sections.'
+            'Next: use memex_get_page_index on relevant Note IDs to get section TOC, then memex_get_node to read.'
         )
         return '\n'.join(lines)
 
@@ -669,13 +836,26 @@ async def memex_note_search(
     name='memex_get_page_index',
     description=(
         'Get note TOC: section titles, summaries, and node IDs. '
-        'Expensive \u2014 only call AFTER memex_get_note_metadata confirms relevance. '
+        'Expensive for large notes — only call AFTER memex_get_note_metadata confirms relevance. '
+        'For large notes (total_tokens > 3000): use depth=0 to get top-level sections first, '
+        'then drill into specific sections with parent_node_id. '
         'Use returned node IDs with memex_get_node.'
     ),
 )
 async def memex_get_page_index(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
+    depth: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description='Max tree depth to return (0=roots only, 1=roots+children, etc).',
+        ),
+    ] = None,
+    parent_node_id: Annotated[
+        str | None,
+        Field(default=None, description='Return only the subtree under this node ID.'),
+    ] = None,
 ) -> str | PageIndexDTO:
     """Get the hierarchical page index for a note."""
     try:
@@ -689,9 +869,37 @@ async def memex_get_page_index(
         if page_index is None:
             return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
 
+        raw_toc = page_index.get('toc', [])
+
+        # Apply depth/subtree filtering if requested
+        if depth is not None or parent_node_id is not None:
+            from memex_core.services.notes import NoteService
+
+            raw_toc = NoteService._filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
+
+        toc = [TOCNodeDTO.model_validate(n) for n in raw_toc]
+
+        def _sum_tokens(nodes: list[TOCNodeDTO]) -> int:
+            total = 0
+            for node in nodes:
+                if node.token_estimate is not None:
+                    total += node.token_estimate
+                total += _sum_tokens(node.children)
+            return total
+
+        metadata_dict = page_index.get('metadata') or {}
+
+        # For unfiltered trees, prefer stored total_tokens (pre-computed at ingestion).
+        # Fall back to recursive sum for pre-existing notes without stored value.
+        if depth is None and parent_node_id is None:
+            total_tokens = metadata_dict.get('total_tokens') or _sum_tokens(toc) or None
+        else:
+            total_tokens = _sum_tokens(toc) or None
+
         return PageIndexDTO(
-            metadata=PageMetadataDTO(**(page_index.get('metadata') or {})),
-            toc=[TOCNodeDTO.model_validate(n) for n in page_index.get('toc', [])],
+            metadata=PageMetadataDTO(**metadata_dict),
+            toc=toc,
+            total_tokens=total_tokens,
         )
 
     except ToolError:
@@ -704,8 +912,11 @@ async def memex_get_page_index(
 @mcp.tool(
     name='memex_get_note_metadata',
     description=(
-        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. '
-        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes.'
+        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, '
+        'source URI, and total_tokens (note size). '
+        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes. '
+        'When total_tokens > 3000, use memex_get_page_index with depth=0 first to get only '
+        'top-level sections, then drill down with parent_node_id.'
     ),
 )
 async def memex_get_note_metadata(
@@ -784,7 +995,7 @@ async def memex_batch_ingest(
     file_paths: Annotated[list[str], Field(description='Absolute file paths.')],
     vault_id: Annotated[
         str | None,
-        Field(default=None, description='Target vault UUID.'),
+        Field(default=None, description='Target vault UUID or name.'),
     ] = None,
     batch_size: Annotated[int, Field(description='Files per batch chunk.')] = 32,
 ) -> str:
@@ -979,7 +1190,8 @@ async def memex_list_entities(
 
         lines = [f'Found {len(entities)} entity/entities:\n']
         for i, e in enumerate(entities, 1):
-            lines.append(f'{i}. **{e.name}** (ID: {e.id}, mentions: {e.mention_count})')
+            type_str = f', type: {e.entity_type}' if e.entity_type else ''
+            lines.append(f'{i}. **{e.name}** (ID: {e.id}{type_str}, mentions: {e.mention_count})')
 
         return '\n'.join(lines)
 
@@ -1011,6 +1223,8 @@ async def memex_get_entity(
             f'**ID:** {entity.id}',
             f'**Mentions:** {entity.mention_count}',
         ]
+        if entity.entity_type:
+            lines.append(f'**Type:** {entity.entity_type}')
         if entity.vault_id:
             lines.append(f'**Vault:** {entity.vault_id}')
 
@@ -1047,12 +1261,12 @@ async def memex_get_entity_mentions(
 
         lines = [f'Found {len(mentions)} mention(s):\n']
         for i, m in enumerate(mentions, 1):
-            unit = m.get('unit', {})
-            note = m.get('note', {})
-            text = str(unit.get('text', ''))[:200]
-            unit_id = unit.get('id', 'N/A')
-            note_id = note.get('id', 'N/A')
-            fact_type = unit.get('fact_type', 'unknown')
+            unit = m.get('unit')
+            note = m.get('document')
+            text = str(unit.text if unit else '')[:200]
+            unit_id = unit.id if unit else 'N/A'
+            note_id = note.id if note else 'N/A'
+            fact_type = unit.fact_type if unit else 'unknown'
             lines.append(
                 f'{i}. [Type: {fact_type}] [Unit ID: {unit_id}] [Note ID: {note_id}]\n   {text}\n'
             )
@@ -1089,9 +1303,9 @@ async def memex_get_entity_cooccurrences(
 
         lines = [f'Found {len(cooccurrences)} co-occurring entity/entities:\n']
         for i, c in enumerate(cooccurrences, 1):
-            e1 = c.get('entity_id_1', 'N/A')
-            e2 = c.get('entity_id_2', 'N/A')
-            count = c.get('cooccurrence_count', 0)
+            e1 = c.entity_id_1
+            e2 = c.entity_id_2
+            count = c.cooccurrence_count
             other_id = e2 if str(e1) == entity_id else e1
             lines.append(f'{i}. Entity ID: {other_id} (co-occurrences: {count})')
 
@@ -1131,6 +1345,9 @@ async def memex_get_memory_unit(
             f'**Status:** {unit.status}',
             f'**Note ID:** {unit.note_id}',
         ]
+        chunk_id = getattr(unit, 'chunk_id', None)
+        if chunk_id:
+            lines.append(f'**Chunk ID:** {chunk_id}')
         if unit.mentioned_at:
             lines.append(f'**Mentioned at:** {unit.mentioned_at}')
         if unit.occurred_start:
@@ -1149,6 +1366,63 @@ async def memex_get_memory_unit(
     except Exception as e:
         logging.error(f'Get memory unit failed: {e}', exc_info=True)
         raise ToolError(f'Get memory unit failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_memory_units',
+    description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+)
+async def memex_get_memory_units(
+    ctx: Context,
+    unit_ids: Annotated[list[str], Field(description='List of memory unit UUIDs.')],
+) -> str:
+    """Retrieve multiple memory units with their contradiction context."""
+    try:
+        api = get_api(ctx)
+        lines: list[str] = []
+        for uid_str in unit_ids:
+            try:
+                uuid_obj = UUID(uid_str)
+            except ValueError:
+                lines.append(f'Invalid UUID: {uid_str}')
+                continue
+
+            unit = await api.get_memory_unit(uuid_obj)
+            if unit is None:
+                lines.append(f'Unit {uid_str}: not found')
+                continue
+
+            fact_type = getattr(unit.fact_type, 'value', unit.fact_type)
+            confidence = getattr(unit, 'confidence', 1.0)
+            conf_str = f' [confidence: {confidence:.2f}]' if confidence < 1.0 else ''
+
+            lines.append(f'## Unit {uid_str}')
+            lines.append(f'- **Type:** {fact_type}{conf_str}')
+            lines.append(f'- **Text:** {unit.text}')
+            if unit.note_id:
+                lines.append(f'- **Note ID:** {unit.note_id}')
+
+            # Show supersession info if available
+            meta = getattr(unit, 'metadata', {}) or getattr(unit, 'unit_metadata', {}) or {}
+            superseded_by = meta.get('superseded_by')
+
+            if superseded_by:
+                lines.append('- **Superseded by:**')
+                for s in superseded_by:
+                    s_text = s.get('unit_text', '')[:150]
+                    s_rel = s.get('relation', 'unknown')
+                    s_note = s.get('note_title', '')
+                    lines.append(f'  - [{s_rel}] {s_text}')
+                    if s_note:
+                        lines.append(f'    From note: {s_note}')
+
+            lines.append('')
+
+        return '\n'.join(lines) if lines else 'No units found.'
+
+    except Exception as e:
+        logging.error(f'Get memory units failed: {e}', exc_info=True)
+        raise ToolError(f'Get memory units failed: {e}')
 
 
 @mcp.tool(
@@ -1194,7 +1468,8 @@ async def memex_ingest_url(
     ctx: Context,
     url: Annotated[str, Field(description='URL to ingest.')],
     vault_id: Annotated[
-        str | None, Field(default=None, description='Target vault UUID. Defaults to active vault.')
+        str | None,
+        Field(default=None, description='Target vault UUID or name. Defaults to active vault.'),
     ] = None,
     background: Annotated[
         bool, Field(default=True, description='Queue ingestion in background.')

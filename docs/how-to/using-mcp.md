@@ -17,6 +17,8 @@ The Memex MCP server exposes these tools to connected AI clients:
 | `memex_memory_search` | Search memory units (facts, events, observations) via TEMPR |
 | `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
 | `memex_add_note` | Save new knowledge to Memex |
+| `memex_set_note_status` | Set note lifecycle status (active, superseded, appended) |
+| `memex_rename_note` | Rename a note (updates title in metadata and page index) |
 | `memex_read_note` | Read full note content (fallback — prefer `get_page_index` + `get_node`) |
 | `memex_get_page_index` | Get the table of contents for a note |
 | `memex_get_node` | Retrieve a specific section of a note by node ID |
@@ -31,6 +33,8 @@ The Memex MCP server exposes these tools to connected AI clients:
 | `memex_get_entity_mentions` / `memex_get_entity_cooccurrences` | Entity relationships |
 | `memex_list_notes` | List notes (not recommended for discovery) |
 | `memex_get_memory_unit` | Retrieve a specific memory unit by UUID |
+| `memex_get_memory_units` | Batch lookup of memory units with contradiction context |
+| `memex_get_note_metadata` | Quick metadata check (title, tags, dates) — ~50 tokens |
 
 ## Instructions
 

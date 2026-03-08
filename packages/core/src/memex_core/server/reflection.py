@@ -22,6 +22,7 @@ from memex_core.server.common import (
     get_api,
     ndjson_openapi,
     ndjson_response,
+    resolve_vault_ids,
 )
 
 router = APIRouter(prefix='/api/v1')
@@ -98,7 +99,7 @@ async def list_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: int = 10,
     status: Literal['queued'] | None = Query(None, description='Filter by status'),
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """
     List reflections.
@@ -106,11 +107,12 @@ async def list_reflections(
     Query params:
     - limit: Maximum number of items to return
     - status: Optional filter by status. Use 'queued' for queue items.
-    - vault_id: Optional vault ID(s) to filter by.
+    - vault_id: Optional vault ID(s) or name(s) to filter by.
     """
     try:
+        resolved = await resolve_vault_ids(api, vault_id)
         if status == 'queued':
-            items = await api.get_reflection_queue_batch(limit=limit, vault_ids=vault_id)
+            items = await api.get_reflection_queue_batch(limit=limit, vault_ids=resolved)
             return ndjson_response(
                 [
                     ReflectionQueueDTO(
@@ -160,14 +162,15 @@ async def list_dead_letter_items(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-    vault_id: Annotated[UUID | None, Query(description='Filter by vault ID.')] = None,
+    vault_id: Annotated[str | None, Query(description='Filter by vault ID or name.')] = None,
 ) -> list[DeadLetterItemDTO]:
     """List dead-lettered reflection tasks that exhausted their retries."""
     try:
+        resolved_vault_id = await api.resolve_vault_identifier(vault_id) if vault_id else None
         items = await api.get_dead_letter_items(
             limit=limit,
             offset=offset,
-            vault_id=vault_id,
+            vault_id=resolved_vault_id,
         )
         return [
             DeadLetterItemDTO(

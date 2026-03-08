@@ -1,0 +1,33 @@
+[project]
+name = "memex-eval"
+dynamic = ["version"]
+description = "Quality benchmarks for the Memex memory system."
+authors = [
+  {name="Jasper Ginn", email="jasperginn@gmail.com"}
+]
+requires-python = ">=3.12"
+dependencies = [
+    "memex-common",
+    "httpx>=0.27",
+    "rich>=13",
+    "typer>=0.12",
+    "dspy>=2.6",
+    "sh>=2.2.2",
+    "tiktoken>=0.12.0",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+]
+
+[project.scripts]
+memex-eval = "memex_eval.cli:app"
+
+[tool.uv.sources]
+memex-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = "../.."
