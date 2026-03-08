@@ -296,9 +296,9 @@ def _collect_session_trace(
 
         result['session_id'] = session_id
 
-        # Compute project slug: absolute workdir path with / replaced by -,
-        # leading - stripped
-        slug = workdir.replace('/', '-').lstrip('-')
+        # Compute project slug: absolute workdir path with / and _ replaced by -,
+        # leading - stripped (matches Claude Code's slug computation)
+        slug = workdir.replace('/', '-').replace('_', '-').lstrip('-')
         trace_src = Path.home() / '.claude' / 'projects' / slug / f'{session_id}.jsonl'
 
         if not trace_src.exists():
