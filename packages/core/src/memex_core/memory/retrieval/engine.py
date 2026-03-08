@@ -19,12 +19,12 @@ from memex_core.memory.models.embedding import FastEmbedder, get_embedding_model
 from memex_core.memory.models.reranking import FastReranker, get_reranking_model
 from memex_core.memory.models.ner import FastNERModel, get_ner_model
 from memex_core.memory.retrieval.strategies import (
-    GraphStrategy,
     KeywordStrategy,
     RetrievalStrategy,
     SemanticStrategy,
     TemporalStrategy,
     MentalModelStrategy,
+    get_graph_strategy,
 )
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
@@ -132,7 +132,8 @@ class RetrievalEngine:
             'semantic': (SemanticStrategy(), False),  # False = ASC (Distance)
             'keyword': (KeywordStrategy(), True),  # True = DESC (Score)
             'graph': (
-                GraphStrategy(
+                get_graph_strategy(
+                    type=self.retrieval_config.graph_retriever_type,
                     ner_model=self.ner_model,
                     similarity_threshold=self.retrieval_config.similarity_threshold,
                     temporal_decay_days=self.retrieval_config.temporal_decay_days,

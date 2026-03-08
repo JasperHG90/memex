@@ -442,6 +442,11 @@ class RetrievalConfig(BaseModel):
         description='Maximum token budget for retrieval results (greedy packing).',
     )
 
+    graph_retriever_type: str = Field(
+        default='entity_cooccurrence',
+        description='Graph retrieval strategy type. Currently supported: "entity_cooccurrence".',
+    )
+
     retrieval_strategies: SearchStrategiesConfig = Field(
         default_factory=SearchStrategiesConfig,
         description='Default enabled search strategies for memory retrieval.',

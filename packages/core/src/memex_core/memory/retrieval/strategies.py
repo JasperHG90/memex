@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import logging
 from typing import Protocol, Any, runtime_checkable
 
 from sqlalchemy import func, desc, literal, or_, text, cast, String
 from sqlalchemy.sql import Select, CompoundSelect
+from sqlalchemy.sql.expression import CTE
 from sqlmodel import select, col
 
 from memex_core.memory.sql_models import (
@@ -146,7 +149,111 @@ from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.utils import get_phonetic_code
 
 
-class GraphStrategy:
+# ---------------------------------------------------------------------------
+# Shared helper: build seed entity CTE from a query string
+# ---------------------------------------------------------------------------
+
+
+def build_seed_entity_cte(
+    query: str,
+    ner_model: FastNERModel | None = None,
+    similarity_threshold: float = 0.3,
+    include_ilike: bool = False,
+    cte_name: str = 'seed_entities',
+) -> CTE:
+    """Build a CTE of (id, weight) seed entities from *query* using NER + phonetic + similarity.
+
+    This is the shared kernel used by both the memory-level and note-level graph
+    strategies.  The caller is responsible for joining the CTE into its own query
+    tree and applying vault / date filters downstream.
+
+    Args:
+        query: The user search query.
+        ner_model: Optional NER model for entity extraction.
+        similarity_threshold: Minimum pg_trgm similarity score.
+        include_ilike: When True **and** NER entities are found, add per-entity
+            ``ILIKE`` and ``similarity()`` fuzzy conditions to the NER path.
+            ``NoteGraphStrategy`` needs this; the base ``GraphStrategy`` does not
+            (it already has ilike in its NER path in the original code, but this
+            parameter makes the shared helper explicit).
+        cte_name: Name for the resulting CTE (must be unique per query tree).
+
+    Returns:
+        A SQLAlchemy CTE with columns ``(id, weight)``.
+    """
+    extracted_names: list[str] = []
+    extracted_phonetics: list[str] = []
+
+    if ner_model:
+        try:
+            extracted = ner_model.predict(query)
+            extracted_names = [e['word'] for e in extracted]
+            for name in extracted_names:
+                p_code = get_phonetic_code(name)
+                if p_code:
+                    extracted_phonetics.append(p_code)
+        except (ValueError, RuntimeError, OSError) as e:
+            logger.warning(f'NER extraction failed: {e}. Falling back to naive search.')
+
+    if extracted_names:
+        logger.info(f'NER found entities: {extracted_names}')
+
+        # Canonical name conditions
+        conds_canonical: list[Any] = [col(Entity.canonical_name).in_(extracted_names)]
+        if extracted_phonetics:
+            conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
+        if include_ilike:
+            for name in extracted_names:
+                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
+                conds_canonical.append(
+                    func.similarity(col(Entity.canonical_name), name) > similarity_threshold
+                )
+
+        seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
+
+        # Alias conditions
+        conds_alias: list[Any] = [col(EntityAlias.name).in_(extracted_names)]
+        if extracted_phonetics:
+            conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
+        if include_ilike:
+            for name in extracted_names:
+                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
+                conds_alias.append(
+                    func.similarity(col(EntityAlias.name), name) > similarity_threshold
+                )
+
+        seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(or_(*conds_alias))
+    else:
+        # Fallback: similarity / ilike on the raw query
+        logger.info('No entities found by NER. Using fallback similarity search.')
+        seed_from_canonical = select(col(Entity.id).label('id')).where(
+            or_(
+                col(Entity.canonical_name).ilike(f'%{query}%'),
+                func.similarity(col(Entity.canonical_name), query) > similarity_threshold,
+            )
+        )
+        seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
+            or_(
+                col(EntityAlias.name).ilike(f'%{query}%'),
+                func.similarity(col(EntityAlias.name), query) > similarity_threshold,
+            )
+        )
+
+    combined_seeds = seed_from_canonical.union(seed_from_alias).subquery(f'{cte_name}_t')
+
+    return (
+        select(combined_seeds.c.id.label('id'), literal(1.0).label('weight')).select_from(
+            combined_seeds
+        )
+    ).cte(cte_name)
+
+
+# ---------------------------------------------------------------------------
+# Memory-level graph strategy (entity co-occurrence)
+# ---------------------------------------------------------------------------
+
+
+class EntityCooccurrenceGraphStrategy:
     """
     Retrieves memories linked to entities mentioned in the query (1st Order)
     AND entities related to those entities (2nd Order BFS).
@@ -173,82 +280,15 @@ class GraphStrategy:
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
     ) -> Select | CompoundSelect:
-        # 1. NER-Driven Extraction
-        # Try to extract entities from the query
-        extracted_names = []
-        extracted_phonetics = []
-
-        if self.ner_model:
-            try:
-                extracted = self.ner_model.predict(query)
-                extracted_names = [e['word'] for e in extracted]
-
-                # Compute phonetics for extracted entities
-                for name in extracted_names:
-                    p_code = get_phonetic_code(name)
-                    if p_code:
-                        extracted_phonetics.append(p_code)
-
-            except (ValueError, RuntimeError, OSError) as e:
-                logger.warning(f'NER Extraction failed: {e}. Falling back to naive search.')
-
-        # 2. Build Seed Query
-        if extracted_names:
-            # --- NER PATH ---
-            logger.info(f'NER found entities: {extracted_names}')
-
-            # Canonical Name Matches (Exact, Phonetic, or Fuzzy)
-            conds_canonical = []
-            conds_canonical.append(col(Entity.canonical_name).in_(extracted_names))
-            if extracted_phonetics:
-                conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
-            for name in extracted_names:
-                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
-                conds_canonical.append(
-                    func.similarity(col(Entity.canonical_name), name) > self.similarity_threshold
-                )
-
-            seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
-
-            # Alias Matches (Exact, Phonetic, or Fuzzy)
-            conds_alias = []
-            conds_alias.append(col(EntityAlias.name).in_(extracted_names))
-            if extracted_phonetics:
-                conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
-            for name in extracted_names:
-                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
-                conds_alias.append(
-                    func.similarity(col(EntityAlias.name), name) > self.similarity_threshold
-                )
-
-            seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
-                or_(*conds_alias)
-            )
-
-        else:
-            # --- FALLBACK PATH (Legacy) ---
-            logger.info('No entities found by NER. Using fallback similarity search.')
-            seed_from_canonical = select(col(Entity.id).label('id')).where(
-                or_(
-                    col(Entity.canonical_name).ilike(f'%{query}%'),
-                    func.similarity(col(Entity.canonical_name), query) > self.similarity_threshold,
-                )
-            )
-
-            seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
-                or_(
-                    col(EntityAlias.name).ilike(f'%{query}%'),
-                    func.similarity(col(EntityAlias.name), query) > self.similarity_threshold,
-                )
-            )
-
-        combined_seeds = seed_from_canonical.union(seed_from_alias).subquery('t')
-
-        seed_entities = (
-            select(combined_seeds.c.id.label('id'), literal(1.0).label('weight')).select_from(
-                combined_seeds
-            )
-        ).cte('seed_entities')
+        # Build seed entity CTE via shared helper.
+        # The original GraphStrategy included ilike in its NER path, so include_ilike=True.
+        seed_entities = build_seed_entity_cte(
+            query=query,
+            ner_model=self.ner_model,
+            similarity_threshold=self.similarity_threshold,
+            include_ilike=True,
+            cte_name='seed_entities',
+        )
 
         # Base Selects
         select_first = select(MemoryUnit.id).select_from(MemoryUnit)
@@ -330,6 +370,10 @@ class GraphStrategy:
         return first_order.union_all(second_order).order_by(text('score DESC')).limit(limit)
 
 
+# Backward-compatible alias
+GraphStrategy = EntityCooccurrenceGraphStrategy
+
+
 class MentalModelStrategy:
     """
     Retrieves Mental Models directly using Vector Similarity on the model's summary embedding.
@@ -387,11 +431,16 @@ class TemporalStrategy:
         return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
 
 
-class NoteGraphStrategy:
+# ---------------------------------------------------------------------------
+# Note-level graph strategy (entity co-occurrence)
+# ---------------------------------------------------------------------------
+
+
+class EntityCooccurrenceNoteGraphStrategy:
     """
     Retrieves document chunks linked to entities mentioned in the query.
 
-    Traversal path: Entity → UnitEntity → MemoryUnit → Document → Chunk.
+    Traversal path: Entity -> UnitEntity -> MemoryUnit -> Document -> Chunk.
     Includes both 1st-order (direct entity match) and 2nd-order (co-occurrence)
     results, with temporal decay scoring for recency.
 
@@ -400,7 +449,7 @@ class NoteGraphStrategy:
 
     def __init__(
         self,
-        ner_model: 'FastNERModel | None' = None,
+        ner_model: FastNERModel | None = None,
         similarity_threshold: float = 0.3,
         temporal_decay_days: float = 30.0,
         temporal_decay_base: float = 2.0,
@@ -410,76 +459,20 @@ class NoteGraphStrategy:
         self.temporal_decay_days = temporal_decay_days
         self.temporal_decay_base = temporal_decay_base
 
-    def _build_seed_entities(self, query: str) -> Select | CompoundSelect:
-        """Build the seed entity query using NER extraction or fallback similarity."""
-        extracted_names: list[str] = []
-        extracted_phonetics: list[str] = []
-
-        if self.ner_model:
-            try:
-                extracted = self.ner_model.predict(query)
-                extracted_names = [e['word'] for e in extracted]
-                for name in extracted_names:
-                    p_code = get_phonetic_code(name)
-                    if p_code:
-                        extracted_phonetics.append(p_code)
-            except (ValueError, RuntimeError, OSError) as e:
-                logger.warning(f'NER extraction failed for doc graph: {e}. Falling back.')
-
-        if extracted_names:
-            conds_canonical: list[Any] = [col(Entity.canonical_name).in_(extracted_names)]
-            if extracted_phonetics:
-                conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
-            for name in extracted_names:
-                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
-                conds_canonical.append(
-                    func.similarity(col(Entity.canonical_name), name) > self.similarity_threshold
-                )
-
-            seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
-
-            conds_alias: list[Any] = [col(EntityAlias.name).in_(extracted_names)]
-            if extracted_phonetics:
-                conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
-            for name in extracted_names:
-                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
-                conds_alias.append(
-                    func.similarity(col(EntityAlias.name), name) > self.similarity_threshold
-                )
-
-            seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
-                or_(*conds_alias)
-            )
-        else:
-            logger.info('No entities found by NER for doc graph. Using fallback similarity.')
-            seed_from_canonical = select(col(Entity.id).label('id')).where(
-                or_(
-                    col(Entity.canonical_name).ilike(f'%{query}%'),
-                    func.similarity(col(Entity.canonical_name), query) > self.similarity_threshold,
-                )
-            )
-            seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
-                or_(
-                    col(EntityAlias.name).ilike(f'%{query}%'),
-                    func.similarity(col(EntityAlias.name), query) > self.similarity_threshold,
-                )
-            )
-
-        return seed_from_canonical.union(seed_from_alias)
-
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
     ) -> Select | CompoundSelect:
         """Build a query returning (Chunk.id, score) via entity graph traversal."""
-        combined_seeds = self._build_seed_entities(query).subquery('doc_graph_seeds_t')
+        # NoteGraphStrategy always included ilike in NER path
+        seed_entities = build_seed_entity_cte(
+            query=query,
+            ner_model=self.ner_model,
+            similarity_threshold=self.similarity_threshold,
+            include_ilike=True,
+            cte_name='doc_graph_seed_entities',
+        )
 
-        seed_entities = (
-            select(combined_seeds.c.id.label('id'), literal(1.0).label('weight')).select_from(
-                combined_seeds
-            )
-        ).cte('doc_graph_seed_entities')
-
-        # 1st Order: Entity → UnitEntity → MemoryUnit → Document → Chunk
+        # 1st Order: Entity -> UnitEntity -> MemoryUnit -> Document -> Chunk
         days_diff = (
             func.extract('epoch', func.now()) - func.extract('epoch', col(MemoryUnit.event_date))
         ) / 86400.0
@@ -543,3 +536,73 @@ class NoteGraphStrategy:
         second_order = apply_vault_filters(second_order, Chunk.vault_id, **kwargs)
 
         return first_order.union_all(second_order).order_by(text('score DESC')).limit(limit)
+
+
+# Backward-compatible alias
+NoteGraphStrategy = EntityCooccurrenceNoteGraphStrategy
+
+
+# ---------------------------------------------------------------------------
+# Factory functions
+# ---------------------------------------------------------------------------
+
+_GRAPH_STRATEGY_REGISTRY: dict[str, type[EntityCooccurrenceGraphStrategy]] = {
+    'entity_cooccurrence': EntityCooccurrenceGraphStrategy,
+}
+
+_NOTE_GRAPH_STRATEGY_REGISTRY: dict[str, type[EntityCooccurrenceNoteGraphStrategy]] = {
+    'entity_cooccurrence': EntityCooccurrenceNoteGraphStrategy,
+}
+
+
+def get_graph_strategy(
+    type: str = 'entity_cooccurrence',
+    ner_model: FastNERModel | None = None,
+    **kwargs: Any,
+) -> RetrievalStrategy:
+    """Create a memory-level graph retrieval strategy by name.
+
+    Args:
+        type: Strategy identifier. Currently only ``'entity_cooccurrence'``.
+        ner_model: Optional NER model for entity extraction.
+        **kwargs: Forwarded to the strategy constructor (e.g. similarity_threshold).
+
+    Returns:
+        A ``RetrievalStrategy``-compatible instance.
+
+    Raises:
+        ValueError: If *type* is not registered.
+    """
+    cls = _GRAPH_STRATEGY_REGISTRY.get(type)
+    if cls is None:
+        raise ValueError(
+            f'Unknown graph retriever type: {type!r}. Available: {sorted(_GRAPH_STRATEGY_REGISTRY)}'
+        )
+    return cls(ner_model=ner_model, **kwargs)
+
+
+def get_note_graph_strategy(
+    type: str = 'entity_cooccurrence',
+    ner_model: FastNERModel | None = None,
+    **kwargs: Any,
+) -> EntityCooccurrenceNoteGraphStrategy:
+    """Create a note-level graph retrieval strategy by name.
+
+    Args:
+        type: Strategy identifier. Currently only ``'entity_cooccurrence'``.
+        ner_model: Optional NER model for entity extraction.
+        **kwargs: Forwarded to the strategy constructor (e.g. similarity_threshold).
+
+    Returns:
+        An ``EntityCooccurrenceNoteGraphStrategy``-compatible instance.
+
+    Raises:
+        ValueError: If *type* is not registered.
+    """
+    cls = _NOTE_GRAPH_STRATEGY_REGISTRY.get(type)
+    if cls is None:
+        raise ValueError(
+            f'Unknown note graph retriever type: {type!r}. '
+            f'Available: {sorted(_NOTE_GRAPH_STRATEGY_REGISTRY)}'
+        )
+    return cls(ner_model=ner_model, **kwargs)
