@@ -1165,9 +1165,6 @@ class ExtractionEngine:
         """Resolve entities and link them to units. Returns set of touched entity IDs."""
         import re
 
-        # Run NER on all fact texts to get entity type information
-        ner_type_map = await self._build_ner_type_map(facts)
-
         entities_data = []
 
         for i, fact in enumerate(facts):
@@ -1176,18 +1173,17 @@ class ExtractionEngine:
             existing_names = {ent.text.lower() for ent in fact.entities}
 
             for ent in fact.entities:
-                entity_type = ent.entity_type or ner_type_map.get(ent.text.lower())
                 entities_data.append(
                     {
                         'text': ent.text,
                         'event_date': fact.occurred_start or fact.mentioned_at,
                         'nearby_entities': [{'text': e.text} for e in fact.entities],
                         'unit_id': unit_id,
-                        'entity_type': entity_type,
+                        'entity_type': ent.entity_type,
                     }
                 )
 
-            # Fallback: discover person/location names from who/where via NER
+            # Discover person/location names from who/where fields
             for field_text, default_type in [
                 (getattr(fact, 'who', None), 'Person'),
                 (getattr(fact, 'where', None), 'Location'),
@@ -1195,47 +1191,22 @@ class ExtractionEngine:
                 if not field_text or field_text.upper() in ('N/A', 'NONE'):
                     continue
 
-                # Try NER-based discovery first
-                found_via_ner = False
-                for name, ner_label in ner_type_map.items():
-                    if (
-                        re.search(r'\b' + re.escape(name) + r'\b', field_text, re.IGNORECASE)
-                        and name not in existing_names
-                    ):
+                # Extract capitalized names from who/where fields
+                # (e.g. "Emily, Sarah" or "San Francisco")
+                skip = {'the', 'and', 'for', 'with', 'from', 'via', 'n/a'}
+                for match in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', field_text):
+                    candidate = match.group(1)
+                    if candidate.lower() not in existing_names and candidate.lower() not in skip:
                         entities_data.append(
                             {
-                                'text': name,
+                                'text': candidate,
                                 'event_date': fact.occurred_start or fact.mentioned_at,
                                 'nearby_entities': [{'text': e.text} for e in fact.entities],
                                 'unit_id': unit_id,
-                                'entity_type': ner_label or default_type,
+                                'entity_type': default_type,
                             }
                         )
-                        existing_names.add(name)
-                        found_via_ner = True
-
-                # Last resort: if NER found nothing, extract capitalized names
-                # from who/where fields (e.g. "Emily, Sarah" or "San Francisco")
-                if not found_via_ner:
-                    # Match sequences of capitalized words (e.g. "Emily Chen",
-                    # "San Francisco") but skip common words
-                    skip = {'the', 'and', 'for', 'with', 'from', 'via', 'n/a'}
-                    for match in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', field_text):
-                        candidate = match.group(1)
-                        if (
-                            candidate.lower() not in existing_names
-                            and candidate.lower() not in skip
-                        ):
-                            entities_data.append(
-                                {
-                                    'text': candidate,
-                                    'event_date': fact.occurred_start or fact.mentioned_at,
-                                    'nearby_entities': [{'text': e.text} for e in fact.entities],
-                                    'unit_id': unit_id,
-                                    'entity_type': default_type,
-                                }
-                            )
-                            existing_names.add(candidate.lower())
+                        existing_names.add(candidate.lower())
 
         if not entities_data:
             return set()
@@ -1254,48 +1225,3 @@ class ExtractionEngine:
         )
 
         return {UUID(rid) for rid in resolved_ids}
-
-    NER_TYPE_MAP: dict[str, str] = {
-        'PER': 'Person',
-        'ORG': 'Organization',
-        'LOC': 'Location',
-        'MISC': 'Misc',
-    }
-
-    async def _build_ner_type_map(self, facts: list[ProcessedFact]) -> dict[str, str]:
-        """Run NER on fact texts AND who/where fields to build entity name -> type mapping."""
-        try:
-            from memex_core.memory.models.ner import get_ner_model
-
-            ner_model = await get_ner_model()
-        except (ImportError, ValueError, RuntimeError, OSError) as e:
-            logger.debug('NER model unavailable, skipping entity type enrichment: %s', e)
-            return {}
-
-        type_map: dict[str, str] = {}
-
-        # Collect all texts to run NER on: fact_text + who + where
-        texts_to_scan: list[str] = []
-        for fact in facts:
-            if fact.fact_text:
-                texts_to_scan.append(fact.fact_text)
-            who = getattr(fact, 'who', None)
-            where = getattr(fact, 'where', None)
-            if who and who.upper() not in ('N/A', 'NONE'):
-                texts_to_scan.append(who)
-            if where and where.upper() not in ('N/A', 'NONE'):
-                texts_to_scan.append(where)
-
-        for text in texts_to_scan:
-            try:
-                ner_results = ner_model.predict(text)
-                for result in ner_results:
-                    word = result.get('word', '').lower()
-                    raw_type = result.get('type', '')
-                    mapped_type = self.NER_TYPE_MAP.get(raw_type)
-                    if len(word) >= 2 and mapped_type and word not in type_map:
-                        type_map[word] = mapped_type
-            except (ValueError, RuntimeError, OSError) as e:
-                logger.debug('NER prediction failed for text: %s', e, exc_info=True)
-
-        return type_map
