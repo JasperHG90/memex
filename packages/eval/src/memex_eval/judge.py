@@ -46,7 +46,7 @@ class Judge:
     """LLM-as-a-judge using dspy with Gemini."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
-        model = model or os.environ.get('EVAL_JUDGE_MODEL', 'gemini/gemini-2.5-flash')
+        model = model or os.environ.get('EVAL_JUDGE_MODEL', 'gemini/gemini-3-flash-preview')
         api_key = api_key or os.environ.get('GOOGLE_API_KEY')
         if not api_key:
             raise ValueError(
