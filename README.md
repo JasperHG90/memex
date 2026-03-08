@@ -278,6 +278,22 @@ Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an acad
 
 Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
 
+### Retrieval efficiency
+
+Memex retrieval adds minimal overhead to agent workflows. Across the 60-question benchmark:
+
+| Metric | Value |
+|---|---|
+| Retrieval tokens per question (median) | **3,440** |
+| Retrieval tokens per question (mean) | 5,495 |
+| Retrieval as % of total tokens | **4.6%** |
+| Median response time | 27.8s |
+| Median turns per question | 4 |
+| Memex tool calls per question (median) | 2 |
+| Cost per question (median) | ~$0.08 |
+
+95% of token usage is agent overhead (system prompt, tool definitions, conversation history). The Memex MCP tools themselves return compact results — a typical question needs just one `memory_search` call (~2.4K tokens) or a two-stage `memory_search` + `note_search` (~3.4K tokens). Complex multi-hop questions that drill into specific note sections via the page index cost ~6K retrieval tokens.
+
 ## 🏗️ Architecture
 
 Memex is built as a monorepo:
