@@ -20,7 +20,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.memory.models.embedding import FastEmbedder
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
-from memex_core.memory.retrieval.strategies import NoteGraphStrategy
+from memex_common.config import RetrievalConfig
+from memex_core.memory.retrieval.strategies import get_note_graph_strategy
 from memex_core.memory.sql_models import Chunk, Note, Node
 from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
 
@@ -89,10 +90,15 @@ class NoteSearchEngine:
         embedder: FastEmbedder,
         ner_model: FastNERModel | None = None,
         lm: dspy.LM | None = None,
+        retrieval_config: RetrievalConfig | None = None,
     ) -> None:
         self.embedder = embedder
         self.lm = lm
-        self.graph_strategy = NoteGraphStrategy(ner_model=ner_model)
+        _config = retrieval_config or RetrievalConfig()
+        self.graph_strategy = get_note_graph_strategy(
+            type=_config.graph_retriever_type,
+            ner_model=ner_model,
+        )
         self.expander = QueryExpander(lm=lm) if lm else None
 
     # ------------------------------------------------------------------
