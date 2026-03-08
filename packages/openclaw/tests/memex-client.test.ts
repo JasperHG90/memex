@@ -413,20 +413,39 @@ describe('MemexClient', () => {
       expect(body.query).toBe('find me');
       expect(body.limit).toBe(5);
       expect(body.expand_query).toBe(false);
-      expect(body.reason).toBe(false);
       expect(body.summarize).toBe(false);
+      expect(body).not.toHaveProperty('reason');
     });
 
     it('passes custom opts', async () => {
       const client = new MemexClient(makeConfig());
       fetchSpy.mockResolvedValueOnce(jsonResponse([]));
 
-      await client.searchNotes('q', { limit: 3, summarize: true, reason: true });
+      await client.searchNotes('q', { limit: 3, summarize: true });
 
       const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
       expect(body.limit).toBe(3);
       expect(body.summarize).toBe(true);
-      expect(body.reason).toBe(true);
+    });
+
+    it('passes strategy and temporal filter opts', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+
+      await client.searchNotes('q', {
+        strategies: ['semantic', 'keyword'],
+        after: '2025-01-01',
+        before: '2025-12-31',
+        tags: ['project'],
+        vault_ids: ['vault-1'],
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.strategies).toEqual(['semantic', 'keyword']);
+      expect(body.after).toBe('2025-01-01');
+      expect(body.before).toBe('2025-12-31');
+      expect(body.tags).toEqual(['project']);
+      expect(body.vault_ids).toEqual(['vault-1']);
     });
 
     it('returns parsed JSON array', async () => {
@@ -1001,5 +1020,443 @@ describe('formatSessionNote', () => {
 
     expect(note).toContain('turns: 0');
     expect(note).not.toContain('## Turn');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New client methods
+// ---------------------------------------------------------------------------
+
+describe('MemexClient new methods', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // -----------------------------------------------------------------------
+  // searchMemories — new overrides
+  // -----------------------------------------------------------------------
+
+  describe('searchMemories with new overrides', () => {
+    it('passes strategies to request body', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('q', undefined, {
+        strategies: ['temporal', 'graph'],
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.strategies).toEqual(['temporal', 'graph']);
+    });
+
+    it('passes include_superseded to request body', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('q', undefined, {
+        include_superseded: true,
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.include_superseded).toBe(true);
+    });
+
+    it('passes after/before temporal filters', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('q', undefined, {
+        after: '2025-01-01',
+        before: '2025-12-31',
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.after).toBe('2025-01-01');
+      expect(body.before).toBe('2025-12-31');
+    });
+
+    it('passes tags filter', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('q', undefined, { tags: ['project', 'dev'] });
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body.tags).toEqual(['project', 'dev']);
+    });
+
+    it('omits optional overrides when not provided', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.searchMemories('q', undefined, {});
+
+      const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+      expect(body).not.toHaveProperty('strategies');
+      expect(body).not.toHaveProperty('include_superseded');
+      expect(body).not.toHaveProperty('after');
+      expect(body).not.toHaveProperty('before');
+      expect(body).not.toHaveProperty('tags');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getMemoryUnit
+  // -----------------------------------------------------------------------
+
+  describe('getMemoryUnit', () => {
+    it('fetches correct URL', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse(makeMemoryUnit()));
+
+      await client.getMemoryUnit('unit-1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe('http://localhost:8000/api/v1/memories/unit-1');
+    });
+
+    it('returns parsed JSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const unit = makeMemoryUnit({ text: 'specific fact' });
+      fetchSpy.mockResolvedValueOnce(jsonResponse(unit));
+
+      const result = await client.getMemoryUnit('u1');
+      expect(result.text).toBe('specific fact');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.getMemoryUnit('bad')).rejects.toThrow(/Memex getMemoryUnit failed: 404/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getMemoryUnits (batch)
+  // -----------------------------------------------------------------------
+
+  describe('getMemoryUnits', () => {
+    it('sends POST with unit_ids', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.getMemoryUnits(['u1', 'u2']);
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/memories/batch');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.unit_ids).toEqual(['u1', 'u2']);
+    });
+
+    it('parses NDJSON stream', async () => {
+      const client = new MemexClient(makeConfig());
+      const m1 = makeMemoryUnit({ text: 'batch-1' });
+      const m2 = makeMemoryUnit({ text: 'batch-2' });
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([m1, m2]));
+
+      const result = await client.getMemoryUnits(['u1', 'u2']);
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // setNoteStatus
+  // -----------------------------------------------------------------------
+
+  describe('setNoteStatus', () => {
+    it('sends PATCH with status', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+      await client.setNoteStatus('note-1', 'superseded', 'note-2');
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/notes/note-1/status');
+      expect(init.method).toBe('PATCH');
+      const body = JSON.parse(init.body);
+      expect(body.status).toBe('superseded');
+      expect(body.linked_note_id).toBe('note-2');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+      await expect(client.setNoteStatus('bad', 'active')).rejects.toThrow(
+        /Memex setNoteStatus failed: 404/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // renameNote
+  // -----------------------------------------------------------------------
+
+  describe('renameNote', () => {
+    it('sends PATCH with new_title', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+      await client.renameNote('note-1', 'New Title');
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/notes/note-1/title');
+      expect(init.method).toBe('PATCH');
+      const body = JSON.parse(init.body);
+      expect(body.new_title).toBe('New Title');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getEntityCooccurrences
+  // -----------------------------------------------------------------------
+
+  describe('getEntityCooccurrences', () => {
+    it('fetches correct URL and parses NDJSON', async () => {
+      const client = new MemexClient(makeConfig());
+      const coocs = [{ entity_id: 'e2', name: 'React', cooccurrence_count: 5 }];
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse(coocs));
+
+      const result = await client.getEntityCooccurrences('e1');
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe(
+        'http://localhost:8000/api/v1/entities/e1/cooccurrences',
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]!.name).toBe('React');
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(errorResponse(500, 'Error'));
+
+      await expect(client.getEntityCooccurrences('e1')).rejects.toThrow(
+        /Memex getEntityCooccurrences failed/,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // listEntities with vaultId
+  // -----------------------------------------------------------------------
+
+  describe('listEntities with vaultId', () => {
+    it('passes vault_id query param', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.listEntities('python', 10, undefined, 'vault-42');
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('vault_id=vault-42');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getPageIndex with depth/parent_node_id
+  // -----------------------------------------------------------------------
+
+  describe('getPageIndex with opts', () => {
+    it('passes depth and parent_node_id as query params', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ toc: [] }));
+
+      await client.getPageIndex('note-1', { depth: 0, parent_node_id: 'node-1' });
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('depth=0');
+      expect(url).toContain('parent_node_id=node-1');
+    });
+
+    it('omits params when not provided', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ toc: [] }));
+
+      await client.getPageIndex('note-1');
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toBe('http://localhost:8000/api/v1/notes/note-1/page-index');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // reflect
+  // -----------------------------------------------------------------------
+
+  describe('reflect', () => {
+    it('sends POST with entity_id', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'queued', entity_id: 'e1' }));
+
+      const result = await client.reflect('e1', 30, 'vault-1');
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/reflections');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.entity_id).toBe('e1');
+      expect(body.limit_recent_memories).toBe(30);
+      expect(body.vault_id).toBe('vault-1');
+      expect(result.status).toBe('queued');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // listVaults
+  // -----------------------------------------------------------------------
+
+  describe('listVaults', () => {
+    it('fetches correct URL and parses NDJSON', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([{ id: 'v1', name: 'Default' }]));
+
+      const result = await client.listVaults();
+
+      expect(fetchSpy.mock.calls[0]![0]).toBe('http://localhost:8000/api/v1/vaults');
+      expect(result).toHaveLength(1);
+      expect(result[0]!.name).toBe('Default');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getActiveVault
+  // -----------------------------------------------------------------------
+
+  describe('getActiveVault', () => {
+    it('returns first vault with is_default=true', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([{ id: 'v1', name: 'Default' }]));
+
+      const result = await client.getActiveVault();
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('is_default=true');
+      expect(result.name).toBe('Default');
+    });
+
+    it('throws when no vaults found', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await expect(client.getActiveVault()).rejects.toThrow(/No active vault found/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // listNotes
+  // -----------------------------------------------------------------------
+
+  describe('listNotes', () => {
+    it('sends limit, offset, and vault_id params', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+      await client.listNotes(10, 5, 'vault-1');
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('limit=10');
+      expect(url).toContain('offset=5');
+      expect(url).toContain('vault_id=vault-1');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // migrateNote
+  // -----------------------------------------------------------------------
+
+  describe('migrateNote', () => {
+    it('sends POST with target_vault_id', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+      await client.migrateNote('note-1', 'vault-2');
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/notes/note-1/migrate');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.target_vault_id).toBe('vault-2');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // ingestUrl
+  // -----------------------------------------------------------------------
+
+  describe('ingestUrl', () => {
+    it('sends POST with url and background param', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'queued' }));
+
+      await client.ingestUrl('https://example.com', 'vault-1', true);
+
+      const [url, init] = fetchSpy.mock.calls[0]!;
+      expect(url).toBe('http://localhost:8000/api/v1/ingestions/url?background=true');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.url).toBe('https://example.com');
+      expect(body.vault_id).toBe('vault-1');
+    });
+
+    it('omits background query param when false', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'ok' }));
+
+      await client.ingestUrl('https://example.com', undefined, false);
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toBe('http://localhost:8000/api/v1/ingestions/url');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // addNote
+  // -----------------------------------------------------------------------
+
+  describe('addNote', () => {
+    it('sends POST with full note data', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(jsonResponse({
+        status: 'ok',
+        document_id: 'doc-1',
+        unit_ids: ['u1'],
+        overlapping_notes: [{ note_id: 'n2', title: 'Similar', similarity: 0.85 }],
+      }));
+
+      const result = await client.addNote({
+        name: 'Test',
+        description: 'A test note',
+        content: 'base64data',
+        tags: ['test'],
+        author: 'openclaw',
+      });
+
+      expect(result.document_id).toBe('doc-1');
+      expect(result.overlapping_notes).toHaveLength(1);
+    });
+
+    it('throws on non-ok response', async () => {
+      const client = new MemexClient(makeConfig());
+      fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+      fetchSpy.mockResolvedValueOnce(errorResponse(400, 'Bad Request'));
+
+      await expect(
+        client.addNote({ name: 'test', description: 'd', content: 'c', tags: [] }),
+      ).rejects.toThrow(/Memex addNote failed: 400/);
+    });
   });
 });

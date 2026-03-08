@@ -36,12 +36,13 @@ function registerPlugin(configOverrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe('plugin registration', () => {
-  it('registers all 10 agent tools', () => {
+  it('registers all 25 agent tools', () => {
     const api = registerPlugin();
     const toolNames = [...api.tools.keys()];
     expect(toolNames).toEqual([
       'memex_memory_search',
       'memex_store',
+      'memex_add_note',
       'memex_note_search',
       'memex_read_note',
       'memex_get_note_metadata',
@@ -50,6 +51,18 @@ describe('plugin registration', () => {
       'memex_get_lineage',
       'memex_list_entities',
       'memex_get_entity',
+      'memex_get_entity_cooccurrences',
+      'memex_get_memory_unit',
+      'memex_get_memory_units',
+      'memex_set_note_status',
+      'memex_rename_note',
+      'memex_reflect',
+      'memex_get_template',
+      'memex_active_vault',
+      'memex_list_vaults',
+      'memex_list_notes',
+      'memex_migrate_note',
+      'memex_ingest_url',
     ]);
   });
 
@@ -1070,5 +1083,368 @@ describe('session grouping', () => {
     expect(body.note_key).toMatch(/^session_/);
     expect(decoded).toContain(longMsg);
     expect(decoded).toContain('full mode assistant reply');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New tools
+// ---------------------------------------------------------------------------
+
+describe('memex_get_entity_cooccurrences tool', () => {
+  it('returns formatted cooccurrence list', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(
+      ndjsonResponse([
+        { entity_id: 'e2', name: 'React', cooccurrence_count: 5 },
+        { entity_id: 'e3', name: 'Node.js', cooccurrence_count: 3 },
+      ]),
+    );
+
+    const tool = api.tools.get('memex_get_entity_cooccurrences')!;
+    const result = await tool.execute('call-1', { entity_id: 'e1' }) as {
+      content: Array<{ text: string }>;
+      details: { count: number };
+    };
+
+    expect(result.details.count).toBe(2);
+    expect(result.content[0]!.text).toContain('React');
+    expect(result.content[0]!.text).toContain('Node.js');
+  });
+
+  it('returns empty message when none found', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+    const tool = api.tools.get('memex_get_entity_cooccurrences')!;
+    const result = await tool.execute('call-1', { entity_id: 'e1' }) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toBe('No co-occurring entities found.');
+  });
+});
+
+describe('memex_get_memory_unit tool', () => {
+  it('returns formatted memory unit', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse({
+        id: 'mu-1',
+        text: 'A key fact',
+        fact_type: 'observation',
+        source_document_ids: ['note-1'],
+        metadata: {},
+        confidence: 0.8,
+      }),
+    );
+
+    const tool = api.tools.get('memex_get_memory_unit')!;
+    const result = await tool.execute('call-1', { unit_id: 'mu-1' }) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain('A key fact');
+    expect(result.content[0]!.text).toContain('[conf: 0.8]');
+  });
+});
+
+describe('memex_get_memory_units tool', () => {
+  it('returns formatted batch results', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(
+      ndjsonResponse([
+        makeMemoryUnit({ text: 'batch fact 1' }),
+        makeMemoryUnit({ text: 'batch fact 2' }),
+      ]),
+    );
+
+    const tool = api.tools.get('memex_get_memory_units')!;
+    const result = await tool.execute('call-1', { unit_ids: ['u1', 'u2'] }) as {
+      content: Array<{ text: string }>;
+      details: { count: number };
+    };
+
+    expect(result.details.count).toBe(2);
+    expect(result.content[0]!.text).toContain('batch fact 1');
+    expect(result.content[0]!.text).toContain('batch fact 2');
+  });
+});
+
+describe('memex_set_note_status tool', () => {
+  it('sets status and returns confirmation', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+    const tool = api.tools.get('memex_set_note_status')!;
+    const result = await tool.execute('call-1', {
+      note_id: 'note-1',
+      status: 'superseded',
+      linked_note_id: 'note-2',
+    }) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain('superseded');
+  });
+
+  it('returns error on failure', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(errorResponse(404, 'Not Found'));
+
+    const tool = api.tools.get('memex_set_note_status')!;
+    const result = await tool.execute('call-1', {
+      note_id: 'bad',
+      status: 'active',
+    }) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain('Failed to set note status');
+  });
+});
+
+describe('memex_rename_note tool', () => {
+  it('renames and returns confirmation', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+    const tool = api.tools.get('memex_rename_note')!;
+    const result = await tool.execute('call-1', {
+      note_id: 'note-1',
+      new_title: 'Updated Title',
+    }) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain('Updated Title');
+  });
+});
+
+describe('memex_reflect tool', () => {
+  it('triggers reflection and returns status', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'queued', entity_id: 'e1' }));
+
+    const tool = api.tools.get('memex_reflect')!;
+    const result = await tool.execute('call-1', {
+      entity_id: 'e1',
+      limit: 30,
+    }) as { content: Array<{ text: string }>; details: { status: string } };
+
+    expect(result.details.status).toBe('queued');
+    expect(result.content[0]!.text).toContain('queued');
+  });
+});
+
+describe('memex_get_template tool', () => {
+  it('returns template for valid type', async () => {
+    const api = registerPlugin();
+
+    const tool = api.tools.get('memex_get_template')!;
+    const result = await tool.execute('call-1', { type: 'quick_note' }) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain('[Title]');
+    expect(result.content[0]!.text).toContain('[Content]');
+  });
+
+  it('returns error for unknown type', async () => {
+    const api = registerPlugin();
+
+    const tool = api.tools.get('memex_get_template')!;
+    const result = await tool.execute('call-1', { type: 'nonexistent' }) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain('Unknown template type');
+  });
+});
+
+describe('memex_active_vault tool', () => {
+  it('returns active vault info', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([{ id: 'v1', name: 'Default' }]));
+
+    const tool = api.tools.get('memex_active_vault')!;
+    const result = await tool.execute('call-1', {}) as {
+      content: Array<{ text: string }>;
+      details: { vault_name: string };
+    };
+
+    expect(result.details.vault_name).toBe('Default');
+    expect(result.content[0]!.text).toContain('Default');
+  });
+});
+
+describe('memex_list_vaults tool', () => {
+  it('returns formatted vault list', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(
+      ndjsonResponse([
+        { id: 'v1', name: 'Default', description: 'Main vault' },
+        { id: 'v2', name: 'Archive' },
+      ]),
+    );
+
+    const tool = api.tools.get('memex_list_vaults')!;
+    const result = await tool.execute('call-1', {}) as {
+      content: Array<{ text: string }>;
+      details: { count: number };
+    };
+
+    expect(result.details.count).toBe(2);
+    expect(result.content[0]!.text).toContain('Default');
+    expect(result.content[0]!.text).toContain('Main vault');
+  });
+});
+
+describe('memex_list_notes tool', () => {
+  it('returns formatted note list', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(
+      ndjsonResponse([
+        { id: 'n1', title: 'First Note', created_at: '2025-01-01' },
+      ]),
+    );
+
+    const tool = api.tools.get('memex_list_notes')!;
+    const result = await tool.execute('call-1', { limit: 10 }) as {
+      content: Array<{ text: string }>;
+      details: { count: number };
+    };
+
+    expect(result.details.count).toBe(1);
+    expect(result.content[0]!.text).toContain('First Note');
+  });
+});
+
+describe('memex_migrate_note tool', () => {
+  it('migrates and returns confirmation', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'success' }));
+
+    const tool = api.tools.get('memex_migrate_note')!;
+    const result = await tool.execute('call-1', {
+      note_id: 'note-1',
+      target_vault_id: 'vault-2',
+    }) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain('migrated');
+  });
+});
+
+describe('memex_ingest_url tool', () => {
+  it('ingests URL and returns result', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ status: 'queued' }));
+
+    const tool = api.tools.get('memex_ingest_url')!;
+    const result = await tool.execute('call-1', {
+      url: 'https://example.com',
+    }) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain('ingestion started');
+  });
+});
+
+describe('memex_add_note tool', () => {
+  it('creates note and returns overlap warnings', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({
+      status: 'ok',
+      document_id: 'doc-1',
+      unit_ids: ['u1'],
+      overlapping_notes: [{ note_id: 'n2', title: 'Similar Note', similarity: 0.85 }],
+    }));
+
+    const tool = api.tools.get('memex_add_note')!;
+    const result = await tool.execute('call-1', {
+      title: 'Test Note',
+      markdown_content: '# Test\nContent here',
+      description: 'A test note',
+      author: 'openclaw',
+      tags: ['test'],
+    }) as { content: Array<{ text: string }>; details: { overlaps: number } };
+
+    expect(result.content[0]!.text).toContain('doc-1');
+    expect(result.content[0]!.text).toContain('Similar Note');
+    expect(result.content[0]!.text).toContain('85%');
+    expect(result.details.overlaps).toBe(1);
+  });
+});
+
+describe('memex_memory_search tool with new params', () => {
+  it('passes strategies and temporal filters', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
+
+    const tool = api.tools.get('memex_memory_search')!;
+    await tool.execute('call-1', {
+      query: 'test',
+      strategies: ['temporal', 'graph'],
+      after: '2025-01-01',
+      before: '2025-12-31',
+      tags: ['project'],
+    });
+
+    const body = JSON.parse(fetchSpy.mock.calls[1]![1].body);
+    expect(body.strategies).toEqual(['temporal', 'graph']);
+    expect(body.after).toBe('2025-01-01');
+    expect(body.before).toBe('2025-12-31');
+    expect(body.tags).toEqual(['project']);
+  });
+
+  it('formats results with confidence and supersession context', async () => {
+    const api = registerPlugin();
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(
+      ndjsonResponse([
+        {
+          id: 'mu-1',
+          text: 'Old fact',
+          fact_type: 'observation',
+          source_document_ids: ['note-1'],
+          metadata: {},
+          confidence: 0.7,
+          unit_metadata: {
+            superseded_by: [
+              { unit_id: 'mu-2', unit_text: 'New fact', relation: 'contradicts' },
+            ],
+          },
+        },
+      ]),
+    );
+
+    const tool = api.tools.get('memex_memory_search')!;
+    const result = await tool.execute('call-1', { query: 'test' }) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.content[0]!.text).toContain('[conf: 0.7]');
+    expect(result.content[0]!.text).toContain('Superseded by: New fact (contradicts)');
+  });
+});
+
+describe('auto-capture sets author', () => {
+  const longMsg = 'D'.repeat(60);
+
+  it('sets author to openclaw in ingestNote calls', async () => {
+    const api = registerPlugin({ sessionGrouping: false });
+    fetchSpy.mockResolvedValueOnce(vaultOkResponse());
+    fetchSpy.mockResolvedValueOnce(jsonResponse({}, 202));
+
+    const hook = api.hooks.get('agent_end')![0]!;
+    await hook({
+      success: true,
+      messages: [
+        { role: 'user', content: longMsg },
+        { role: 'assistant', content: 'response' },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    const [, init] = fetchSpy.mock.calls[1]!;
+    const body = JSON.parse(init.body);
+    expect(body.author).toBe('openclaw');
   });
 });
