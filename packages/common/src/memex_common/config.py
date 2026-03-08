@@ -444,7 +444,7 @@ class RetrievalConfig(BaseModel):
 
     graph_retriever_type: str = Field(
         default='entity_cooccurrence',
-        description='Graph retrieval strategy type. Currently supported: "entity_cooccurrence".',
+        description='Graph retrieval strategy type: "entity_cooccurrence", "causal", or "link_expansion".',
     )
 
     retrieval_strategies: SearchStrategiesConfig = Field(

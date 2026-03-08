@@ -567,7 +567,15 @@ class RetrievalEngine:
         strategy_weights: dict[str, float] | None = None,
         debug_ctx: DebugContext | None = None,
     ) -> Sequence[Any]:
-        """Run RRF independently per fact type, then interleave results."""
+        """Run RRF independently per fact type, then interleave results.
+
+        Each fact type (from ``FactTypes``) gets its own RRF pass limited to
+        ``RetrievalConfig.fact_type_budget`` candidates. Results are merged via
+        round-robin interleaving across type buckets (plus mental models as an
+        extra bucket when enabled).
+
+        Enabled by ``RetrievalConfig.fact_type_partitioned_rrf``.
+        """
         fact_types = [ft.value for ft in FactTypes]
         per_type_budget = self.retrieval_config.fact_type_budget
 
@@ -812,7 +820,17 @@ class RetrievalEngine:
     def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
-        """Re-ranks results using a Cross-Encoder with recency and temporal boosts."""
+        """Re-rank results using a cross-encoder with multiplicative boosts.
+
+        Applies sigmoid-normalized cross-encoder scores, then multiplies by:
+        * **recency boost** -- scaled by ``RetrievalConfig.reranking_recency_alpha``
+          (linear decay over 365 days)
+        * **temporal proximity boost** -- scaled by
+          ``RetrievalConfig.reranking_temporal_alpha`` (uses ``unit.temporal_proximity``
+          when available)
+
+        Set both alphas to 0 to disable boosts (backward compatible).
+        """
         if not self.reranker or not results:
             return results
 

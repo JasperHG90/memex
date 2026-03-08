@@ -162,7 +162,21 @@ def build_semantic_seed_cte(
     top_k: int = 5,
     weight: float = 0.7,
 ) -> CTE:
-    """Find seed entities by semantic similarity to query embedding."""
+    """Build a CTE of seed entities discovered via semantic similarity.
+
+    Finds the top-K memory units closest to ``query_embedding``, then extracts
+    their linked entities as seeds with the given ``weight``.
+
+    Args:
+        query_embedding: Dense vector for the user query.
+        vault_id: Scope the lookup to a single vault.
+        top_k: Number of nearest memory units to consider.
+        weight: Score assigned to each semantic seed (should be < 1.0 so NER
+            seeds dominate on overlap).
+
+    Returns:
+        A SQLAlchemy CTE with columns ``(id, weight)``.
+    """
     from typing import Any as _Any
     from typing import cast as _cast
 
@@ -197,7 +211,16 @@ def _build_ner_seeds(
     similarity_threshold: float,
     include_ilike: bool = False,
 ) -> Select | CompoundSelect:
-    """Build seed entity query using NER extraction or fallback similarity."""
+    """Build a UNION query of seed entity IDs from NER or fallback similarity.
+
+    When a ``ner_model`` is provided, entities are extracted from the query and
+    matched against ``Entity.canonical_name`` and ``EntityAlias.name`` using exact,
+    phonetic, and optionally ILIKE/trigram conditions. Without NER, falls back
+    to ILIKE + pg_trgm similarity on the raw query string.
+
+    Returns:
+        A ``Select | CompoundSelect`` producing a single ``id`` column.
+    """
     extracted_names: list[str] = []
     extracted_phonetics: list[str] = []
 
@@ -340,18 +363,23 @@ def build_seed_entity_cte(
 
 
 class EntityCooccurrenceGraphStrategy:
-    """
-    Retrieves memories linked to entities mentioned in the query (1st Order)
-    AND entities related to those entities (2nd Order BFS).
+    """Graph retrieval via entity co-occurrence (1st + 2nd order BFS).
 
-    V2 Updates:
-    - NER-Driven Query Expansion
-    - Phonetic Search
-    - Exponential Decay
-    - Weighted Context
+    1st order: NER seed entities -> ``UnitEntity`` -> ``MemoryUnit`` (scored
+    by seed weight + temporal decay).
+    2nd order: seed entities -> ``EntityCooccurrence`` neighbours ->
+    ``MemoryUnit`` (scored by co-occurrence link strength).
 
-    V3 Updates:
-    - Semantic Seeding
+    Supports semantic seeding (T3) to augment NER seeds with entities
+    extracted from the top-K semantically similar memory units.
+
+    Config dependencies:
+        ``RetrievalConfig.similarity_threshold``,
+        ``RetrievalConfig.temporal_decay_days``,
+        ``RetrievalConfig.temporal_decay_base``,
+        ``RetrievalConfig.graph_semantic_seeding``,
+        ``RetrievalConfig.graph_semantic_seed_top_k``,
+        ``RetrievalConfig.graph_semantic_seed_weight``.
     """
 
     def __init__(
@@ -540,14 +568,15 @@ class TemporalStrategy:
 
 
 class EntityCooccurrenceNoteGraphStrategy:
-    """
-    Retrieves document chunks linked to entities mentioned in the query.
+    """Note/chunk variant of :class:`EntityCooccurrenceGraphStrategy`.
 
-    Traversal path: Entity -> UnitEntity -> MemoryUnit -> Document -> Chunk.
-    Includes both 1st-order (direct entity match) and 2nd-order (co-occurrence)
-    results, with temporal decay scoring for recency.
+    Traversal: seed entities -> ``UnitEntity`` -> ``MemoryUnit`` -> ``Note``
+    -> ``Chunk``. Includes 1st-order (direct entity match) and 2nd-order
+    (co-occurrence) results with temporal decay scoring.
 
-    Returns Chunk.id + score (higher is better).
+    Returns ``(Chunk.id, score)`` where higher score is better.
+
+    Config dependencies: same as :class:`EntityCooccurrenceGraphStrategy`.
     """
 
     def __init__(
@@ -667,13 +696,22 @@ CAUSAL_LINK_TYPES = ('causes', 'caused_by', 'enables', 'prevents')
 
 
 class CausalGraphStrategy:
-    """Expand from NER seed entities through causal edges in ``memory_links``.
+    """Graph retrieval expanding through causal edges in ``memory_links``.
 
     Traversal:
-        seed_entities  -> UnitEntity -> MemoryUnit  (1st order, score=1.0+decay)
-        1st-order ids  -> memory_links (causal)     -> MemoryUnit  (2nd order,
+        seed_entities -> UnitEntity -> MemoryUnit  (1st order, score=1.0+decay)
+        1st-order ids -> memory_links (causal)     -> MemoryUnit  (2nd order,
         score=weight*0.8)
-    Combined via UNION ALL -> GROUP BY id, MAX(score).
+
+    Combined via UNION ALL -> GROUP BY id, MAX(score). Only causal link types
+    (``causes``, ``caused_by``, ``enables``, ``prevents``) with weight >=
+    ``causal_weight_threshold`` are traversed.
+
+    Config dependencies:
+        ``RetrievalConfig.causal_weight_threshold``,
+        ``RetrievalConfig.similarity_threshold``,
+        ``RetrievalConfig.temporal_decay_days``,
+        ``RetrievalConfig.temporal_decay_base``.
     """
 
     def __init__(
@@ -760,10 +798,12 @@ class CausalGraphStrategy:
 
 
 class CausalNoteGraphStrategy:
-    """Causal expansion for chunk/note-based search.
+    """Note/chunk variant of :class:`CausalGraphStrategy`.
 
-    Mirrors :class:`CausalGraphStrategy` but returns ``Chunk.id`` instead
-    of ``MemoryUnit.id``.
+    Returns ``(Chunk.id, score)`` by joining causal-expanded memory unit IDs
+    back through ``MemoryUnit -> Note -> Chunk``.
+
+    Config dependencies: same as :class:`CausalGraphStrategy`.
     """
 
     def __init__(
@@ -857,9 +897,16 @@ class LinkExpansionGraphStrategy:
     """Graph retrieval expanding through 3 link signals with additive scoring.
 
     Signals (each contributes 0-1 to the final score, range 0-3):
-    * **entity** -- co-occurring units via ``memory_links(type='entity')``
-    * **semantic** -- bidirectional kNN via ``memory_links(type='semantic')``
-    * **causal** -- causal chain via ``memory_links(type IN causal_types)``
+    * **entity** -- co-occurring units via ``memory_links(type='entity')``,
+      scored by ``tanh(distinct_entity_count * 0.5)``
+    * **semantic** -- bidirectional kNN via ``memory_links(type='semantic')``,
+      scored by max link weight
+    * **causal** -- causal chain via ``memory_links(type IN causal_types)``,
+      filtered by ``causal_threshold``
+
+    Config dependencies:
+        ``RetrievalConfig.link_expansion_causal_threshold``,
+        ``RetrievalConfig.similarity_threshold``.
     """
 
     def __init__(
@@ -973,6 +1020,8 @@ class LinkExpansionNoteGraphStrategy:
 
     Returns ``(Chunk.id, score)`` by joining expanded memory-unit IDs back
     through ``MemoryUnit -> Note -> Chunk``.
+
+    Config dependencies: same as :class:`LinkExpansionGraphStrategy`.
     """
 
     def __init__(
