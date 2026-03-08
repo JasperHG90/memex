@@ -488,6 +488,10 @@ class RetrievalConfig(BaseModel):
         default=0.3,
         description='Confidence below this marks a unit as superseded. Used by contradiction detection.',
     )
+    temporal_extraction_enabled: bool = Field(
+        default=True,
+        description='Enable NLP-based temporal constraint extraction from queries using dateparser.',
+    )
 
 
 class ContradictionConfig(BaseModel):
