@@ -864,6 +864,7 @@ class PageMetadataDTO(BaseModel):
     has_assets: bool = False
     vault_id: UUID | None = None
     vault_name: str | None = None
+    total_tokens: int | None = None
 
 
 class SectionSummaryDTO(BaseModel):
