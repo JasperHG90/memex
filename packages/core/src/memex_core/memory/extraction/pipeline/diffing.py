@@ -281,6 +281,17 @@ def build_page_index_with_metadata(
         Dict with ``metadata`` and ``toc`` keys.
     """
     thin_tree = build_thin_tree(toc, min_node_tokens)
+
+    def _sum_tokens(nodes: list[dict[str, Any]]) -> int:
+        total = 0
+        for node in nodes:
+            total += node.get('token_estimate', 0) or 0
+            total += _sum_tokens(node.get('children', []))
+        return total
+
+    metadata = dict(metadata)  # don't mutate caller's dict
+    metadata['total_tokens'] = _sum_tokens(thin_tree)
+
     return {'metadata': metadata, 'toc': thin_tree}
 
 

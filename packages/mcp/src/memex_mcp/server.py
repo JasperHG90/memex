@@ -52,6 +52,7 @@ STEP 2 — FILTER: Use metadata to drop irrelevant notes BEFORE reading.
 
 STEP 3 — READ (only confirmed-relevant notes):
   - `memex_get_page_index` → get TOC and node IDs.
+    - If total_tokens from metadata > 3000: use `depth=0` first, then `parent_node_id` to drill down.
   - `memex_get_node` (parallel) → read specific sections by node ID.
   - `memex_read_note` → fallback only, for very short notes.
 
@@ -835,7 +836,9 @@ async def memex_note_search(
     name='memex_get_page_index',
     description=(
         'Get note TOC: section titles, summaries, and node IDs. '
-        'Expensive \u2014 only call AFTER memex_get_note_metadata confirms relevance. '
+        'Expensive for large notes — only call AFTER memex_get_note_metadata confirms relevance. '
+        'For large notes (total_tokens > 3000): use depth=0 to get top-level sections first, '
+        'then drill into specific sections with parent_node_id. '
         'Use returned node IDs with memex_get_node.'
     ),
 )
@@ -884,10 +887,17 @@ async def memex_get_page_index(
                 total += _sum_tokens(node.children)
             return total
 
-        total_tokens = _sum_tokens(toc) or None
+        metadata_dict = page_index.get('metadata') or {}
+
+        # For unfiltered trees, prefer stored total_tokens (pre-computed at ingestion).
+        # Fall back to recursive sum for pre-existing notes without stored value.
+        if depth is None and parent_node_id is None:
+            total_tokens = metadata_dict.get('total_tokens') or _sum_tokens(toc) or None
+        else:
+            total_tokens = _sum_tokens(toc) or None
 
         return PageIndexDTO(
-            metadata=PageMetadataDTO(**(page_index.get('metadata') or {})),
+            metadata=PageMetadataDTO(**metadata_dict),
             toc=toc,
             total_tokens=total_tokens,
         )
@@ -902,8 +912,11 @@ async def memex_get_page_index(
 @mcp.tool(
     name='memex_get_note_metadata',
     description=(
-        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. '
-        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes.'
+        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, '
+        'source URI, and total_tokens (note size). '
+        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes. '
+        'When total_tokens > 3000, use memex_get_page_index with depth=0 first to get only '
+        'top-level sections, then drill down with parent_node_id.'
     ),
 )
 async def memex_get_note_metadata(

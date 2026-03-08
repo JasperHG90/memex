@@ -1,6 +1,7 @@
 """Tests for the memex_get_page_index and memex_get_node MCP tools."""
 
 import datetime as dt
+import json
 from uuid import uuid4
 
 import pytest
@@ -142,3 +143,109 @@ async def test_memex_get_node_exception_handling(mock_api, mcp_client):
 
     with pytest.raises(ToolError, match='connection reset'):
         await mcp_client.call_tool('memex_get_node', {'node_id': str(uuid4())})
+
+
+# ---------------------------------------------------------------------------
+# memex_get_page_index — total_tokens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_memex_get_page_index_includes_total_tokens(mock_api, mcp_client):
+    """Page index response includes total_tokens from metadata."""
+    page_index = {
+        'metadata': {'title': 'Test', 'total_tokens': 5000},
+        'toc': [
+            {
+                'id': str(uuid4()),
+                'title': 'Chapter 1',
+                'level': 1,
+                'token_estimate': 3000,
+                'children': [],
+            },
+            {
+                'id': str(uuid4()),
+                'title': 'Chapter 2',
+                'level': 1,
+                'token_estimate': 2000,
+                'children': [],
+            },
+        ],
+    }
+    mock_api.get_note_page_index.return_value = page_index
+
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    data = json.loads(result.content[0].text)
+
+    assert data['total_tokens'] == 5000
+    assert data['metadata']['total_tokens'] == 5000
+
+
+@pytest.mark.asyncio
+async def test_memex_get_page_index_uses_stored_total_tokens_for_unfiltered(mock_api, mcp_client):
+    """Unfiltered page index should prefer stored total_tokens from metadata."""
+    page_index = {
+        'metadata': {'title': 'Test', 'total_tokens': 9999},
+        'toc': [
+            {
+                'id': str(uuid4()),
+                'title': 'Section',
+                'level': 1,
+                'token_estimate': 100,
+                'children': [],
+            },
+        ],
+    }
+    mock_api.get_note_page_index.return_value = page_index
+
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    data = json.loads(result.content[0].text)
+
+    # Should use the stored 9999, not the computed 100
+    assert data['total_tokens'] == 9999
+
+
+@pytest.mark.asyncio
+async def test_memex_get_page_index_falls_back_to_recursive_sum(mock_api, mcp_client):
+    """When stored total_tokens is missing, fall back to recursive sum."""
+    page_index = {
+        'metadata': {'title': 'Old Note'},
+        'toc': [
+            {
+                'id': str(uuid4()),
+                'title': 'A',
+                'level': 1,
+                'token_estimate': 200,
+                'children': [
+                    {
+                        'id': str(uuid4()),
+                        'title': 'A.1',
+                        'level': 2,
+                        'token_estimate': 150,
+                        'children': [],
+                    },
+                ],
+            },
+        ],
+    }
+    mock_api.get_note_page_index.return_value = page_index
+
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    data = json.loads(result.content[0].text)
+
+    assert data['total_tokens'] == 350
+
+
+@pytest.mark.asyncio
+async def test_memex_get_note_metadata_includes_total_tokens(mock_api, mcp_client):
+    """memex_get_note_metadata should return total_tokens when present."""
+    mock_api.get_note_metadata.return_value = {
+        'title': 'Big Note',
+        'description': 'A large note',
+        'total_tokens': 7500,
+    }
+
+    result = await mcp_client.call_tool('memex_get_note_metadata', {'note_id': str(uuid4())})
+    data = json.loads(result.content[0].text)
+
+    assert data['total_tokens'] == 7500
