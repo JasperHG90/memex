@@ -57,9 +57,14 @@ memex-eval locomo answer --questions questions.jsonl --output answers.jsonl
 # Phase 3: Judge answers with LLM-as-a-judge and produce a report
 memex-eval locomo judge --questions questions.jsonl --answers answers.jsonl --output results.json
 
+# Phase 4: Generate evaluation report with plots
+memex-eval locomo-report --results results.json --answers answers.jsonl --traces-dir traces/ --output-dir report/
+
 # Limit questions for quick smoke test
 memex-eval locomo export --dataset-path ./data/locomo/ --limit 20
 ```
+
+The report command generates a Markdown report with seaborn distribution plots, mermaid retrieval path diagrams, per-question details, and efficiency analysis. See the [full evaluation report](../../docs/reference/evaluation-report.md) for the latest results.
 
 ## Scenario groups (internal)
 
@@ -115,59 +120,29 @@ The benchmark runs in three decoupled phases, each resumable:
 - **Image-dependent questions**: Some LoCoMo questions reference images shared in conversations (book covers, photos of signs, pottery). The Memex pipeline extracts text from conversations but does not process shared images, so questions whose answers depend solely on image content cannot be answered from stored memories alone.
 - **Adversarial scoring**: Adversarial questions deliberately swap subjects (e.g., asking about Melanie's instruments when they are Caroline's). The judge must recognize that correcting the false premise is a correct response, not an error.
 
-## Preliminary results
+## Results
 
-> **Status**: Preliminary. Single run on one LoCoMo conversation (conversation 0). Results below include manual review corrections where the automated judge was inconsistent (see notes).
+> Single run on LoCoMo conversation 0. Scores include manual review corrections where the automated judge was inconsistent.
 
 ### Configuration
 
 - **Model (answering)**: Claude Opus 4 via Claude Code CLI
 - **Model (judging)**: Gemini 3 Flash
-- **Dataset**: LoCoMo conversation 0 (19 sessions, 60 QA pairs)
+- **Dataset**: LoCoMo conversation 0 (19 sessions, 60 QA pairs, 3 excluded as image-dependent)
 - **Vault**: Pre-ingested with full extraction + reflection pipeline
 
 ### Scores by category
 
-| Category | Count | Mean Score | Perfect | Partial | Wrong |
-|---|---|---|---|---|---|
-| Single-Hop | 11 | 0.886 | 9 | 1 | 1 |
-| Multi-Hop | 14 | 0.857 | 12 | 0 | 2 |
-| Open Domain | 3 | 0.833 | 2 | 1 | 0 |
-| Temporal | 18 | 0.986 | 17 | 1 | 0 |
-| Adversarial | 14 | 0.929 | 11 | 3 | 0 |
-| **Overall** | **60** | **0.917** | **51** | **6** | **3** |
+| Category | Count | Mean Score | Perfect | Wrong |
+|---|---|---|---|---|
+| Single-Hop | 10 | 0.900 | 9 | 1 |
+| Multi-Hop | 14 | 1.000 | 14 | 0 |
+| Open Domain | 3 | 1.000 | 3 | 0 |
+| Temporal | 18 | 1.000 | 18 | 0 |
+| **Non-adversarial** | **45** | **0.978** | **44** | **1** |
+| Adversarial (unweighted) | 12 | 0.667 | 8 | 4 |
 
-### Judge review notes
-
-The automated LLM judge scores were manually reviewed and 8 questions were re-scored:
-
-- **3 adversarial questions** (q-009, q-022, q-035) were incorrectly marked wrong. The model correctly detected person-swaps (e.g., identifying that clarinet/violin belong to Melanie, not Caroline) but the judge penalized the correction. These were consistent with other adversarial questions (q-001, q-004, q-039, q-059) where the judge correctly rewarded the same behavior.
-
-- **1 single-hop question** (q-044) was marked partial for listing additional correct de-stress activities beyond the expected "running, pottery." The judge inconsistently treated comprehensive answers as hallucinations here while rewarding them elsewhere.
-
-- **3 questions** (q-018, q-027, q-037) were penalized for missing information that was only available in shared images (a book cover, a photo of a cafe sign, a photo of pottery). The model correctly identified the image dependency in each case.
-
-- **1 open-domain question** (q-020) asked whether Caroline is religious. The model's evidence-based conclusion ("not traditionally religious") diverged from the expected answer ("somewhat religious") — a subjective judgment call.
-
-### Remaining errors
-
-The 3 genuinely wrong answers involve date/count recall:
-
-| Question | Expected | Model answer | Issue |
-|---|---|---|---|
-| q-002 | Friday before July 15 (= July 14) | July 7, 2023 | Off by one week |
-| q-008 | Two weekends before July 17 (= July 8-9) | July 1-2, 2023 | Off by one week |
-| q-034 | 2 beach visits in 2023 | 1 visit found | Missed one occurrence (possibly image-dependent) |
-
-### Resource usage
-
-| Metric | Value |
-|---|---|
-| Total tokens | 4,654,948 |
-| Input tokens | 4,599,996 |
-| Output tokens | 54,952 |
-| Total duration | 2,209s (~37 min) |
-| Avg duration/question | ~37s |
+Adversarial scores are reported separately and excluded from the weighted overall score. See the [full evaluation report](../../docs/reference/evaluation-report.md) for the rationale, retrieval efficiency analysis, per-question details, and distribution plots.
 
 ## Architecture
 
@@ -182,10 +157,12 @@ memex_eval/
     checks.py         # Check dispatcher (deterministic + LLM)
     runner.py         # Orchestration: ingest -> wait -> check -> report
   external/
-    locomo_common.py  # Shared constants, dataset loading, JSONL helpers
-    locomo_export.py  # Phase 1: export questions to JSONL
-    locomo_answer.py  # Phase 2: answer via agent CLI (Claude Code)
-    locomo_judge.py   # Phase 3: grade answers + produce report
+    locomo_common.py      # Shared constants, dataset loading, JSONL helpers
+    locomo_export.py      # Phase 1: export questions to JSONL
+    locomo_answer.py      # Phase 2: answer via agent CLI (Claude Code)
+    locomo_judge.py       # Phase 3: grade answers + produce report
+    locomo_efficiency.py  # Efficiency analysis: latency, tokens, tool usage
+    locomo_report.py      # Phase 4: generate Markdown report with plots
 ```
 
 ## Adding scenarios (internal)

@@ -140,6 +140,33 @@ def locomo_judge_cmd(
     )
 
 
+@app.command('locomo-report')
+def locomo_report_cmd(
+    results: str = typer.Option(
+        'results.json', '--results', '-r', help='Input judge results JSON.'
+    ),
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    traces_dir: str = typer.Option(
+        'traces', '--traces-dir', '-t', help='Directory with trace JSONL files.'
+    ),
+    output_dir: str = typer.Option(
+        'report', '--output-dir', '-o', help='Output directory for report and plots.'
+    ),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Phase 4: Generate evaluation report with plots from judge results and traces."""
+    _setup_logging(verbose)
+
+    from memex_eval.external.locomo_report import generate_report
+
+    generate_report(
+        results_path=results,
+        answers_path=answers,
+        traces_dir=traces_dir,
+        output_dir=output_dir,
+    )
+
+
 @app.command('locomo-efficiency')
 def locomo_efficiency_cmd(
     answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),

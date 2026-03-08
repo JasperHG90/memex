@@ -265,18 +265,18 @@ The `release.yaml` GitHub Action automatically builds all artifacts (Python, das
 
 Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 60 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
 
-### Preliminary results (LoCoMo)
+### LoCoMo results
 
-| Category | Count | Score |
+| Category | Count | Mean Score |
 |---|---|---|
-| Single-Hop | 11 | 0.886 |
-| Multi-Hop | 14 | 0.857 |
-| Open Domain | 3 | 0.833 |
-| Temporal | 18 | 0.986 |
-| Adversarial | 14 | 0.929 |
-| **Overall** | **60** | **0.917** |
+| Single-Hop | 10 | 0.900 |
+| Multi-Hop | 14 | 1.000 |
+| Open Domain | 3 | 1.000 |
+| Temporal | 18 | 1.000 |
+| **Non-adversarial** | **45** | **0.978** |
+| Adversarial (unweighted) | 12 | 0.667 |
 
-Answering model: Claude Opus 4.6. Judging model: Gemini 2.5 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. The 3 remaining errors are date-recall mistakes (off by one week). See [`packages/eval`](./packages/eval/README.md) for full methodology, scoring criteria, and review notes.
+Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
 
 ## 🏗️ Architecture
 
