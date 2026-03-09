@@ -196,6 +196,12 @@ async def test_mcp_list_tools(mcp_client):
     assert 'memex_get_entity' not in names
     assert 'memex_list_notes' not in names
 
+    # Tool descriptions should guide agents to use leaf node IDs
+    tool_by_name = {t.name: t for t in tools}
+    page_desc = tool_by_name['memex_get_page_indices'].description
+    assert 'leaf' in page_desc.lower(), 'page_indices description should mention leaf nodes'
+    assert 'memex_get_nodes' in page_desc, 'page_indices description should reference get_nodes'
+
 
 @pytest.mark.asyncio
 async def test_mcp_list_prompts(mcp_client):
