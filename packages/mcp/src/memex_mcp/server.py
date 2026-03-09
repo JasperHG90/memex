@@ -39,50 +39,44 @@ persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex is a personal knowledge management system. Follow this retrieval workflow:
+    instructions="""Memex is a personal knowledge management system.
 
-STEP 1 — SEARCH: Pick by query type, or run both in parallel when unsure:
-  - `memex_memory_search` (memory search): best for broad/exploratory queries ("What do I know about X?"). Returns atomic facts, events, observations across all notes.
-  - `memex_note_search` (note search): best for targeted document lookup ("Find the doc about X"). Returns ranked source notes with metadata and snippets.
-  When unsure, run both in parallel and combine results (deduplicate by Note ID).
+RETRIEVAL WORKFLOW — execute steps in order:
 
-STEP 2 — FILTER: Use metadata to drop irrelevant notes BEFORE reading.
-  - After `memex_memory_search`: call `memex_get_note_metadata` on each Note ID (cheap, ~50 tokens).
-  - After `memex_note_search`: metadata is already inline — use the returned title, description, and tags to filter. No extra calls needed.
+SEARCH → pick by query type, or run both in parallel:
+  - `memex_memory_search`: broad/exploratory queries. Returns atomic facts, observations.
+  - `memex_note_search`: targeted document lookup. Returns ranked notes with inline metadata.
 
-STEP 3 — READ (only confirmed-relevant notes):
-  - `memex_get_page_index` → get TOC and node IDs.
-    - If total_tokens from metadata > 3000: use `depth=0` first, then `parent_node_id` to drill down.
-  - `memex_get_node` (parallel) → read specific sections by node ID.
-  - `memex_read_note` → fallback only, for very short notes.
+FILTER → drop irrelevant notes BEFORE reading:
+  - After `memex_memory_search`: call `memex_get_note_metadata` on each Note ID.
+  - After `memex_note_search`: metadata is already inline. DO NOT call `memex_get_note_metadata`.
 
-STEP 4 — ASSETS
-When a note has has_assets: true or lists supporting_files:
+READ → only confirmed-relevant notes:
+  - `memex_get_page_index` → TOC + node IDs. Use `depth=0` when total_tokens > 3000.
+  - `memex_get_node` (parallel) → section content.
+  - `memex_read_note` → ONLY when total_tokens < 500.
 
-1. Consider if the assets will help in answering the question.
-2. Use memex_list_assets to enumerate attached files.
-3. Use memex_get_resource to retrieve images/documents by path.
-4. Render images inline using image-preview blocks.
-
-Never claim visual content is unavailable without first attempting retrieval.
+ASSETS → REQUIRED when has_assets is true:
+  - `memex_list_assets` → `memex_get_resource` to fetch the image/file.
+  - Use fetched images as input to understand visual content (architecture diagrams, flowcharts, etc.).
+  - Reproduce key visuals as Mermaid diagrams, ASCII art, or structured text descriptions in your response — don't just leave image references.
+  - NEVER create diagrams/charts without first checking assets for visual context.
 
 RULES:
-- Always filter before reading. Never call `memex_get_page_index` on notes you haven't confirmed relevant.
+- ONLY use IDs (Note, Node, Unit) that appear in tool output. If search returns empty, reformulate — never fabricate.
+- Filter before reading. Never call `memex_get_page_index` on unconfirmed notes.
 - Never use `memex_list_notes` for discovery.
-- Parallelize aggressively.
-- CITE SOURCES: Use numbered citations [1], [2] etc. inline. Add a reference list at the end with title and note ID. For memory units, include both memory ID and source note ID.
+- Cite sources: [1], [2] inline. Reference list at end with source type prefix:
+  `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID.
 
-ENTITY EXPLORATION (when you need to find people, teams, or concepts):
-  1. `memex_list_entities` — browse or search entities by name.
-  2. `memex_get_entity` — get details (type, mention count).
-  3. `memex_get_entity_mentions` — find facts/observations that mention the entity.
-  4. `memex_get_entity_cooccurrences` — find related entities (people on the same team, concepts in the same docs).
+ENTITY EXPLORATION:
+  `memex_list_entities` → `memex_get_entity` → `memex_get_entity_mentions` / `memex_get_entity_cooccurrences`
 
 STRATEGY HINTS for `memex_memory_search`:
-  - `strategies: ["temporal"]` — chronological ordering (e.g. "what happened after X?")
-  - `strategies: ["graph"]` — entity-centric traversal (e.g. "what do we know about person X?")
-  - `strategies: ["mental_model"]` — synthesized observations (e.g. "what patterns exist around X?")
-  - Default (all strategies) is best for general queries.
+  - `strategies: ["temporal"]` — chronological
+  - `strategies: ["graph"]` — entity-centric
+  - `strategies: ["mental_model"]` — synthesized observations
+  - Default (all) is best for general queries.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -213,7 +207,7 @@ async def memex_get_lineage(
 
 @mcp.tool(
     name='memex_list_assets',
-    description='List all file assets attached to a note.',
+    description='List file assets for a note. REQUIRED when has_assets is true — call before answering.',
 )
 async def memex_list_assets(
     ctx: Context,
@@ -271,7 +265,7 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note content. FALLBACK ONLY — prefer memex_get_page_index + memex_get_node for section-level reading.',
+    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_index + memex_get_node.',
 )
 async def memex_read_note(
     ctx: Context,
@@ -284,6 +278,15 @@ async def memex_read_note(
             uuid_obj = UUID(note_id)
         except ValueError:
             raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        metadata = await api.get_note_metadata(uuid_obj)
+        if metadata:
+            total_tokens = metadata.get('total_tokens', 0)
+            if total_tokens and total_tokens >= 500:
+                raise ToolError(
+                    f'Note has {total_tokens} tokens (limit: 500). '
+                    'Use memex_get_page_index + memex_get_node instead.'
+                )
 
         note = await api.get_note(uuid_obj)
         meta = note.doc_metadata
@@ -694,7 +697,7 @@ async def memex_memory_search(
         )
 
         if not results:
-            return 'No results found.'
+            return f"No results for '{query}'. Reformulate or try memex_note_search. Do not fabricate IDs."
 
         output = [f"Found {len(results)} results for '{query}':\n"]
 
@@ -797,7 +800,7 @@ async def memex_note_search(
         )
 
         if not results:
-            return f"No notes found for query: '{query}'"
+            return f"No notes for '{query}'. Reformulate, try memex_memory_search, or set expand_query=true. Do not fabricate IDs."
 
         lines = [f"Found {len(results)} note(s) for '{query}':\n"]
 
@@ -823,7 +826,7 @@ async def memex_note_search(
             if src := metadata.get('source_uri'):
                 lines.append(f'- **Source:** {src}')
             if metadata.get('has_assets'):
-                lines.append('- **Has assets:** yes')
+                lines.append('- **Has assets:** yes → call memex_list_assets before answering')
             if doc.snippets:
                 lines.append('- **Snippets:**')
                 for snippet in doc.snippets[:2]:
@@ -833,7 +836,8 @@ async def memex_note_search(
             lines.append('')
 
         lines.append(
-            'Next: use memex_get_page_index on relevant Note IDs to get section TOC, then memex_get_node to read.'
+            'Do NOT call memex_get_note_metadata — metadata above is complete. '
+            'Next: memex_get_page_index → memex_get_node on relevant notes.'
         )
         return '\n'.join(lines)
 
@@ -847,7 +851,7 @@ async def memex_note_search(
     description=(
         'Get note TOC: section titles, summaries, and node IDs. '
         'Expensive for large notes — only call AFTER memex_get_note_metadata confirms relevance. '
-        'For large notes (total_tokens > 3000): use depth=0 to get top-level sections first, '
+        'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
         'Use returned node IDs with memex_get_node.'
     ),
@@ -859,7 +863,7 @@ async def memex_get_page_index(
         int | None,
         Field(
             default=None,
-            description='Max tree depth to return (0=roots only, 1=roots+children, etc).',
+            description='Detail level: 0=top-level overview (H1+H2), 1+=full tree.',
         ),
     ] = None,
     parent_node_id: Annotated[
@@ -897,6 +901,26 @@ async def memex_get_page_index(
                 total += _sum_tokens(node.children)
             return total
 
+        def _estimate_toc_tokens(nodes: list[TOCNodeDTO]) -> int:
+            """Estimate the serialized token cost of the TOC itself (titles + summaries + structure)."""
+            total = 0
+            for node in nodes:
+                # Title tokens + structural overhead (id, level, children keys)
+                total += len(node.title) // 4 + 20
+                # Summary tokens from SectionSummaryDTO fields
+                if node.summary:
+                    for field in (
+                        node.summary.who,
+                        node.summary.what,
+                        node.summary.how,
+                        node.summary.when,
+                        node.summary.where,
+                    ):
+                        if field:
+                            total += len(field) // 4
+                total += _estimate_toc_tokens(node.children)
+            return total
+
         metadata_dict = page_index.get('metadata') or {}
 
         # For unfiltered trees, prefer stored total_tokens (pre-computed at ingestion).
@@ -905,6 +929,15 @@ async def memex_get_page_index(
             total_tokens = metadata_dict.get('total_tokens') or _sum_tokens(toc) or None
         else:
             total_tokens = _sum_tokens(toc) or None
+
+        # Guard on the TOC's own serialized cost, not the note's content tokens.
+        if depth is None and parent_node_id is None:
+            toc_cost = _estimate_toc_tokens(toc)
+            if toc_cost > 3000:
+                raise ToolError(
+                    f'Page index has ~{toc_cost} tokens. '
+                    'Call again with depth=0 to get top-level sections (H1+H2), then drill down with parent_node_id.'
+                )
 
         return PageIndexDTO(
             metadata=PageMetadataDTO(**metadata_dict),
@@ -922,11 +955,9 @@ async def memex_get_page_index(
 @mcp.tool(
     name='memex_get_note_metadata',
     description=(
-        'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, '
-        'source URI, and total_tokens (note size). '
-        'Call on search results BEFORE memex_get_page_index to filter out irrelevant notes. '
-        'When total_tokens > 3000, use memex_get_page_index with depth=0 first to get only '
-        'top-level sections, then drill down with parent_node_id.'
+        'Cheap relevance check (~50 tokens). '
+        'Use after memex_memory_search. '
+        'SKIP after memex_note_search (metadata already inline).'
     ),
 )
 async def memex_get_note_metadata(

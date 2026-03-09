@@ -144,6 +144,8 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     """Test reading a note successfully."""
     doc_id = uuid4()
     vault_id = uuid4()
+    # Return metadata with < 500 tokens so the guard allows reading
+    mock_api.get_note_metadata.return_value = {'title': 'Test Doc', 'total_tokens': 100}
     mock_api.get_note.return_value = NoteDTO(
         id=doc_id,
         doc_metadata={'name': 'Test Doc', 'description': 'Test Description'},
@@ -158,9 +160,20 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_read_note_blocked_large(mock_api, mcp_client):
+    """Test that reading a large note (>= 500 tokens) raises ToolError."""
+    doc_id = uuid4()
+    mock_api.get_note_metadata.return_value = {'title': 'Big Note', 'total_tokens': 2000}
+
+    with pytest.raises(ToolError, match='2000 tokens'):
+        await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
+
+
+@pytest.mark.asyncio
 async def test_mcp_read_note_not_found(mock_api, mcp_client):
     """Test reading a note that doesn't exist raises ToolError."""
     doc_id = uuid4()
+    mock_api.get_note_metadata.return_value = None
     mock_api.get_note.side_effect = FileNotFoundError()
 
     with pytest.raises(ToolError) as excinfo:

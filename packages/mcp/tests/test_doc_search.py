@@ -53,7 +53,7 @@ async def test_memex_note_search_no_results(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_note_search', {'query': 'unknown topic'})
     text = result.content[0].text
 
-    assert 'No notes found' in text
+    assert 'No notes' in text
     assert 'unknown topic' in text
 
 

@@ -121,22 +121,36 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 ### Retrieval
 
 Session start context is automatic via hook. Do NOT redundantly search at session start.
-PROHIBITED: `memex_list_notes` for discovery.
 
-`memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes with inline metadata (title, description, tags) via hybrid retrieval. Use the metadata to filter before reading.
+PROHIBITED:
+- `memex_list_notes` for discovery.
+- Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
+- `memex_get_note_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_node`.
+- Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resource`.
 
-### Note reading
+**Search** — pick by query type, or run both in parallel:
+- `memex_memory_search` — atomic facts, observations, mental models. Broad queries.
+- `memex_note_search` — ranked source notes with inline metadata. Targeted lookup.
 
-1. `memex_get_page_index` (Note ID → table of contents)
-2. `memex_get_node` (node ID → section text)
-3. Fallback only: `memex_read_note`
+**Filter** — before reading:
+- After `memex_memory_search`: call `memex_get_note_metadata` to check relevance.
+- After `memex_note_search`: use inline metadata directly.
+
+**Read** — only confirmed-relevant notes:
+1. `memex_get_page_index` → TOC + node IDs
+2. `memex_get_node` (parallel) → section content
+3. `memex_read_note` → only when total_tokens < 500
+
+**Assets** — required when `has_assets: true`:
+- `memex_list_assets` → `memex_get_resource` → render inline.
 
 ### Citations
 
-When presenting information from Memex, use numbered citations [1], [2] etc. inline. Add a reference list at the end:
-- Notes: title + note ID
-- Memory units: title + memory ID + source note ID
+When presenting information from Memex, use numbered citations [1], [2] etc. inline. Add a reference list at the end with the source type prefix:
+- `[note]` — title + note ID
+- `[memory]` — title + memory ID + source note ID
+- `[asset]` — filename + note ID
 
 ### Slash commands
 
