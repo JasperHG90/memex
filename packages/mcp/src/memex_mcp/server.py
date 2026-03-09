@@ -69,8 +69,28 @@ RULES:
 - Cite sources: [1], [2] inline. Reference list at end with source type prefix:
   `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID.
 
-ENTITY EXPLORATION:
-  `memex_list_entities` → `memex_get_entity` → `memex_get_entity_mentions` / `memex_get_entity_cooccurrences`
+ENTITY EXPLORATION — use for relationship and "landscape" questions:
+  When the question is about how things connect, what else relates to X, or mapping a concept's
+  reach across notes, entity exploration is often MORE effective than search. Search finds documents
+  *about* a topic; entity exploration reveals the *graph of relationships* between concepts, people,
+  decisions, and systems — including cross-note connections that search cannot surface.
+
+  Use entity exploration when:
+  - The question asks how something "fits in" or "relates to" other things
+  - You want to discover connected documents you haven't found yet
+  - You need to map the scope/reach of a concept across the knowledge base
+  - You want to find cross-note relationships (e.g. which RFCs, ADRs, or decisions reference each other)
+
+  Workflow:
+  1. `memex_list_entities` — search for entities by name. Returns entity IDs, types, and mention counts.
+  2. `memex_get_entity` — get details for a specific entity.
+  3. `memex_get_entity_mentions` — find all memory units (facts, events, observations) that reference
+     this entity. Each mention comes from a different note, revealing cross-note connections.
+  4. `memex_get_entity_cooccurrences` — find entities that frequently appear alongside this one.
+     This is the fastest way to discover related concepts, people, and decisions.
+
+  Combine with search: use search to find initial documents, then use entity exploration to
+  discover what else connects to the key concepts you found.
 
 STRATEGY HINTS for `memex_memory_search`:
   - `strategies: ["temporal"]` — chronological
@@ -1344,9 +1364,9 @@ async def memex_get_entity_cooccurrences(
 
         lines = [f'Found {len(cooccurrences)} co-occurring entity/entities:\n']
         for i, c in enumerate(cooccurrences, 1):
-            e1 = c.entity_id_1
-            e2 = c.entity_id_2
-            count = c.cooccurrence_count
+            e1 = c['entity_id_1']
+            e2 = c['entity_id_2']
+            count = c['cooccurrence_count']
             other_id = e2 if str(e1) == entity_id else e1
             lines.append(f'{i}. Entity ID: {other_id} (co-occurrences: {count})')
 
