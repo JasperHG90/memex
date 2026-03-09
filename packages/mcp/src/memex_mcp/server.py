@@ -5,7 +5,7 @@ import os
 import pathlib as plb
 import asyncio
 import base64
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 from uuid import UUID
 import mimetypes
 
@@ -52,7 +52,7 @@ IF query asks about specific content, topics, or document lookup:
   1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
   2. FILTER: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip this.
   3. READ: `memex_get_page_index` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
-  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resource` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
+  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resource` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
 IF query is broad (e.g. "explain X and how it fits the architecture"):
   → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
@@ -78,7 +78,7 @@ RULES:
 
 @mcp.tool(
     name='memex_list_assets',
-    description='List file assets for a note. REQUIRED when has_assets is true — call before answering.',
+    description='List file assets for a note. REQUIRED when has_assets is true. Feed paths to memex_get_resource.',
 )
 async def memex_list_assets(
     ctx: Context,
@@ -275,13 +275,40 @@ async def memex_rename_note(
         raise ToolError(f'Rename note failed: {e}')
 
 
+async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | str:
+    """Fetch a single resource by path. Raises on failure."""
+    mime_type, _ = mimetypes.guess_type(path)
+
+    # For local stores, return file:// URI to avoid base64 overhead
+    local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
+    if local_path and mime_type and mime_type.startswith('image/'):
+        return f'file://{local_path}'
+
+    content_bytes = await api.get_resource(path)
+
+    if mime_type:
+        if mime_type.startswith('image/'):
+            return Image(data=content_bytes, format=mime_type.split('/')[-1])
+        elif mime_type.startswith('audio/'):
+            return Audio(data=content_bytes, format=mime_type.split('/')[-1])
+
+    path_obj = plb.Path(path)
+    filename = path_obj.name
+    ext = path_obj.suffix.lstrip('.') if path_obj.suffix else None
+
+    return File(data=content_bytes, name=filename, format=ext)
+
+
 @mcp.tool(
     name='memex_get_resource',
-    description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets.',
+    description=(
+        'Retrieve 1+ file resources (images, audio, documents) by path. '
+        'Get paths from memex_list_assets. Accepts a single path or a list.'
+    ),
 )
 async def memex_get_resource(
     ctx: Context,
-    path: Annotated[str, Field(description='Resource path.')],
+    paths: Annotated[list[str], Field(description='Resource path(s).')],
     vault_id: Annotated[
         str | None,
         Field(
@@ -289,38 +316,26 @@ async def memex_get_resource(
             description="Vault UUID or name, e.g. 'memex'. Omit for active vault.",
         ),
     ] = None,
-) -> Image | Audio | File | str:
-    """Retrieve a file resource. Returns an Image, Audio, or File object."""
+) -> list[Image | Audio | File | str]:
+    """Retrieve file resources. Returns a list of Image, Audio, File, or error strings."""
     try:
         api = get_api(ctx)
 
         if vault_id:
             await api.resolve_vault_identifier(vault_id)
 
-        mime_type, _ = mimetypes.guess_type(path)
+        results: list[Image | Audio | File | str] = []
+        for path in paths:
+            try:
+                results.append(await _fetch_single_resource(api, path))
+            except Exception as exc:
+                results.append(f'Error fetching {path}: {exc}')
 
-        # For local stores, return file:// URI to avoid base64 overhead
-        local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
-        if local_path and mime_type and mime_type.startswith('image/'):
-            return f'file://{local_path}'
-
-        content_bytes = await api.get_resource(path)
-
-        if mime_type:
-            if mime_type.startswith('image/'):
-                return Image(data=content_bytes, format=mime_type.split('/')[-1])
-            elif mime_type.startswith('audio/'):
-                return Audio(data=content_bytes, format=mime_type.split('/')[-1])
-
-        path_obj = plb.Path(path)
-        filename = path_obj.name
-        ext = path_obj.suffix.lstrip('.') if path_obj.suffix else None
-
-        return File(data=content_bytes, name=filename, format=ext)
+        return results
 
     except Exception as e:
         logging.error(f'Get resource failed: {e}', exc_info=True)
-        raise ToolError(f'Failed to retrieve resource: {e}')
+        raise ToolError(f'Failed to retrieve resources: {e}')
 
 
 @mcp.tool(
@@ -754,10 +769,89 @@ async def memex_note_search(
         raise ToolError(f'Note search failed: {e}')
 
 
+def _sum_tokens(nodes: list[TOCNodeDTO]) -> int:
+    total = 0
+    for node in nodes:
+        if node.token_estimate is not None:
+            total += node.token_estimate
+        total += _sum_tokens(node.children)
+    return total
+
+
+def _estimate_toc_tokens(nodes: list[TOCNodeDTO]) -> int:
+    """Estimate the serialized token cost of the TOC itself."""
+    total = 0
+    for node in nodes:
+        total += len(node.title) // 4 + 20
+        if node.summary:
+            for field in (
+                node.summary.who,
+                node.summary.what,
+                node.summary.how,
+                node.summary.when,
+                node.summary.where,
+            ):
+                if field:
+                    total += len(field) // 4
+        total += _estimate_toc_tokens(node.children)
+    return total
+
+
+async def _get_single_page_index(
+    api: Any,
+    note_id_str: str,
+    depth: int | None,
+    parent_node_id: str | None,
+) -> PageIndexDTO | str:
+    """Fetch and process a single note's page index. Raises ToolError on failure."""
+    try:
+        uuid_obj = UUID(note_id_str)
+    except ValueError:
+        raise ToolError(f'Invalid Note UUID: {note_id_str}')
+
+    page_index = await api.get_note_page_index(uuid_obj)
+    if page_index is None:
+        return (
+            f'Note {note_id_str}: No page index available. '
+            'Only notes indexed with the page_index strategy have a table of contents.'
+        )
+
+    raw_toc = page_index.get('toc', [])
+
+    if depth is not None or parent_node_id is not None:
+        from memex_core.services.notes import NoteService
+
+        raw_toc = NoteService._filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
+
+    toc = [TOCNodeDTO.model_validate(n) for n in raw_toc]
+
+    metadata_dict = page_index.get('metadata') or {}
+
+    if depth is None and parent_node_id is None:
+        total_tokens = metadata_dict.get('total_tokens') or _sum_tokens(toc) or None
+    else:
+        total_tokens = _sum_tokens(toc) or None
+
+    if depth is None and parent_node_id is None:
+        toc_cost = _estimate_toc_tokens(toc)
+        if toc_cost > 3000:
+            raise ToolError(
+                f'Note {note_id_str}: Page index has ~{toc_cost} tokens. '
+                'Call again with depth=0 to get top-level sections (H1+H2), '
+                'then drill down with parent_node_id.'
+            )
+
+    return PageIndexDTO(
+        metadata=PageMetadataDTO(**metadata_dict),
+        toc=toc,
+        total_tokens=total_tokens,
+    )
+
+
 @mcp.tool(
     name='memex_get_page_index',
     description=(
-        'Get note TOC: section titles, summaries, and node IDs. '
+        'Get note TOC: section titles, summaries, and node IDs for 1+ notes. '
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
@@ -766,7 +860,7 @@ async def memex_note_search(
 )
 async def memex_get_page_index(
     ctx: Context,
-    note_id: Annotated[str, Field(description='Note UUID.')],
+    note_ids: Annotated[list[str], Field(description='List of Note UUIDs.')],
     depth: Annotated[
         int | None,
         Field(
@@ -779,79 +873,37 @@ async def memex_get_page_index(
         Field(default=None, description='Return only the subtree under this node ID.'),
     ] = None,
 ) -> str | PageIndexDTO:
-    """Get the hierarchical page index for a note."""
+    """Get the hierarchical page index for one or more notes."""
     try:
         api = get_api(ctx)
-        try:
-            uuid_obj = UUID(note_id)
-        except ValueError:
-            raise ToolError(f'Invalid Note UUID: {note_id}')
 
-        page_index = await api.get_note_page_index(uuid_obj)
-        if page_index is None:
-            return 'No page index available for this note. Only notes indexed with the page_index strategy have a table of contents.'
+        # Single note: preserve original return type (PageIndexDTO)
+        if len(note_ids) == 1:
+            return await _get_single_page_index(api, note_ids[0], depth, parent_node_id)
 
-        raw_toc = page_index.get('toc', [])
+        # Multiple notes: process each, collect results and errors
+        sections: list[str] = []
+        errors: list[str] = []
 
-        # Apply depth/subtree filtering if requested
-        if depth is not None or parent_node_id is not None:
-            from memex_core.services.notes import NoteService
+        for nid_str in note_ids:
+            try:
+                result = await _get_single_page_index(api, nid_str, depth, parent_node_id)
+                if isinstance(result, str):
+                    errors.append(result)
+                else:
+                    sections.append(f'## Note: {nid_str}\n' + result.model_dump_json(indent=2))
+            except ToolError as te:
+                errors.append(str(te))
+            except Exception as exc:
+                errors.append(f'Note {nid_str}: {exc}')
 
-            raw_toc = NoteService._filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
+        output = '\n---\n'.join(sections) if sections else ''
 
-        toc = [TOCNodeDTO.model_validate(n) for n in raw_toc]
+        if errors:
+            err_block = '\n### Errors\n' + '\n'.join(f'- {e}' for e in errors)
+            output = (output + '\n' + err_block) if output else err_block
 
-        def _sum_tokens(nodes: list[TOCNodeDTO]) -> int:
-            total = 0
-            for node in nodes:
-                if node.token_estimate is not None:
-                    total += node.token_estimate
-                total += _sum_tokens(node.children)
-            return total
-
-        def _estimate_toc_tokens(nodes: list[TOCNodeDTO]) -> int:
-            """Estimate the serialized token cost of the TOC itself (titles + summaries + structure)."""
-            total = 0
-            for node in nodes:
-                # Title tokens + structural overhead (id, level, children keys)
-                total += len(node.title) // 4 + 20
-                # Summary tokens from SectionSummaryDTO fields
-                if node.summary:
-                    for field in (
-                        node.summary.who,
-                        node.summary.what,
-                        node.summary.how,
-                        node.summary.when,
-                        node.summary.where,
-                    ):
-                        if field:
-                            total += len(field) // 4
-                total += _estimate_toc_tokens(node.children)
-            return total
-
-        metadata_dict = page_index.get('metadata') or {}
-
-        # For unfiltered trees, prefer stored total_tokens (pre-computed at ingestion).
-        # Fall back to recursive sum for pre-existing notes without stored value.
-        if depth is None and parent_node_id is None:
-            total_tokens = metadata_dict.get('total_tokens') or _sum_tokens(toc) or None
-        else:
-            total_tokens = _sum_tokens(toc) or None
-
-        # Guard on the TOC's own serialized cost, not the note's content tokens.
-        if depth is None and parent_node_id is None:
-            toc_cost = _estimate_toc_tokens(toc)
-            if toc_cost > 3000:
-                raise ToolError(
-                    f'Page index has ~{toc_cost} tokens. '
-                    'Call again with depth=0 to get top-level sections (H1+H2), then drill down with parent_node_id.'
-                )
-
-        return PageIndexDTO(
-            metadata=PageMetadataDTO(**metadata_dict),
-            toc=toc,
-            total_tokens=total_tokens,
-        )
+        return output if output else 'No page indices found for the provided note IDs.'
 
     except ToolError:
         raise
@@ -960,8 +1012,21 @@ async def memex_get_nodes(
         if not uuid_list and errors:
             raise ToolError('\n'.join(errors))
 
-        # Batch fetch all nodes
-        nodes = await api.get_nodes(uuid_list)
+        # Batch fetch all nodes, with fallback to individual lookups
+        try:
+            nodes = await api.get_nodes(uuid_list)
+        except Exception:
+            # Fallback to individual get_node calls (e.g. batch endpoint unavailable)
+            nodes = []
+            for uid in uuid_list:
+                try:
+                    node = await api.get_node(uid)
+                    if node:
+                        nodes.append(node)
+                    else:
+                        errors.append(f'Node {uid} not found')
+                except Exception as exc:
+                    errors.append(f'Node {uid}: {exc}')
 
         # Build lookup for found nodes
         found_ids: set[UUID] = set()
