@@ -51,8 +51,8 @@ IF query asks about specific content, topics, or document lookup:
   → SEARCH
   1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
   2. FILTER: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip this.
-  3. READ: `memex_get_page_index` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
-  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resource` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
+  3. READ: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
+  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resources` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
 IF query is broad (e.g. "explain X and how it fits the architecture"):
   → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
@@ -65,7 +65,7 @@ RESPONSE FORMAT — MANDATORY for every response:
 
 RULES:
 - Only use IDs from tool output. Never fabricate IDs.
-- Filter before reading. Never call `memex_get_page_index` on unconfirmed notes.
+- Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
 - Never use `memex_recent_notes` for discovery.
 
 `memex_memory_search` strategies: `["temporal"]` chronological, `["graph"]` entity-centric, `["mental_model"]` synthesized. Default (all) is best for general queries.
@@ -78,7 +78,7 @@ RULES:
 
 @mcp.tool(
     name='memex_list_assets',
-    description='List file assets for a note. REQUIRED when has_assets is true. Feed paths to memex_get_resource.',
+    description='List file assets for a note. REQUIRED when has_assets is true. Feed paths to memex_get_resources.',
 )
 async def memex_list_assets(
     ctx: Context,
@@ -140,7 +140,7 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_index + memex_get_nodes.',
+    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_indices + memex_get_nodes.',
 )
 async def memex_read_note(
     ctx: Context,
@@ -160,7 +160,7 @@ async def memex_read_note(
             if total_tokens and total_tokens >= 500:
                 raise ToolError(
                     f'Note has {total_tokens} tokens (limit: 500). '
-                    'Use memex_get_page_index + memex_get_nodes instead.'
+                    'Use memex_get_page_indices + memex_get_nodes instead.'
                 )
 
         note = await api.get_note(uuid_obj)
@@ -300,13 +300,13 @@ async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | 
 
 
 @mcp.tool(
-    name='memex_get_resource',
+    name='memex_get_resources',
     description=(
         'Retrieve 1+ file resources (images, audio, documents) by path. '
         'Get paths from memex_list_assets. Accepts a single path or a list.'
     ),
 )
-async def memex_get_resource(
+async def memex_get_resources(
     ctx: Context,
     paths: Annotated[list[str], Field(description='Resource path(s).')],
     vault_id: Annotated[
@@ -651,7 +651,7 @@ async def memex_memory_search(
 
         output.append(
             'Tip: Use memex_get_notes_metadata for tags/token counts. '
-            'Next: memex_get_page_index → memex_get_nodes.'
+            'Next: memex_get_page_indices → memex_get_nodes.'
         )
         return '\n'.join(output)
 
@@ -715,7 +715,7 @@ async def memex_note_search(
             expand_query=expand_query,
             reason=False,
             summarize=False,
-            vault_ids=vault_ids,
+            vault_ids=cast(list[UUID | str] | None, vault_ids),
             strategies=strategies,
             after=after_dt,
             before=before_dt,
@@ -760,7 +760,7 @@ async def memex_note_search(
 
         lines.append(
             'Do NOT call memex_get_notes_metadata — metadata above is complete. '
-            'Next: memex_get_page_index → memex_get_nodes on relevant notes.'
+            'Next: memex_get_page_indices → memex_get_nodes on relevant notes.'
         )
         return '\n'.join(lines)
 
@@ -849,7 +849,7 @@ async def _get_single_page_index(
 
 
 @mcp.tool(
-    name='memex_get_page_index',
+    name='memex_get_page_indices',
     description=(
         'Get note TOC: section titles, summaries, and node IDs for 1+ notes. '
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
@@ -858,7 +858,7 @@ async def _get_single_page_index(
         'Use returned node IDs with memex_get_nodes.'
     ),
 )
-async def memex_get_page_index(
+async def memex_get_page_indices(
     ctx: Context,
     note_ids: Annotated[list[str], Field(description='List of Note UUIDs.')],
     depth: Annotated[
@@ -940,15 +940,27 @@ async def memex_get_notes_metadata(
             raise ToolError('\n'.join(errors))
 
         results: list[dict] = []
-        for uid in uuid_list:
-            try:
-                metadata = await api.get_note_metadata(uid)
-                if metadata is None:
+        try:
+            batch_results = await api.get_notes_metadata(uuid_list)
+            for meta in batch_results:
+                nid_str = meta.get('note_id') or meta.get('id')
+                results.append({'note_id': str(nid_str), **meta} if nid_str else meta)
+            # Find IDs not returned by batch
+            returned_ids = {meta.get('note_id') or meta.get('id') for meta in batch_results}
+            for uid in uuid_list:
+                if str(uid) not in returned_ids:
                     errors.append(f'{uid}: no metadata available')
-                else:
-                    results.append({'note_id': str(uid), **metadata})
-            except Exception as exc:
-                errors.append(f'{uid}: {exc}')
+        except Exception:
+            # Fallback to individual lookups
+            for uid in uuid_list:
+                try:
+                    metadata = await api.get_note_metadata(uid)
+                    if metadata is None:
+                        errors.append(f'{uid}: no metadata available')
+                    else:
+                        results.append({'note_id': str(uid), **metadata})
+                except Exception as exc:
+                    errors.append(f'{uid}: {exc}')
 
         if not results and not errors:
             return 'No metadata found for any of the provided note IDs.'
@@ -989,7 +1001,7 @@ async def memex_get_notes_metadata(
 @mcp.tool(
     name='memex_get_nodes',
     description=(
-        'Read note sections by node IDs. Get node IDs from memex_get_page_index. '
+        'Read note sections by node IDs. Get node IDs from memex_get_page_indices. '
         'Accepts 1 or more IDs — use for single and batch reads.'
     ),
 )
@@ -1049,8 +1061,10 @@ async def memex_get_nodes(
             sections.append('\n'.join(section))
 
         # Check for node IDs that weren't found (by either UUID or hash)
+        # Skip IDs already reported as errors by the fallback path
+        reported = {e.split(' ')[1] for e in errors if e.startswith('Node ')}
         for uid in uuid_list:
-            if uid not in found_ids:
+            if uid not in found_ids and str(uid) not in reported:
                 # Check if found by hash match
                 hash_matched = any(uid.hex == getattr(n, 'node_hash', None) for n in nodes)
                 if not hash_matched:

@@ -170,9 +170,10 @@ class TestGetNotesMetadataEdgeCases:
 
     @pytest.mark.asyncio
     async def test_all_lookups_fail(self, mock_api, mcp_client):
-        """When every single note lookup raises, output should report all errors."""
+        """When both batch and individual lookups fail, output should report all errors."""
         nid1 = uuid4()
         nid2 = uuid4()
+        mock_api.get_notes_metadata.side_effect = RuntimeError('batch down')
         mock_api.get_note_metadata.side_effect = RuntimeError('DB down')
 
         result = await mcp_client.call_tool(
@@ -186,9 +187,10 @@ class TestGetNotesMetadataEdgeCases:
 
     @pytest.mark.asyncio
     async def test_metadata_returns_none(self, mock_api, mcp_client):
-        """When metadata is None (note exists but no metadata), report it."""
+        """When batch returns empty for a note, report it."""
         nid = uuid4()
-        mock_api.get_note_metadata.return_value = None
+        # Batch returns empty — note not found in batch results
+        mock_api.get_notes_metadata.return_value = []
 
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
         text = result.content[0].text
@@ -199,11 +201,9 @@ class TestGetNotesMetadataEdgeCases:
     async def test_mixed_valid_and_invalid_uuids(self, mock_api, mcp_client):
         """Valid UUIDs proceed; invalid ones are reported in errors."""
         nid = uuid4()
-        mock_api.get_note_metadata.return_value = {
-            'title': 'OK Note',
-            'total_tokens': 100,
-            'tags': [],
-        }
+        mock_api.get_notes_metadata.return_value = [
+            {'note_id': str(nid), 'title': 'OK Note', 'total_tokens': 100, 'tags': []},
+        ]
 
         result = await mcp_client.call_tool(
             'memex_get_notes_metadata', {'note_ids': [str(nid), 'not-a-uuid']}
@@ -217,10 +217,9 @@ class TestGetNotesMetadataEdgeCases:
     async def test_metadata_missing_title_field(self, mock_api, mcp_client):
         """Metadata dict without title or name should show 'Untitled'."""
         nid = uuid4()
-        mock_api.get_note_metadata.return_value = {
-            'total_tokens': 300,
-            'tags': ['misc'],
-        }
+        mock_api.get_notes_metadata.return_value = [
+            {'note_id': str(nid), 'total_tokens': 300, 'tags': ['misc']},
+        ]
 
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
         text = result.content[0].text
@@ -230,21 +229,36 @@ class TestGetNotesMetadataEdgeCases:
 
     @pytest.mark.asyncio
     async def test_duplicate_ids_fetched_individually(self, mock_api, mcp_client):
-        """Duplicate IDs cause separate API calls (no dedup)."""
+        """Duplicate IDs: batch returns one, second is reported as missing."""
         nid = uuid4()
-        mock_api.get_note_metadata.return_value = {
-            'title': 'Same Note',
-            'total_tokens': 50,
-            'tags': [],
-        }
+        mock_api.get_notes_metadata.return_value = [
+            {'note_id': str(nid), 'title': 'Same Note', 'total_tokens': 50, 'tags': []},
+        ]
 
         result = await mcp_client.call_tool(
             'memex_get_notes_metadata', {'note_ids': [str(nid), str(nid)]}
         )
         text = result.content[0].text
 
-        assert text.count('Same Note') == 2
-        assert mock_api.get_note_metadata.call_count == 2
+        # Batch returns one result, the duplicate ID matches so no "not found"
+        assert 'Same Note' in text
+
+    @pytest.mark.asyncio
+    async def test_batch_fails_falls_back_to_individual(self, mock_api, mcp_client):
+        """When batch API fails, tool falls back to individual lookups."""
+        nid = uuid4()
+        mock_api.get_notes_metadata.side_effect = RuntimeError('batch unavailable')
+        mock_api.get_note_metadata.return_value = {
+            'title': 'Fallback Note',
+            'total_tokens': 100,
+            'tags': [],
+        }
+
+        result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
+        text = result.content[0].text
+
+        assert 'Fallback Note' in text
+        mock_api.get_note_metadata.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

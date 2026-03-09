@@ -82,15 +82,15 @@ via hybrid retrieval. Use the metadata to filter before reading.
 
 ## Note reading
 
-1. `memex_get_page_index` (Note ID -> table of contents)
-2. `memex_get_node` (node ID -> section text)
+1. `memex_get_page_indices` (Note IDs -> table of contents)
+2. `memex_get_nodes` (node IDs -> section text)
 3. Fallback only: `memex_read_note`
 
 ## Workflow
 
 1. Search memories first with `memex_memory_search`
 2. If needed, search source notes with `memex_note_search`
-3. For verification, use two-speed reading: `memex_get_page_index` then `memex_get_node`
+3. For verification, use two-speed reading: `memex_get_page_indices` then `memex_get_nodes`
 4. Answer the question concisely based on what you found
 """
 
@@ -121,8 +121,8 @@ def _setup_claude_workdir(server_url: str) -> str:
                     'allow': [
                         'mcp__memex__memex_memory_search',
                         'mcp__memex__memex_note_search',
-                        'mcp__memex__memex_get_page_index',
-                        'mcp__memex__memex_get_node',
+                        'mcp__memex__memex_get_page_indices',
+                        'mcp__memex__memex_get_nodes',
                         'mcp__memex__memex_read_note',
                         'mcp__memex__memex_set_active_vault',
                         'mcp__memex__memex_list_vaults',

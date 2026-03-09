@@ -179,7 +179,11 @@ async def test_mcp_list_tools(mcp_client):
     assert 'memex_get_memory_units' in names
     assert 'memex_get_nodes' in names
     assert 'memex_get_notes_metadata' in names
+    assert 'memex_get_page_indices' in names
+    assert 'memex_get_resources' in names
     # Removed tools should not exist
+    assert 'memex_get_page_index' not in names
+    assert 'memex_get_resource' not in names
     assert 'memex_reflect' not in names
     assert 'memex_get_lineage' not in names
     assert 'memex_batch_ingest' not in names

@@ -655,9 +655,21 @@ async def test_get_notes_metadata_batch(mock_api, mcp_client):
     nid1 = uuid4()
     nid2 = uuid4()
 
-    mock_api.get_note_metadata.side_effect = [
-        {'title': 'Note One', 'total_tokens': 200, 'tags': ['python'], 'has_assets': False},
-        {'title': 'Note Two', 'total_tokens': 800, 'tags': [], 'has_assets': True},
+    mock_api.get_notes_metadata.return_value = [
+        {
+            'note_id': str(nid1),
+            'title': 'Note One',
+            'total_tokens': 200,
+            'tags': ['python'],
+            'has_assets': False,
+        },
+        {
+            'note_id': str(nid2),
+            'title': 'Note Two',
+            'total_tokens': 800,
+            'tags': [],
+            'has_assets': True,
+        },
     ]
 
     result = await mcp_client.call_tool(
@@ -674,10 +686,13 @@ async def test_get_notes_metadata_batch(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_get_notes_metadata_batch_partial_failure(mock_api, mcp_client):
-    """Should report errors for individual failures without failing entirely."""
+    """Should report errors for individual failures without failing entirely.
+    Tests the fallback path: batch fails, individual calls handle partial success."""
     nid1 = uuid4()
     nid2 = uuid4()
 
+    # Batch fails, triggering individual fallback
+    mock_api.get_notes_metadata.side_effect = RuntimeError('batch unavailable')
     mock_api.get_note_metadata.side_effect = [
         {'title': 'Good Note', 'total_tokens': 100, 'tags': []},
         RuntimeError('Not found'),

@@ -46,15 +46,15 @@ def analyze_tool_pattern(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
     memory_search = 'memex_memory_search' in sequence
     note_search = 'memex_note_search' in sequence
 
-    has_page_index = 'memex_get_page_index' in sequence
-    has_get_node = 'memex_get_node' in sequence
+    has_page_index = 'memex_get_page_indices' in sequence
+    has_get_node = 'memex_get_nodes' in sequence
     two_speed = has_page_index and has_get_node
 
-    # Check ordering: page_index before get_node
+    # Check ordering: page_indices before get_nodes
     two_speed_ordered = False
     if two_speed:
-        first_page = next(i for i, s in enumerate(sequence) if s == 'memex_get_page_index')
-        first_node = next(i for i, s in enumerate(sequence) if s == 'memex_get_node')
+        first_page = next(i for i, s in enumerate(sequence) if s == 'memex_get_page_indices')
+        first_node = next(i for i, s in enumerate(sequence) if s == 'memex_get_nodes')
         two_speed_ordered = first_page < first_node
 
     return {

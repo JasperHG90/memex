@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 26 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 20 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -19,9 +19,9 @@ Follow this three-step retrieval workflow:
 1. **Search** — Pick by query type, or run both in parallel when unsure:
    - `memex_memory_search` (memory search) for broad/exploratory queries
    - `memex_note_search` (note search) for targeted document retrieval
-2. **Filter** — Call `memex_get_note_metadata` on each candidate note (cheap, ~50 tokens). Check title, tags, description to confirm relevance before reading.
-3. **Read** — Only for confirmed-relevant notes: `memex_get_page_index` (TOC + node IDs) then `memex_get_node` (section text). Fall back to `memex_read_note` only for small notes.
-4. **Avoid**: Do not use `memex_list_notes` for discovery.
+2. **Filter** — Call `memex_get_notes_metadata` on candidate notes (cheap, ~50 tokens each). Check title, tags, description to confirm relevance before reading. Skip after `memex_note_search` — metadata is already inline.
+3. **Read** — Only for confirmed-relevant notes: `memex_get_page_indices` (TOC + node IDs) then `memex_get_nodes` (section text). Fall back to `memex_read_note` only for small notes (< 500 tokens).
+4. **Avoid**: Do not use `memex_recent_notes` for discovery.
 
 ### When to use which search
 
@@ -36,11 +36,11 @@ When unsure which to use, run both in parallel and combine results (deduplicate 
 
 | Tool | Cost | Best for | Returns |
 |------|------|----------|---------|
-| `memex_get_note_metadata` | ~50 tokens | Relevance filtering — checking tags, title, dates | Metadata dict only |
-| `memex_get_page_index` + `memex_get_node` | ~500+ tokens | Section-level reading of note content | TOC tree, then section text |
+| `memex_get_notes_metadata` | ~50 tokens/note | Relevance filtering — checking tags, title, dates | Metadata for 1+ notes |
+| `memex_get_page_indices` + `memex_get_nodes` | ~500+ tokens | Section-level reading of note content | TOC tree, then section text |
 | `memex_read_note` | Full note | Reading a small note in full (fallback) | Full note content |
 
-Always call `memex_get_note_metadata` before `memex_get_page_index` to avoid wasting tokens on irrelevant notes.
+Always call `memex_get_notes_metadata` before `memex_get_page_indices` to avoid wasting tokens on irrelevant notes.
 
 ---
 
@@ -62,7 +62,7 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `before` | string | No | - | Only results before this ISO 8601 date (e.g. `2025-12-31`). |
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
-Returns formatted text with Unit IDs, Note IDs, scores, and dates.
+Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
 
 ---
 
@@ -75,57 +75,59 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `query` | string | Yes | - | The note search query. |
 | `limit` | int | No | `5` | Maximum number of notes to return. |
 | `expand_query` | bool | No | `false` | Enable multi-query expansion via LLM. |
-| `reason` | bool | No | `false` | Identify relevant sections with reasoning. |
-| `summarize` | bool | No | `false` | Synthesize an answer from retrieved sections (implies `reason=true`). |
 | `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
 | `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
-| `after` | string | No | - | Only notes created after this ISO 8601 date. |
-| `before` | string | No | - | Only notes created before this ISO 8601 date. |
+| `after` | string | No | - | Only notes after this ISO 8601 date. |
+| `before` | string | No | - | Only notes before this ISO 8601 date. |
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 
-Returns note titles, IDs, scores, snippets, relevant sections (when `reason=true`), and a synthesized answer (when `summarize=true`).
+Returns note titles, IDs, scores, snippets, and inline metadata.
 
 ---
 
 ## Note Reading Tools
 
-### `memex_get_note_metadata`
+### `memex_get_notes_metadata`
 
-Retrieve just the metadata (title, description, tags, publish date, source URI) from a note's page index without loading the full TOC tree. Use for quick identification — checking tags, title, or dates — without loading section content. If you need to browse sections, use `memex_get_page_index` instead.
+Get metadata (title, tags, token count, has_assets) for 1+ notes. Use after `memex_memory_search` to filter results before reading. Skip after `memex_note_search` (metadata already inline).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `note_id` | string | Yes | The UUID of the note. |
+| `note_ids` | string[] | Yes | List of Note UUIDs. |
 
-Returns the metadata dict, or `null` if the note has no page index (e.g., legacy notes ingested before the page index strategy).
+Returns metadata for each note, or errors for invalid/missing IDs.
 
 ---
 
-### `memex_get_page_index`
+### `memex_get_page_indices`
 
-Get the hierarchical page index (table of contents) for a note. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_node` to retrieve specific section text. If you only need the note's title, tags, or description, use `memex_get_note_metadata` instead.
+Get the hierarchical page index (table of contents) for 1+ notes. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_nodes` to retrieve specific section text. Only call after `memex_get_notes_metadata` confirms relevance.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `note_id` | string | Yes | - | The UUID of the note. |
-| `depth` | int | No | - | Max tree depth to return (0=roots only, 1=roots+children, etc). |
+| `note_ids` | string[] | Yes | - | List of Note UUIDs. |
+| `depth` | int | No | - | Max tree depth to return (0=top-level H1+H2 overview, 1+=full tree). |
 | `parent_node_id` | string | No | - | Return only the subtree under this node ID. |
+
+For large notes (total_tokens > 3000): use `depth=0` first to get top-level sections, then drill into specific sections with `parent_node_id`.
 
 ---
 
-### `memex_get_node`
+### `memex_get_nodes`
 
-Retrieve the full text content of a specific note section (node) by its ID. Node IDs are found in search results (reasoning field) or via `memex_get_page_index`.
+Read note sections by node IDs. Get node IDs from `memex_get_page_indices`. Accepts 1 or more IDs — use for single and batch reads.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `node_id` | string | Yes | The UUID of the node to retrieve. |
+| `node_ids` | string[] | Yes | List of Node UUIDs. |
+
+Returns section titles, content text, and note IDs. Falls back to individual lookups if batch endpoint is unavailable.
 
 ---
 
 ### `memex_read_note`
 
-Retrieve the full content and metadata of a note by its UUID. This is a fallback — prefer `memex_get_page_index` + `memex_get_node` to read specific sections.
+Read full note content. Only when total_tokens < 500. Otherwise use `memex_get_page_indices` + `memex_get_nodes`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -198,19 +200,20 @@ List all file assets (images, PDFs, etc.) attached to a note.
 |-----------|------|----------|-------------|
 | `note_id` | string | Yes | The UUID of the note. |
 
-Returns filenames, MIME types, and paths. Use paths with `memex_get_resource` to retrieve file content.
+Returns filenames, MIME types, and paths. Use paths with `memex_get_resources` to retrieve file content.
 
 ---
 
-### `memex_get_resource`
+### `memex_get_resources`
 
-Retrieve a file resource (image, audio, or document) by its path. Get asset paths from `memex_list_assets` (for notes) or `memex_get_lineage` (for memory units).
+Retrieve 1+ file resources (images, audio, documents) by path. Get paths from `memex_list_assets`. Accepts a single path or a list.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `path` | string | Yes | The path to the resource file. |
+| `paths` | string[] | Yes | Resource path(s). |
+| `vault_id` | string | No | Vault UUID or name. Omit for active vault. |
 
-Returns an `Image`, `Audio`, or `File` object depending on MIME type.
+Returns `Image`, `Audio`, `File`, or error strings for each path. Per-item failures don't block other resources.
 
 ---
 
@@ -228,21 +231,21 @@ List or search entities in the knowledge graph. Without a query, returns top ent
 
 ---
 
-### `memex_get_entity`
+### `memex_get_entities`
 
-Get details for a specific entity by its UUID.
+Get entity details (name, type, mention count) for 1+ entities by UUID. Use after `memex_list_entities` to get full details.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `entity_id` | string | Yes | The UUID of the entity. |
+| `entity_ids` | string[] | Yes | List of Entity UUIDs. |
 
-Returns entity name, ID, mention count, and vault.
+Returns entity name, ID, type, mention count, and vault. Falls back to individual lookups if batch endpoint is unavailable.
 
 ---
 
 ### `memex_get_entity_mentions`
 
-Get memory units that mention a specific entity.
+Get facts, observations, and events that mention an entity. Each mention links to its source note, revealing cross-note connections.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -253,25 +256,16 @@ Get memory units that mention a specific entity.
 
 ### `memex_get_entity_cooccurrences`
 
-Get entities that frequently co-occur with a given entity.
+Find entities that frequently appear alongside a given entity — the fastest way to map relationships and discover connected concepts. Returns entity names, types, and co-occurrence counts inline (no follow-up calls needed).
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `entity_id` | string | Yes | The UUID of the entity. |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `entity_id` | string | Yes | - | The UUID of the entity. |
+| `limit` | int | No | `10` | Max co-occurring entities to return. |
 
 ---
 
 ## Memory Unit Tools
-
-### `memex_get_memory_unit`
-
-Retrieve a specific memory unit by its UUID. Returns the unit text, type, status, dates, metadata, source note ID, and chunk ID.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `unit_id` | string | Yes | The UUID of the memory unit. |
-
----
 
 ### `memex_get_memory_units`
 
@@ -282,71 +276,6 @@ Batch lookup of memory units by ID. Includes contradiction links and supersessio
 | `unit_ids` | string[] | Yes | List of memory unit UUIDs. |
 
 Returns unit text, type, confidence, note ID, and supersession context for each unit.
-
----
-
-## Lineage & Provenance
-
-### `memex_get_lineage`
-
-Retrieve the provenance chain (lineage) of a memory unit, observation, note, or mental model. Shows the derivation tree from source notes through extraction to observations and mental models.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `unit_id` | string | Yes | - | The UUID of the memory unit or observation. |
-| `entity_type` | string | No | `memory_unit` | Entity type: `memory_unit`, `observation`, `note`, `mental_model`. |
-
----
-
-## Reflection
-
-### `memex_reflect`
-
-Trigger reflection on an entity to synthesize and update its mental model from recent memories. Reflection runs automatically in the background, but this tool triggers it immediately.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `entity_id` | string | Yes | - | The UUID of the entity to reflect upon. |
-| `limit` | int | No | `20` | Limit recent memories to consider. |
-| `vault_id` | string | No | Global Vault | The UUID of the vault. |
-
----
-
-## Ingestion Tools
-
-### `memex_ingest_url`
-
-Ingest content from a URL into Memex.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `url` | string | Yes | - | The URL to ingest. |
-| `vault_id` | string | No | Active vault | Target vault UUID. |
-| `background` | bool | No | `true` | Queue ingestion in background. |
-
----
-
-### `memex_batch_ingest`
-
-Asynchronously ingest multiple local files into Memex.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `file_paths` | string[] | Yes | - | List of absolute paths to local files. |
-| `vault_id` | string | No | - | UUID of the vault to ingest into. |
-| `batch_size` | int | No | `32` | Number of files to process per chunk. |
-
----
-
-### `memex_get_batch_status`
-
-Retrieve the status and results of a batch ingestion job.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `job_id` | string | Yes | The UUID of the batch job. |
-
-Returns job status, progress, processed/skipped/failed counts, created note IDs, and errors.
 
 ---
 
@@ -368,12 +297,11 @@ Returns vault names, IDs, and descriptions.
 
 ---
 
-### `memex_list_notes`
+### `memex_recent_notes`
 
-List notes in the active vault. Not recommended for discovery -- use `memex_memory_search` or `memex_note_search` instead.
+Browse recent notes. Filter by vault name or UUID. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `limit` | int | No | `20` | Maximum notes to return. |
-| `offset` | int | No | `0` | Pagination offset. |
 | `vault_id` | string | No | - | Vault UUID or name to filter by. |

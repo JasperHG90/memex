@@ -26,8 +26,8 @@ PROHIBITED:
 - `memex_recent_notes` for discovery.
 - Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
 - `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
-- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_nodes`.
-- Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resource`.
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_indices` + `memex_get_nodes`.
+- Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resources`.
 
 **Search** — pick by query type, or run both in parallel:
 - `memex_memory_search` — atomic facts, observations, mental models. Broad queries.
@@ -38,12 +38,12 @@ PROHIBITED:
 - After `memex_note_search`: use inline metadata directly.
 
 **Read** — only confirmed-relevant notes:
-1. `memex_get_page_index` (accepts 1+ note IDs) → TOC + node IDs
+1. `memex_get_page_indices` (accepts 1+ note IDs) → TOC + node IDs
 2. `memex_get_nodes` (batch) → section content
 3. `memex_read_note` → only when total_tokens < 500
 
 **Assets** — required when `has_assets: true`:
-- `memex_list_assets` → `memex_get_resource` (accepts 1+ paths) → render inline.
+- `memex_list_assets` → `memex_get_resources` (accepts 1+ paths) → render inline.
 
 ### Citations
 
