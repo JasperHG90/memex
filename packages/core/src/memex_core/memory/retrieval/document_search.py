@@ -525,14 +525,10 @@ class NoteSearchEngine:
         doc_ids = list(doc_to_chunks.keys())
         doc_stmt = select(Note).where(col(Note.id).in_(doc_ids))
         if after is not None:
-            from sqlalchemy import func
-
             date_col = func.coalesce(Note.publish_date, Note.created_at)
             doc_stmt = doc_stmt.where(date_col >= after)
         if before is not None:
-            from sqlalchemy import func as sa_func
-
-            date_col_b = sa_func.coalesce(Note.publish_date, Note.created_at)
+            date_col_b = func.coalesce(Note.publish_date, Note.created_at)
             doc_stmt = doc_stmt.where(date_col_b <= before)
         if tags:
             # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'
