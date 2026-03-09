@@ -186,9 +186,13 @@ class NoteService:
             toc = subtree
 
         if depth is not None and depth >= 0:
+            # depth=0 → roots + direct children (H1 + H2 overview)
+            # depth=1 → full tree (no trimming)
+            # depth=N (N>=1) → full tree
+            effective_depth = depth + 1
 
             def _trim_depth(nodes: list[dict[str, Any]], current: int) -> list[dict[str, Any]]:
-                if current >= depth:
+                if current > effective_depth:
                     return []
                 result = []
                 for node in nodes:
@@ -197,7 +201,9 @@ class NoteService:
                     result.append(trimmed)
                 return result
 
-            toc = _trim_depth(toc, 0)
+            if depth == 0:
+                toc = _trim_depth(toc, 0)
+            # depth >= 1: return full tree (no trimming needed)
 
         return toc
 
