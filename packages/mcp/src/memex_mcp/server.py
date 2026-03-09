@@ -1298,10 +1298,10 @@ async def memex_get_entity_mentions(
         lines = [f'Found {len(mentions)} mention(s):\n']
         for i, m in enumerate(mentions, 1):
             unit = m.get('unit')
-            note = m.get('document')
+            note = m.get('note') or m.get('document')
             text = str(unit.text if unit else '')[:200]
             unit_id = unit.id if unit else 'N/A'
-            note_id = note.id if note else 'N/A'
+            note_id = note.id if note else (getattr(unit, 'note_id', None) or 'N/A')
             fact_type = unit.fact_type if unit else 'unknown'
             lines.append(
                 f'{i}. [Type: {fact_type}] [Unit ID: {unit_id}] [Note ID: {note_id}]\n   {text}\n'
@@ -1350,13 +1350,14 @@ async def memex_get_entity_cooccurrences(
                 other_name = c.get('entity_1_name', '')
                 other_type = c.get('entity_1_type', '')
                 other_id = e1
+            co_label = 'co-occurrence' if count == 1 else 'co-occurrences'
             if other_name:
                 lines.append(
                     f'{i}. **{other_name}** ({other_type}{", " if other_type else ""}'
-                    f'ID: {other_id}) — {count} co-occurrences'
+                    f'ID: {other_id}) — {count} {co_label}'
                 )
             else:
-                lines.append(f'{i}. Entity ID: {other_id} — {count} co-occurrences')
+                lines.append(f'{i}. Entity ID: {other_id} — {count} {co_label}')
 
         return '\n'.join(lines)
 

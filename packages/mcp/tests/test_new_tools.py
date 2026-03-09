@@ -186,6 +186,47 @@ async def test_get_entity_mentions_success(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_get_entity_mentions_with_note_key(mock_api, mcp_client):
+    """When API returns 'note' key (remote client), note_id should still resolve."""
+    eid = uuid4()
+    uid = uuid4()
+    nid = uuid4()
+    unit = type(
+        'Unit',
+        (),
+        {'id': str(uid), 'text': 'Data flows here', 'fact_type': 'world', 'note_id': str(nid)},
+    )()
+    doc = type('Doc', (), {'id': str(nid)})()
+    mock_api.get_entity_mentions.return_value = [{'unit': unit, 'note': doc}]
+
+    result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    assert str(nid) in text
+    assert 'N/A' not in text
+
+
+@pytest.mark.asyncio
+async def test_get_entity_mentions_no_document_falls_back_to_unit_note_id(mock_api, mcp_client):
+    """When neither 'note' nor 'document' key exists, fall back to unit.note_id."""
+    eid = uuid4()
+    uid = uuid4()
+    nid = uuid4()
+    unit = type(
+        'Unit',
+        (),
+        {'id': str(uid), 'text': 'Orphan mention', 'fact_type': 'event', 'note_id': str(nid)},
+    )()
+    mock_api.get_entity_mentions.return_value = [{'unit': unit}]
+
+    result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    assert str(nid) in text
+    assert 'N/A' not in text
+
+
+@pytest.mark.asyncio
 async def test_get_entity_mentions_empty(mock_api, mcp_client):
     eid = uuid4()
     mock_api.get_entity_mentions.return_value = []
