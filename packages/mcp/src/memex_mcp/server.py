@@ -55,19 +55,21 @@ IF query asks about specific content, topics, or document lookup:
   1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
   2. FILTER: after `memex_memory_search`, call `memex_get_note_metadata` per Note ID. After `memex_note_search`, metadata is inline — skip this.
   3. READ: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
+  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resource` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
 IF query is broad (e.g. "explain X and how it fits the architecture"):
   → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
 
-ASSETS — REQUIRED when has_assets is true:
-  `memex_list_assets` → `memex_get_resource` → use images as visual input, reproduce as Mermaid/ASCII/text in response.
-  NEVER create diagrams without first checking assets.
+RESPONSE FORMAT — MANDATORY for every response:
+- Cite every claim from Memex with numbered references [1], [2], etc. inline.
+- End response with a reference list. Each entry uses a type prefix:
+  `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID
+- Example: `[1] [note] Detailing the Sys Layer architecture — 2eb202ed-bee6-7b2a-f0b9-917e8d5dd6f0`
 
 RULES:
 - Only use IDs from tool output. Never fabricate IDs.
 - Filter before reading. Never call `memex_get_page_index` on unconfirmed notes.
 - Never use `memex_list_notes` for discovery.
-- Cite sources inline [1], [2]. Reference list at end: `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID.
 
 `memex_memory_search` strategies: `["temporal"]` chronological, `["graph"]` entity-centric, `["mental_model"]` synthesized. Default (all) is best for general queries.
 """.strip(),

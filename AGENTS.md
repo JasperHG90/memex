@@ -134,25 +134,26 @@ IF query asks about specific content or document lookup:
 - **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
 - **Filter**: after `memex_memory_search`, call `memex_get_note_metadata`. After `memex_note_search`, metadata is inline — skip.
 - **Read**: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
+- **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → `memex_get_resource` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER skip this step.
 
 IF query is broad: run entity exploration AND search in parallel.
-
-**Assets** — required when `has_assets: true`:
-- `memex_list_assets` → `memex_get_resource` → render inline.
 
 PROHIBITED:
 - `memex_list_notes` for discovery.
 - Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
 - `memex_get_note_metadata` after `memex_note_search` (metadata already inline).
 - `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_node`.
-- Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resource`.
+- Creating diagrams without first checking assets via `memex_list_assets` → `memex_get_resource`.
+- Presenting Memex information without citations.
 
-### Citations
+### Citations — MANDATORY
 
-When presenting information from Memex, use numbered citations [1], [2] etc. inline. Add a reference list at the end with the source type prefix:
-- `[note]` — title + note ID
-- `[memory]` — title + memory ID + source note ID
-- `[asset]` — filename + note ID
+Every response using Memex data MUST include:
+1. Inline numbered references [1], [2] on every claim from Memex.
+2. Reference list at end of response. Each entry uses a type prefix:
+   - `[note]` — title + note ID
+   - `[memory]` — title + memory ID + source note ID
+   - `[asset]` — filename + note ID
 
 ### Slash commands
 
