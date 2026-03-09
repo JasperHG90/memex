@@ -56,6 +56,16 @@ STEP 3 — READ (only confirmed-relevant notes):
   - `memex_get_node` (parallel) → read specific sections by node ID.
   - `memex_read_note` → fallback only, for very short notes.
 
+STEP 4 — ASSETS
+When a note has has_assets: true or lists supporting_files:
+
+1. Consider if the assets will help in answering the question.
+2. Use memex_list_assets to enumerate attached files.
+3. Use memex_get_resource to retrieve images/documents by path.
+4. Render images inline using image-preview blocks.
+
+Never claim visual content is unavailable without first attempting retrieval.
+
 RULES:
 - Always filter before reading. Never call `memex_get_page_index` on notes you haven't confirmed relevant.
 - Never use `memex_list_notes` for discovery.
