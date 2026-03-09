@@ -47,8 +47,8 @@ async def test_ingest_batch_internal_success(api, mock_metastore, mock_filestore
         # Verify idempotency check called
         mock_session.exec.assert_called()
 
-        # Verify assets saved
-        mock_filestore.save.assert_called()
+        # Verify assets saved via transaction proxy
+        mock_txn.save_file.assert_called()
 
         # Verify memory.retain called
         api.memory.retain.assert_called()

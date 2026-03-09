@@ -53,7 +53,7 @@ class AsyncTransaction:
                 await self._rollback()
                 return False
             await self.db_session.commit()
-            await self.fs.commit_staging()
+            await self.fs.commit_staging(self.txn_id)
         except Exception as e:
             await self._rollback()
             raise e
@@ -61,6 +61,14 @@ class AsyncTransaction:
             if self._session:
                 await self._session.close()
                 self._session = None
+
+    async def save_file(self, key: str, data: bytes) -> None:
+        """Save a file within this transaction's staging context."""
+        await self.fs.save(key, data, txn_id=self.txn_id)
+
+    async def delete_file(self, key: str, *, recursive: bool = False) -> None:
+        """Delete a file within this transaction's staging context."""
+        await self.fs.delete(key, txn_id=self.txn_id, recursive=recursive)
 
     async def _rollback(self):
         """Rollback both DB and File operations."""
@@ -73,4 +81,4 @@ class AsyncTransaction:
                 pass
 
         # Rollback Files
-        await self.fs.rollback_staging()
+        await self.fs.rollback_staging(self.txn_id)

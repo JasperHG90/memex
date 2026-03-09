@@ -224,7 +224,7 @@ ingested_at: {now}
 
             for filename, content in note._files.items():
                 full_asset_key = f'{asset_path}/{filename}'
-                await self.filestore.save(full_asset_key, content)
+                await txn.save_file(full_asset_key, content)
                 asset_files_list.append(full_asset_key)
 
             # 5. Extract Facts (MS)
@@ -358,7 +358,7 @@ ingested_at: {now}
                                 raw_content = content
 
                             full_asset_key = f'{asset_path}/{filename}'
-                            await self.filestore.save(full_asset_key, raw_content)
+                            await txn.save_file(full_asset_key, raw_content)
                             asset_files_list.append(full_asset_key)
 
                         resolved_title = await resolve_document_title(

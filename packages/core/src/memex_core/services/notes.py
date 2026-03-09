@@ -153,7 +153,7 @@ class NoteService:
                 from memex_core.memory.sql_models import Vault
 
                 metadata = dict(metadata)
-                metadata.setdefault('has_assets', bool(doc.assets))
+                metadata['has_assets'] = bool(doc.assets)
                 metadata.setdefault('vault_id', str(doc.vault_id))
                 vault = await session.get(Vault, doc.vault_id)
                 if vault:
@@ -329,9 +329,9 @@ class NoteService:
             # Stage filestore deletes (deferred until commit)
             if doc.assets:
                 for asset_path in doc.assets:
-                    await self.filestore.delete(asset_path)
+                    await txn.delete_file(asset_path)
             if doc.filestore_path:
-                await self.filestore.delete(doc.filestore_path, recursive=True)
+                await txn.delete_file(doc.filestore_path, recursive=True)
 
             # ORM cascades handle memory_units, chunks, and their children
             await txn.db_session.delete(doc)
