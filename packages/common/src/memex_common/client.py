@@ -324,6 +324,15 @@ class RemoteMemexAPI:
                 return None
             raise
 
+    async def get_nodes(self, node_ids: list[UUID]) -> list[NodeDTO]:
+        """Get multiple note nodes by ID."""
+        result = await self._post('nodes/batch', {'node_ids': [str(n) for n in node_ids]})
+        return [NodeDTO(**d) for d in result]
+
+    async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
+        """Get metadata for multiple notes."""
+        return await self._post('notes/metadata/batch', {'note_ids': [str(n) for n in note_ids]})
+
     async def delete_note(self, note_id: UUID) -> bool:
         """Delete a note and all associated data."""
         try:
@@ -450,6 +459,11 @@ class RemoteMemexAPI:
         result = await self._get(f'entities/{entity_id}')
         return EntityDTO(**result)
 
+    async def get_entities(self, entity_ids: list[UUID]) -> list[EntityDTO]:
+        """Get multiple entities by ID."""
+        result = await self._post('entities/batch', {'entity_ids': [str(e) for e in entity_ids]})
+        return [EntityDTO(**e) for e in result]
+
     async def get_entity_mentions(
         self,
         entity_id: UUID | str,
@@ -500,15 +514,16 @@ class RemoteMemexAPI:
         entity_id: UUID | str,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Get co-occurrence edges for an entity."""
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {'limit': limit}
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
-        return await self._get(f'entities/{entity_id}/cooccurrences', params=params or None)
+        return await self._get(f'entities/{entity_id}/cooccurrences', params=params)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
         """Get memory unit details."""

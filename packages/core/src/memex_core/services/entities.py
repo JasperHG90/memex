@@ -68,11 +68,14 @@ class EntityService(BaseService):
                 yield row[0]
 
     async def get_entity_cooccurrences(
-        self, entity_id: UUID | str, vault_ids: list[UUID] | None = None
+        self,
+        entity_id: UUID | str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 50,
     ) -> list[Any]:
         """Get co-occurrence edges for an entity."""
         from sqlalchemy.orm import selectinload
-        from sqlmodel import or_, select
+        from sqlmodel import desc, or_, select
 
         from memex_core.memory.sql_models import EntityCooccurrence
 
@@ -93,6 +96,7 @@ class EntityService(BaseService):
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
+            stmt = stmt.order_by(desc(EntityCooccurrence.cooccurrence_count)).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def get_bulk_cooccurrences(
@@ -139,6 +143,15 @@ class EntityService(BaseService):
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
             return await session.get(Entity, eid)
+
+    async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
+        """Get multiple entities by ID."""
+        from memex_core.memory.sql_models import Entity
+        from sqlmodel import select
+
+        async with self.metastore.session() as session:
+            stmt = select(Entity).where(col(Entity.id).in_(entity_ids))
+            return list((await session.exec(stmt)).all())
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """

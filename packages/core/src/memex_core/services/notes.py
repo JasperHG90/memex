@@ -243,6 +243,38 @@ class NoteService:
                 return None
             return NodeDTO.model_validate(node)
 
+    async def get_nodes(self, node_ids: list[UUID]) -> list[NodeDTO]:
+        """Retrieve multiple document nodes by ID.
+
+        Tries primary-key lookup first, falls back to querying by
+        ``node_hash`` so that MD5 content-hash IDs from page indexes
+        also resolve correctly.
+        """
+        from sqlmodel import or_, select
+
+        from memex_core.memory.sql_models import Node
+
+        async with self.metastore.session() as session:
+            hex_ids = [nid.hex for nid in node_ids]
+            stmt = select(Node).where(
+                or_(col(Node.id).in_(node_ids), col(Node.node_hash).in_(hex_ids))
+            )
+            results = (await session.exec(stmt)).all()
+            return [NodeDTO.model_validate(n) for n in results]
+
+    async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
+        """Return metadata for multiple notes. Skips notes that are not found."""
+        results: list[dict[str, Any]] = []
+        for nid in note_ids:
+            try:
+                meta = await self.get_note_metadata(nid)
+                if meta:
+                    meta['note_id'] = str(nid)
+                    results.append(meta)
+            except Exception:
+                pass
+        return results
+
     async def list_notes(
         self,
         limit: int = 100,

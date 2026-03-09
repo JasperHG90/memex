@@ -608,6 +608,14 @@ class MemexAPI:
         """Retrieve a specific document node. Delegates to NoteService."""
         return await self._notes.get_node(node_id)
 
+    async def get_nodes(self, node_ids: list[UUID]) -> list[NodeDTO]:
+        """Retrieve multiple document nodes. Delegates to NoteService."""
+        return await self._notes.get_nodes(node_ids)
+
+    async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
+        """Retrieve metadata for multiple notes. Delegates to NoteService."""
+        return await self._notes.get_notes_metadata(note_ids)
+
     async def list_notes(
         self,
         limit: int = 100,
@@ -647,10 +655,15 @@ class MemexAPI:
             yield entity
 
     async def get_entity_cooccurrences(
-        self, entity_id: UUID | str, vault_ids: list[UUID] | None = None
+        self,
+        entity_id: UUID | str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 50,
     ) -> list[Any]:
         """Get co-occurrence edges for an entity. Delegates to EntityService."""
-        return await self._entities.get_entity_cooccurrences(entity_id, vault_ids=vault_ids)
+        return await self._entities.get_entity_cooccurrences(
+            entity_id, vault_ids=vault_ids, limit=limit
+        )
 
     async def get_bulk_cooccurrences(
         self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
@@ -667,6 +680,10 @@ class MemexAPI:
     async def get_entity(self, entity_id: UUID | str) -> Any | None:
         """Get an entity by ID. Delegates to EntityService."""
         return await self._entities.get_entity(entity_id)
+
+    async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
+        """Get multiple entities by ID. Delegates to EntityService."""
+        return await self._entities.get_entities(entity_ids)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
         """Get a memory unit by ID. Delegates to StatsService."""

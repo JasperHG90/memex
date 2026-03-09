@@ -118,6 +118,38 @@ async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, 'Failed to get note')
 
 
+class BatchNodeRequest(BaseModel):
+    node_ids: list[UUID]
+
+
+@router.post('/nodes/batch', response_model=list[NodeDTO])
+async def get_nodes_batch(
+    request: Annotated[BatchNodeRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> list[NodeDTO]:
+    """Get multiple note nodes by ID."""
+    try:
+        return await api.get_nodes(request.node_ids)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get nodes batch')
+
+
+class BatchNoteMetadataRequest(BaseModel):
+    note_ids: list[UUID]
+
+
+@router.post('/notes/metadata/batch')
+async def get_notes_metadata_batch(
+    request: Annotated[BatchNoteMetadataRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Get metadata for multiple notes."""
+    try:
+        return await api.get_notes_metadata(request.note_ids)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get notes metadata batch')
+
+
 @router.get('/nodes/{node_id}', response_model=NodeDTO)
 async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) -> NodeDTO:
     """Get a specific note node by its ID."""
