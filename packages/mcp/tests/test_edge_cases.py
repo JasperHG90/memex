@@ -911,5 +911,182 @@ class TestUUIDFormats:
             await mcp_client.call_tool('memex_get_nodes', {'node_ids': ['']})
 
 
-# Need AsyncMock for vault resolution test
-from unittest.mock import AsyncMock
+# Need AsyncMock / MagicMock for vault resolution + resource tests
+from unittest.mock import AsyncMock, MagicMock
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SVG resource handling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestSVGResourceHandling:
+    """SVGs should be returned as File objects, not Image objects."""
+
+    @pytest.mark.asyncio
+    async def test_svg_local_path_not_returned_as_file_uri(self, mock_api, mcp_client):
+        """SVG with local path should NOT get file:// URI (that's for raster images only)."""
+        mock_api.get_resource_path = MagicMock(return_value='/data/images/diagram.svg')
+        mock_api.get_resource.return_value = b'<svg>...</svg>'
+
+        result = await mcp_client.call_tool(
+            'memex_get_resources', {'paths': ['images/diagram.svg']}
+        )
+
+        # Should fall through to get_resource and return as File, not file:// URI
+        contents = result.content
+        assert len(contents) >= 1
+        # Should NOT be a plain text file:// URI
+        text_contents = [c for c in contents if hasattr(c, 'text')]
+        for tc in text_contents:
+            assert 'file://' not in tc.text or 'Error' in tc.text
+
+    @pytest.mark.asyncio
+    async def test_svg_remote_returned_as_file_not_image(self, mock_api, mcp_client):
+        """SVG without local path should be returned as File (EmbeddedResource), not Image."""
+        mock_api.get_resource_path = MagicMock(return_value=None)
+        mock_api.get_resource.return_value = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+
+        result = await mcp_client.call_tool('memex_get_resources', {'paths': ['assets/chart.svg']})
+
+        contents = result.content
+        assert len(contents) >= 1
+        # Should be an EmbeddedResource (File), not an Image
+        resource_contents = [c for c in contents if c.type == 'resource']
+        image_contents = [c for c in contents if c.type == 'image']
+        assert len(resource_contents) == 1, 'SVG should be returned as EmbeddedResource'
+        assert len(image_contents) == 0, 'SVG should NOT be returned as Image'
+
+    @pytest.mark.asyncio
+    async def test_png_still_returned_as_image_uri(self, mock_api, mcp_client):
+        """Raster images (PNG) should still get file:// URI treatment."""
+        mock_api.get_resource_path = MagicMock(return_value='/data/images/photo.png')
+
+        result = await mcp_client.call_tool('memex_get_resources', {'paths': ['images/photo.png']})
+
+        texts = [c.text for c in result.content if hasattr(c, 'text')]
+        combined = ' '.join(texts)
+        assert 'file:///data/images/photo.png' in combined
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Note title fallback — list_assets and read_note
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestNoteTitleFallback:
+    """note.title should take precedence over doc_metadata for display name."""
+
+    @pytest.mark.asyncio
+    async def test_list_assets_uses_note_title(self, mock_api, mcp_client):
+        """memex_list_assets should prefer note.title over doc_metadata."""
+        doc_id = uuid4()
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title='Extracted Title',
+            doc_metadata={'name': 'Original Filename.md'},
+            assets=['images/photo.png'],
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert 'Extracted Title' in text
+        assert 'Original Filename.md' not in text
+
+    @pytest.mark.asyncio
+    async def test_list_assets_falls_back_to_doc_metadata(self, mock_api, mcp_client):
+        """When note.title is None, use doc_metadata name."""
+        doc_id = uuid4()
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title=None,
+            doc_metadata={'name': 'From Metadata'},
+            assets=['images/photo.png'],
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert 'From Metadata' in text
+
+    @pytest.mark.asyncio
+    async def test_list_assets_untitled_when_all_empty(self, mock_api, mcp_client):
+        """When both note.title and doc_metadata are empty, show 'Untitled'."""
+        doc_id = uuid4()
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title=None,
+            doc_metadata={},
+            assets=['images/photo.png'],
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert 'Untitled' in text
+
+    @pytest.mark.asyncio
+    async def test_read_note_uses_note_title(self, mock_api, mcp_client):
+        """memex_read_note should prefer note.title over doc_metadata."""
+        doc_id = uuid4()
+        mock_api.get_note_metadata.return_value = {'total_tokens': 100}
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title='Page Index Title',
+            doc_metadata={'name': 'raw-file.md', 'title': 'Meta Title'},
+            original_text='Body text.',
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert '# Page Index Title' in text
+        assert 'raw-file.md' not in text
+
+    @pytest.mark.asyncio
+    async def test_read_note_falls_back_to_doc_metadata_title(self, mock_api, mcp_client):
+        """When note.title is None, use doc_metadata['title']."""
+        doc_id = uuid4()
+        mock_api.get_note_metadata.return_value = {'total_tokens': 50}
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title=None,
+            doc_metadata={'title': 'Fallback Title'},
+            original_text='Content.',
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert '# Fallback Title' in text
+
+    @pytest.mark.asyncio
+    async def test_read_note_empty_string_title_falls_through(self, mock_api, mcp_client):
+        """Empty string title should be falsy and fall through to doc_metadata."""
+        doc_id = uuid4()
+        mock_api.get_note_metadata.return_value = {'total_tokens': 50}
+        mock_api.get_note.return_value = NoteDTO(
+            id=doc_id,
+            title='',
+            doc_metadata={'name': 'Actual Name'},
+            original_text='Content.',
+            vault_id=uuid4(),
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        )
+
+        result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
+        text = result.content[0].text
+
+        assert '# Actual Name' in text
+        assert '# Untitled' not in text
