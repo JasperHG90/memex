@@ -6,11 +6,14 @@ import base64
 import hashlib
 import logging
 import pathlib as plb
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
 import dspy
+import yaml
+from dateutil import parser as dateutil_parser
 from sqlmodel import col
 
 from memex_core.config import MemexConfig
@@ -26,6 +29,55 @@ from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.storage.transaction import AsyncTransaction
 
 logger = logging.getLogger('memex.core.services.ingestion')
+
+FRONTMATTER_PATTERN = re.compile(r'\A---\s*\n(?P<yaml>.*?)\n---\s*\n', re.DOTALL)
+DATE_FIELD_NAMES = (
+    'date',
+    'publish_date',
+    'published_at',
+    'created_date',
+    'created',
+    'published',
+)
+
+
+def _parse_frontmatter_date(val: Any) -> datetime | None:
+    """Parse a frontmatter date value into a timezone-aware UTC datetime."""
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=timezone.utc)
+        return val
+    if isinstance(val, date):
+        return datetime(val.year, val.month, val.day, tzinfo=timezone.utc)
+    if isinstance(val, str):
+        try:
+            dt = dateutil_parser.parse(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+def _extract_date_from_frontmatter(content: str) -> datetime | None:
+    """Parse YAML frontmatter for date fields. Returns timezone-aware datetime or None."""
+    match = FRONTMATTER_PATTERN.match(content)
+    if not match:
+        return None
+    try:
+        fm = yaml.safe_load(match.group('yaml'))
+    except Exception:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    for field in DATE_FIELD_NAMES:
+        val = fm.get(field)
+        if val is not None:
+            parsed = _parse_frontmatter_date(val)
+            if parsed is not None:
+                return parsed
+    return None
 
 
 class IngestionService:
@@ -238,9 +290,21 @@ ingested_at: {now}
                 vault_id=target_vault_id,
             )
 
+            # Resolve event_date: passed value -> frontmatter -> LLM -> now()
+            if event_date is None:
+                event_date = _extract_date_from_frontmatter(content_text)
+            if event_date is None:
+                async with self.metastore.session() as date_session:
+                    event_date = await extract_document_date(
+                        content_text, self.lm, date_session, target_vault_id
+                    )
+                    await date_session.commit()
+            if event_date is None:
+                event_date = datetime.now(timezone.utc)
+
             retain_content = RetainContent(
                 content=content_text,
-                event_date=event_date or datetime.now(timezone.utc),
+                event_date=event_date,
                 payload={
                     'source': 'note',
                     'note_name': resolved_title,
@@ -369,9 +433,14 @@ ingested_at: {now}
                             vault_id=target_vault_id,
                         )
 
+                        # Extract date from frontmatter, fall back to now()
+                        batch_event_date = _extract_date_from_frontmatter(decoded_content)
+                        if batch_event_date is None:
+                            batch_event_date = datetime.now(timezone.utc)
+
                         retain_content = RetainContent(
                             content=decoded_content,
-                            event_date=datetime.now(timezone.utc),
+                            event_date=batch_event_date,
                             payload={
                                 'source': 'batch_note',
                                 'note_name': resolved_title,

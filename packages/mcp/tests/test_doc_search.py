@@ -1,5 +1,6 @@
-"""Tests for the memex_note_search MCP tool."""
+"""Tests for the memex_note_search MCP tool and memex_read_note."""
 
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -153,3 +154,62 @@ async def test_memex_note_search_tip_always_present(mock_api, mcp_client):
     text = result.content[0].text
 
     assert 'memex_get_page_indices' in text
+
+
+# --- memex_read_note force parameter tests ---
+
+
+@pytest.mark.asyncio
+async def test_memex_read_note_force_bypasses_token_limit(mock_api, mcp_client):
+    """force=True should return full content even for >500 token notes."""
+    note_id = str(uuid4())
+    mock_api.get_note_metadata.return_value = {'total_tokens': 1000}
+    mock_api.get_note.return_value = MagicMock(
+        id=note_id,
+        vault_id='test',
+        title='Big Note',
+        doc_metadata={'name': 'Big Note'},
+        original_text='Content of the note',
+        created_at='2025-01-01',
+        assets=[],
+    )
+    result = await mcp_client.call_tool('memex_read_note', {'note_id': note_id, 'force': True})
+    assert 'Big Note' in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_memex_read_note_without_force_blocks_large_note(mock_api, mcp_client):
+    """Without force, >500 token notes should raise ToolError."""
+    note_id = str(uuid4())
+    mock_api.get_note_metadata.return_value = {'total_tokens': 1000}
+
+    with pytest.raises(ToolError, match='tokens'):
+        await mcp_client.call_tool('memex_read_note', {'note_id': note_id})
+
+
+@pytest.mark.asyncio
+async def test_memex_read_note_force_false_blocks_large_note(mock_api, mcp_client):
+    """Explicit force=False should still block large notes."""
+    note_id = str(uuid4())
+    mock_api.get_note_metadata.return_value = {'total_tokens': 1000}
+
+    with pytest.raises(ToolError, match='tokens'):
+        await mcp_client.call_tool('memex_read_note', {'note_id': note_id, 'force': False})
+
+
+@pytest.mark.asyncio
+async def test_memex_read_note_small_note_no_force_needed(mock_api, mcp_client):
+    """Notes under 500 tokens should work without force."""
+    note_id = str(uuid4())
+    mock_api.get_note_metadata.return_value = {'total_tokens': 200}
+    mock_api.get_note.return_value = MagicMock(
+        id=note_id,
+        vault_id='test',
+        title='Small Note',
+        doc_metadata={'name': 'Small Note'},
+        original_text='Short content',
+        created_at='2025-01-01',
+        assets=[],
+    )
+    result = await mcp_client.call_tool('memex_read_note', {'note_id': note_id})
+    assert 'Small Note' in result.content[0].text
