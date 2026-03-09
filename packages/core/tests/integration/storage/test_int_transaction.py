@@ -51,8 +51,8 @@ async def test_transaction_commit(
                 text("INSERT INTO trans_test (id, name) VALUES (1, 'success')")
             )
 
-            # FS Action
-            await store.save('txn_file.txt', b'txn content')
+            # FS Action — use txn proxy
+            await txn.save_file('txn_file.txt', b'txn content')
 
             # Verify FS is staged
             assert (tmp_path / 'txn_file.txt').exists() is False
@@ -91,7 +91,7 @@ async def test_transaction_rollback(
                 await txn.db_session.exec(
                     text("INSERT INTO trans_test_rb (id, name) VALUES (1, 'fail')")
                 )
-                await store.save('fail_file.txt', b'should be gone')
+                await txn.save_file('fail_file.txt', b'should be gone')
                 raise RuntimeError('Force Rollback')
         except RuntimeError:
             pass
@@ -105,3 +105,41 @@ async def test_transaction_rollback(
         # Check FS
         assert (tmp_path / 'fail_file.txt').exists() is False
         assert (tmp_path / 'fail_file.txt.stage_txn-rollback').exists() is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transactions(
+    metastore_config: PostgresMetaStoreConfig, store_config: LocalFileStoreConfig, tmp_path: Path
+) -> None:
+    """Two concurrent transactions must both commit their files."""
+    engine = AsyncPostgresMetaStoreEngine(metastore_config)
+    store = LocalAsyncFileStore(store_config)
+
+    async with engine.open():
+        async with engine.session() as setup_session:
+            await setup_session.exec(
+                text('CREATE TABLE IF NOT EXISTS trans_test_cc (id INT PRIMARY KEY, name TEXT)')
+            )
+            await setup_session.exec(text('TRUNCATE trans_test_cc'))
+            await setup_session.commit()
+
+        # Start both transactions
+        txn_a = AsyncTransaction(engine, store, 'txn-a')
+        txn_b = AsyncTransaction(engine, store, 'txn-b')
+
+        async with txn_a as a:
+            await a.save_file('a.txt', b'aaa')
+            await a.db_session.exec(text("INSERT INTO trans_test_cc (id, name) VALUES (1, 'a')"))
+
+            # Start B while A is still open
+            async with txn_b as b:
+                await b.save_file('b.txt', b'bbb')
+                await b.db_session.exec(
+                    text("INSERT INTO trans_test_cc (id, name) VALUES (2, 'b')")
+                )
+
+        # Both files should exist at final paths
+        assert (tmp_path / 'a.txt').exists()
+        assert (tmp_path / 'b.txt').exists()
+        assert await store.load('a.txt') == b'aaa'
+        assert await store.load('b.txt') == b'bbb'

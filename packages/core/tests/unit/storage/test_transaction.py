@@ -44,6 +44,8 @@ def mock_fs() -> AsyncMock:
     fs.begin_staging = Mock()  # Synchronous method
     fs.commit_staging = AsyncMock()
     fs.rollback_staging = AsyncMock()
+    fs.save = AsyncMock()
+    fs.delete = AsyncMock()
     return fs
 
 
@@ -81,7 +83,7 @@ async def test_transaction_success(
 
     # Verify commit actions on exit
     mock_session.commit.assert_awaited_once()
-    mock_fs.commit_staging.assert_awaited_once()
+    mock_fs.commit_staging.assert_awaited_once_with('test-txn-id')
     mock_session.close.assert_awaited_once()
 
 
@@ -113,7 +115,7 @@ async def test_transaction_body_failure(
 
     # Verify rollback actions
     mock_session.rollback.assert_awaited_once()
-    mock_fs.rollback_staging.assert_awaited_once()
+    mock_fs.rollback_staging.assert_awaited_once_with('test-txn-id')
     mock_session.close.assert_awaited_once()
 
     # Should NOT commit
@@ -134,7 +136,7 @@ async def test_transaction_db_commit_failure(
     # Verify rollback actions
     mock_session.commit.assert_awaited_once()
     mock_session.rollback.assert_awaited_once()
-    mock_fs.rollback_staging.assert_awaited_once()
+    mock_fs.rollback_staging.assert_awaited_once_with('test-txn-id')
     mock_session.close.assert_awaited_once()
 
     # FS commit should be skipped
@@ -155,7 +157,7 @@ async def test_transaction_file_commit_failure(
     mock_session.commit.assert_awaited_once()
     # Since commit succeeded, rollback is called in exception handler
     mock_session.rollback.assert_awaited_once()
-    mock_fs.rollback_staging.assert_awaited_once()
+    mock_fs.rollback_staging.assert_awaited_once_with('test-txn-id')
     mock_session.close.assert_awaited_once()
 
 
@@ -172,5 +174,23 @@ async def test_rollback_swallows_db_exception(
 
     # Verify correct call order
     mock_session.rollback.assert_awaited_once()
-    mock_fs.rollback_staging.assert_awaited_once()
+    mock_fs.rollback_staging.assert_awaited_once_with('test-txn-id')
     mock_session.close.assert_awaited_once()
+
+
+async def test_transaction_save_file(
+    transaction: AsyncTransaction, mock_session: AsyncMock, mock_fs: AsyncMock
+) -> None:
+    """Test the save_file proxy method."""
+    async with transaction as txn:
+        await txn.save_file('key.txt', b'data')
+    mock_fs.save.assert_awaited_once_with('key.txt', b'data', txn_id='test-txn-id')
+
+
+async def test_transaction_delete_file(
+    transaction: AsyncTransaction, mock_session: AsyncMock, mock_fs: AsyncMock
+) -> None:
+    """Test the delete_file proxy method."""
+    async with transaction as txn:
+        await txn.delete_file('key.txt')
+    mock_fs.delete.assert_awaited_once_with('key.txt', txn_id='test-txn-id', recursive=False)

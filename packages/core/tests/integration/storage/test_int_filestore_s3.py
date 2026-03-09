@@ -117,13 +117,13 @@ async def test_staging_commit(s3_store: S3AsyncFileStore) -> None:
     data = b'staged on s3'
 
     s3_store.begin_staging(txn_id)
-    await s3_store.save(key, data)
+    await s3_store.save(key, data, txn_id=txn_id)
 
     # Final file should NOT exist; staged file should
     assert await s3_store.exists(key) is False
     assert await s3_store.exists(f'{key}.stage_{txn_id}') is True
 
-    await s3_store.commit_staging()
+    await s3_store.commit_staging(txn_id)
 
     assert await s3_store.exists(key) is True
     assert await s3_store.exists(f'{key}.stage_{txn_id}') is False
@@ -139,9 +139,9 @@ async def test_staging_rollback(s3_store: S3AsyncFileStore) -> None:
     key = f'notes/{uuid4()}.txt'
 
     s3_store.begin_staging(txn_id)
-    await s3_store.save(key, b'will be rolled back')
+    await s3_store.save(key, b'will be rolled back', txn_id=txn_id)
 
-    await s3_store.rollback_staging()
+    await s3_store.rollback_staging(txn_id)
 
     assert await s3_store.exists(key) is False
     assert await s3_store.exists(f'{key}.stage_{txn_id}') is False
