@@ -128,8 +128,43 @@ class TestGetNodesEdgeCases:
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid1), str(nid2)]})
         text = result.content[0].text
 
-        assert f'Node {nid1} not found' in text
-        assert f'Node {nid2} not found' in text
+        assert str(nid1) in text
+        assert str(nid2) in text
+        assert 'not found' in text
+        assert 'child node IDs' in text
+
+    @pytest.mark.asyncio
+    async def test_partial_success_shows_hint_for_missing(self, mock_api, mcp_client):
+        """When some nodes found and some not, show content + helpful hint."""
+        found_id = uuid4()
+        missing_id = uuid4()
+        mock_api.get_nodes.return_value = [
+            NodeDTO(
+                id=found_id,
+                note_id=uuid4(),
+                vault_id=uuid4(),
+                title='Found Section',
+                text='Content here.',
+                level=1,
+                node_hash='abc123',
+                seq=0,
+                status='active',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            ),
+        ]
+
+        result = await mcp_client.call_tool(
+            'memex_get_nodes', {'node_ids': [str(found_id), str(missing_id)]}
+        )
+        text = result.content[0].text
+
+        # Should include the found node's content
+        assert 'Found Section' in text
+        assert 'Content here.' in text
+        # Should include helpful hint about missing, not a harsh error
+        assert str(missing_id) in text
+        assert 'parent sections' in text
+        assert 'Errors' not in text  # not in the old error block format
 
     @pytest.mark.asyncio
     async def test_node_with_empty_text(self, mock_api, mcp_client):

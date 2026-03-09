@@ -859,7 +859,7 @@ async def _get_single_page_index(
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
-        'Use returned node IDs with memex_get_nodes.'
+        'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content.'
     ),
 )
 async def memex_get_page_indices(
@@ -1044,12 +1044,17 @@ async def memex_get_nodes(
                 except Exception as exc:
                     errors.append(f'Node {uid}: {exc}')
 
-        # Build lookup for found nodes
+        # Build lookup for found nodes — track both primary key and hash matches
         found_ids: set[UUID] = set()
+        found_hashes: set[str] = set()
         sections: list[str] = []
 
         for node in nodes:
             found_ids.add(node.id)
+            node_hash = getattr(node, 'node_hash', None)
+            if node_hash:
+                found_hashes.add(node_hash)
+
             title = node.title
             text = node.text
             doc_id = node.note_id
@@ -1067,18 +1072,29 @@ async def memex_get_nodes(
         # Check for node IDs that weren't found (by either UUID or hash)
         # Skip IDs already reported as errors by the fallback path
         reported = {e.split(' ')[1] for e in errors if e.startswith('Node ')}
+        not_found: list[str] = []
         for uid in uuid_list:
-            if uid not in found_ids and str(uid) not in reported:
-                # Check if found by hash match
-                hash_matched = any(uid.hex == getattr(n, 'node_hash', None) for n in nodes)
-                if not hash_matched:
-                    errors.append(f'Node {uid} not found')
+            if uid in found_ids or uid.hex in found_hashes:
+                continue
+            if str(uid) in reported:
+                continue
+            not_found.append(str(uid))
 
         output = '\n---\n'.join(sections) if sections else ''
 
         if errors:
             err_block = '\n### Errors\n' + '\n'.join(f'- {e}' for e in errors)
             output = (output + '\n' + err_block) if output else err_block
+
+        if not_found:
+            hint = (
+                f'\n\n**Note:** {len(not_found)} node ID(s) not found: '
+                + ', '.join(not_found[:5])
+                + ('...' if len(not_found) > 5 else '')
+                + '\nThese may be parent sections without stored content. '
+                'Use child node IDs from memex_get_page_indices instead.'
+            )
+            output = (output + hint) if output else hint.strip()
 
         return output if output else 'No nodes found for the provided IDs.'
 
