@@ -22,6 +22,8 @@ from memex_common.config import (
     deep_merge,
 )
 
+from .__about__ import __version__ as __version__
+
 # Suppress Pydantic serializer warnings
 warnings.filterwarnings('ignore', message='Pydantic serializer warnings')
 
