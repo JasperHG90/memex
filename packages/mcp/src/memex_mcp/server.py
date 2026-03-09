@@ -115,7 +115,7 @@ async def memex_list_assets(
             return 'No assets found for this note.'
 
         meta = note.doc_metadata
-        name = meta.get('name') or meta.get('title') or 'Untitled'
+        name = note.title or meta.get('name') or meta.get('title') or 'Untitled'
 
         output = [f'Assets for Note: {name}']
 
@@ -165,7 +165,7 @@ async def memex_read_note(
 
         note = await api.get_note(uuid_obj)
         meta = note.doc_metadata
-        name = meta.get('name') or meta.get('title') or 'Untitled'
+        name = note.title or meta.get('name') or meta.get('title') or 'Untitled'
 
         output = [f'# {name}']
 
@@ -278,16 +278,20 @@ async def memex_rename_note(
 async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | str:
     """Fetch a single resource by path. Raises on failure."""
     mime_type, _ = mimetypes.guess_type(path)
+    # SVGs are XML text — Claude's vision API can't process them as images
+    is_raster_image = (
+        mime_type is not None and mime_type.startswith('image/') and mime_type != 'image/svg+xml'
+    )
 
     # For local stores, return file:// URI to avoid base64 overhead
     local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
-    if local_path and mime_type and mime_type.startswith('image/'):
+    if local_path and is_raster_image:
         return f'file://{local_path}'
 
     content_bytes = await api.get_resource(path)
 
     if mime_type:
-        if mime_type.startswith('image/'):
+        if is_raster_image:
             return Image(data=content_bytes, format=mime_type.split('/')[-1])
         elif mime_type.startswith('audio/'):
             return Audio(data=content_bytes, format=mime_type.split('/')[-1])
