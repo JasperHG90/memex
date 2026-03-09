@@ -80,6 +80,51 @@ class ExtractSemanticFacts(dspy.Signature):
     )
 
 
+class ExtractFrontmatterMetadata(dspy.Signature):
+    """Extract structured metadata from YAML frontmatter of a document.
+
+    This is YAML frontmatter from a document header. Extract:
+    1. Author/creator as a Person entity (from fields like created_by, author, creator)
+    2. Any dates found (created_date, publish_date, date, etc.)
+    3. Any other structured metadata as factual statements
+
+    LANGUAGE RULE: Output extracted facts in ENGLISH.
+    """
+
+    frontmatter_text: str = dspy.InputField(
+        description='The YAML frontmatter block from a document header'
+    )
+    event_date_ref: str = dspy.InputField(description='Reference date for temporal context')
+    extracted_facts: ExtractedOutput = dspy.OutputField(
+        description='Structured list of extracted facts from the frontmatter'
+    )
+
+
+async def extract_facts_from_frontmatter(
+    frontmatter_text: str,
+    event_date: dt.datetime,
+    lm: dspy.LM,
+    semaphore: asyncio.Semaphore | None = None,
+    vault_id: UUID | None = None,
+) -> tuple[list[RawFact], TokenUsage]:
+    """Extract structured metadata facts from YAML frontmatter using LLM."""
+    predictor = dspy.ChainOfThought(ExtractFrontmatterMetadata)
+    try:
+        result, token_usage = await run_dspy_operation(
+            lm=lm,
+            predictor=predictor,
+            input_kwargs={
+                'frontmatter_text': sanitize_text(frontmatter_text),
+                'event_date_ref': event_date.strftime('%A, %B %d, %Y'),
+            },
+            semaphore=semaphore,
+        )
+        return result.extracted_facts.extracted_facts, token_usage
+    except Exception as e:
+        logger.error(f'Frontmatter extraction failed: {e}')
+        return [], TokenUsage()
+
+
 async def _extract_facts_from_chunk(
     chunk: str,
     chunk_index: int,

@@ -140,11 +140,17 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_indices + memex_get_nodes.',
+    description='Read full note. ONLY when total_tokens < 500 (use force=True to override). Otherwise: memex_get_page_indices + memex_get_nodes.',
 )
 async def memex_read_note(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
+    force: Annotated[
+        bool,
+        Field(
+            description='Override the 500-token limit and read the full note regardless of size.'
+        ),
+    ] = False,
 ) -> str:
     """Read a full note."""
     try:
@@ -157,10 +163,11 @@ async def memex_read_note(
         metadata = await api.get_note_metadata(uuid_obj)
         if metadata:
             total_tokens = metadata.get('total_tokens', 0)
-            if total_tokens and total_tokens >= 500:
+            if not force and total_tokens and total_tokens >= 500:
                 raise ToolError(
                     f'Note has {total_tokens} tokens (limit: 500). '
-                    'Use memex_get_page_indices + memex_get_nodes instead.'
+                    'Use force=True to override, or use '
+                    'memex_get_page_indices + memex_get_nodes instead.'
                 )
 
         note = await api.get_note(uuid_obj)
