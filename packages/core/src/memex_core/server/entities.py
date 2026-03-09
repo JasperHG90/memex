@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -136,6 +136,23 @@ async def get_entity_mentions(
         raise _handle_error(e, f'Failed to fetch mentions for entity {id}')
 
 
+class BatchEntityRequest(BaseModel):
+    entity_ids: list[UUID]
+
+
+@router.post('/entities/batch', response_model=list[EntityDTO])
+async def get_entities_batch(
+    request: Annotated[BatchEntityRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Get multiple entities by ID."""
+    try:
+        entities = await api.get_entities(request.entity_ids)
+        return [build_entity_dto(e) for e in entities]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get entities batch')
+
+
 @router.get('/entities/{id}', response_model=EntityDTO)
 async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get entity details."""
@@ -156,12 +173,13 @@ async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
 async def get_entity_cooccurrences(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    limit: int = 50,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get co-occurrence edges for an entity."""
     try:
         vault_ids = await resolve_vault_ids(api, vault_id)
-        cos = await api.get_entity_cooccurrences(id, vault_ids=vault_ids)
+        cos = await api.get_entity_cooccurrences(id, vault_ids=vault_ids, limit=limit)
         items = [
             {
                 'entity_id_1': c.entity_id_1,

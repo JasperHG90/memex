@@ -1,4 +1,4 @@
-"""Tests for the memex_get_page_index and memex_get_node MCP tools."""
+"""Tests for the memex_get_page_index and memex_get_nodes MCP tools."""
 
 import datetime as dt
 import json
@@ -84,52 +84,54 @@ async def test_memex_get_page_index_exception_handling(mock_api, mcp_client):
 
 
 # ---------------------------------------------------------------------------
-# memex_get_node
+# memex_get_nodes (batch)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_memex_get_node_returns_formatted_content(mock_api, mcp_client):
+async def test_memex_get_nodes_returns_formatted_content(mock_api, mcp_client):
     """Tool output includes title, node ID, document ID, and text."""
     node = _make_node(title='Background', text='Some background text.', level=2)
-    mock_api.get_node.return_value = node
+    mock_api.get_nodes.return_value = [node]
 
-    result = await mcp_client.call_tool('memex_get_node', {'node_id': str(node.id)})
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(node.id)]})
     text = result.content[0].text
 
     assert 'Background' in text
     assert str(node.id) in text
     assert str(node.note_id) in text
     assert 'Some background text.' in text
-    mock_api.get_node.assert_called_once_with(node.id)
+    mock_api.get_nodes.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_memex_get_node_not_found(mock_api, mcp_client):
-    """Tool raises ToolError when the node does not exist."""
+async def test_memex_get_nodes_not_found(mock_api, mcp_client):
+    """Tool reports error when the node does not exist."""
     node_id = uuid4()
-    mock_api.get_node.return_value = None
+    mock_api.get_nodes.return_value = []
 
-    with pytest.raises(ToolError, match='not found'):
-        await mcp_client.call_tool('memex_get_node', {'node_id': str(node_id)})
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(node_id)]})
+    text = result.content[0].text
+
+    assert 'not found' in text
 
 
 @pytest.mark.asyncio
-async def test_memex_get_node_invalid_uuid(mock_api, mcp_client):
+async def test_memex_get_nodes_invalid_uuid(mock_api, mcp_client):
     """Tool raises ToolError for a malformed node UUID."""
-    with pytest.raises(ToolError, match='Invalid Node UUID'):
-        await mcp_client.call_tool('memex_get_node', {'node_id': 'bad-uuid'})
+    with pytest.raises(ToolError, match='Invalid UUID'):
+        await mcp_client.call_tool('memex_get_nodes', {'node_ids': ['bad-uuid']})
 
-    mock_api.get_node.assert_not_called()
+    mock_api.get_nodes.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_memex_get_node_empty_text(mock_api, mcp_client):
+async def test_memex_get_nodes_empty_text(mock_api, mcp_client):
     """Tool handles nodes with no text content gracefully."""
     node = _make_node(title='Empty Section', text='')
-    mock_api.get_node.return_value = node
+    mock_api.get_nodes.return_value = [node]
 
-    result = await mcp_client.call_tool('memex_get_node', {'node_id': str(node.id)})
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(node.id)]})
     text = result.content[0].text
 
     assert 'Empty Section' in text
@@ -137,12 +139,12 @@ async def test_memex_get_node_empty_text(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_get_node_exception_handling(mock_api, mcp_client):
+async def test_memex_get_nodes_exception_handling(mock_api, mcp_client):
     """Tool raises ToolError on unexpected failure."""
-    mock_api.get_node.side_effect = RuntimeError('connection reset')
+    mock_api.get_nodes.side_effect = RuntimeError('connection reset')
 
     with pytest.raises(ToolError, match='connection reset'):
-        await mcp_client.call_tool('memex_get_node', {'node_id': str(uuid4())})
+        await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(uuid4())]})
 
 
 # ---------------------------------------------------------------------------
@@ -405,18 +407,20 @@ async def test_memex_get_page_index_falls_back_to_recursive_sum(mock_api, mcp_cl
 
 
 @pytest.mark.asyncio
-async def test_memex_get_note_metadata_includes_total_tokens(mock_api, mcp_client):
-    """memex_get_note_metadata should return total_tokens when present."""
+async def test_memex_get_notes_metadata_includes_total_tokens(mock_api, mcp_client):
+    """memex_get_notes_metadata should return total_tokens when present."""
+    nid = uuid4()
     mock_api.get_note_metadata.return_value = {
         'title': 'Big Note',
         'description': 'A large note',
         'total_tokens': 7500,
     }
 
-    result = await mcp_client.call_tool('memex_get_note_metadata', {'note_id': str(uuid4())})
-    data = json.loads(result.content[0].text)
+    result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
+    text = result.content[0].text
 
-    assert data['total_tokens'] == 7500
+    assert '7500' in text
+    assert 'Big Note' in text
 
 
 # ---------------------------------------------------------------------------

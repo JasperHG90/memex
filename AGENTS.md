@@ -132,17 +132,17 @@ IF query asks about relationships, connections, "how X relates to Y", or landsca
 
 IF query asks about specific content or document lookup:
 - **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
-- **Filter**: after `memex_memory_search`, call `memex_get_note_metadata`. After `memex_note_search`, metadata is inline — skip.
-- **Read**: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
+- **Filter**: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip.
+- **Read**: `memex_get_page_index` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
 - **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → `memex_get_resource` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER skip this step.
 
 IF query is broad: run entity exploration AND search in parallel.
 
 PROHIBITED:
-- `memex_list_notes` for discovery.
+- `memex_recent_notes` for discovery.
 - Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
-- `memex_get_note_metadata` after `memex_note_search` (metadata already inline).
-- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_node`.
+- `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_nodes`.
 - Creating diagrams without first checking assets via `memex_list_assets` → `memex_get_resource`.
 - Presenting Memex information without citations.
 

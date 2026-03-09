@@ -21,12 +21,9 @@ from memex_mcp.lifespan import lifespan, get_api
 from memex_mcp.types import NoteTemplateType
 from memex_common.schemas import (
     BatchJobStatus,
-    IngestURLRequest,
-    LineageResponse,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
-    ReflectionRequest,
     TOCNodeDTO,
 )
 
@@ -53,8 +50,8 @@ IF query asks about relationships, connections, "how X fits in", "what relates t
 IF query asks about specific content, topics, or document lookup:
   → SEARCH
   1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
-  2. FILTER: after `memex_memory_search`, call `memex_get_note_metadata` per Note ID. After `memex_note_search`, metadata is inline — skip this.
-  3. READ: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
+  2. FILTER: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip this.
+  3. READ: `memex_get_page_index` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
   4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resource` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
 IF query is broad (e.g. "explain X and how it fits the architecture"):
@@ -69,7 +66,7 @@ RESPONSE FORMAT — MANDATORY for every response:
 RULES:
 - Only use IDs from tool output. Never fabricate IDs.
 - Filter before reading. Never call `memex_get_page_index` on unconfirmed notes.
-- Never use `memex_list_notes` for discovery.
+- Never use `memex_recent_notes` for discovery.
 
 `memex_memory_search` strategies: `["temporal"]` chronological, `["graph"]` entity-centric, `["mental_model"]` synthesized. Default (all) is best for general queries.
 """.strip(),
@@ -80,127 +77,6 @@ RULES:
 
 
 @mcp.tool(
-    name='memex_reflect',
-    description='Trigger immediate reflection on an entity to synthesize its mental model from recent memories.',
-)
-async def memex_reflect(
-    ctx: Context,
-    entity_id: Annotated[str, Field(description='Entity UUID.')],
-    limit: Annotated[int, Field(description='Recent memories to consider.')] = 20,
-    vault_id: Annotated[
-        str | None,
-        Field(default=None, description='Vault UUID or name. Defaults to Global Vault.'),
-    ] = None,
-):
-    """Reflect on an entity to update its mental model."""
-    try:
-        api = get_api(ctx)
-
-        try:
-            e_uuid = UUID(entity_id)
-        except ValueError:
-            raise ToolError(f'Invalid Entity UUID: {entity_id}')
-
-        v_uuid = None
-        if vault_id:
-            v_uuid = await api.resolve_vault_identifier(vault_id)
-
-        req_kwargs: dict = {
-            'entity_id': e_uuid,
-            'limit_recent_memories': limit,
-        }
-        if v_uuid:
-            req_kwargs['vault_id'] = v_uuid
-
-        request = ReflectionRequest(**req_kwargs)
-
-        results = await api.reflect_batch([request])
-
-        if not results:
-            return 'Reflection produced no results.'
-
-        res = results[0]
-        output = [f'Reflection complete for entity {res.entity_id}.']
-        output.append(f'Status: {res.status}')
-
-        if res.new_observations:
-            output.append('\nNew Observations:')
-            for obs in res.new_observations:
-                output.append(f'- {obs.title}: {obs.content}')
-        else:
-            output.append('\nNo new observations formed.')
-
-        return '\n'.join(output)
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Reflection failed: {e}', exc_info=True)
-        raise ToolError(f'Reflection failed: {e}')
-
-
-@mcp.tool(
-    name='memex_get_lineage',
-    description='Get provenance chain of a memory unit, observation, note, or mental model.',
-)
-async def memex_get_lineage(
-    ctx: Context,
-    unit_id: Annotated[str, Field(description='Unit or observation UUID.')],
-    entity_type: Annotated[
-        str,
-        Field(description='Type: memory_unit (default), observation, note, mental_model.'),
-    ] = 'memory_unit',
-) -> str:
-    """Retrieve the lineage of a memory unit."""
-    try:
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(unit_id)
-        except ValueError:
-            raise ToolError(f'Invalid Unit UUID: {unit_id}')
-
-        lineage: LineageResponse
-        if entity_type == 'note':
-            lineage = await api.get_note_lineage(uuid_obj)
-        else:
-            lineage = await api.get_entity_lineage(uuid_obj)
-
-        def format_lineage(node: LineageResponse, depth: int = 0) -> list[str]:
-            indent = '  ' * depth
-            entity_id = node.entity.get('id', 'Unknown ID')
-            content = (
-                node.entity.get('content')
-                or node.entity.get('text')
-                or node.entity.get('name')
-                or 'No content'
-            )
-            if isinstance(content, bytes):
-                content = '[Binary Content]'
-
-            content_str = str(content)
-            if len(content_str) > 100:
-                content_str = content_str[:97] + '...'
-
-            lines = [f'{indent}- [{node.entity_type}] {content_str} (ID: {entity_id})']
-
-            for child in node.derived_from:
-                lines.extend(format_lineage(child, depth + 1))
-
-            return lines
-
-        output = ['# Lineage Graph']
-        output.extend(format_lineage(lineage))
-
-        return '\n'.join(output)
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Get lineage failed: {e}', exc_info=True)
-        raise ToolError(f'Get lineage failed: {e}')
-
-
-@mcp.tool(
     name='memex_list_assets',
     description='List file assets for a note. REQUIRED when has_assets is true — call before answering.',
 )
@@ -208,7 +84,11 @@ async def memex_list_assets(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
     vault_id: Annotated[
-        str | None, Field(default=None, description='Vault UUID or name filter.')
+        str | None,
+        Field(
+            default=None,
+            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
+        ),
     ] = None,
 ) -> str:
     """List assets for a note."""
@@ -260,7 +140,7 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_index + memex_get_node.',
+    description='Read full note. ONLY when total_tokens < 500. Otherwise: memex_get_page_index + memex_get_nodes.',
 )
 async def memex_read_note(
     ctx: Context,
@@ -280,7 +160,7 @@ async def memex_read_note(
             if total_tokens and total_tokens >= 500:
                 raise ToolError(
                     f'Note has {total_tokens} tokens (limit: 500). '
-                    'Use memex_get_page_index + memex_get_node instead.'
+                    'Use memex_get_page_index + memex_get_nodes instead.'
                 )
 
         note = await api.get_note(uuid_obj)
@@ -397,13 +277,17 @@ async def memex_rename_note(
 
 @mcp.tool(
     name='memex_get_resource',
-    description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets or memex_get_lineage.',
+    description='Retrieve a file resource (image, audio, document) by path. Get paths from memex_list_assets.',
 )
 async def memex_get_resource(
     ctx: Context,
     path: Annotated[str, Field(description='Resource path.')],
     vault_id: Annotated[
-        str | None, Field(default=None, description='Vault UUID or name filter.')
+        str | None,
+        Field(
+            default=None,
+            description="Vault UUID or name, e.g. 'memex'. Omit for active vault.",
+        ),
     ] = None,
 ) -> Image | Audio | File | str:
     """Retrieve a file resource. Returns an Image, Audio, or File object."""
@@ -532,7 +416,7 @@ async def memex_add_note(
         str | None,
         Field(
             default=None,
-            description='Target vault UUID or name. Defaults to active vault.',
+            description="Target vault UUID or name, e.g. 'rituals'. Omit for active vault.",
         ),
     ] = None,
     note_key: Annotated[
@@ -636,7 +520,10 @@ async def memex_memory_search(
     ] = 10,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Vault UUIDs or names to search.'),
+        Field(
+            default=None,
+            description="Vault UUIDs or names, e.g. ['rituals']. Omit for active vault.",
+        ),
     ] = None,
     token_budget: Annotated[
         int | None,
@@ -694,6 +581,20 @@ async def memex_memory_search(
         if not results:
             return f"No results for '{query}'. Reformulate or try memex_note_search. Do not fabricate IDs."
 
+        # Fetch note titles for enriched output
+        note_ids = list({res.note_id for res in results if res.note_id})
+        note_titles: dict[UUID, str] = {}
+        if note_ids:
+            try:
+                metas = await api.get_notes_metadata(note_ids)
+                for meta in metas:
+                    nid_str = meta.get('note_id')
+                    title = meta.get('title') or meta.get('name')
+                    if nid_str and title:
+                        note_titles[UUID(nid_str)] = title
+            except Exception:
+                pass  # Graceful degradation — titles are optional
+
         output = [f"Found {len(results)} results for '{query}':\n"]
 
         for i, res in enumerate(results, 1):
@@ -711,8 +612,16 @@ async def memex_memory_search(
             confidence = getattr(res, 'confidence', 1.0)
             confidence_str = f' [conf: {confidence:.1f}]' if confidence < 1.0 else ''
 
+            # Use note title if available
+            if res.note_id and res.note_id in note_titles:
+                note_ref = f'Note: "{note_titles[res.note_id]}" {res.note_id}'
+            elif res.note_id:
+                note_ref = f'Note: {res.note_id}'
+            else:
+                note_ref = 'Note: unknown'
+
             output.append(
-                f'{i}. [{unit_type}] [Unit: {res.id}] [Note: {res.note_id}]'
+                f'{i}. [{unit_type}] [Unit: {res.id}] [{note_ref}]'
                 f'{score_str}{date_str}{confidence_str}\n   {snippet}\n'
             )
 
@@ -726,7 +635,8 @@ async def memex_memory_search(
                     )
 
         output.append(
-            'Tip: Use Note IDs above with memex_get_note_metadata to check relevance before deeper reading.'
+            'Tip: Use memex_get_notes_metadata for tags/token counts. '
+            'Next: memex_get_page_index → memex_get_nodes.'
         )
         return '\n'.join(output)
 
@@ -750,7 +660,10 @@ async def memex_note_search(
     expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
     vault_ids: Annotated[
         list[str] | None,
-        Field(default=None, description='Vault UUIDs or names to search.'),
+        Field(
+            default=None,
+            description="Vault UUIDs or names, e.g. ['rituals']. Omit for active vault.",
+        ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
@@ -761,11 +674,11 @@ async def memex_note_search(
     ] = None,
     after: Annotated[
         str | None,
-        Field(default=None, description='Only notes created after this ISO 8601 date.'),
+        Field(default=None, description='Only notes after this ISO 8601 date.'),
     ] = None,
     before: Annotated[
         str | None,
-        Field(default=None, description='Only notes created before this ISO 8601 date.'),
+        Field(default=None, description='Only notes before this ISO 8601 date.'),
     ] = None,
     tags: Annotated[
         list[str] | None,
@@ -831,8 +744,8 @@ async def memex_note_search(
             lines.append('')
 
         lines.append(
-            'Do NOT call memex_get_note_metadata — metadata above is complete. '
-            'Next: memex_get_page_index → memex_get_node on relevant notes.'
+            'Do NOT call memex_get_notes_metadata — metadata above is complete. '
+            'Next: memex_get_page_index → memex_get_nodes on relevant notes.'
         )
         return '\n'.join(lines)
 
@@ -845,10 +758,10 @@ async def memex_note_search(
     name='memex_get_page_index',
     description=(
         'Get note TOC: section titles, summaries, and node IDs. '
-        'Expensive for large notes — only call AFTER memex_get_note_metadata confirms relevance. '
+        'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
-        'Use returned node IDs with memex_get_node.'
+        'Use returned node IDs with memex_get_nodes.'
     ),
 )
 async def memex_get_page_index(
@@ -948,189 +861,149 @@ async def memex_get_page_index(
 
 
 @mcp.tool(
-    name='memex_get_note_metadata',
+    name='memex_get_notes_metadata',
     description=(
-        'Cheap relevance check (~50 tokens). '
-        'Use after memex_memory_search. '
+        'Get metadata (title, tags, token count, has_assets) for 1+ notes. '
+        'Use after memex_memory_search to filter results before reading. '
         'SKIP after memex_note_search (metadata already inline).'
     ),
 )
-async def memex_get_note_metadata(
+async def memex_get_notes_metadata(
     ctx: Context,
-    note_id: Annotated[str, Field(description='Note UUID.')],
-) -> str | PageMetadataDTO:
-    """Get just the metadata from a note's page index."""
+    note_ids: Annotated[list[str], Field(description='List of Note UUIDs.')],
+) -> str:
+    """Get metadata for one or more notes."""
     try:
         api = get_api(ctx)
-        try:
-            uuid_obj = UUID(note_id)
-        except ValueError:
-            raise ToolError(f'Invalid Note UUID: {note_id}')
+        uuid_list: list[UUID] = []
+        errors: list[str] = []
 
-        metadata = await api.get_note_metadata(uuid_obj)
-        if metadata is None:
-            return 'No metadata available for this note. The note may not have a page index.'
+        for nid in note_ids:
+            try:
+                uuid_list.append(UUID(nid))
+            except ValueError:
+                errors.append(f'Invalid UUID: {nid}')
 
-        return PageMetadataDTO(**metadata)
+        if not uuid_list and errors:
+            raise ToolError('\n'.join(errors))
+
+        results: list[dict] = []
+        for uid in uuid_list:
+            try:
+                metadata = await api.get_note_metadata(uid)
+                if metadata is None:
+                    errors.append(f'{uid}: no metadata available')
+                else:
+                    results.append({'note_id': str(uid), **metadata})
+            except Exception as exc:
+                errors.append(f'{uid}: {exc}')
+
+        if not results and not errors:
+            return 'No metadata found for any of the provided note IDs.'
+
+        lines: list[str] = []
+        for meta in results:
+            nid = meta.get('note_id', 'N/A')
+            title = meta.get('title') or meta.get('name') or 'Untitled'
+            tokens = meta.get('total_tokens', 'N/A')
+            has_assets = meta.get('has_assets', False)
+            tags_list = meta.get('tags', [])
+            vault_name = meta.get('vault_name', '')
+            lines.append(f'## {title}')
+            lines.append(f'- **Note ID:** {nid}')
+            lines.append(f'- **Tokens:** {tokens}')
+            if vault_name:
+                lines.append(f'- **Vault:** {vault_name}')
+            if tags_list:
+                lines.append(f'- **Tags:** {", ".join(tags_list)}')
+            if has_assets:
+                lines.append('- **Has assets:** yes → call memex_list_assets before answering')
+            lines.append('')
+
+        if errors:
+            lines.append('### Errors')
+            for err in errors:
+                lines.append(f'- {err}')
+
+        return '\n'.join(lines)
 
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get note metadata failed: {e}', exc_info=True)
-        raise ToolError(f'Get note metadata failed: {e}')
+        logging.error(f'Get notes metadata failed: {e}', exc_info=True)
+        raise ToolError(f'Get notes metadata failed: {e}')
 
 
 @mcp.tool(
-    name='memex_get_node',
-    description='Read a specific note section by node ID. Get node IDs from memex_get_page_index or memex_note_search reasoning. Call multiple in parallel when reading several sections.',
+    name='memex_get_nodes',
+    description=(
+        'Read note sections by node IDs. Get node IDs from memex_get_page_index. '
+        'Accepts 1 or more IDs — use for single and batch reads.'
+    ),
 )
-async def memex_get_node(
+async def memex_get_nodes(
     ctx: Context,
-    node_id: Annotated[str, Field(description='Node UUID.')],
+    node_ids: Annotated[list[str], Field(description='List of Node UUIDs.')],
 ) -> str:
-    """Retrieve the full text content of a specific note node."""
+    """Retrieve the full text content of one or more note nodes."""
     try:
         api = get_api(ctx)
-        try:
-            uuid_obj = UUID(node_id)
-        except ValueError:
-            raise ToolError(f'Invalid Node UUID: {node_id}')
+        uuid_list: list[UUID] = []
+        errors: list[str] = []
 
-        node = await api.get_node(uuid_obj)
-        if node is None:
-            raise ToolError(f'Node {node_id} not found.')
+        for nid in node_ids:
+            try:
+                uuid_list.append(UUID(nid))
+            except ValueError:
+                errors.append(f'Invalid UUID: {nid}')
 
-        title = node.title
-        text = node.text
-        doc_id = node.note_id
-        level = node.level
+        if not uuid_list and errors:
+            raise ToolError('\n'.join(errors))
 
-        output = [f'# {"#" * level} {title}']
-        output.append(f'**Node ID:** {node_id}')
-        output.append(f'**Note ID:** {doc_id}')
-        if text:
-            output.append(f'\n{text}')
-        else:
-            output.append('\n[No text content]')
+        # Batch fetch all nodes
+        nodes = await api.get_nodes(uuid_list)
 
-        return '\n'.join(output)
+        # Build lookup for found nodes
+        found_ids: set[UUID] = set()
+        sections: list[str] = []
+
+        for node in nodes:
+            found_ids.add(node.id)
+            title = node.title
+            text = node.text
+            doc_id = node.note_id
+            level = node.level
+
+            section = [f'# {"#" * level} {title}']
+            section.append(f'**Node ID:** {node.id}')
+            section.append(f'**Note ID:** {doc_id}')
+            if text:
+                section.append(f'\n{text}')
+            else:
+                section.append('\n[No text content]')
+            sections.append('\n'.join(section))
+
+        # Check for node IDs that weren't found (by either UUID or hash)
+        for uid in uuid_list:
+            if uid not in found_ids:
+                # Check if found by hash match
+                hash_matched = any(uid.hex == getattr(n, 'node_hash', None) for n in nodes)
+                if not hash_matched:
+                    errors.append(f'Node {uid} not found')
+
+        output = '\n---\n'.join(sections) if sections else ''
+
+        if errors:
+            err_block = '\n### Errors\n' + '\n'.join(f'- {e}' for e in errors)
+            output = (output + '\n' + err_block) if output else err_block
+
+        return output if output else 'No nodes found for the provided IDs.'
 
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get node failed: {e}', exc_info=True)
-        raise ToolError(f'Get node failed: {e}')
-
-
-@mcp.tool(
-    name='memex_batch_ingest',
-    description='Async batch ingest of local files.',
-)
-async def memex_batch_ingest(
-    ctx: Context,
-    file_paths: Annotated[list[str], Field(description='Absolute file paths.')],
-    vault_id: Annotated[
-        str | None,
-        Field(default=None, description='Target vault UUID or name.'),
-    ] = None,
-    batch_size: Annotated[int, Field(description='Files per batch chunk.')] = 32,
-) -> str:
-    """Submit a batch of local files for asynchronous ingestion."""
-    try:
-        api = get_api(ctx)
-        notes = []
-
-        for path_str in file_paths:
-            path = plb.Path(path_str)
-            if not path.exists() or not path.is_file():
-                continue
-
-            async with aiofiles.open(path, 'rb') as f:
-                content = await f.read()
-
-            import base64
-
-            note_dto = NoteCreateDTO(
-                name=path.name,
-                description=f'Imported from {path}',
-                content=base64.b64encode(content),
-                vault_id=vault_id,
-                note_key=str(path.absolute()),
-            )
-            notes.append(note_dto)
-
-        if not notes:
-            return 'No valid files found for ingestion.'
-
-        job_ids: list[str] = []
-        for note_dto in notes:
-            result = await api.ingest(note_dto, background=True)
-            job_ids.append(str(cast(BatchJobStatus, result).job_id))
-
-        return (
-            f'Batch ingestion started.\n'
-            f'Files submitted: {len(notes)}\n'
-            f'Job IDs:\n' + '\n'.join(f'- {jid}' for jid in job_ids) + '\n'
-            'Use `memex_get_batch_status` with any job ID to track progress.'
-        )
-
-    except Exception as e:
-        logging.error(f'Batch ingest failed: {e}', exc_info=True)
-        raise ToolError(f'Batch ingest failed: {e}')
-
-
-@mcp.tool(
-    name='memex_get_batch_status',
-    description='Get batch ingestion job status.',
-)
-async def memex_get_batch_status(
-    ctx: Context,
-    job_id: Annotated[str, Field(description='Batch job UUID.')],
-) -> str:
-    """Check the status of a batch ingestion job."""
-    try:
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(job_id)
-        except ValueError:
-            raise ToolError(f'Invalid Job UUID: {job_id}')
-
-        try:
-            job = await api.get_job_status(uuid_obj)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise ToolError(f'Job {job_id} not found.')
-            raise
-
-        output = [f'# Batch Job Status: {job.status.upper()}']
-        output.append(f'Job ID: {job.job_id}')
-        if job.progress:
-            output.append(f'Progress: {job.progress}')
-
-        if job.result:
-            output.append(f'Processed: {job.result.processed_count}')
-            output.append(f'Skipped: {job.result.skipped_count}')
-            output.append(f'Failed: {job.result.failed_count}')
-
-            if job.status == 'completed' and job.result.note_ids:
-                output.append('\nCreated Note IDs (truncated):')
-                for did in job.result.note_ids[:10]:
-                    output.append(f'- {did}')
-                if len(job.result.note_ids) > 10:
-                    output.append(f'- ... and {len(job.result.note_ids) - 10} more.')
-
-            if job.result.errors:
-                output.append('\nErrors:')
-                for err in job.result.errors[:5]:
-                    output.append(f'- {err}')
-
-        return '\n'.join(output)
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Get batch status failed: {e}', exc_info=True)
-        raise ToolError(f'Get batch status failed: {e}')
+        logging.error(f'Get nodes failed: {e}', exc_info=True)
+        raise ToolError(f'Get nodes failed: {e}')
 
 
 @mcp.tool(
@@ -1159,24 +1032,27 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 
 @mcp.tool(
-    name='memex_list_notes',
-    description='List notes in active vault. NOT for discovery — use memex_memory_search or memex_note_search.',
+    name='memex_recent_notes',
+    description='Browse recent notes. Filter by vault name or UUID.',
 )
-async def memex_list_notes(
+async def memex_recent_notes(
     ctx: Context,
     limit: Annotated[int, Field(description='Max notes to return.')] = 20,
-    offset: Annotated[int, Field(description='Pagination offset.')] = 0,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Vault UUID or name filter.')
+        str | None,
+        Field(
+            default=None,
+            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
+        ),
     ] = None,
 ) -> str:
-    """List notes in the active vault."""
+    """List recent notes."""
     try:
         api = get_api(ctx)
         resolved_vault_id = None
         if vault_id:
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
-        notes = await api.list_notes(limit=limit, offset=offset, vault_id=resolved_vault_id)
+        notes = await api.list_notes(limit=limit, offset=0, vault_id=resolved_vault_id)
 
         if not notes:
             return 'No notes found.'
@@ -1195,7 +1071,16 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_list_entities',
-    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance. Use vault_id to scope to entities mentioned in a specific vault.\n\nEntity exploration workflow:\n1. memex_list_entities → browse/search entities by name (optionally vault-scoped)\n2. memex_get_entity → get details (type, mention count)\n3. memex_get_entity_mentions → find facts/observations mentioning entity\n4. memex_get_entity_cooccurrences → find related entities',
+    description=(
+        'List or search entities in the knowledge graph. '
+        'Without a query, returns top entities by relevance. '
+        'Use vault_id to scope to entities mentioned in a specific vault.\n\n'
+        'Entity exploration workflow:\n'
+        '1. memex_list_entities → browse/search entities by name (optionally vault-scoped)\n'
+        '2. memex_get_entities → get details (type, mention count)\n'
+        '3. memex_get_entity_mentions → find facts/observations mentioning entity\n'
+        '4. memex_get_entity_cooccurrences → find related entities'
+    ),
 )
 async def memex_list_entities(
     ctx: Context,
@@ -1207,7 +1092,7 @@ async def memex_list_entities(
         str | None,
         Field(
             default=None,
-            description='Vault UUID or name. Scopes results to entities mentioned in this vault.',
+            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
         ),
     ] = None,
 ) -> str:
@@ -1240,40 +1125,90 @@ async def memex_list_entities(
 
 
 @mcp.tool(
-    name='memex_get_entity',
-    description='Get entity details by UUID — name, type, mention count, aliases, mental model.',
+    name='memex_get_entities',
+    description=(
+        'Get entity details (name, type, mention count) for 1+ entities by UUID. '
+        'Use after memex_list_entities to get full details.'
+    ),
 )
-async def memex_get_entity(
+async def memex_get_entities(
     ctx: Context,
-    entity_id: Annotated[str, Field(description='Entity UUID.')],
+    entity_ids: Annotated[list[str], Field(description='List of Entity UUIDs.')],
 ) -> str:
-    """Get entity details."""
+    """Get details for one or more entities."""
     try:
         api = get_api(ctx)
+        uuid_list: list[UUID] = []
+        errors: list[str] = []
+
+        for eid in entity_ids:
+            try:
+                uuid_list.append(UUID(eid))
+            except ValueError:
+                errors.append(f'Invalid UUID: {eid}')
+
+        if not uuid_list and errors:
+            raise ToolError('\n'.join(errors))
+
+        sections: list[str] = []
+        found_ids: set[UUID] = set()
+
+        # Try batch fetch first
         try:
-            uuid_obj = UUID(entity_id)
-        except ValueError:
-            raise ToolError(f'Invalid Entity UUID: {entity_id}')
+            entities = await api.get_entities(uuid_list)
+            for entity in entities:
+                found_ids.add(entity.id)
+                lines = [
+                    f'# Entity: {entity.name}',
+                    f'**ID:** {entity.id}',
+                    f'**Mentions:** {entity.mention_count}',
+                ]
+                if entity.entity_type:
+                    lines.append(f'**Type:** {entity.entity_type}')
+                if entity.vault_id:
+                    lines.append(f'**Vault:** {entity.vault_id}')
+                sections.append('\n'.join(lines))
+        except Exception:
+            # Fall back to individual lookups
+            for uid in uuid_list:
+                try:
+                    entity = await api.get_entity(uid)
+                    if entity is None:
+                        errors.append(f'{uid}: entity not found')
+                        continue
+                    found_ids.add(entity.id)
+                    lines = [
+                        f'# Entity: {entity.name}',
+                        f'**ID:** {entity.id}',
+                        f'**Mentions:** {entity.mention_count}',
+                    ]
+                    if entity.entity_type:
+                        lines.append(f'**Type:** {entity.entity_type}')
+                    if entity.vault_id:
+                        lines.append(f'**Vault:** {entity.vault_id}')
+                    sections.append('\n'.join(lines))
+                except Exception as exc:
+                    errors.append(f'{uid}: {exc}')
 
-        entity = await api.get_entity(uuid_obj)
+        # Report missing IDs (only if not already reported via fallback path)
+        reported = {e.split(':')[0] for e in errors}
+        for uid in uuid_list:
+            if uid not in found_ids and str(uid) not in reported:
+                errors.append(f'{uid}: entity not found')
 
-        lines = [
-            f'# Entity: {entity.name}',
-            f'**ID:** {entity.id}',
-            f'**Mentions:** {entity.mention_count}',
-        ]
-        if entity.entity_type:
-            lines.append(f'**Type:** {entity.entity_type}')
-        if entity.vault_id:
-            lines.append(f'**Vault:** {entity.vault_id}')
+        output = '\n---\n'.join(sections) if sections else ''
 
-        return '\n'.join(lines)
+        if errors:
+            err_block = '\n### Errors\n' + '\n'.join(f'- {e}' for e in errors)
+            output = (output + '\n' + err_block) if output else err_block
+
+        return output if output else 'No entities found for the provided IDs.'
 
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entity failed: {e}', exc_info=True)
-        raise ToolError(f'Get entity failed: {e}')
+        logging.error(f'Get entities failed: {e}', exc_info=True)
+        raise ToolError(f'Get entities failed: {e}')
 
 
 @mcp.tool(
@@ -1306,9 +1241,14 @@ async def memex_get_entity_mentions(
             unit_id = unit.id if unit else 'N/A'
             note_id = note.id if note else (getattr(unit, 'note_id', None) or 'N/A')
             fact_type = unit.fact_type if unit else 'unknown'
-            lines.append(
-                f'{i}. [Type: {fact_type}] [Unit ID: {unit_id}] [Note ID: {note_id}]\n   {text}\n'
-            )
+
+            # Extract note title for richer output
+            note_title = getattr(note, 'title', None) or getattr(note, 'name', None) or ''
+            if note_title:
+                note_ref = f'Note: "{note_title}" ({note_id})'
+            else:
+                note_ref = f'Note ID: {note_id}'
+            lines.append(f'{i}. [Type: {fact_type}] [{note_ref}] [Unit: {unit_id}]\n   {text}\n')
 
         return '\n'.join(lines)
 
@@ -1326,6 +1266,7 @@ async def memex_get_entity_mentions(
 async def memex_get_entity_cooccurrences(
     ctx: Context,
     entity_id: Annotated[str, Field(description='Entity UUID.')],
+    limit: Annotated[int, Field(description='Max co-occurring entities to return.')] = 10,
 ) -> str:
     """Get co-occurring entities."""
     try:
@@ -1335,7 +1276,7 @@ async def memex_get_entity_cooccurrences(
         except ValueError:
             raise ToolError(f'Invalid Entity UUID: {entity_id}')
 
-        cooccurrences = await api.get_entity_cooccurrences(uuid_obj)
+        cooccurrences = await api.get_entity_cooccurrences(uuid_obj, limit=limit)
 
         if not cooccurrences:
             return 'No co-occurrences found for this entity.'
@@ -1355,9 +1296,9 @@ async def memex_get_entity_cooccurrences(
                 other_id = e1
             co_label = 'co-occurrence' if count == 1 else 'co-occurrences'
             if other_name:
+                type_prefix = f'{other_type}, ' if other_type else ''
                 lines.append(
-                    f'{i}. **{other_name}** ({other_type}{", " if other_type else ""}'
-                    f'ID: {other_id}) — {count} {co_label}'
+                    f'{i}. **{other_name}** ({type_prefix}ID: {other_id}) — {count} {co_label}'
                 )
             else:
                 lines.append(f'{i}. Entity ID: {other_id} — {count} {co_label}')
@@ -1369,56 +1310,6 @@ async def memex_get_entity_cooccurrences(
     except Exception as e:
         logging.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
         raise ToolError(f'Get entity cooccurrences failed: {e}')
-
-
-@mcp.tool(
-    name='memex_get_memory_unit',
-    description='Get a memory unit by UUID.',
-)
-async def memex_get_memory_unit(
-    ctx: Context,
-    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
-) -> str:
-    """Retrieve a memory unit by ID."""
-    try:
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(unit_id)
-        except ValueError:
-            raise ToolError(f'Invalid Unit UUID: {unit_id}')
-
-        unit = await api.get_memory_unit(uuid_obj)
-
-        fact_type = getattr(unit.fact_type, 'value', unit.fact_type)
-
-        lines = [
-            '# Memory Unit',
-            f'**ID:** {unit.id}',
-            f'**Type:** {fact_type}',
-            f'**Status:** {unit.status}',
-            f'**Note ID:** {unit.note_id}',
-        ]
-        chunk_id = getattr(unit, 'chunk_id', None)
-        if chunk_id:
-            lines.append(f'**Chunk ID:** {chunk_id}')
-        if unit.mentioned_at:
-            lines.append(f'**Mentioned at:** {unit.mentioned_at}')
-        if unit.occurred_start:
-            lines.append(f'**Occurred:** {unit.occurred_start} — {unit.occurred_end or "ongoing"}')
-        if unit.metadata:
-            meta_str = str(unit.metadata)
-            if len(meta_str) > 200:
-                meta_str = meta_str[:197] + '...'
-            lines.append(f'**Metadata:** {meta_str}')
-        lines.append(f'\n## Text\n{unit.text}')
-
-        return '\n'.join(lines)
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Get memory unit failed: {e}', exc_info=True)
-        raise ToolError(f'Get memory unit failed: {e}')
 
 
 @mcp.tool(
@@ -1440,7 +1331,12 @@ async def memex_get_memory_units(
                 lines.append(f'Invalid UUID: {uid_str}')
                 continue
 
-            unit = await api.get_memory_unit(uuid_obj)
+            try:
+                unit = await api.get_memory_unit(uuid_obj)
+            except Exception as exc:
+                lines.append(f'## Unit {uid_str}\n- **Error:** {exc}\n')
+                continue
+
             if unit is None:
                 lines.append(f'Unit {uid_str}: not found')
                 continue
@@ -1476,78 +1372,6 @@ async def memex_get_memory_units(
     except Exception as e:
         logging.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
-
-
-@mcp.tool(
-    name='memex_migrate_note',
-    description='Move a note and all associated data to a different vault.',
-)
-async def memex_migrate_note(
-    ctx: Context,
-    note_id: Annotated[str, Field(description='Note UUID.')],
-    target_vault_id: Annotated[str, Field(description='Target vault UUID or name.')],
-) -> str:
-    """Migrate a note to a different vault."""
-    try:
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(note_id)
-        except ValueError:
-            raise ToolError(f'Invalid Note UUID: {note_id}')
-
-        result = await api.migrate_note(uuid_obj, target_vault_id)
-        source = result.get('source_vault_id', 'unknown')
-        target = result.get('target_vault_id', 'unknown')
-        entities = result.get('entities_affected', 0)
-        return (
-            f'Note {note_id} migrated successfully.\n'
-            f'Source vault: {source}\n'
-            f'Target vault: {target}\n'
-            f'Entities affected: {entities}'
-        )
-
-    except ToolError:
-        raise
-    except Exception as e:
-        logging.error(f'Migrate note failed: {e}', exc_info=True)
-        raise ToolError(f'Migrate note failed: {e}')
-
-
-@mcp.tool(
-    name='memex_ingest_url',
-    description='Ingest content from a URL.',
-)
-async def memex_ingest_url(
-    ctx: Context,
-    url: Annotated[str, Field(description='URL to ingest.')],
-    vault_id: Annotated[
-        str | None,
-        Field(default=None, description='Target vault UUID or name. Defaults to active vault.'),
-    ] = None,
-    background: Annotated[
-        bool, Field(default=True, description='Queue ingestion in background.')
-    ] = True,
-) -> str:
-    """Ingest content from a URL."""
-    try:
-        api = get_api(ctx)
-
-        request = IngestURLRequest(url=url, vault_id=vault_id)
-        result = await api.ingest_url(request, background=background)
-
-        if isinstance(result, dict):
-            status = result.get('status', 'unknown')
-            job_id = result.get('job_id', '')
-            msg = f'URL ingestion queued. Status: {status}'
-            if job_id:
-                msg += f', Job ID: {job_id}'
-            return msg
-
-        return f'URL ingested. Note ID: {getattr(result, "note_id", "N/A")}'
-
-    except Exception as e:
-        logging.error(f'Ingest URL failed: {e}', exc_info=True)
-        raise ToolError(f'Ingest URL failed: {e}')
 
 
 def entrypoint():
