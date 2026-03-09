@@ -122,28 +122,30 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 
 Session start context is automatic via hook. Do NOT redundantly search at session start.
 
+Route by query type:
+
+IF query asks about relationships, connections, "how X relates to Y", or landscape:
+- `memex_list_entities(query="X")` → entity IDs, types, mention counts
+- `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts
+- `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+- Then read source notes via Search/Read below as needed
+
+IF query asks about specific content or document lookup:
+- **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
+- **Filter**: after `memex_memory_search`, call `memex_get_note_metadata`. After `memex_note_search`, metadata is inline — skip.
+- **Read**: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
+
+IF query is broad: run entity exploration AND search in parallel.
+
+**Assets** — required when `has_assets: true`:
+- `memex_list_assets` → `memex_get_resource` → render inline.
+
 PROHIBITED:
 - `memex_list_notes` for discovery.
 - Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
 - `memex_get_note_metadata` after `memex_note_search` (metadata already inline).
 - `memex_read_note` on notes over 500 tokens. Use `memex_get_page_index` + `memex_get_node`.
 - Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resource`.
-
-**Search** — pick by query type, or run both in parallel:
-- `memex_memory_search` — atomic facts, observations, mental models. Broad queries.
-- `memex_note_search` — ranked source notes with inline metadata. Targeted lookup.
-
-**Filter** — before reading:
-- After `memex_memory_search`: call `memex_get_note_metadata` to check relevance.
-- After `memex_note_search`: use inline metadata directly.
-
-**Read** — only confirmed-relevant notes:
-1. `memex_get_page_index` → TOC + node IDs
-2. `memex_get_node` (parallel) → section content
-3. `memex_read_note` → only when total_tokens < 500
-
-**Assets** — required when `has_assets: true`:
-- `memex_list_assets` → `memex_get_resource` → render inline.
 
 ### Citations
 
