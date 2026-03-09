@@ -166,6 +166,10 @@ async def get_entity_cooccurrences(
             {
                 'entity_id_1': c.entity_id_1,
                 'entity_id_2': c.entity_id_2,
+                'entity_1_name': c.entity_1.canonical_name,
+                'entity_1_type': c.entity_1.entity_type,
+                'entity_2_name': c.entity_2.canonical_name,
+                'entity_2_type': c.entity_2.entity_type,
                 'cooccurrence_count': c.cooccurrence_count,
                 'vault_id': c.vault_id,
             }

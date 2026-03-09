@@ -207,15 +207,25 @@ async def test_get_entity_mentions_invalid_uuid(mock_api, mcp_client):
 async def test_get_entity_cooccurrences_success(mock_api, mcp_client):
     eid = uuid4()
     other_id = uuid4()
-    cooc = {'entity_id_1': str(eid), 'entity_id_2': str(other_id), 'cooccurrence_count': 7}
+    cooc = {
+        'entity_id_1': str(eid),
+        'entity_id_2': str(other_id),
+        'entity_1_name': 'Memex',
+        'entity_1_type': 'Technology',
+        'entity_2_name': 'Domain Layer',
+        'entity_2_type': 'Technology',
+        'cooccurrence_count': 7,
+    }
     mock_api.get_entity_cooccurrences.return_value = [cooc]
 
     result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
     text = result.content[0].text
 
     assert 'Found 1 co-occurring' in text
+    assert 'Domain Layer' in text
+    assert 'Technology' in text
     assert str(other_id) in text
-    assert 'co-occurrences: 7' in text
+    assert '7 co-occurrences' in text
 
 
 @pytest.mark.asyncio
@@ -231,6 +241,128 @@ async def test_get_entity_cooccurrences_empty(mock_api, mcp_client):
 async def test_get_entity_cooccurrences_invalid_uuid(mock_api, mcp_client):
     with pytest.raises(ToolError, match='Invalid Entity UUID'):
         await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': 'nope'})
+
+
+@pytest.mark.asyncio
+async def test_get_entity_cooccurrences_reverse_direction(mock_api, mcp_client):
+    """When queried entity is entity_id_2, entity_1 fields should be displayed."""
+    eid = uuid4()
+    other_id = uuid4()
+    cooc = {
+        'entity_id_1': str(other_id),
+        'entity_id_2': str(eid),
+        'entity_1_name': 'PostgreSQL',
+        'entity_1_type': 'Technology',
+        'entity_2_name': 'Memex',
+        'entity_2_type': 'Software',
+        'cooccurrence_count': 3,
+    }
+    mock_api.get_entity_cooccurrences.return_value = [cooc]
+
+    result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    # Should show entity_1 info (PostgreSQL), not entity_2 (Memex)
+    assert 'PostgreSQL' in text
+    assert 'Technology' in text
+    assert str(other_id) in text
+    assert '3 co-occurrences' in text
+
+
+@pytest.mark.asyncio
+async def test_get_entity_cooccurrences_no_type(mock_api, mcp_client):
+    """When entity_type is None or empty, output should not have trailing comma."""
+    eid = uuid4()
+    other_id = uuid4()
+    cooc = {
+        'entity_id_1': str(eid),
+        'entity_id_2': str(other_id),
+        'entity_1_name': 'Memex',
+        'entity_1_type': None,
+        'entity_2_name': 'SomeEntity',
+        'entity_2_type': '',
+        'cooccurrence_count': 5,
+    }
+    mock_api.get_entity_cooccurrences.return_value = [cooc]
+
+    result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    assert 'SomeEntity' in text
+    assert str(other_id) in text
+    assert '5 co-occurrences' in text
+    # Should not have ", , ID:" pattern when type is empty
+    assert ', , ID:' not in text
+
+
+@pytest.mark.asyncio
+async def test_get_entity_cooccurrences_multiple(mock_api, mcp_client):
+    """Multiple co-occurrences should all appear with names and types."""
+    eid = uuid4()
+    id1 = uuid4()
+    id2 = uuid4()
+    id3 = uuid4()
+    coocs = [
+        {
+            'entity_id_1': str(eid),
+            'entity_id_2': str(id1),
+            'entity_1_name': 'Memex',
+            'entity_1_type': 'Software',
+            'entity_2_name': 'PostgreSQL',
+            'entity_2_type': 'Technology',
+            'cooccurrence_count': 10,
+        },
+        {
+            'entity_id_1': str(eid),
+            'entity_id_2': str(id2),
+            'entity_1_name': 'Memex',
+            'entity_1_type': 'Software',
+            'entity_2_name': 'Domain Layer',
+            'entity_2_type': 'Architecture',
+            'cooccurrence_count': 7,
+        },
+        {
+            'entity_id_1': str(id3),
+            'entity_id_2': str(eid),
+            'entity_1_name': 'FastAPI',
+            'entity_1_type': 'Framework',
+            'entity_2_name': 'Memex',
+            'entity_2_type': 'Software',
+            'cooccurrence_count': 4,
+        },
+    ]
+    mock_api.get_entity_cooccurrences.return_value = coocs
+
+    result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    assert 'Found 3 co-occurring' in text
+    assert 'PostgreSQL' in text
+    assert 'Domain Layer' in text
+    assert 'FastAPI' in text
+    assert '10 co-occurrences' in text
+    assert '7 co-occurrences' in text
+    assert '4 co-occurrences' in text
+
+
+@pytest.mark.asyncio
+async def test_get_entity_cooccurrences_missing_name_fields(mock_api, mcp_client):
+    """Gracefully handle legacy data without name/type fields."""
+    eid = uuid4()
+    other_id = uuid4()
+    cooc = {
+        'entity_id_1': str(eid),
+        'entity_id_2': str(other_id),
+        'cooccurrence_count': 2,
+    }
+    mock_api.get_entity_cooccurrences.return_value = [cooc]
+
+    result = await mcp_client.call_tool('memex_get_entity_cooccurrences', {'entity_id': str(eid)})
+    text = result.content[0].text
+
+    # Should fall back to ID-only format
+    assert str(other_id) in text
+    assert '2 co-occurrences' in text
 
 
 # ── memex_get_memory_unit ──

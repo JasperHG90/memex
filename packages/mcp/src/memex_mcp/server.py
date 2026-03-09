@@ -41,62 +41,35 @@ mcp = FastMCP(
     'memex_mcp',
     instructions="""Memex is a personal knowledge management system.
 
-RETRIEVAL WORKFLOW — execute steps in order:
+ROUTING — select retrieval strategy by query type:
 
-SEARCH → pick by query type, or run both in parallel:
-  - `memex_memory_search`: broad/exploratory queries. Returns atomic facts, observations.
-  - `memex_note_search`: targeted document lookup. Returns ranked notes with inline metadata.
+IF query asks about relationships, connections, "how X fits in", "what relates to X", or landscape:
+  → ENTITY EXPLORATION (can combine with SEARCH)
+  1. `memex_list_entities(query="X")` → entity IDs, types, mention counts
+  2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
+  3. `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+  4. Read source notes via SEARCH/READ below as needed
 
-FILTER → drop irrelevant notes BEFORE reading:
-  - After `memex_memory_search`: call `memex_get_note_metadata` on each Note ID.
-  - After `memex_note_search`: metadata is already inline. DO NOT call `memex_get_note_metadata`.
+IF query asks about specific content, topics, or document lookup:
+  → SEARCH
+  1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
+  2. FILTER: after `memex_memory_search`, call `memex_get_note_metadata` per Note ID. After `memex_note_search`, metadata is inline — skip this.
+  3. READ: `memex_get_page_index` → `memex_get_node` (parallel). `memex_read_note` only when total_tokens < 500.
 
-READ → only confirmed-relevant notes:
-  - `memex_get_page_index` → TOC + node IDs. Use `depth=0` when total_tokens > 3000.
-  - `memex_get_node` (parallel) → section content.
-  - `memex_read_note` → ONLY when total_tokens < 500.
+IF query is broad (e.g. "explain X and how it fits the architecture"):
+  → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
 
-ASSETS → REQUIRED when has_assets is true:
-  - `memex_list_assets` → `memex_get_resource` to fetch the image/file.
-  - Use fetched images as input to understand visual content (architecture diagrams, flowcharts, etc.).
-  - Reproduce key visuals as Mermaid diagrams, ASCII art, or structured text descriptions in your response — don't just leave image references.
-  - NEVER create diagrams/charts without first checking assets for visual context.
+ASSETS — REQUIRED when has_assets is true:
+  `memex_list_assets` → `memex_get_resource` → use images as visual input, reproduce as Mermaid/ASCII/text in response.
+  NEVER create diagrams without first checking assets.
 
 RULES:
-- ONLY use IDs (Note, Node, Unit) that appear in tool output. If search returns empty, reformulate — never fabricate.
+- Only use IDs from tool output. Never fabricate IDs.
 - Filter before reading. Never call `memex_get_page_index` on unconfirmed notes.
 - Never use `memex_list_notes` for discovery.
-- Cite sources: [1], [2] inline. Reference list at end with source type prefix:
-  `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID.
+- Cite sources inline [1], [2]. Reference list at end: `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID.
 
-ENTITY EXPLORATION — use for relationship and "landscape" questions:
-  When the question is about how things connect, what else relates to X, or mapping a concept's
-  reach across notes, entity exploration is often MORE effective than search. Search finds documents
-  *about* a topic; entity exploration reveals the *graph of relationships* between concepts, people,
-  decisions, and systems — including cross-note connections that search cannot surface.
-
-  Use entity exploration when:
-  - The question asks how something "fits in" or "relates to" other things
-  - You want to discover connected documents you haven't found yet
-  - You need to map the scope/reach of a concept across the knowledge base
-  - You want to find cross-note relationships (e.g. which RFCs, ADRs, or decisions reference each other)
-
-  Workflow:
-  1. `memex_list_entities` — search for entities by name. Returns entity IDs, types, and mention counts.
-  2. `memex_get_entity` — get details for a specific entity.
-  3. `memex_get_entity_mentions` — find all memory units (facts, events, observations) that reference
-     this entity. Each mention comes from a different note, revealing cross-note connections.
-  4. `memex_get_entity_cooccurrences` — find entities that frequently appear alongside this one.
-     This is the fastest way to discover related concepts, people, and decisions.
-
-  Combine with search: use search to find initial documents, then use entity exploration to
-  discover what else connects to the key concepts you found.
-
-STRATEGY HINTS for `memex_memory_search`:
-  - `strategies: ["temporal"]` — chronological
-  - `strategies: ["graph"]` — entity-centric
-  - `strategies: ["mental_model"]` — synthesized observations
-  - Default (all) is best for general queries.
+`memex_memory_search` strategies: `["temporal"]` chronological, `["graph"]` entity-centric, `["mental_model"]` synthesized. Default (all) is best for general queries.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -1220,7 +1193,7 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_list_entities',
-    description='List or search entities. Without query, returns top entities by relevance.',
+    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance.\n\nEntity exploration workflow:\n1. memex_list_entities → browse/search entities by name\n2. memex_get_entity → get details (type, mention count)\n3. memex_get_entity_mentions → find facts/observations mentioning entity\n4. memex_get_entity_cooccurrences → find related entities',
 )
 async def memex_list_entities(
     ctx: Context,
@@ -1263,7 +1236,7 @@ async def memex_list_entities(
 
 @mcp.tool(
     name='memex_get_entity',
-    description='Get entity details by UUID.',
+    description='Get entity details by UUID — name, type, mention count, aliases, mental model.',
 )
 async def memex_get_entity(
     ctx: Context,
@@ -1300,7 +1273,7 @@ async def memex_get_entity(
 
 @mcp.tool(
     name='memex_get_entity_mentions',
-    description='Get memory units mentioning an entity.',
+    description='Get facts, observations, and events that mention an entity. Each mention links to its source note, revealing cross-note connections.',
 )
 async def memex_get_entity_mentions(
     ctx: Context,
@@ -1343,7 +1316,7 @@ async def memex_get_entity_mentions(
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
-    description='Get co-occurring entities for a given entity.',
+    description='Find entities that frequently appear alongside a given entity — the fastest way to map relationships and discover connected concepts. Returns entity names, types, and co-occurrence counts inline (no follow-up calls needed). Use this for "what relates to X?" questions.',
 )
 async def memex_get_entity_cooccurrences(
     ctx: Context,
@@ -1367,8 +1340,21 @@ async def memex_get_entity_cooccurrences(
             e1 = c['entity_id_1']
             e2 = c['entity_id_2']
             count = c['cooccurrence_count']
-            other_id = e2 if str(e1) == entity_id else e1
-            lines.append(f'{i}. Entity ID: {other_id} (co-occurrences: {count})')
+            if str(e1) == entity_id:
+                other_name = c.get('entity_2_name', '')
+                other_type = c.get('entity_2_type', '')
+                other_id = e2
+            else:
+                other_name = c.get('entity_1_name', '')
+                other_type = c.get('entity_1_type', '')
+                other_id = e1
+            if other_name:
+                lines.append(
+                    f'{i}. **{other_name}** ({other_type}{", " if other_type else ""}'
+                    f'ID: {other_id}) — {count} co-occurrences'
+                )
+            else:
+                lines.append(f'{i}. Entity ID: {other_id} — {count} co-occurrences')
 
         return '\n'.join(lines)
 

@@ -71,13 +71,25 @@ class EntityService(BaseService):
         self, entity_id: UUID | str, vault_ids: list[UUID] | None = None
     ) -> list[Any]:
         """Get co-occurrence edges for an entity."""
-        from memex_core.memory.sql_models import EntityCooccurrence
+        from sqlalchemy.orm import selectinload
         from sqlmodel import or_, select
+
+        from memex_core.memory.sql_models import EntityCooccurrence
 
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
-            stmt = select(EntityCooccurrence).where(
-                or_(EntityCooccurrence.entity_id_1 == eid, EntityCooccurrence.entity_id_2 == eid)
+            stmt = (
+                select(EntityCooccurrence)
+                .options(
+                    selectinload(EntityCooccurrence.entity_1),  # type: ignore[arg-type]
+                    selectinload(EntityCooccurrence.entity_2),  # type: ignore[arg-type]
+                )
+                .where(
+                    or_(
+                        EntityCooccurrence.entity_id_1 == eid,
+                        EntityCooccurrence.entity_id_2 == eid,
+                    )
+                )
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
