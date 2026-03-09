@@ -68,7 +68,7 @@ async def test_integration_search_assets_resource(mock_api):
         assert 'assets/arch.png' in assets_text
 
         # Step 3: Get Resource (batch)
-        await client.call_tool('memex_get_resource', {'paths': ['assets/arch.png']})
+        await client.call_tool('memex_get_resources', {'paths': ['assets/arch.png']})
 
         # Verify it returns file:// URI for local images
         mock_api.get_resource_path.assert_called_once_with('assets/arch.png')

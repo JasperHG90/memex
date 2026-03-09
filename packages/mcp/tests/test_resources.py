@@ -8,7 +8,7 @@ async def test_mcp_get_resource_image(mock_api, mcp_client):
     """Test retrieving an image resource returns file:// URI for local stores."""
     mock_api.get_resource_path = MagicMock(return_value='/data/images/test.png')
 
-    result = await mcp_client.call_tool('memex_get_resource', {'paths': ['images/test.png']})
+    result = await mcp_client.call_tool('memex_get_resources', {'paths': ['images/test.png']})
 
     assert len(result.content) == 1
     content = result.content[0]
@@ -24,7 +24,7 @@ async def test_mcp_get_resource_text(mock_api, mcp_client):
     mock_api.get_resource_path = MagicMock(return_value=None)
     mock_api.get_resource.return_value = b'Hello World'
 
-    result = await mcp_client.call_tool('memex_get_resource', {'paths': ['notes/test.txt']})
+    result = await mcp_client.call_tool('memex_get_resources', {'paths': ['notes/test.txt']})
 
     # Batch returns a list — first item should be an EmbeddedResource
     assert len(result.content) >= 1
@@ -37,14 +37,14 @@ async def test_mcp_get_resource_text(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_mcp_get_resource_with_vault_id(mock_api, mcp_client):
-    """Test memex_get_resource accepts vault_id parameter."""
+    """Test memex_get_resources accepts vault_id parameter."""
     vault_id = uuid4()
 
     mock_api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
     mock_api.get_resource_path = MagicMock(return_value='/data/images/test.png')
 
     result = await mcp_client.call_tool(
-        'memex_get_resource', {'paths': ['images/test.png'], 'vault_id': str(vault_id)}
+        'memex_get_resources', {'paths': ['images/test.png'], 'vault_id': str(vault_id)}
     )
 
     assert len(result.content) == 1
@@ -57,7 +57,7 @@ async def test_mcp_get_resource_multiple_paths(mock_api, mcp_client):
     mock_api.get_resource_path = MagicMock(side_effect=['/data/img1.png', '/data/img2.png'])
 
     result = await mcp_client.call_tool(
-        'memex_get_resource', {'paths': ['images/img1.png', 'images/img2.png']}
+        'memex_get_resources', {'paths': ['images/img1.png', 'images/img2.png']}
     )
 
     # Should get two file:// URIs
@@ -74,7 +74,7 @@ async def test_mcp_get_resource_partial_failure(mock_api, mcp_client):
     mock_api.get_resource.side_effect = RuntimeError('not found')
 
     result = await mcp_client.call_tool(
-        'memex_get_resource', {'paths': ['images/ok.png', 'images/bad.txt']}
+        'memex_get_resources', {'paths': ['images/ok.png', 'images/bad.txt']}
     )
 
     texts = [c.text for c in result.content if hasattr(c, 'text')]

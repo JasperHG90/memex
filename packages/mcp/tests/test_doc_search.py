@@ -152,4 +152,4 @@ async def test_memex_note_search_tip_always_present(mock_api, mcp_client):
     result = await mcp_client.call_tool('memex_note_search', {'query': 'anything'})
     text = result.content[0].text
 
-    assert 'memex_get_page_index' in text
+    assert 'memex_get_page_indices' in text
