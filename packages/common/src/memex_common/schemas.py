@@ -727,6 +727,7 @@ class NodeDTO(BaseModel):
     id: UUID
     note_id: UUID
     vault_id: UUID
+    node_hash: str | None = None
     title: str
     text: str
     level: int
