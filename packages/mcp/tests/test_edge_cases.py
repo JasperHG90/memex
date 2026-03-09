@@ -167,6 +167,155 @@ class TestGetNodesEdgeCases:
         assert 'Errors' not in text  # not in the old error block format
 
     @pytest.mark.asyncio
+    async def test_hash_matched_node_not_reported_missing(self, mock_api, mcp_client):
+        """Node found via node_hash (page index hash ID) should not be reported as missing.
+
+        Page index IDs are MD5 content hashes, not the node's primary key UUID.
+        When an agent passes a hash ID, UUID(hash_hex) != node.id, but the node
+        is found via the node_hash column. The found_hashes tracking must suppress
+        the "not found" hint for these IDs.
+        """
+        # Simulate: agent passes hash "aabbccdd..." from page index.
+        # UUID("aabbccdd...") parses fine but is NOT the node's primary key.
+        hash_hex = 'aabbccdd11223344aabbccdd11223344'
+        real_node_id = uuid4()  # different from UUID(hash_hex)
+
+        mock_api.get_nodes.return_value = [
+            NodeDTO(
+                id=real_node_id,
+                note_id=uuid4(),
+                vault_id=uuid4(),
+                title='Hash-Matched Section',
+                text='Found via hash.',
+                level=1,
+                node_hash=hash_hex,
+                seq=0,
+                status='active',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            ),
+        ]
+
+        result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [hash_hex]})
+        text = result.content[0].text
+
+        assert 'Hash-Matched Section' in text
+        assert 'Found via hash.' in text
+        # Must NOT report the hash ID as "not found"
+        assert 'not found' not in text
+        assert 'parent sections' not in text
+
+    @pytest.mark.asyncio
+    async def test_hash_id_mixed_with_uuid_id(self, mock_api, mcp_client):
+        """Mix of hash-matched and UUID-matched nodes: both found, no errors."""
+        hash_hex = 'deadbeef12345678deadbeef12345678'
+        uuid_node_id = uuid4()
+
+        mock_api.get_nodes.return_value = [
+            NodeDTO(
+                id=uuid4(),  # different from UUID(hash_hex)
+                note_id=uuid4(),
+                vault_id=uuid4(),
+                title='Via Hash',
+                text='Hash content.',
+                level=1,
+                node_hash=hash_hex,
+                seq=0,
+                status='active',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            ),
+            NodeDTO(
+                id=uuid_node_id,
+                note_id=uuid4(),
+                vault_id=uuid4(),
+                title='Via UUID',
+                text='UUID content.',
+                level=2,
+                node_hash='other_hash',
+                seq=1,
+                status='active',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            ),
+        ]
+
+        result = await mcp_client.call_tool(
+            'memex_get_nodes', {'node_ids': [hash_hex, str(uuid_node_id)]}
+        )
+        text = result.content[0].text
+
+        assert 'Via Hash' in text
+        assert 'Via UUID' in text
+        assert 'not found' not in text
+
+    @pytest.mark.asyncio
+    async def test_hash_matched_plus_missing_shows_hint_only_for_missing(
+        self, mock_api, mcp_client
+    ):
+        """Hash-matched node OK, truly missing node gets the hint."""
+        hash_hex = 'abcdef0123456789abcdef0123456789'
+        missing_id = uuid4()
+
+        mock_api.get_nodes.return_value = [
+            NodeDTO(
+                id=uuid4(),
+                note_id=uuid4(),
+                vault_id=uuid4(),
+                title='Found By Hash',
+                text='Content.',
+                level=1,
+                node_hash=hash_hex,
+                seq=0,
+                status='active',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            ),
+        ]
+
+        result = await mcp_client.call_tool(
+            'memex_get_nodes', {'node_ids': [hash_hex, str(missing_id)]}
+        )
+        text = result.content[0].text
+
+        assert 'Found By Hash' in text
+        # Only the truly missing ID should appear in the hint
+        assert str(missing_id) in text
+        assert (
+            hash_hex not in text.split('not found')[0].split('**Note:**')[-1]
+            if '**Note:**' in text
+            else True
+        )
+        assert 'parent sections' in text
+
+    @pytest.mark.asyncio
+    async def test_more_than_five_missing_truncated(self, mock_api, mcp_client):
+        """When >5 IDs are not found, output truncates with '...'."""
+        missing_ids = [uuid4() for _ in range(7)]
+        mock_api.get_nodes.return_value = []
+
+        result = await mcp_client.call_tool(
+            'memex_get_nodes', {'node_ids': [str(m) for m in missing_ids]}
+        )
+        text = result.content[0].text
+
+        assert '7 node ID(s) not found' in text
+        assert '...' in text
+        # Only first 5 IDs should be listed
+        for mid in missing_ids[:5]:
+            assert str(mid) in text
+        for mid in missing_ids[5:]:
+            assert str(mid) not in text
+
+    @pytest.mark.asyncio
+    async def test_not_found_hint_not_in_errors_block(self, mock_api, mcp_client):
+        """Not-found hint should be a **Note:** block, not an ### Errors block."""
+        mock_api.get_nodes.return_value = []
+
+        result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(uuid4())]})
+        text = result.content[0].text
+
+        assert '**Note:**' in text
+        assert 'memex_get_page_indices' in text
+        assert '### Errors' not in text
+
+    @pytest.mark.asyncio
     async def test_node_with_empty_text(self, mock_api, mcp_client):
         """Node with text=None or text='' should show placeholder."""
         nid = uuid4()
