@@ -38,12 +38,12 @@ PROHIBITED:
 - After `memex_note_search`: use inline metadata directly.
 
 **Read** — only confirmed-relevant notes:
-1. `memex_get_page_index` → TOC + node IDs
+1. `memex_get_page_index` (accepts 1+ note IDs) → TOC + node IDs
 2. `memex_get_nodes` (batch) → section content
 3. `memex_read_note` → only when total_tokens < 500
 
 **Assets** — required when `has_assets: true`:
-- `memex_list_assets` → `memex_get_resource` → render inline.
+- `memex_list_assets` → `memex_get_resource` (accepts 1+ paths) → render inline.
 
 ### Citations
 

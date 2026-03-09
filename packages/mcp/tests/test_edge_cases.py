@@ -58,13 +58,40 @@ class TestGetNodesEdgeCases:
         assert 'not found' not in text
 
     @pytest.mark.asyncio
-    async def test_api_exception_becomes_tool_error(self, mock_api, mcp_client):
-        """If the batch API call itself throws, the tool should raise ToolError."""
+    async def test_api_exception_falls_back_to_individual(self, mock_api, mcp_client):
+        """If batch call fails, tool falls back to individual get_node calls."""
         nid = uuid4()
-        mock_api.get_nodes.side_effect = RuntimeError('connection reset')
+        mock_api.get_nodes.side_effect = RuntimeError('batch not supported')
+        node = NodeDTO(
+            id=nid,
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            title='Fallback Node',
+            text='Recovered.',
+            level=1,
+            seq=0,
+            status='active',
+            created_at=dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc),
+        )
+        mock_api.get_node.return_value = node
 
-        with pytest.raises(ToolError, match='connection reset'):
-            await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
+        result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
+        text = result.content[0].text
+
+        assert 'Fallback Node' in text
+        mock_api.get_node.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_both_batch_and_individual_fail(self, mock_api, mcp_client):
+        """If both batch and individual lookups fail, report errors."""
+        nid = uuid4()
+        mock_api.get_nodes.side_effect = RuntimeError('batch down')
+        mock_api.get_node.side_effect = RuntimeError('also down')
+
+        result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
+        text = result.content[0].text
+
+        assert 'also down' in text
 
     @pytest.mark.asyncio
     async def test_mixed_valid_and_invalid_uuids(self, mock_api, mcp_client):

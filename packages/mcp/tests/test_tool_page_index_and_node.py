@@ -46,7 +46,7 @@ async def test_memex_get_page_index_returns_json(mock_api, mcp_client):
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(doc_id)})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(doc_id)]})
     text = result.content[0].text
 
     assert 'Chapter 1' in text
@@ -59,7 +59,7 @@ async def test_memex_get_page_index_no_index(mock_api, mcp_client):
     """Tool returns a helpful message when the document has no page index."""
     mock_api.get_note_page_index.return_value = None
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
     text = result.content[0].text
 
     assert 'No page index available' in text
@@ -69,7 +69,7 @@ async def test_memex_get_page_index_no_index(mock_api, mcp_client):
 async def test_memex_get_page_index_invalid_uuid(mock_api, mcp_client):
     """Tool raises ToolError for a malformed document UUID."""
     with pytest.raises(ToolError, match='Invalid Note UUID'):
-        await mcp_client.call_tool('memex_get_page_index', {'note_id': 'not-a-uuid'})
+        await mcp_client.call_tool('memex_get_page_index', {'note_ids': ['not-a-uuid']})
 
     mock_api.get_note_page_index.assert_not_called()
 
@@ -80,7 +80,7 @@ async def test_memex_get_page_index_exception_handling(mock_api, mcp_client):
     mock_api.get_note_page_index.side_effect = RuntimeError('DB offline')
 
     with pytest.raises(ToolError, match='DB offline'):
-        await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+        await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +140,14 @@ async def test_memex_get_nodes_empty_text(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_memex_get_nodes_exception_handling(mock_api, mcp_client):
-    """Tool raises ToolError on unexpected failure."""
+    """Tool reports error when both batch and individual lookups fail."""
     mock_api.get_nodes.side_effect = RuntimeError('connection reset')
+    mock_api.get_node.side_effect = RuntimeError('connection reset')
 
-    with pytest.raises(ToolError, match='connection reset'):
-        await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(uuid4())]})
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(uuid4())]})
+    text = result.content[0].text
+
+    assert 'connection reset' in text
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +179,7 @@ async def test_memex_get_page_index_includes_total_tokens(mock_api, mcp_client):
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
     data = json.loads(result.content[0].text)
 
     assert data['total_tokens'] == 2000
@@ -210,7 +213,7 @@ async def test_memex_get_page_index_blocks_large_unfiltered(mock_api, mcp_client
     mock_api.get_note_page_index.return_value = page_index
 
     with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+        await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
 
 
 @pytest.mark.asyncio
@@ -237,7 +240,7 @@ async def test_memex_get_page_index_allows_large_content_small_toc(mock_api, mcp
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
     data = json.loads(result.content[0].text)
 
     # Should return successfully with the content total_tokens preserved
@@ -272,7 +275,7 @@ async def test_memex_get_page_index_toc_guard_includes_summaries(mock_api, mcp_c
     mock_api.get_note_page_index.return_value = page_index
 
     with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+        await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
 
 
 @pytest.mark.asyncio
@@ -320,7 +323,7 @@ async def test_memex_get_page_index_toc_guard_counts_nested_children(mock_api, m
     mock_api.get_note_page_index.return_value = page_index
 
     with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+        await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
 
 
 @pytest.mark.asyncio
@@ -342,7 +345,7 @@ async def test_memex_get_page_index_small_toc_no_summaries_passes(mock_api, mcp_
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
     data = json.loads(result.content[0].text)
 
     assert data['total_tokens'] == 5000
@@ -367,7 +370,7 @@ async def test_memex_get_page_index_allows_large_with_depth(mock_api, mcp_client
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -400,7 +403,7 @@ async def test_memex_get_page_index_falls_back_to_recursive_sum(mock_api, mcp_cl
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    result = await mcp_client.call_tool('memex_get_page_index', {'note_id': str(uuid4())})
+    result = await mcp_client.call_tool('memex_get_page_index', {'note_ids': [str(uuid4())]})
     data = json.loads(result.content[0].text)
 
     assert data['total_tokens'] == 350
@@ -474,7 +477,7 @@ async def test_memex_get_page_index_depth_filters_toc(mock_api, mcp_client):
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -497,7 +500,7 @@ async def test_memex_get_page_index_parent_node_id_filters_subtree(mock_api, mcp
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'parent_node_id': root_id}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'parent_node_id': root_id}
     )
     data = json.loads(result.content[0].text)
 
@@ -512,7 +515,7 @@ async def test_memex_get_page_index_filtered_total_tokens_uses_recursive_sum(moc
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -560,7 +563,7 @@ async def test_memex_get_page_index_depth_0_includes_h2_children(mock_api, mcp_c
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -604,7 +607,7 @@ async def test_memex_get_page_index_depth_0_trims_grandchildren(mock_api, mcp_cl
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -620,7 +623,7 @@ async def test_memex_get_page_index_depth_1_returns_full_tree(mock_api, mcp_clie
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 1}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 1}
     )
     data = json.loads(result.content[0].text)
 
@@ -638,7 +641,7 @@ async def test_memex_get_page_index_depth_1_total_tokens_includes_all(mock_api, 
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 1}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 1}
     )
     data = json.loads(result.content[0].text)
 
@@ -671,7 +674,7 @@ async def test_memex_get_page_index_depth_0_flat_note(mock_api, mcp_client):
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 0}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 0}
     )
     data = json.loads(result.content[0].text)
 
@@ -690,7 +693,7 @@ async def test_memex_get_page_index_depth_0_with_parent_node(mock_api, mcp_clien
 
     result = await mcp_client.call_tool(
         'memex_get_page_index',
-        {'note_id': str(uuid4()), 'depth': 0, 'parent_node_id': root_id},
+        {'note_ids': [str(uuid4())], 'depth': 0, 'parent_node_id': root_id},
     )
     data = json.loads(result.content[0].text)
 
@@ -708,7 +711,7 @@ async def test_memex_get_page_index_depth_high_value_returns_full(mock_api, mcp_
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool(
-        'memex_get_page_index', {'note_id': str(uuid4()), 'depth': 99}
+        'memex_get_page_index', {'note_ids': [str(uuid4())], 'depth': 99}
     )
     data = json.loads(result.content[0].text)
 
