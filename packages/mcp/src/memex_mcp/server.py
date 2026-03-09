@@ -1195,7 +1195,7 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_list_entities',
-    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance.\n\nEntity exploration workflow:\n1. memex_list_entities → browse/search entities by name\n2. memex_get_entity → get details (type, mention count)\n3. memex_get_entity_mentions → find facts/observations mentioning entity\n4. memex_get_entity_cooccurrences → find related entities',
+    description='List or search entities in the knowledge graph. Without a query, returns top entities by relevance. Use vault_id to scope to entities mentioned in a specific vault.\n\nEntity exploration workflow:\n1. memex_list_entities → browse/search entities by name (optionally vault-scoped)\n2. memex_get_entity → get details (type, mention count)\n3. memex_get_entity_mentions → find facts/observations mentioning entity\n4. memex_get_entity_cooccurrences → find related entities',
 )
 async def memex_list_entities(
     ctx: Context,
@@ -1204,22 +1204,25 @@ async def memex_list_entities(
     ] = None,
     limit: Annotated[int, Field(description='Max entities to return.')] = 20,
     vault_id: Annotated[
-        str | None, Field(default=None, description='Vault UUID or name filter.')
+        str | None,
+        Field(
+            default=None,
+            description='Vault UUID or name. Scopes results to entities mentioned in this vault.',
+        ),
     ] = None,
 ) -> str:
     """List or search entities."""
     try:
         api = get_api(ctx)
-        resolved_vault_id = None
+        vault_ids: list[UUID | str] | None = None
         if vault_id:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+            resolved = await api.resolve_vault_identifier(vault_id)
+            vault_ids = [resolved] if resolved else None
 
         if query:
-            entities = await api.search_entities(query, limit=limit, vault_id=resolved_vault_id)
+            entities = await api.search_entities(query, limit=limit, vault_ids=vault_ids)
         else:
-            entities = [
-                e async for e in api.list_entities_ranked(limit=limit, vault_id=resolved_vault_id)
-            ]
+            entities = [e async for e in api.list_entities_ranked(limit=limit, vault_ids=vault_ids)]
 
         if not entities:
             return 'No entities found.'
