@@ -194,7 +194,7 @@ async def test_mcp_list_tools(mcp_client):
     assert 'memex_get_note_metadata' not in names
     assert 'memex_get_memory_unit' not in names
     assert 'memex_get_entity' not in names
-    assert 'memex_list_notes' not in names
+    assert 'memex_list_notes' in names
 
     # Tool descriptions should guide agents to use leaf node IDs
     tool_by_name = {t.name: t for t in tools}

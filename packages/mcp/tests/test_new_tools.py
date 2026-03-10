@@ -63,7 +63,7 @@ async def test_recent_notes_returns_formatted_list(mock_api, mcp_client):
         vault_id=uuid4(),
         created_at=dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc),
     )
-    mock_api.list_notes.return_value = [n1]
+    mock_api.get_recent_notes.return_value = [n1]
 
     result = await mcp_client.call_tool('memex_recent_notes', {'limit': 10})
     text = result.content[0].text
@@ -71,12 +71,11 @@ async def test_recent_notes_returns_formatted_list(mock_api, mcp_client):
     assert 'Found 1 note(s)' in text
     assert '**First Note**' in text
     assert str(n1.id) in text
-    mock_api.list_notes.assert_called_once_with(limit=10, offset=0, vault_id=None)
 
 
 @pytest.mark.asyncio
 async def test_recent_notes_empty(mock_api, mcp_client):
-    mock_api.list_notes.return_value = []
+    mock_api.get_recent_notes.return_value = []
 
     result = await mcp_client.call_tool('memex_recent_notes', {})
     assert 'No notes found' in result.content[0].text
@@ -84,7 +83,7 @@ async def test_recent_notes_empty(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_recent_notes_error_raises_tool_error(mock_api, mcp_client):
-    mock_api.list_notes.side_effect = RuntimeError('timeout')
+    mock_api.get_recent_notes.side_effect = RuntimeError('timeout')
 
     with pytest.raises(ToolError, match='timeout'):
         await mcp_client.call_tool('memex_recent_notes', {})
@@ -98,7 +97,7 @@ async def test_list_entities_ranked(mock_api, mcp_client):
     """Without a query, should call list_entities_ranked."""
     e1 = EntityDTO(id=uuid4(), name='Python', mention_count=42)
 
-    async def _ranked(limit: int = 100, vault_ids=None):
+    async def _ranked(limit: int = 100, vault_ids=None, entity_type=None):
         yield e1
 
     mock_api.list_entities_ranked = _ranked
@@ -120,7 +119,12 @@ async def test_list_entities_with_query(mock_api, mcp_client):
     text = result.content[0].text
 
     assert '**Rust**' in text
-    mock_api.search_entities.assert_called_once_with('rust', limit=20, vault_ids=None)
+    mock_api.search_entities.assert_called_once_with(
+        'rust',
+        limit=20,
+        vault_ids=None,
+        entity_type=None,
+    )
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,36 @@ class TestBuildNoteDtoDict:
 
         assert dto.assets == []
 
+    def test_includes_publish_date(self):
+        pub = dt.datetime(2024, 6, 15, tzinfo=dt.timezone.utc)
+        doc = {
+            'id': uuid4(),
+            'title': 'Test Note',
+            'original_text': 'hello',
+            'created_at': dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            'vault_id': uuid4(),
+            'doc_metadata': {},
+            'publish_date': pub,
+        }
+
+        dto = build_note_dto(doc)
+
+        assert dto.publish_date == pub
+
+    def test_publish_date_defaults_to_none(self):
+        doc = {
+            'id': uuid4(),
+            'title': 'Test Note',
+            'original_text': 'hello',
+            'created_at': dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            'vault_id': uuid4(),
+            'doc_metadata': {},
+        }
+
+        dto = build_note_dto(doc)
+
+        assert dto.publish_date is None
+
 
 class TestBuildNoteDtoORM:
     """Tests for the ORM object construction path."""
@@ -71,6 +101,37 @@ class TestBuildNoteDtoORM:
         dto = build_note_dto(doc)
 
         assert dto.assets == []
+
+    def test_includes_publish_date(self):
+        pub = dt.datetime(2024, 6, 15, tzinfo=dt.timezone.utc)
+        doc = SimpleNamespace(
+            id=uuid4(),
+            title='Test Note',
+            original_text='hello',
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            vault_id=uuid4(),
+            doc_metadata={},
+            assets=['assets/img.png'],
+            publish_date=pub,
+        )
+
+        dto = build_note_dto(doc)
+
+        assert dto.publish_date == pub
+
+    def test_publish_date_defaults_to_none(self):
+        doc = SimpleNamespace(
+            id=uuid4(),
+            title='Test Note',
+            original_text='hello',
+            created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            vault_id=uuid4(),
+            doc_metadata={},
+        )
+
+        dto = build_note_dto(doc)
+
+        assert dto.publish_date is None
 
     def test_assets_none_becomes_empty_list(self):
         doc = SimpleNamespace(
