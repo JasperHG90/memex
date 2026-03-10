@@ -196,9 +196,15 @@ publish_date: {extracted.metadata.get('date')}
 
         now = datetime.now().isoformat()
 
+        extra_fm = ''
+        if extracted.metadata.get('author'):
+            extra_fm += f'\nauthor: {extracted.metadata["author"]}'
+        if extracted.metadata.get('creation_date'):
+            extra_fm += f'\ncreated_date: {extracted.metadata["creation_date"].isoformat()}'
+
         note_content = f"""---
 source_file: {path.name}
-type: {extracted.content_type}
+type: {extracted.content_type}{extra_fm}
 ingested_at: {now}
 ---
 {extracted.content}
@@ -206,8 +212,10 @@ ingested_at: {now}
 
         original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
 
+        name = extracted.metadata.get('title') or path.stem
+
         note = NoteInput(
-            name=path.stem,
+            name=name,
             description=f'Content from {path.name}',
             content=note_content.encode('utf-8'),
             tags=['file-import'],
@@ -216,14 +224,27 @@ ingested_at: {now}
             files=extracted.images,
         )
 
-        # Resolve document date: file mtime -> LLM fallback -> now()
-        event_date = extracted.document_date
-        if event_date is None:
+        # Resolve document date: LLM content extraction -> PDF metadata -> file mtime -> now()
+        # 1. LLM content date (highest priority)
+        event_date = None
+        if extracted.document_date is None:
             async with self.metastore.session() as date_session:
                 event_date = await extract_document_date(
                     extracted.content, self.lm, date_session, target_vault_id
                 )
                 await date_session.commit()
+
+        # 2. PDF metadata creation date
+        if event_date is None:
+            event_date = extracted.metadata.get('creation_date')
+
+        # 3. File processor's document_date (mtime — will be None for PDFs now)
+        if event_date is None:
+            event_date = extracted.document_date
+
+        # 4. Final fallback — avoids duplicate LLM call inside ingest()
+        if event_date is None:
+            event_date = datetime.now(timezone.utc)
 
         return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
 
