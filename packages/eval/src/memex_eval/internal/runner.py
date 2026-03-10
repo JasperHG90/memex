@@ -73,7 +73,7 @@ async def run_benchmark(
     async with httpx.AsyncClient(base_url=server_url, timeout=180.0) as client:
         api = RemoteMemexAPI(client)
 
-        vault_id = await _setup_vault(api)
+        vault_id = await _setup_vault(api, VAULT_NAME, 'Automated quality benchmark vault.')
         logger.info('Using vault %s (id=%s)', VAULT_NAME, vault_id)
 
         for group in groups:
@@ -95,24 +95,19 @@ def _select_groups(group_filter: str | None) -> list[ScenarioGroup]:
     return [group]
 
 
-async def _setup_vault(api: RemoteMemexAPI) -> UUID:
-    """Create or clean the benchmark vault."""
+async def _setup_vault(api: RemoteMemexAPI, name: str, description: str) -> UUID:
+    """Create or clean a vault by name."""
     vaults = await api.list_vaults()
     for vault in vaults:
-        if vault.name == VAULT_NAME:
-            logger.info('Cleaning existing benchmark vault...')
-            # Delete all notes in the vault
+        if vault.name == name:
+            logger.info('Cleaning existing vault "%s"...', name)
             notes = await api.list_notes(vault_id=vault.id, limit=500)
             for note in notes:
                 await api.delete_note(note.id)
-            await api.set_writer_vault(str(vault.id))
             return vault.id
 
-    logger.info('Creating benchmark vault...')
-    vault = await api.create_vault(
-        CreateVaultRequest(name=VAULT_NAME, description='Automated quality benchmark vault.')
-    )
-    await api.set_writer_vault(str(vault.id))
+    logger.info('Creating vault "%s"...', name)
+    vault = await api.create_vault(CreateVaultRequest(name=name, description=description))
     return vault.id
 
 
@@ -125,10 +120,18 @@ async def _run_group(
     """Run all checks for a scenario group."""
     group_result = GroupResult(name=group.name, description=group.description)
 
+    # Build vault map: vault_name -> vault_id (None = default vault)
+    vault_map: dict[str | None, UUID] = {None: vault_id}
+    extra_vault_names = {doc.vault_name for doc in group.docs if doc.vault_name}
+    extra_vault_names |= {c.vault_name for c in group.checks if c.vault_name}
+    for name in extra_vault_names:
+        vault_map[name] = await _setup_vault(api, name, f'Benchmark vault: {name}')
+        logger.info('  Extra vault "%s" (id=%s)', name, vault_map[name])
+
     # Phase 1: Ingest documents
     if group.docs:
         ingest_start = time.monotonic()
-        await _ingest_docs(api, vault_id, group)
+        await _ingest_docs(api, vault_map, group)
         group_result.ingest_duration_ms = (time.monotonic() - ingest_start) * 1000
 
     # Phase 2: Handle reflection group specially
@@ -139,7 +142,8 @@ async def _run_group(
 
     # Phase 3: Run checks
     for check in group.checks:
-        check_result = await _execute_check(api, vault_id, group.name, check, judge)
+        check_vault_id = vault_map.get(check.vault_name, vault_id)
+        check_result = await _execute_check(api, check_vault_id, group.name, check, judge)
         group_result.checks.append(check_result)
 
     return group_result
@@ -147,17 +151,24 @@ async def _run_group(
 
 async def _ingest_docs(
     api: RemoteMemexAPI,
-    vault_id: UUID,
+    vault_map: dict[str | None, UUID],
     group: ScenarioGroup,
 ) -> None:
-    """Ingest scenario documents into the vault."""
+    """Ingest scenario documents into their respective vaults."""
+    default_vault_id = vault_map[None]
+    vaults_with_docs: set[UUID] = set()
+
     for doc in group.docs:
+        doc_vault_id = vault_map.get(doc.vault_name, default_vault_id)
+        vaults_with_docs.add(doc_vault_id)
+
         note = NoteCreateDTO(
             name=doc.title,
             description=doc.description,
             content=doc.content_b64,
+            files=doc.files_b64 if doc.files else {},
             tags=doc.tags,
-            vault_id=str(vault_id),
+            vault_id=str(doc_vault_id),
             note_key=f'bench-{doc.filename}',
         )
         logger.info('  Ingesting: %s', doc.title)
@@ -170,11 +181,12 @@ async def _ingest_docs(
 
         # For sequential ingest, wait between docs to allow extraction
         if group.sequential_ingest:
-            await _wait_for_extraction(api, vault_id)
+            await _wait_for_extraction(api, doc_vault_id)
 
     # Wait for all extraction to complete
     if not group.sequential_ingest:
-        await _wait_for_extraction(api, vault_id)
+        for vid in vaults_with_docs:
+            await _wait_for_extraction(api, vid)
 
 
 async def _wait_for_extraction(api: RemoteMemexAPI, vault_id: UUID) -> None:
@@ -183,10 +195,19 @@ async def _wait_for_extraction(api: RemoteMemexAPI, vault_id: UUID) -> None:
     prev_count = -1
     stable_ticks = 0
     start = time.monotonic()
+    consecutive_errors = 0
 
     while time.monotonic() - start < POLL_TIMEOUT:
         await asyncio.sleep(POLL_INTERVAL)
-        stats = await api.get_stats_counts(vault_id=vault_id)
+        try:
+            stats = await api.get_stats_counts(vault_id=vault_id)
+            consecutive_errors = 0
+        except Exception as e:
+            consecutive_errors += 1
+            logger.warning('  Poll error (%d): %s', consecutive_errors, e)
+            if consecutive_errors >= 5:
+                raise
+            continue
         current = stats.memories
 
         if current == prev_count and current > 0:
@@ -227,6 +248,8 @@ async def _execute_check(
     judge: Judge | None,
 ) -> CheckResult:
     """Execute a single check by querying Memex and evaluating the result."""
+    full_start = time.monotonic()
+
     memory_results = None
     note_results = None
     entity_names: list[str] = []
@@ -300,7 +323,7 @@ async def _execute_check(
             actual=f'Query error: {e}',
         )
 
-    return run_check(
+    result = run_check(
         check=check,
         group_name=group_name,
         memory_results=memory_results,
@@ -311,3 +334,20 @@ async def _execute_check(
         cooccurrences=cooccurrences,
         mentions=mentions,
     )
+
+    # Override duration with full time (including API call)
+    result.duration_ms = (time.monotonic() - full_start) * 1000
+
+    # Timing assertion
+    if (
+        check.max_duration_ms is not None
+        and result.status == CheckStatus.PASS
+        and result.duration_ms > check.max_duration_ms
+    ):
+        result.status = CheckStatus.FAIL
+        result.actual = (
+            f'Exceeded time limit: {result.duration_ms:.0f}ms > '
+            f'{check.max_duration_ms:.0f}ms. {result.actual}'
+        )
+
+    return result
