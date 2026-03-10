@@ -1138,8 +1138,88 @@ async def memex_list_vaults(ctx: Context) -> str:
 
 
 @mcp.tool(
+    name='memex_list_notes',
+    description=(
+        'List notes with optional date filters. '
+        "Use after/before for temporal queries like 'documents from 2026'."
+    ),
+)
+async def memex_list_notes(
+    ctx: Context,
+    after: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Only notes on/after this date (ISO 8601, e.g. 2026-01-01).',
+        ),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Only notes on/before this date (ISO 8601, e.g. 2026-12-31).',
+        ),
+    ] = None,
+    limit: Annotated[int, Field(description='Max notes to return.')] = 50,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
+        ),
+    ] = None,
+) -> str:
+    """List notes with optional date filters."""
+    from datetime import datetime as _dt
+
+    try:
+        api = get_api(ctx)
+        resolved_vault_id = None
+        if vault_id:
+            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+
+        parsed_after = None
+        parsed_before = None
+        if after is not None:
+            try:
+                parsed_after = _dt.fromisoformat(after)
+            except ValueError:
+                raise ToolError(f'Invalid after date: {after}')
+        if before is not None:
+            try:
+                parsed_before = _dt.fromisoformat(before)
+            except ValueError:
+                raise ToolError(f'Invalid before date: {before}')
+
+        notes = await api.list_notes(
+            limit=limit,
+            offset=0,
+            vault_id=resolved_vault_id,
+            after=parsed_after,
+            before=parsed_before,
+        )
+
+        if not notes:
+            return 'No notes found.'
+
+        lines = [f'Found {len(notes)} note(s):\n']
+        for i, n in enumerate(notes, 1):
+            title = n.title or 'Untitled'
+            pub = f', publish_date: {n.publish_date}' if n.publish_date else ''
+            lines.append(f'{i}. **{title}** (ID: {n.id}, created: {n.created_at}{pub})')
+
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'List notes failed: {e}', exc_info=True)
+        raise ToolError(f'List notes failed: {e}')
+
+
+@mcp.tool(
     name='memex_recent_notes',
-    description='Browse recent notes. Filter by vault name or UUID.',
+    description='Browse recent notes. Filter by vault name or UUID and optional date range.',
 )
 async def memex_recent_notes(
     ctx: Context,
@@ -1151,14 +1231,49 @@ async def memex_recent_notes(
             description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
         ),
     ] = None,
+    after: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Only notes on/after this date (ISO 8601).',
+        ),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Only notes on/before this date (ISO 8601).',
+        ),
+    ] = None,
 ) -> str:
     """List recent notes."""
+    from datetime import datetime as _dt
+
     try:
         api = get_api(ctx)
         resolved_vault_id = None
         if vault_id:
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
-        notes = await api.list_notes(limit=limit, offset=0, vault_id=resolved_vault_id)
+
+        parsed_after = None
+        parsed_before = None
+        if after is not None:
+            try:
+                parsed_after = _dt.fromisoformat(after)
+            except ValueError:
+                raise ToolError(f'Invalid after date: {after}')
+        if before is not None:
+            try:
+                parsed_before = _dt.fromisoformat(before)
+            except ValueError:
+                raise ToolError(f'Invalid before date: {before}')
+
+        notes = await api.get_recent_notes(
+            limit=limit,
+            vault_id=resolved_vault_id,
+            after=parsed_after,
+            before=parsed_before,
+        )
 
         if not notes:
             return 'No notes found.'
@@ -1166,10 +1281,13 @@ async def memex_recent_notes(
         lines = [f'Found {len(notes)} note(s):\n']
         for i, n in enumerate(notes, 1):
             title = n.title or 'Untitled'
-            lines.append(f'{i}. **{title}** (ID: {n.id}, created: {n.created_at})')
+            pub = f', publish_date: {n.publish_date}' if n.publish_date else ''
+            lines.append(f'{i}. **{title}** (ID: {n.id}, created: {n.created_at}{pub})')
 
         return '\n'.join(lines)
 
+    except ToolError:
+        raise
     except Exception as e:
         logging.error(f'List notes failed: {e}', exc_info=True)
         raise ToolError(f'List notes failed: {e}')
@@ -1201,6 +1319,17 @@ async def memex_list_entities(
             description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
         ),
     ] = None,
+    entity_type: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by entity type. '
+                'Valid values: Person, Organization, Location, '
+                'Concept, Technology, File, Misc.'
+            ),
+        ),
+    ] = None,
 ) -> str:
     """List or search entities."""
     try:
@@ -1211,9 +1340,16 @@ async def memex_list_entities(
             vault_ids = [resolved] if resolved else None
 
         if query:
-            entities = await api.search_entities(query, limit=limit, vault_ids=vault_ids)
+            entities = await api.search_entities(
+                query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            )
         else:
-            entities = [e async for e in api.list_entities_ranked(limit=limit, vault_ids=vault_ids)]
+            entities = [
+                e
+                async for e in api.list_entities_ranked(
+                    limit=limit, vault_ids=vault_ids, entity_type=entity_type
+                )
+            ]
 
         if not entities:
             return 'No entities found.'

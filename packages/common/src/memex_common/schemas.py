@@ -39,6 +39,18 @@ def decode_base64(v: Any) -> bytes:
 Base64Bytes = Annotated[bytes, BeforeValidator(decode_base64)]
 
 
+class EntityType(str, Enum):
+    """Semantic type of an entity in the knowledge graph."""
+
+    PERSON = 'Person'
+    ORGANIZATION = 'Organization'
+    LOCATION = 'Location'
+    CONCEPT = 'Concept'
+    TECHNOLOGY = 'Technology'
+    FILE = 'File'
+    MISC = 'Misc'
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 

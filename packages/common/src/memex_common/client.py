@@ -248,6 +248,8 @@ class RemoteMemexAPI:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[str | UUID] | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
     ) -> list[NoteDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
@@ -256,6 +258,10 @@ class RemoteMemexAPI:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
+        if after is not None:
+            params['after'] = after.isoformat()
+        if before is not None:
+            params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -399,6 +405,8 @@ class RemoteMemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[str | UUID] | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
     ) -> list[NoteDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
@@ -407,6 +415,10 @@ class RemoteMemexAPI:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
+        if after is not None:
+            params['after'] = after.isoformat()
+        if before is not None:
+            params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -416,6 +428,7 @@ class RemoteMemexAPI:
         limit: int = 20,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> list[EntityDTO]:
         """Search for entities by name."""
         params: dict[str, Any] = {'q': query, 'limit': limit}
@@ -424,6 +437,8 @@ class RemoteMemexAPI:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
+        if entity_type:
+            params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
         if not isinstance(result, list):
             result = [result]
@@ -435,6 +450,7 @@ class RemoteMemexAPI:
         q: str | None = None,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> AsyncGenerator[EntityDTO, None]:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
@@ -445,6 +461,8 @@ class RemoteMemexAPI:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
+        if entity_type:
+            params['entity_type'] = entity_type
 
         async with self.client.stream('GET', 'entities', params=params) as response:
             response.raise_for_status()
@@ -588,6 +606,7 @@ class RemoteMemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> list[EntityDTO]:
         """Get top entities by mention count."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-mentions'}
@@ -596,6 +615,8 @@ class RemoteMemexAPI:
             ids.append(vault_id)
         if ids:
             params['vault_id'] = [str(v) for v in ids]
+        if entity_type:
+            params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
 
