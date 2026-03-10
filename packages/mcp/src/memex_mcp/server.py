@@ -1334,6 +1334,8 @@ async def memex_list_entities(
     """List or search entities."""
     try:
         api = get_api(ctx)
+        if entity_type:
+            entity_type = entity_type.title()
         vault_ids: list[UUID | str] | None = None
         if vault_id:
             resolved = await api.resolve_vault_identifier(vault_id)
