@@ -28,7 +28,7 @@ class _StagingState:
     """Per-transaction staging state."""
 
     staged_files: dict[str, str] = field(default_factory=dict)  # staged_key -> final_key
-    pending_deletes: set[str] = field(default_factory=set)
+    pending_deletes: dict[str, bool] = field(default_factory=dict)  # key -> recursive
 
 
 class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
@@ -115,7 +115,10 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
                 await asyncio.gather(*tasks)
 
         if stage.pending_deletes:
-            tasks = [self._delete(key, recursive=False) for key in stage.pending_deletes]
+            tasks = [
+                self._delete(key, recursive=recursive)
+                for key, recursive in stage.pending_deletes.items()
+            ]
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -223,7 +226,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         """
         if txn_id is not None:
             stage = self._get_stage(txn_id)
-            stage.pending_deletes.add(key)
+            stage.pending_deletes[key] = recursive
         else:
             await self._delete(key, recursive=recursive)
 
