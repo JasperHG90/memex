@@ -178,6 +178,66 @@ async def test_deferred_delete(store: LocalAsyncFileStore) -> None:
 
 
 @pytest.mark.asyncio
+async def test_deferred_recursive_delete(store: LocalAsyncFileStore) -> None:
+    """Staging a recursive delete must actually remove nested files on commit."""
+    # Create a directory structure simulating a note with assets
+    await store.save('notes/abc/note.md', b'# Hello')
+    await store.save('notes/abc/assets/image.png', b'PNG_DATA')
+    await store.save('notes/abc/assets/deep/chart.svg', b'SVG_DATA')
+    assert await store.exists('notes/abc/note.md') is True
+    assert await store.exists('notes/abc/assets/image.png') is True
+    assert await store.exists('notes/abc/assets/deep/chart.svg') is True
+
+    txn_id = 'txn_recursive'
+    store.begin_staging(txn_id)
+    await store.delete('notes/abc', txn_id=txn_id, recursive=True)
+
+    # Files should still exist before commit
+    assert await store.exists('notes/abc/note.md') is True
+
+    await store.commit_staging(txn_id)
+
+    # All files including nested ones must be gone
+    assert await store.exists('notes/abc/note.md') is False
+    assert await store.exists('notes/abc/assets/image.png') is False
+    assert await store.exists('notes/abc/assets/deep/chart.svg') is False
+    assert await store.is_dir('notes/abc') is False
+
+
+@pytest.mark.asyncio
+async def test_deferred_non_recursive_delete_preserves_flag(store: LocalAsyncFileStore) -> None:
+    """Staging a non-recursive delete must not remove nested files."""
+    await store.save('dir/file.txt', b'content')
+    await store.save('dir/sub/nested.txt', b'nested')
+
+    txn_id = 'txn_non_recursive'
+    store.begin_staging(txn_id)
+    # Delete a single file (non-recursive) via staging
+    await store.delete('dir/file.txt', txn_id=txn_id, recursive=False)
+
+    await store.commit_staging(txn_id)
+
+    assert await store.exists('dir/file.txt') is False
+    # The nested file should still exist
+    assert await store.exists('dir/sub/nested.txt') is True
+
+
+@pytest.mark.asyncio
+async def test_staging_context_manager_recursive_delete(store: LocalAsyncFileStore) -> None:
+    """Recursive delete through the staging context manager works end-to-end."""
+    await store.save('project/docs/readme.md', b'readme')
+    await store.save('project/docs/img/logo.png', b'logo')
+    txn_id = 'txn_ctx_recursive'
+
+    async with store.staging(txn_id):
+        await store.delete('project/docs', txn_id=txn_id, recursive=True)
+
+    assert await store.exists('project/docs/readme.md') is False
+    assert await store.exists('project/docs/img/logo.png') is False
+    assert await store.is_dir('project/docs') is False
+
+
+@pytest.mark.asyncio
 async def test_move_file_single(store: LocalAsyncFileStore) -> None:
     """move_file works for a single file."""
     await store.save('src.txt', b'data')

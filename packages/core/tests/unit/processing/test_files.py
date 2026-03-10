@@ -154,6 +154,50 @@ class TestParsePdfDate:
     def test_short_string(self):
         assert _parse_pdf_date('D:2023') is None
 
+    def test_positive_timezone_offset(self):
+        """PDF date with +05'30' should be converted from IST to UTC."""
+        result = _parse_pdf_date("D:20260310064822+05'30'")
+        # 06:48:22 +05:30 = 01:18:22 UTC
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime(2026, 3, 10, 1, 18, 22, tzinfo=timezone.utc)
+
+    def test_negative_timezone_offset(self):
+        """PDF date with -08'00' should be converted from PST to UTC."""
+        result = _parse_pdf_date("D:20260310064822-08'00'")
+        # 06:48:22 -08:00 = 14:48:22 UTC
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime(2026, 3, 10, 14, 48, 22, tzinfo=timezone.utc)
+
+    def test_utc_z_offset(self):
+        """PDF date with Z00'00' should remain UTC."""
+        result = _parse_pdf_date("D:20260310064822Z00'00'")
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime(2026, 3, 10, 6, 48, 22, tzinfo=timezone.utc)
+
+    def test_no_timezone_suffix_defaults_utc(self):
+        """PDF date with no timezone suffix should default to UTC."""
+        result = _parse_pdf_date('D:20260310064822')
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime(2026, 3, 10, 6, 48, 22, tzinfo=timezone.utc)
+
+    def test_malformed_timezone_defaults_utc(self):
+        """PDF date with unrecognised tz suffix should default to UTC."""
+        result = _parse_pdf_date('D:20260310064822XYZ')
+        assert result is not None
+        assert result.tzinfo == timezone.utc
+        assert result == datetime(2026, 3, 10, 6, 48, 22, tzinfo=timezone.utc)
+
+    def test_positive_offset_without_prefix(self):
+        """PDF date without D: prefix but with timezone offset."""
+        result = _parse_pdf_date("20260310120000+09'00'")
+        # 12:00:00 +09:00 = 03:00:00 UTC
+        assert result is not None
+        assert result == datetime(2026, 3, 10, 3, 0, 0, tzinfo=timezone.utc)
+
 
 @pytest.mark.asyncio
 async def test_extract_pdf_no_fitz_metadata(file_processor):
