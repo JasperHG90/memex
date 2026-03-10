@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 
-from memex_common.schemas import MemoryUnitDTO, NoteSearchResult
+from memex_common.schemas import EntityDTO, MemoryUnitDTO, NoteSearchResult
 
 from memex_eval.judge import Judge
 from memex_eval.internal.scenarios import GroundTruthCheck
@@ -21,6 +21,9 @@ def run_check(
     note_results: list[NoteSearchResult] | None = None,
     entity_names: list[str] | None = None,
     judge: Judge | None = None,
+    entities: list[EntityDTO] | None = None,
+    cooccurrences: list[dict] | None = None,
+    mentions: list[dict] | None = None,
 ) -> CheckResult:
     """Execute a single ground-truth check and return the result."""
     start = time.monotonic()
@@ -29,6 +32,12 @@ def run_check(
             result = _check_keyword_in_results(check, group_name, memory_results, note_results)
         elif check.check_type == 'entity_exists':
             result = _check_entity_exists(check, group_name, entity_names or [])
+        elif check.check_type == 'entity_type_check':
+            result = _check_entity_type(check, group_name, entities)
+        elif check.check_type == 'entity_cooccurrence_check':
+            result = _check_entity_cooccurrence(check, group_name, cooccurrences)
+        elif check.check_type == 'entity_mention_check':
+            result = _check_entity_mention(check, group_name, mentions)
         elif check.check_type == 'result_ordering':
             result = _check_result_ordering(check, group_name, memory_results)
         elif check.check_type == 'llm_judge':
@@ -291,3 +300,181 @@ def _check_llm_judge(
         actual=combined[:200],
         reasoning=reasoning,
     )
+
+
+def _check_entity_type(
+    check: GroundTruthCheck,
+    group_name: str,
+    entities: list[EntityDTO] | None,
+) -> CheckResult:
+    """Check that an entity has the expected type."""
+    if not entities:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No entities returned',
+        )
+
+    expected_name = check.expected if isinstance(check.expected, str) else check.expected[0]
+    matched = None
+    for entity in entities:
+        if expected_name.lower() in entity.name.lower():
+            matched = entity
+            break
+
+    if matched is None:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Entity "{expected_name}" not found. '
+            f'Available: {", ".join(e.name for e in entities[:10])}',
+        )
+
+    actual_type = matched.entity_type or ''
+    expected_type = check.expected_entity_type or ''
+    if actual_type.lower() == expected_type.lower():
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Entity "{matched.name}" has type "{actual_type}"',
+        )
+    else:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Entity "{matched.name}" has type "{actual_type}", expected "{expected_type}"',
+        )
+
+
+def _check_entity_cooccurrence(
+    check: GroundTruthCheck,
+    group_name: str,
+    cooccurrences: list[dict] | None,
+) -> CheckResult:
+    """Check that expected entities appear in co-occurrence results."""
+    if not cooccurrences:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No co-occurrences returned',
+        )
+
+    # Collect all co-occurring entity names
+    all_names: list[str] = []
+    for cooc in cooccurrences:
+        for key in ('entity_1_name', 'entity_2_name'):
+            name = cooc.get(key, '')
+            if name:
+                all_names.append(name)
+
+    names_lower = [n.lower() for n in all_names]
+    expected_list = check.expected if isinstance(check.expected, list) else [check.expected]
+
+    found = []
+    missing = []
+    for expected in expected_list:
+        if any(expected.lower() in name for name in names_lower):
+            found.append(expected)
+        else:
+            missing.append(expected)
+
+    if not missing:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Found co-occurrences: {", ".join(found)}',
+        )
+    else:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Missing co-occurrences: {", ".join(missing)}. '
+            f'Available: {", ".join(set(all_names))}',
+        )
+
+
+def _check_entity_mention(
+    check: GroundTruthCheck,
+    group_name: str,
+    mentions: list[dict] | None,
+) -> CheckResult:
+    """Check that entity mentions contain expected keywords."""
+    if not mentions:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No mentions returned',
+        )
+
+    # Combine all mention texts
+    parts: list[str] = []
+    for mention in mentions:
+        unit = mention.get('unit')
+        if unit and hasattr(unit, 'text'):
+            parts.append(unit.text)
+        elif isinstance(unit, dict) and 'text' in unit:
+            parts.append(unit['text'])
+    combined = '\n'.join(parts).lower()
+
+    expected_list = check.expected if isinstance(check.expected, list) else [check.expected]
+
+    found = []
+    missing = []
+    for keyword in expected_list:
+        if keyword.lower() in combined:
+            found.append(keyword)
+        else:
+            missing.append(keyword)
+
+    if not missing:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Found keywords in mentions: {", ".join(found)}',
+        )
+    else:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Missing keywords: {", ".join(missing)}',
+        )

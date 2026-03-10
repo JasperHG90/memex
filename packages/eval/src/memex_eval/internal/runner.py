@@ -231,8 +231,42 @@ async def _execute_check(
     note_results = None
     entity_names: list[str] = []
 
+    entities_list = None
+    cooccurrences = None
+    mentions = None
+
     try:
-        if check.check_type == 'entity_exists':
+        if check.check_type == 'entity_type_check':
+            entities_list = await api.search_entities(
+                query=check.query, limit=check.top_k, vault_id=vault_id
+            )
+        elif check.check_type == 'entity_cooccurrence_check':
+            found = await api.search_entities(query=check.query, limit=1, vault_id=vault_id)
+            if not found:
+                return CheckResult(
+                    name=check.name,
+                    group=group_name,
+                    status=CheckStatus.FAIL,
+                    description=check.description,
+                    query=check.query,
+                    expected=check.expected,
+                    actual='Entity not found',
+                )
+            cooccurrences = await api.get_entity_cooccurrences(found[0].id, vault_id=vault_id)
+        elif check.check_type == 'entity_mention_check':
+            found = await api.search_entities(query=check.query, limit=1, vault_id=vault_id)
+            if not found:
+                return CheckResult(
+                    name=check.name,
+                    group=group_name,
+                    status=CheckStatus.FAIL,
+                    description=check.description,
+                    query=check.query,
+                    expected=check.expected,
+                    actual='Entity not found',
+                )
+            mentions = await api.get_entity_mentions(found[0].id, vault_id=vault_id)
+        elif check.check_type == 'entity_exists':
             # Search for entities by name
             entities = await api.search_entities(
                 query=check.query, limit=check.top_k, vault_id=vault_id
@@ -273,4 +307,7 @@ async def _execute_check(
         note_results=note_results,
         entity_names=entity_names,
         judge=judge,
+        entities=entities_list,
+        cooccurrences=cooccurrences,
+        mentions=mentions,
     )
