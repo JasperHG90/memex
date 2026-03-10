@@ -1057,6 +1057,25 @@ class TestListEntitiesEdgeCases:
 
         assert 'C++ & "Rust" <lang>' in text
 
+    @pytest.mark.asyncio
+    async def test_entity_type_case_insensitive(self, mock_api, mcp_client):
+        """entity_type should be normalised to title-case (e.g. 'person' → 'Person')."""
+        e = EntityDTO(id=uuid4(), name='Alice', mention_count=3)
+        mock_api.search_entities = AsyncMock(return_value=[e])
+
+        result = await mcp_client.call_tool(
+            'memex_list_entities', {'query': 'alice', 'entity_type': 'person'}
+        )
+        text = result.content[0].text
+
+        assert 'Alice' in text
+        mock_api.search_entities.assert_called_once_with(
+            'alice',
+            limit=20,
+            vault_ids=None,
+            entity_type='Person',
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cross-cutting: UUID format variations
