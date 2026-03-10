@@ -13,8 +13,11 @@ class GroundTruthCheck:
     name: str
     description: str
     query: str
-    check_type: str  # 'keyword_in_results', 'entity_exists', 'result_ordering', 'llm_judge'
+    check_type: str  # 'keyword_in_results', 'entity_exists', 'entity_type_check',
+    #                   'entity_cooccurrence_check', 'entity_mention_check',
+    #                   'result_ordering', 'llm_judge'
     expected: str | list[str]
+    expected_entity_type: str | None = None  # for entity_type_check
     search_type: str = 'memory'  # 'memory' or 'note'
     strategies: list[str] | None = None
     include_superseded: bool | None = None
@@ -211,6 +214,22 @@ GROUP_BASIC = ScenarioGroup(
             check_type='keyword_in_results',
             expected=['Project Alpha'],
             search_type='note',
+        ),
+        GroundTruthCheck(
+            name='sarah_chen_entity_type',
+            description='Sarah Chen is classified as a Person entity.',
+            query='Sarah Chen',
+            check_type='entity_type_check',
+            expected='Sarah Chen',
+            expected_entity_type='Person',
+        ),
+        GroundTruthCheck(
+            name='acme_corp_entity_type',
+            description='Acme Corp is classified as an Organization entity.',
+            query='Acme Corp',
+            check_type='entity_type_check',
+            expected='Acme Corp',
+            expected_entity_type='Organization',
         ),
     ],
 )
@@ -423,6 +442,43 @@ GROUP_ENTITY_RESOLUTION = ScenarioGroup(
             query='AI Research Lab',
             check_type='entity_exists',
             expected=['AI Research Lab'],
+        ),
+        GroundTruthCheck(
+            name='elena_entity_type',
+            description='Elena Vasquez is classified as a Person entity.',
+            query='Elena Vasquez',
+            check_type='entity_type_check',
+            expected='Elena Vasquez',
+            expected_entity_type='Person',
+        ),
+        GroundTruthCheck(
+            name='ai_research_lab_entity_type',
+            description='AI Research Lab is classified as an Organization entity.',
+            query='AI Research Lab',
+            check_type='entity_type_check',
+            expected='AI Research Lab',
+            expected_entity_type='Organization',
+        ),
+        GroundTruthCheck(
+            name='elena_cooccurs_with_raj',
+            description='Elena Vasquez co-occurs with Raj Mehta.',
+            query='Elena Vasquez',
+            check_type='entity_cooccurrence_check',
+            expected=['Raj Mehta'],
+        ),
+        GroundTruthCheck(
+            name='elena_cooccurs_with_ai_lab',
+            description='Elena Vasquez co-occurs with AI Research Lab.',
+            query='Elena Vasquez',
+            check_type='entity_cooccurrence_check',
+            expected=['AI Research Lab'],
+        ),
+        GroundTruthCheck(
+            name='elena_mentions_nlp',
+            description='Elena Vasquez mentions reference NLP.',
+            query='Elena Vasquez',
+            check_type='entity_mention_check',
+            expected=['NLP'],
         ),
     ],
 )
