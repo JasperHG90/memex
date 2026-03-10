@@ -77,6 +77,11 @@ async def test_cli_memory_add_with_asset(db_session: AsyncSession, setup_cli_e2e
                 'memex_core.memory.extraction.core.run_dspy_operation', new_callable=AsyncMock
             ) as mock_run_dspy,
             patch(
+                'memex_core.processing.dates.run_dspy_operation',
+                new_callable=AsyncMock,
+                return_value=(MagicMock(extracted_date=None), TokenUsage(total_tokens=0)),
+            ),
+            patch(
                 'memex_core.memory.extraction.engine.get_embedding_model',
                 return_value=MockEmbedder(),
             ),

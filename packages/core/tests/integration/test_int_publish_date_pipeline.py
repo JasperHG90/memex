@@ -6,7 +6,7 @@ pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.asyncio
-async def test_ingest_with_frontmatter_publish_date(ensure_db_env_vars):
+async def test_ingest_with_frontmatter_publish_date():
     """
     Full pipeline test: ingesting a note with publish_date in frontmatter
     should use that date as the event_date instead of now().
