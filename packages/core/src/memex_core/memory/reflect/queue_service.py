@@ -97,40 +97,34 @@ class ReflectionQueueService:
             return
 
         now = datetime.now(timezone.utc)
-        # 1. Ensure queue items exist
-        await self._ensure_queue_items(session, entity_ids, vault_id)
 
-        # 2. Fetch Entities and Queue Items
+        # Fetch entities with their queue items (LEFT join — queue item may not exist)
         stmt = (
             select(Entity, ReflectionQueue)
-            .join(ReflectionQueue, col(Entity.id) == col(ReflectionQueue.entity_id))
+            .outerjoin(ReflectionQueue, col(Entity.id) == col(ReflectionQueue.entity_id))
             .where(col(Entity.id).in_(entity_ids))
-            .where(col(ReflectionQueue.vault_id) == vault_id)
+            .where(
+                (col(ReflectionQueue.vault_id) == vault_id)
+                | (col(ReflectionQueue.vault_id).is_(None))
+            )
         )
         results = await session.exec(stmt)
 
-        # 3. Update both Entity and QueueItem
+        # Update entity retrieval stats only — do NOT re-queue for reflection
+        # since no new evidence was added (retrieval != extraction).
         for entity, queue_item in results.all():
             entity.retrieval_count += 1
             entity.last_retrieved_at = now
-
-            # Defensive check
-            if queue_item is None:
-                queue_item = ReflectionQueue(
-                    entity_id=entity.id,
-                    vault_id=vault_id,
-                    status=ReflectionStatus.PENDING,
-                    accumulated_evidence=0,
-                    priority_score=0.0,
-                )
-
-            queue_item.last_queued_at = now
-            queue_item.status = ReflectionStatus.PENDING
-            queue_item.priority_score = self.calculate_priority(
-                queue_item.accumulated_evidence, entity.mention_count, entity.retrieval_count
-            )
-            session.add(queue_item)
             session.add(entity)
+
+            # Update priority score if queue item exists (doesn't change status)
+            if queue_item is not None:
+                queue_item.priority_score = self.calculate_priority(
+                    queue_item.accumulated_evidence,
+                    entity.mention_count,
+                    entity.retrieval_count,
+                )
+                session.add(queue_item)
 
         await session.flush()
 
