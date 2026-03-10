@@ -80,7 +80,7 @@ async def test_retrieve_empty_results(mock_embedder):
 
     engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
 
-    results = await engine.retrieve(session, RetrievalRequest(query='test query'))
+    results, _ = await engine.retrieve(session, RetrievalRequest(query='test query'))
 
     assert results == []
     session.exec.assert_called()

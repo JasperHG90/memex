@@ -254,7 +254,7 @@ async def _execute_check(
                 kwargs['strategies'] = check.strategies
             if check.include_superseded is not None:
                 kwargs['include_superseded'] = check.include_superseded
-            memory_results = await api.search(**kwargs)
+            memory_results, _ = await api.search(**kwargs)
     except Exception as e:
         return CheckResult(
             name=check.name,

@@ -1,4 +1,3 @@
-from collections import defaultdict
 import logging
 from typing import Any
 
@@ -17,7 +16,6 @@ from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.sql_models import (
     MemoryUnit,
-    UnitEntity,
     MentalModel,
     ReflectionQueue,
     ReflectionStatus,
@@ -260,53 +258,42 @@ class MemoryEngine:
         self,
         session: AsyncSession,
         request: RetrievalRequest,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], Any]:
         """
         Retrieve memories using the 4-channel TEMPR Recall architecture.
 
-        Channels:
-        1.  **Temporal**: Time-based decay and proximity.
-        2.  **Semantic**: Vector similarity.
-        3.  **Graph**: Knowledge graph traversal (entity links).
-        4.  **Keyword**: BM25/Lexical matching.
-
-        Args:
-            session: Active DB session.
-            request: The retrieval parameters (query, filters, limit).
-
         Returns:
-            List of ranked MemoryUnits.
+            Tuple of (ranked MemoryUnits, optional resonance_task coroutine).
+            The caller should schedule resonance_task via BackgroundTasks.
         """
-        results = await self.retrieval.retrieve(session, request)
-        logger.debug(f'DEBUG: Recall retrieved {len(results)} units.')
+        results, resonance_ctx = await self.retrieval.retrieve(session, request)
+        logger.debug(f'Recall retrieved {len(results)} units.')
 
-        # Update Resonance (Retrieval Count) in Reflection Queue
-        if results and self.extraction.queue_service:
-            try:
-                unit_ids = [u.id for u in results]
-                stmt = select(UnitEntity.entity_id, UnitEntity.vault_id).where(
-                    col(UnitEntity.unit_id).in_(unit_ids)
-                )
-                rows = await session.exec(stmt)
-                rows_list = rows.all()
-                logger.debug(f'DEBUG: Found {len(rows_list)} linked entities via UnitEntity.')
+        # Build a background coroutine for resonance update (non-blocking).
+        # Returns the coroutine function (not invoked) so the caller can
+        # schedule it via BackgroundTasks or asyncio.create_task as appropriate.
+        resonance_task = None
+        queue_svc = self.extraction.queue_service
+        if resonance_ctx and self._session_factory and queue_svc:
+            session_factory = self._session_factory
+            entity_ids = resonance_ctx['entity_ids']
+            vault_id = resonance_ctx['vault_id']
 
-                entities_by_vault = defaultdict(set)
-                for eid, vid in rows_list:
-                    entities_by_vault[vid].add(eid)
+            async def _do_resonance_update() -> None:
+                try:
+                    async with session_factory() as bg_session:
+                        await queue_svc.handle_retrieval_event(
+                            bg_session,
+                            entity_ids,
+                            vault_id=vault_id,
+                        )
+                        await bg_session.commit()
+                except Exception:
+                    logger.exception('Background resonance update failed')
 
-                for vid, eids in entities_by_vault.items():
-                    logger.debug(
-                        f'DEBUG: Calling handle_retrieval_event for vault {vid} with {len(eids)} entities.'
-                    )
-                    await self.extraction.queue_service.handle_retrieval_event(
-                        session, eids, vault_id=vid
-                    )
-            except (ValueError, RuntimeError, OSError) as e:
-                # Do not fail retrieval if queue update fails
-                logger.warning(f'Failed to update reflection queue resonance: {e}')
+            resonance_task = _do_resonance_update
 
-        return results
+        return (results, resonance_task)
 
     async def reflect(
         self,

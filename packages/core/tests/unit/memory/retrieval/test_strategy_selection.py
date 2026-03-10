@@ -123,7 +123,7 @@ class TestStrategyDispatch:
 
         with patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf:
             mock_rrf.return_value = []
-            await engine.retrieve(mock_session, request)
+            results, _ = await engine.retrieve(mock_session, request)
 
             mock_rrf.assert_called_once()
             _, kwargs = mock_rrf.call_args
@@ -144,7 +144,7 @@ class TestStrategyDispatch:
             ):
                 # We need to let _perform_rrf_retrieval run to hit the single-strategy branch
                 # But it calls _perform_single_strategy_retrieval internally
-                await engine.retrieve(mock_session, request)
+                results, _ = await engine.retrieve(mock_session, request)
                 mock_single.assert_called_once()
 
     @pytest.mark.asyncio
@@ -156,7 +156,7 @@ class TestStrategyDispatch:
             engine, '_perform_single_strategy_retrieval', new_callable=AsyncMock
         ) as mock_single:
             mock_single.return_value = []
-            await engine.retrieve(mock_session, request)
+            results, _ = await engine.retrieve(mock_session, request)
             mock_single.assert_called_once()
             args, kwargs = mock_single.call_args
             # strategy_name should be 'mental_model', result_type should be 'model'
@@ -173,7 +173,7 @@ class TestStrategyDispatch:
         ) as mock_single:
             with patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf:
                 mock_rrf.return_value = []
-                await engine.retrieve(mock_session, request)
+                results, _ = await engine.retrieve(mock_session, request)
                 # RRF should be called, single should NOT
                 mock_rrf.assert_called_once()
                 mock_single.assert_not_called()
@@ -186,7 +186,7 @@ class TestStrategyDispatch:
 
         with patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf:
             mock_rrf.return_value = []
-            await engine.retrieve(mock_session, request)
+            results, _ = await engine.retrieve(mock_session, request)
 
             _, kwargs = mock_rrf.call_args
             assert kwargs.get('strategy_weights') == weights

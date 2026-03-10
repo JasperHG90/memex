@@ -4,7 +4,7 @@ import logging
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, BackgroundTasks, Body, Depends
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
@@ -79,9 +79,10 @@ def _build_retrieval_dtos(
 async def search_memories(
     request: Annotated[RetrievalRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
 ):
     try:
-        units = await api.search(
+        units, resonance_task = await api.search(
             query=request.query,
             limit=request.limit,
             vault_ids=request.vault_ids,
@@ -94,6 +95,9 @@ async def search_memories(
             before=request.before,
             tags=request.tags,
         )
+
+        if resonance_task is not None:
+            background_tasks.add_task(resonance_task)
 
         return ndjson_response(_build_retrieval_dtos(units, debug=request.debug))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

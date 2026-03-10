@@ -592,7 +592,7 @@ async def memex_memory_search(
         after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
         before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
 
-        results = await api.search(
+        results, resonance_task = await api.search(
             query=query,
             limit=limit,
             vault_ids=cast(list[UUID | str] | None, vault_ids),
@@ -603,6 +603,10 @@ async def memex_memory_search(
             before=before_dt,
             tags=tags,
         )
+
+        # Fire-and-forget resonance update (no BackgroundTasks in MCP context)
+        if resonance_task is not None:
+            asyncio.create_task(resonance_task())
 
         if not results:
             return f"No results for '{query}'. Reformulate or try memex_note_search. Do not fabricate IDs."

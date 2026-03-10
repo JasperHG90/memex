@@ -355,7 +355,7 @@ class TestSearchEndpointDebug:
             unit_metadata={},
             score=1.0,
         )
-        mock_api.search.return_value = [unit]
+        mock_api.search.return_value = ([unit], None)
         mock_api.resolve_source_notes.return_value = {}
 
         response = client.post(
@@ -367,7 +367,7 @@ class TestSearchEndpointDebug:
         assert data[0]['debug_info'] is None
 
     def test_debug_true_passes_debug_to_search(self, client, mock_api):
-        mock_api.search.return_value = []
+        mock_api.search.return_value = ([], None)
         mock_api.resolve_source_notes.return_value = {}
 
         client.post(
@@ -410,7 +410,7 @@ class TestSearchEndpointDebug:
                 ),
             ],
         )
-        mock_api.search.return_value = [unit]
+        mock_api.search.return_value = ([unit], None)
         mock_api.resolve_source_notes.return_value = {}
 
         response = client.post(
@@ -426,3 +426,56 @@ class TestSearchEndpointDebug:
         assert data[0]['debug_info'][0]['rrf_score'] == 0.016
         assert data[0]['debug_info'][0]['raw_score'] == 0.9
         assert data[0]['debug_info'][0]['timing_ms'] == 10.0
+
+    def test_search_endpoint_schedules_resonance_background_task(self, client, mock_api):
+        uid = uuid4()
+        unit = SimpleNamespace(
+            id=uid,
+            note_id=uuid4(),
+            text='Test fact',
+            fact_type=FactTypes.WORLD,
+            status='active',
+            mentioned_at=None,
+            occurred_start=None,
+            occurred_end=None,
+            event_date=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+            unit_metadata={},
+            score=1.0,
+        )
+        mock_resonance_fn = AsyncMock()
+        mock_api.search.return_value = ([unit], mock_resonance_fn)
+        mock_api.resolve_source_notes.return_value = {}
+
+        response = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'limit': 10},
+        )
+        assert response.status_code == 200
+        # FastAPI TestClient runs background tasks synchronously
+        mock_resonance_fn.assert_called_once()
+
+    def test_search_endpoint_no_resonance_when_none(self, client, mock_api):
+        uid = uuid4()
+        unit = SimpleNamespace(
+            id=uid,
+            note_id=uuid4(),
+            text='Test fact',
+            fact_type=FactTypes.WORLD,
+            status='active',
+            mentioned_at=None,
+            occurred_start=None,
+            occurred_end=None,
+            event_date=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+            unit_metadata={},
+            score=1.0,
+        )
+        mock_api.search.return_value = ([unit], None)
+        mock_api.resolve_source_notes.return_value = {}
+
+        response = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'limit': 10},
+        )
+        assert response.status_code == 200

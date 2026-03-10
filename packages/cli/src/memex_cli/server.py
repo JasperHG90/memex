@@ -284,6 +284,8 @@ def start(
             error_log,
             '--log-level',
             log_level,
+            '--timeout',
+            '120',
             '--capture-output',  # Capture stdout/stderr from workers
         ]
         if preload:

@@ -41,16 +41,19 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
 async def test_mcp_search_tool(mock_api, mcp_client):
     """Test the search tool via the MCP Client."""
     unit_id = uuid4()
-    mock_api.search.return_value = [
-        MemoryUnitDTO(
-            id=unit_id,
-            text='Python is a popular programming language.',
-            fact_type=FactTypes.WORLD,
-            score=0.95,
-            vault_id=uuid4(),
-            metadata={},
-        )
-    ]
+    mock_api.search.return_value = (
+        [
+            MemoryUnitDTO(
+                id=unit_id,
+                text='Python is a popular programming language.',
+                fact_type=FactTypes.WORLD,
+                score=0.95,
+                vault_id=uuid4(),
+                metadata={},
+            )
+        ],
+        None,
+    )
 
     result = await mcp_client.call_tool(
         'memex_memory_search', {'query': 'python language', 'limit': 5}
@@ -72,17 +75,20 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
     """Search results should include dates when available."""
     unit_id = uuid4()
     ts = dt.datetime(2025, 6, 15, 12, 0, tzinfo=dt.timezone.utc)
-    mock_api.search.return_value = [
-        MemoryUnitDTO(
-            id=unit_id,
-            text='Event happened.',
-            fact_type=FactTypes.WORLD,
-            score=0.8,
-            vault_id=uuid4(),
-            metadata={},
-            mentioned_at=ts,
-        )
-    ]
+    mock_api.search.return_value = (
+        [
+            MemoryUnitDTO(
+                id=unit_id,
+                text='Event happened.',
+                fact_type=FactTypes.WORLD,
+                score=0.8,
+                vault_id=uuid4(),
+                metadata={},
+                mentioned_at=ts,
+            )
+        ],
+        None,
+    )
 
     result = await mcp_client.call_tool('memex_memory_search', {'query': 'event'})
     text = result.content[0].text
@@ -94,7 +100,7 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
 async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
     """Test searching with a specific vault filter."""
     vault_id = uuid4()
-    mock_api.search.return_value = []
+    mock_api.search.return_value = ([], None)
 
     await mcp_client.call_tool(
         'memex_memory_search', {'query': 'secret project', 'vault_ids': [str(vault_id)]}
@@ -108,7 +114,7 @@ async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
 @pytest.mark.asyncio
 async def test_mcp_search_invalid_vault_uuid(mock_api, mcp_client):
     """Test that search handles malformed vault UUIDs gracefully by passing them to the API."""
-    mock_api.search.return_value = []
+    mock_api.search.return_value = ([], None)
     await mcp_client.call_tool(
         'memex_memory_search', {'query': 'test', 'vault_ids': ['not-a-uuid']}
     )

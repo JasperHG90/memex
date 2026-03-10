@@ -141,7 +141,7 @@ async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str)
             query='What were the results of the Project Aether tests?', limit=3
         )
 
-        memories = await memory_engine.recall(session, recall_request)
+        memories, _ = await memory_engine.recall(session, recall_request)
 
         assert len(memories) > 0
         # Check relevance

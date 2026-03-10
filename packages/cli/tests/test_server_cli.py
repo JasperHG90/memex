@@ -40,6 +40,8 @@ def test_start_prod(mock_dependencies, runner):
         assert 'gunicorn' in cmd[0]
         assert '-b' in cmd
         assert '0.0.0.0:9000' in cmd
+        assert '--timeout' in cmd
+        assert cmd[cmd.index('--timeout') + 1] == '120'
 
 
 def test_start_already_running(runner):
