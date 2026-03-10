@@ -26,8 +26,11 @@ def mock_api():
     mock.get_entity = AsyncMock()
     mock.get_entity_mentions = AsyncMock()
     mock.get_entity_cooccurrences = AsyncMock()
+    mock.get_entities = AsyncMock()
     mock.get_memory_unit = AsyncMock()
-    mock.ingest_url = AsyncMock()
+    mock.get_nodes = AsyncMock()
+    mock.get_note_metadata = AsyncMock()
+    mock.get_notes_metadata = AsyncMock()
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock

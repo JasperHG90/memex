@@ -65,6 +65,8 @@ _UUID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_TEMP_FILE_PATTERN = re.compile(r'^tmp[a-z0-9_]{4,12}$')
+
 
 class ExtractNoteTitle(dspy.Signature):
     """Extract a concise, descriptive title for a document from its content summary.
@@ -193,6 +195,8 @@ def _is_meaningful_name(name: str | None) -> bool:
         return False
     stripped = name.strip()
     if _UUID_PATTERN.match(stripped):
+        return False
+    if _TEMP_FILE_PATTERN.match(stripped):
         return False
     # Strip recognized file extension before checking against generic names
     stem = stripped

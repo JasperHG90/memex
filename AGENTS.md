@@ -116,23 +116,44 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 5. Resolved a tricky configuration/environment issue
 
 **Keep notes concise** (hard maximum: 300 tokens). Capture the key insight, not a detailed report. No per-file changelogs.
-
-A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 </constraint>
 
 ### Retrieval
 
 Session start context is automatic via hook. Do NOT redundantly search at session start.
-PROHIBITED: `memex_list_notes` for discovery.
 
-`memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes via hybrid retrieval. `reason=True` annotates relevant sections.
+Route by query type:
 
-### Note reading
+IF query asks about relationships, connections, "how X relates to Y", or landscape:
+- `memex_list_entities(query="X")` → entity IDs, types, mention counts
+- `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts
+- `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+- Then read source notes via Search/Read below as needed
 
-1. `memex_get_page_index` (Note ID → table of contents)
-2. `memex_get_node` (node ID → section text)
-3. Fallback only: `memex_read_note`
+IF query asks about specific content or document lookup:
+- **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
+- **Filter**: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip.
+- **Read**: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
+- **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → `memex_get_resources` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER skip this step.
+
+IF query is broad: run entity exploration AND search in parallel.
+
+PROHIBITED:
+- `memex_recent_notes` for discovery.
+- Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
+- `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_indices` + `memex_get_nodes`.
+- Creating diagrams without first checking assets via `memex_list_assets` → `memex_get_resources`.
+- Presenting Memex information without citations.
+
+### Citations — MANDATORY
+
+Every response using Memex data MUST include:
+1. Inline numbered references [1], [2] on every claim from Memex.
+2. Reference list at end of response. Each entry uses a type prefix:
+   - `[note]` — title + note ID
+   - `[memory]` — title + memory ID + source note ID
+   - `[asset]` — filename + note ID
 
 ### Slash commands
 

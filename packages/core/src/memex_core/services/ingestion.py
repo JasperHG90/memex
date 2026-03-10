@@ -6,11 +6,14 @@ import base64
 import hashlib
 import logging
 import pathlib as plb
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
 import dspy
+import yaml
+from dateutil import parser as dateutil_parser
 from sqlmodel import col
 
 from memex_core.config import MemexConfig
@@ -26,6 +29,55 @@ from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.storage.transaction import AsyncTransaction
 
 logger = logging.getLogger('memex.core.services.ingestion')
+
+FRONTMATTER_PATTERN = re.compile(r'\A---\s*\n(?P<yaml>.*?)\n---\s*\n', re.DOTALL)
+DATE_FIELD_NAMES = (
+    'date',
+    'publish_date',
+    'published_at',
+    'created_date',
+    'created',
+    'published',
+)
+
+
+def _parse_frontmatter_date(val: Any) -> datetime | None:
+    """Parse a frontmatter date value into a timezone-aware UTC datetime."""
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=timezone.utc)
+        return val
+    if isinstance(val, date):
+        return datetime(val.year, val.month, val.day, tzinfo=timezone.utc)
+    if isinstance(val, str):
+        try:
+            dt = dateutil_parser.parse(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+def _extract_date_from_frontmatter(content: str) -> datetime | None:
+    """Parse YAML frontmatter for date fields. Returns timezone-aware datetime or None."""
+    match = FRONTMATTER_PATTERN.match(content)
+    if not match:
+        return None
+    try:
+        fm = yaml.safe_load(match.group('yaml'))
+    except Exception:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    for field in DATE_FIELD_NAMES:
+        val = fm.get(field)
+        if val is not None:
+            parsed = _parse_frontmatter_date(val)
+            if parsed is not None:
+                return parsed
+    return None
 
 
 class IngestionService:
@@ -144,9 +196,15 @@ publish_date: {extracted.metadata.get('date')}
 
         now = datetime.now().isoformat()
 
+        extra_fm = ''
+        if extracted.metadata.get('author'):
+            extra_fm += f'\nauthor: {extracted.metadata["author"]}'
+        if extracted.metadata.get('creation_date'):
+            extra_fm += f'\ncreated_date: {extracted.metadata["creation_date"].isoformat()}'
+
         note_content = f"""---
 source_file: {path.name}
-type: {extracted.content_type}
+type: {extracted.content_type}{extra_fm}
 ingested_at: {now}
 ---
 {extracted.content}
@@ -154,8 +212,10 @@ ingested_at: {now}
 
         original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
 
+        name = extracted.metadata.get('title') or path.stem
+
         note = NoteInput(
-            name=path.stem,
+            name=name,
             description=f'Content from {path.name}',
             content=note_content.encode('utf-8'),
             tags=['file-import'],
@@ -164,14 +224,27 @@ ingested_at: {now}
             files=extracted.images,
         )
 
-        # Resolve document date: file mtime -> LLM fallback -> now()
-        event_date = extracted.document_date
-        if event_date is None:
+        # Resolve document date: LLM content extraction -> PDF metadata -> file mtime -> now()
+        # 1. LLM content date (highest priority)
+        event_date = None
+        if extracted.document_date is None:
             async with self.metastore.session() as date_session:
                 event_date = await extract_document_date(
                     extracted.content, self.lm, date_session, target_vault_id
                 )
                 await date_session.commit()
+
+        # 2. PDF metadata creation date
+        if event_date is None:
+            event_date = extracted.metadata.get('creation_date')
+
+        # 3. File processor's document_date (mtime — will be None for PDFs now)
+        if event_date is None:
+            event_date = extracted.document_date
+
+        # 4. Final fallback — avoids duplicate LLM call inside ingest()
+        if event_date is None:
+            event_date = datetime.now(timezone.utc)
 
         return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
 
@@ -224,7 +297,7 @@ ingested_at: {now}
 
             for filename, content in note._files.items():
                 full_asset_key = f'{asset_path}/{filename}'
-                await self.filestore.save(full_asset_key, content)
+                await txn.save_file(full_asset_key, content)
                 asset_files_list.append(full_asset_key)
 
             # 5. Extract Facts (MS)
@@ -238,9 +311,21 @@ ingested_at: {now}
                 vault_id=target_vault_id,
             )
 
+            # Resolve event_date: passed value -> frontmatter -> LLM -> now()
+            if event_date is None:
+                event_date = _extract_date_from_frontmatter(content_text)
+            if event_date is None:
+                async with self.metastore.session() as date_session:
+                    event_date = await extract_document_date(
+                        content_text, self.lm, date_session, target_vault_id
+                    )
+                    await date_session.commit()
+            if event_date is None:
+                event_date = datetime.now(timezone.utc)
+
             retain_content = RetainContent(
                 content=content_text,
-                event_date=event_date or datetime.now(timezone.utc),
+                event_date=event_date,
                 payload={
                     'source': 'note',
                     'note_name': resolved_title,
@@ -265,6 +350,13 @@ ingested_at: {now}
 
             result['note_id'] = note_uuid
             result['status'] = 'success'
+
+            # Overlap detection: find similar existing notes via chunk embeddings
+            overlapping = await self._detect_overlapping_notes(
+                txn.db_session, note_uuid, target_vault_id
+            )
+            if overlapping:
+                result['overlapping_notes'] = overlapping
 
             return result
 
@@ -337,7 +429,7 @@ ingested_at: {now}
                         asset_path = f'assets/{vault_name}/{note_uuid}'
                         asset_files_list = []
 
-                        decoded_content = note_dto.content_decoded
+                        decoded_content = note_dto.content_decoded.decode('utf-8')
 
                         for filename, content in note_dto.files.items():
                             try:
@@ -351,7 +443,7 @@ ingested_at: {now}
                                 raw_content = content
 
                             full_asset_key = f'{asset_path}/{filename}'
-                            await self.filestore.save(full_asset_key, raw_content)
+                            await txn.save_file(full_asset_key, raw_content)
                             asset_files_list.append(full_asset_key)
 
                         resolved_title = await resolve_document_title(
@@ -362,9 +454,14 @@ ingested_at: {now}
                             vault_id=target_vault_id,
                         )
 
+                        # Extract date from frontmatter, fall back to now()
+                        batch_event_date = _extract_date_from_frontmatter(decoded_content)
+                        if batch_event_date is None:
+                            batch_event_date = datetime.now(timezone.utc)
+
                         retain_content = RetainContent(
                             content=decoded_content,
-                            event_date=datetime.now(timezone.utc),
+                            event_date=batch_event_date,
                             payload={
                                 'source': 'batch_note',
                                 'note_name': resolved_title,
@@ -396,3 +493,64 @@ ingested_at: {now}
                 results['errors'].append({'chunk_start': i, 'error': str(e)})
 
             yield results
+
+    async def _detect_overlapping_notes(
+        self,
+        session: Any,
+        note_id: UUID,
+        vault_id: UUID,
+        similarity_threshold: float = 0.85,
+        max_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Find existing notes with high chunk-level similarity to the newly ingested note."""
+        from sqlalchemy import text as sql_text
+
+        # Use raw SQL for pgvector cosine distance aggregation
+        query = sql_text("""
+            WITH new_chunks AS (
+                SELECT embedding
+                FROM chunks
+                WHERE note_id = :note_id AND embedding IS NOT NULL
+            ),
+            similarities AS (
+                SELECT
+                    c.note_id,
+                    AVG(1 - (c.embedding <=> nc.embedding)) AS avg_similarity
+                FROM chunks c
+                CROSS JOIN new_chunks nc
+                WHERE c.note_id != :note_id
+                  AND c.vault_id = :vault_id
+                  AND c.status = 'active'
+                  AND c.embedding IS NOT NULL
+                GROUP BY c.note_id
+                HAVING AVG(1 - (c.embedding <=> nc.embedding)) >= :threshold
+                ORDER BY avg_similarity DESC
+                LIMIT :max_results
+            )
+            SELECT s.note_id, s.avg_similarity, n.title
+            FROM similarities s
+            JOIN notes n ON n.id = s.note_id
+        """)
+
+        try:
+            result = await session.exec(
+                query,
+                params={
+                    'note_id': str(note_id),
+                    'vault_id': str(vault_id),
+                    'threshold': similarity_threshold,
+                    'max_results': max_results,
+                },
+            )
+            rows = result.all()
+            return [
+                {
+                    'note_id': str(row[0]),
+                    'similarity': round(float(row[1]), 4),
+                    'title': row[2],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.warning(f'Overlap detection failed (non-fatal): {e}')
+            return []

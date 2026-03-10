@@ -553,7 +553,6 @@ class TestOutputMessages:
         assert 'Hooks: Enabled' in result.output
         assert 'SessionStart' in result.output
         assert 'PostToolUse' in result.output
-        assert 'Stop' in result.output
 
     def test_summary_shows_hooks_disabled(self, tmp_path):
         result = _invoke('--project-dir', str(tmp_path), '--no-hooks')
@@ -641,31 +640,6 @@ class TestHookTemplateContent:
         content = _load_template('hooks/on_post_commit.sh')
         assert '__PROJECT_DIR__' not in content
 
-    # --- on_stop.sh -------------------------------------------------------
-
-    def test_stop_exists_and_has_shebang(self):
-        content = _load_template('hooks/on_stop.sh')
-        assert content.startswith('#!/usr/bin/env bash')
-
-    def test_stop_checks_stop_hook_active(self):
-        content = _load_template('hooks/on_stop.sh')
-        assert 'stop_hook_active' in content
-
-    def test_stop_outputs_decision_block(self):
-        content = _load_template('hooks/on_stop.sh')
-        assert '"decision"' in content
-        assert '"block"' in content
-        assert '"reason"' in content
-
-    def test_stop_has_memory_check_message(self):
-        content = _load_template('hooks/on_stop.sh')
-        assert 'MEMORY CHECK' in content
-        assert 'memex_add_note' in content
-
-    def test_stop_has_no_project_dir_placeholder(self):
-        content = _load_template('hooks/on_stop.sh')
-        assert '__PROJECT_DIR__' not in content
-
     # --- on_post_write.sh -------------------------------------------------
 
     def test_post_write_exists_and_has_shebang(self):
@@ -731,10 +705,10 @@ class TestBuildHooksConfig:
         end_cmd = config['SessionEnd'][0]['hooks'][0]['command']
         assert end_cmd == str(hooks_dir / 'on_session_end.sh')
 
-    def test_default_includes_post_tool_use_and_stop(self, tmp_path):
+    def test_default_includes_post_tool_use(self, tmp_path):
         config = _build_hooks_config(tmp_path)
         assert 'PostToolUse' in config
-        assert 'Stop' in config
+        assert 'Stop' not in config
 
     def test_post_tool_use_has_bash_matcher(self, tmp_path):
         config = _build_hooks_config(tmp_path)
@@ -754,12 +728,6 @@ class TestBuildHooksConfig:
         assert post_commit_cmd == str(hooks_dir / 'on_post_commit.sh')
         post_write_cmd = config['PostToolUse'][1]['hooks'][0]['command']
         assert post_write_cmd == str(hooks_dir / 'on_post_write.sh')
-
-    def test_stop_references_correct_script(self, tmp_path):
-        config = _build_hooks_config(tmp_path)
-        hooks_dir = tmp_path / '.claude' / 'hooks' / 'memex'
-        stop_cmd = config['Stop'][0]['hooks'][0]['command']
-        assert stop_cmd == str(hooks_dir / 'on_stop.sh')
 
     def test_hook_entries_have_command_type(self, tmp_path):
         config = _build_hooks_config(tmp_path, include_session_end=True)
@@ -847,13 +815,6 @@ class TestLoadHookTemplate:
         assert '#!/usr/bin/env bash' in content
         assert '__PROJECT_DIR__' not in content
 
-    def test_stop_has_no_placeholder_to_replace(self):
-        import pathlib
-
-        content = _load_hook_template('on_stop.sh', pathlib.Path('/fake'))
-        assert '#!/usr/bin/env bash' in content
-        assert '__PROJECT_DIR__' not in content
-
     def test_post_write_has_no_placeholder_to_replace(self):
         import pathlib
 
@@ -878,7 +839,6 @@ class TestSetupCreatesHooks:
         assert (hooks_dir / 'on_session_start.sh').exists()
         assert (hooks_dir / 'on_pre_compact.sh').exists()
         assert (hooks_dir / 'on_post_commit.sh').exists()
-        assert (hooks_dir / 'on_stop.sh').exists()
         assert (hooks_dir / 'on_post_write.sh').exists()
         # SessionEnd not created by default
         assert not (hooks_dir / 'on_session_end.sh').exists()
@@ -897,7 +857,6 @@ class TestSetupCreatesHooks:
             'on_session_start.sh',
             'on_pre_compact.sh',
             'on_post_commit.sh',
-            'on_stop.sh',
             'on_post_write.sh',
         ):
             assert os.access(hooks_dir / script, os.X_OK)
@@ -923,7 +882,7 @@ class TestSetupCreatesHooks:
         _invoke('--project-dir', str(tmp_path))
         settings_path = tmp_path / '.claude' / 'settings.local.json'
         data = json.loads(settings_path.read_text())
-        assert 'Stop' in data['hooks']
+        assert 'Stop' not in data['hooks']
         assert 'PostToolUse' in data['hooks']
         assert len(data['hooks']['PostToolUse']) == 2
 
@@ -1034,14 +993,6 @@ class TestHookScriptSyntax:
 
         _invoke('--project-dir', str(tmp_path), '--with-session-tracking')
         script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_session_end.sh'
-        result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
-        assert result.returncode == 0, f'Syntax error: {result.stderr}'
-
-    def test_stop_passes_bash_syntax(self, tmp_path):
-        import subprocess
-
-        _invoke('--project-dir', str(tmp_path))
-        script = tmp_path / '.claude' / 'hooks' / 'memex' / 'on_stop.sh'
         result = subprocess.run(['bash', '-n', str(script)], capture_output=True, text=True)
         assert result.returncode == 0, f'Syntax error: {result.stderr}'
 

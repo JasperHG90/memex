@@ -113,12 +113,12 @@ async def test_staging_commit(gcs_store: GCSAsyncFileStore) -> None:
     data = b'staged on gcs'
 
     gcs_store.begin_staging(txn_id)
-    await gcs_store.save(key, data)
+    await gcs_store.save(key, data, txn_id=txn_id)
 
     assert await gcs_store.exists(key) is False
     assert await gcs_store.exists(f'{key}.stage_{txn_id}') is True
 
-    await gcs_store.commit_staging()
+    await gcs_store.commit_staging(txn_id)
 
     assert await gcs_store.exists(key) is True
     assert await gcs_store.exists(f'{key}.stage_{txn_id}') is False
@@ -134,9 +134,9 @@ async def test_staging_rollback(gcs_store: GCSAsyncFileStore) -> None:
     key = f'notes/{uuid4()}.txt'
 
     gcs_store.begin_staging(txn_id)
-    await gcs_store.save(key, b'will be rolled back')
+    await gcs_store.save(key, b'will be rolled back', txn_id=txn_id)
 
-    await gcs_store.rollback_staging()
+    await gcs_store.rollback_staging(txn_id)
 
     assert await gcs_store.exists(key) is False
     assert await gcs_store.exists(f'{key}.stage_{txn_id}') is False

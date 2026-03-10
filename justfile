@@ -85,6 +85,22 @@ dashboard-generate-api:
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 
+# Run internal quality benchmark (requires running Memex server)
+benchmark-internal server='http://localhost:8001/api/v1/':
+  uv run memex-eval run --server {{server}}
+
+# Run internal benchmark (deterministic checks only, no LLM judge)
+benchmark-internal-fast server='http://localhost:8001/api/v1/':
+  uv run memex-eval run --server {{server}} --no-llm-judge
+
+# Run LongMemEval external benchmark
+benchmark-longmemeval dataset_path server='http://localhost:8001/api/v1/':
+  uv run memex-eval longmemeval --dataset-path {{dataset_path}} --server {{server}}
+
+# Run LoCoMo external benchmark
+benchmark-locomo dataset_path server='http://localhost:8001/api/v1/':
+  uv run memex-eval locomo --dataset-path {{dataset_path}} --server {{server}}
+
 # Run database migrations to latest
 db-upgrade:
   uv run memex database upgrade

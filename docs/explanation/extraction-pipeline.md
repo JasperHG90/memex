@@ -72,7 +72,7 @@ A semantic indexing algorithm that preserves document structure by building a tr
 
 4. **Summarization**: Each node receives a summary, providing hierarchical context that is passed to child nodes during fact extraction. Nodes below `min_node_tokens` are skipped to filter noise.
 
-The reason PageIndex exists is to preserve semantic scope. When a fact is extracted from "Section 3.2: Database Migration", Memex knows the context is database migration, not the entire document. This enables features like skeleton-tree search (`--reason` flag) and section-level retrieval via `memex_get_page_index` and `memex_get_node`.
+The reason PageIndex exists is to preserve semantic scope. When a fact is extracted from "Section 3.2: Database Migration", Memex knows the context is database migration, not the entire document. This enables features like skeleton-tree search (`--reason` flag) and section-level retrieval via `memex_get_page_indices` and `memex_get_nodes`.
 
 ### Incremental Updates (Diffing)
 

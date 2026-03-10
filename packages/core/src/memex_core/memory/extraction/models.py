@@ -357,9 +357,10 @@ class BaseFact(SQLModel):
     )
     entities: list[Entity] = Field(
         default_factory=list,
-        description='Named entities, objects, AND abstract concepts from the fact. Include: '
-        "people names, organizations, places, significant objects (e.g., 'coffee maker', 'car'), "
-        "AND abstract concepts/themes (e.g., 'friendship', 'career growth', 'loss', 'celebration'). "
+        description='Named entities, objects, AND abstract concepts from the fact. '
+        'MANDATORY: ALL person names from "who" MUST appear here as Entity(text=name, entity_type="Person"). '
+        'MANDATORY: ALL location names from "where" MUST appear here as Entity(text=place, entity_type="Location"). '
+        'Also include: organizations, significant objects, AND abstract concepts/themes. '
         'Extract anything that could help link related facts together.',
     )
     fact_type: FactTypes = Field(
@@ -521,6 +522,7 @@ class ExtractedFact(BaseFact):
     occurred_end: None | dt.datetime = Field(
         default=None, description='The end time of the event described by the fact, if applicable.'
     )
+    who: str | None = Field(default=None, description='People/entities involved in the fact.')
     where: str | None = Field(
         default=None, description='Location information associated with the fact.'
     )
@@ -552,6 +554,7 @@ class ProcessedFact(SQLModel):
         default_factory=dict, description='Additional key-value metadata.'
     )
 
+    who: str | None = Field(default=None, description='People/entities involved in the fact.')
     where: str | None = Field(
         default=None, description='Location information associated with the fact.'
     )
@@ -617,6 +620,7 @@ class ProcessedFact(SQLModel):
             mentioned_at=extracted_fact.mentioned_at,
             context=extracted_fact.context or '',
             payload={k: str(v) for k, v in extracted_fact.payload.items()},
+            who=extracted_fact.who,
             where=extracted_fact.where,
             entities=extracted_fact.entities,
             causal_relations=extracted_fact.causal_relations,

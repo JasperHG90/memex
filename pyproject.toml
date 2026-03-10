@@ -12,6 +12,7 @@ dependencies = [
     "memex_cli",
     "memex_mcp",
     "memex_common",
+    "memex_eval",
 ]
 
 [tool.uv.sources]
@@ -19,12 +20,14 @@ memex_core = { workspace = true }
 memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
+memex_eval = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "packages/cli",
     "packages/common",
     "packages/core",
+    "packages/eval",
     "packages/mcp",
 ]
 
@@ -90,4 +93,7 @@ dev = [
     "s3fs>=2024.6.0",
     "gcsfs>=2024.6.0",
     "minio>=7.2.0",
+    "types-dateparser>=1.3.0.20260211",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]

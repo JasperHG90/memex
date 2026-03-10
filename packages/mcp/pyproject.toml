@@ -19,6 +19,12 @@ dependencies = [
 memex-common = { workspace = true }
 memex-core = { workspace = true }
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/memex_mcp/__about__.py"
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"

@@ -3,6 +3,7 @@ import os
 import posixpath
 
 import logging
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar, cast, Self, AsyncGenerator
 from abc import ABCMeta, abstractmethod
 from contextlib import asynccontextmanager
@@ -22,6 +23,14 @@ from memex_core.config import (
 T = TypeVar('T', bound=FileStoreConfig)
 
 
+@dataclass
+class _StagingState:
+    """Per-transaction staging state."""
+
+    staged_files: dict[str, str] = field(default_factory=dict)  # staged_key -> final_key
+    pending_deletes: set[str] = field(default_factory=set)
+
+
 class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
     def __init__(self, config: T):
         self.config = config
@@ -31,10 +40,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         self._logger.debug(f'Storage backend filesystem initialized: {self._fs}')
         self._semaphore = asyncio.Semaphore(20)
 
-        self._txn_id: str | None = None
-        # NB: contains mapping of staged temp file to final file locations
-        self._staged_files: dict[str, str] = {}
-        self._pending_deletes: set[str] = set()
+        self._active_stages: dict[str, _StagingState] = {}
 
     @abstractmethod
     def initialize(self) -> AsyncFileSystem | AsyncFileSystemWrapper:
@@ -75,62 +81,64 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             self._logger.warning('Connection check failed for %s', self.__class__.__name__)
             return False
 
-    def begin_staging(self, transaction_id: str):
-        """If using a transaction, then this is setting up the staging process
-        on the file store backend. This means that files will be stored temporarily
-        with a unique transaction id. Upon finalizing the transaction, the files
-        are either moved to their permanent location or they are removed if the
-        transaction fails.
+    def begin_staging(self, transaction_id: str) -> None:
+        """Set up staging for a transaction. Files saved with this txn_id will be
+        stored temporarily until commit or rollback.
 
         Args:
-            transaction_id (str): idempotent transaction id
+            transaction_id: unique transaction id.
+
+        Raises:
+            ValueError: If a staging session with this id is already active.
         """
-        self._txn_id = transaction_id
-        self._staged_files = {}
-        self._pending_deletes = set()
+        if transaction_id in self._active_stages:
+            raise ValueError(f'Staging transaction {transaction_id!r} is already active.')
+        self._active_stages[transaction_id] = _StagingState()
 
-    async def commit_staging(self):
-        """Commit staged files to their final locations."""
-        if not self._txn_id:
-            return
+    def _get_stage(self, txn_id: str) -> _StagingState:
+        """Look up active staging state, raising if not found."""
+        try:
+            return self._active_stages[txn_id]
+        except KeyError:
+            raise ValueError(f'No active staging transaction {txn_id!r}.')
 
-        if self._staged_files:
+    async def commit_staging(self, txn_id: str) -> None:
+        """Commit staged files for *txn_id* to their final locations."""
+        stage = self._get_stage(txn_id)
+
+        if stage.staged_files:
             self._logger.debug(
-                f'Committing {len(self._staged_files)} staged files for transaction {self._txn_id}'
+                f'Committing {len(stage.staged_files)} staged files for transaction {txn_id}'
             )
-            tasks = []
-            for tmp, final in self._staged_files.items():
-                tasks.append(self.move_file(tmp, final))
+            tasks = [self.move_file(tmp, final) for tmp, final in stage.staged_files.items()]
             if tasks:
                 await asyncio.gather(*tasks)
 
-        if self._pending_deletes:
-            tasks = []
-            for key in self._pending_deletes:
-                tasks.append(self._delete(key, recursive=False))
+        if stage.pending_deletes:
+            tasks = [self._delete(key, recursive=False) for key in stage.pending_deletes]
             if tasks:
                 await asyncio.gather(*tasks)
 
-        self._reset()
+        self._reset(txn_id)
 
-    async def rollback_staging(self):
-        """Roll back staged files, removing any temporary files."""
-        if not self._staged_files:
+    async def rollback_staging(self, txn_id: str) -> None:
+        """Roll back staged files for *txn_id*, removing temporary files."""
+        stage = self._active_stages.get(txn_id)
+        if stage is None or not stage.staged_files:
+            self._reset(txn_id)
             return
         tasks = []
-        for tmp in self._staged_files.keys():
+        for tmp in stage.staged_files:
             if await self.exists(tmp):
                 tasks.append(self._delete(tmp, recursive=False))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        self._reset()
+        self._reset(txn_id)
 
-    def _reset(self):
-        """Reset staging state."""
-        self._txn_id = None
-        self._staged_files = {}
-        self._pending_deletes = set()
+    def _reset(self, txn_id: str) -> None:
+        """Remove staging state for *txn_id*."""
+        self._active_stages.pop(txn_id, None)
 
     @asynccontextmanager
     async def staging(self, transaction_id: str) -> AsyncGenerator[Self, None]:
@@ -138,10 +146,10 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         self.begin_staging(transaction_id)
         try:
             yield self
-            await self.commit_staging()
+            await self.commit_staging(transaction_id)
         except Exception as e:
             self._logger.error(f'Staging error: {e}. Rolling back staged files.')
-            await self.rollback_staging()
+            await self.rollback_staging(transaction_id)
             raise
 
     async def move_file(
@@ -179,18 +187,20 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             await self._fs._makedirs(self._fs._parent(fp), exist_ok=True)
             await self._fs._pipe(fp, data)
 
-    async def save(self, key: str, data: bytes) -> None:
+    async def save(self, key: str, data: bytes, *, txn_id: str | None = None) -> None:
         """
         Save data to the storage backend.
 
         Args:
             key: The identifier for the data.
-            data: The string data to be saved.
+            data: The data to be saved.
+            txn_id: Optional transaction id. When provided the write is staged.
         """
-        if self._txn_id:
-            target = f'{key}.stage_{self._txn_id}'
+        if txn_id is not None:
+            stage = self._get_stage(txn_id)
+            target = f'{key}.stage_{txn_id}'
             await self._save(target, data)
-            self._staged_files[target] = key
+            stage.staged_files[target] = key
         else:
             await self._save(key, data)
 
@@ -202,15 +212,18 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             async with self._semaphore:
                 await self._fs._rm(fp, recursive=recursive)
 
-    async def delete(self, key: str, recursive: bool = False) -> None:
+    async def delete(self, key: str, *, txn_id: str | None = None, recursive: bool = False) -> None:
         """
         Delete data from the storage backend.
 
         Args:
             key: The identifier for the data to be deleted.
+            txn_id: Optional transaction id. When provided the delete is deferred.
+            recursive: Whether to delete recursively.
         """
-        if self._txn_id:
-            self._pending_deletes.add(key)
+        if txn_id is not None:
+            stage = self._get_stage(txn_id)
+            stage.pending_deletes.add(key)
         else:
             await self._delete(key, recursive=recursive)
 

@@ -52,6 +52,12 @@ class TestIsMeaningfulName:
             ('untitled.txt', False),
             ('draft.yaml', False),
             ('main.json', False),
+            # Temp file names
+            ('tmpj0elmicy', False),
+            ('tmp12345678', False),
+            ('tmp_abc_1234', False),
+            # Real words starting with "tmp" are meaningful
+            ('template', True),
             # Filenames with meaningful stems (not generic)
             ('my-meeting-notes.md', True),
             ('006: Detailing the Sys Layer architecture', True),
@@ -60,6 +66,7 @@ class TestIsMeaningfulName:
             ('My Research Notes', True),
             ('Q3 Financial Report', True),
             ('meeting-notes-2024', True),
+            ('Report Phase 0', True),
             ('a', True),  # single non-generic character
         ],
     )

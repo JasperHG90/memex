@@ -63,6 +63,8 @@ def _build_retrieval_dtos(
                 vault_id=u.vault_id,
                 metadata=u.unit_metadata,
                 score=getattr(u, 'score', None),
+                chunk_id=getattr(u, 'chunk_id', None),
+                confidence=getattr(u, 'confidence', 1.0) or 1.0,
                 debug_info=debug_info,
             )
         )
@@ -86,7 +88,11 @@ async def search_memories(
             token_budget=request.token_budget,
             strategies=request.strategies,
             include_stale=request.include_stale,
+            include_superseded=request.include_superseded,
             debug=request.debug,
+            after=request.after,
+            before=request.before,
+            tags=request.tags,
         )
 
         return ndjson_response(_build_retrieval_dtos(units, debug=request.debug))

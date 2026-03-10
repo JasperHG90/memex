@@ -47,6 +47,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "structlog>=25.5.0",
     "alembic>=1.15.0",
+    "dateparser>=1.2.2",
 ]
 
 [project.optional-dependencies]
@@ -67,3 +68,9 @@ memex-common = { workspace = true }
 
 [dependency-groups]
 dev = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/memex_core/__about__.py"

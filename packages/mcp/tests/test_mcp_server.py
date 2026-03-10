@@ -5,31 +5,9 @@ from fastmcp.exceptions import ToolError
 from memex_common.schemas import (
     IngestResponse,
     NoteDTO,
-    ReflectionResultDTO,
-    ObservationDTO,
     MemoryUnitDTO,
     FactTypes,
 )
-
-
-@pytest.mark.asyncio
-async def test_mcp_reflect_tool(mock_api, mcp_client):
-    """Test the reflect tool via the MCP Client."""
-    entity_id = uuid4()
-
-    mock_api.reflect_batch.return_value = [
-        ReflectionResultDTO(
-            entity_id=entity_id,
-            new_observations=[ObservationDTO(title='Obs1', content='Content1')],
-            status='success',
-        )
-    ]
-
-    result = await mcp_client.call_tool('memex_reflect', {'entity_id': str(entity_id), 'limit': 10})
-
-    assert 'Reflection complete' in result.content[0].text
-    assert 'Obs1: Content1' in result.content[0].text
-    mock_api.reflect_batch.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -144,6 +122,8 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     """Test reading a note successfully."""
     doc_id = uuid4()
     vault_id = uuid4()
+    # Return metadata with < 500 tokens so the guard allows reading
+    mock_api.get_note_metadata.return_value = {'title': 'Test Doc', 'total_tokens': 100}
     mock_api.get_note.return_value = NoteDTO(
         id=doc_id,
         doc_metadata={'name': 'Test Doc', 'description': 'Test Description'},
@@ -158,9 +138,20 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_read_note_blocked_large(mock_api, mcp_client):
+    """Test that reading a large note (>= 500 tokens) raises ToolError."""
+    doc_id = uuid4()
+    mock_api.get_note_metadata.return_value = {'title': 'Big Note', 'total_tokens': 2000}
+
+    with pytest.raises(ToolError, match='2000 tokens'):
+        await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
+
+
+@pytest.mark.asyncio
 async def test_mcp_read_note_not_found(mock_api, mcp_client):
     """Test reading a note that doesn't exist raises ToolError."""
     doc_id = uuid4()
+    mock_api.get_note_metadata.return_value = None
     mock_api.get_note.side_effect = FileNotFoundError()
 
     with pytest.raises(ToolError) as excinfo:
@@ -175,46 +166,41 @@ async def test_mcp_list_tools(mcp_client):
     """Verify that all expected tools are registered."""
     tools = await mcp_client.list_tools()
     names = [t.name for t in tools]
-    assert 'memex_reflect' in names
+    # Core tools should exist
     assert 'memex_add_note' in names
     assert 'memex_memory_search' in names
     assert 'memex_note_search' in names
     assert 'memex_list_vaults' in names
-    assert 'memex_list_notes' in names
+    assert 'memex_recent_notes' in names
     assert 'memex_list_entities' in names
-    assert 'memex_get_entity' in names
+    assert 'memex_get_entities' in names
     assert 'memex_get_entity_mentions' in names
     assert 'memex_get_entity_cooccurrences' in names
-    assert 'memex_get_memory_unit' in names
-    assert 'memex_ingest_url' in names
-    # Renamed tools should not exist
-    assert 'memex_doc_search' not in names
-    assert 'memex_adjust_belief' not in names
+    assert 'memex_get_memory_units' in names
+    assert 'memex_get_nodes' in names
+    assert 'memex_get_notes_metadata' in names
+    assert 'memex_get_page_indices' in names
+    assert 'memex_get_resources' in names
+    # Removed tools should not exist
+    assert 'memex_get_page_index' not in names
+    assert 'memex_get_resource' not in names
+    assert 'memex_reflect' not in names
+    assert 'memex_get_lineage' not in names
+    assert 'memex_batch_ingest' not in names
+    assert 'memex_get_batch_status' not in names
+    assert 'memex_migrate_note' not in names
+    assert 'memex_ingest_url' not in names
+    assert 'memex_get_node' not in names
+    assert 'memex_get_note_metadata' not in names
+    assert 'memex_get_memory_unit' not in names
+    assert 'memex_get_entity' not in names
+    assert 'memex_list_notes' not in names
 
-
-@pytest.mark.asyncio
-async def test_mcp_batch_ingest_sets_note_key(mock_api, mcp_client, tmp_path):
-    """Test that memex_batch_ingest sets note_key to the absolute file path."""
-    from memex_common.schemas import BatchJobStatus, NoteCreateDTO
-
-    test_file = tmp_path / 'content.md'
-    test_file.write_text('# Hello World\n\nSome content here.')
-
-    mock_api.ingest.return_value = BatchJobStatus(
-        job_id=str(uuid4()), status='queued', progress='0/1'
-    )
-
-    await mcp_client.call_tool(
-        'memex_batch_ingest',
-        {'file_paths': [str(test_file)]},
-    )
-
-    mock_api.ingest.assert_called_once()
-    args, _ = mock_api.ingest.call_args
-    note_dto = args[0]
-    assert isinstance(note_dto, NoteCreateDTO)
-    assert note_dto.note_key == str(test_file.absolute())
-    assert note_dto.name == 'content.md'
+    # Tool descriptions should guide agents to use leaf node IDs
+    tool_by_name = {t.name: t for t in tools}
+    page_desc = tool_by_name['memex_get_page_indices'].description
+    assert 'leaf' in page_desc.lower(), 'page_indices description should mention leaf nodes'
+    assert 'memex_get_nodes' in page_desc, 'page_indices description should reference get_nodes'
 
 
 @pytest.mark.asyncio

@@ -180,6 +180,19 @@ class RetrievalRequest(BaseModel):
         default_factory=dict, description='Optional key-value filters (e.g. fact_type).'
     )
 
+    # Temporal filtering
+    after: dt.datetime | None = Field(
+        default=None, description='Only return results after this date (ISO 8601).'
+    )
+    before: dt.datetime | None = Field(
+        default=None, description='Only return results before this date (ISO 8601).'
+    )
+
+    # Tag filtering
+    tags: list[str] | None = Field(
+        default=None, description='Only return results from notes with ALL of these tags.'
+    )
+
     # Advanced options
     rerank: bool = Field(
         default=True, description='Whether to apply neural reranking if available.'
@@ -203,6 +216,10 @@ class RetrievalRequest(BaseModel):
     )
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
+    )
+    include_superseded: bool = Field(
+        default=False,
+        description='Whether to include superseded (low-confidence) memory units in results.',
     )
     debug: bool = Field(
         default=False,
@@ -289,6 +306,15 @@ class MemoryUnitBase(VaultMixin):
     )
 
 
+class SupersessionInfo(BaseModel):
+    """Info about a unit that supersedes this one."""
+
+    unit_id: UUID
+    unit_text: str
+    note_title: str | None = None
+    relation: str  # 'contradicts' | 'weakens'
+
+
 class MemoryUnitDTO(MemoryUnitBase):
     """DTO for a Memory Unit (Fact/Experience)."""
 
@@ -303,6 +329,16 @@ class MemoryUnitDTO(MemoryUnitBase):
         default=None,
         description='The unique identifier of the source note.',
         examples=['123e4567-e89b-12d3-a456-426614174000'],
+    )
+
+    chunk_id: UUID | None = Field(
+        default=None,
+        description='The source chunk ID this memory unit was extracted from.',
+    )
+
+    node_ids: list[str] = Field(
+        default_factory=list,
+        description='Page-index node IDs linked to the source chunk.',
     )
 
     source_note_ids: list[UUID] = Field(
@@ -326,6 +362,16 @@ class MemoryUnitDTO(MemoryUnitBase):
     debug_info: list[StrategyDebugInfo] | None = Field(
         default=None,
         description='Per-strategy attribution when debug=True. None when debug is off.',
+    )
+
+    confidence: float = Field(
+        default=1.0,
+        description='Confidence score (0.0-1.0).',
+    )
+
+    superseded_by: list[SupersessionInfo] | None = Field(
+        default=None,
+        description='Units that supersede this one.',
     )
 
     @property
@@ -489,6 +535,14 @@ class NoteCreateDTO(BaseModel):
         return {k: v.decode('utf-8') for k, v in files.items()}
 
 
+class OverlappingNote(BaseModel):
+    """A note that overlaps with the newly ingested one."""
+
+    note_id: UUID
+    similarity: float
+    title: str | None = None
+
+
 class IngestResponse(BaseModel):
     """Response from ingestion."""
 
@@ -513,6 +567,11 @@ class IngestResponse(BaseModel):
         default=None,
         description='Reason for skipping or failure, if applicable.',
         examples=['idempotency_check'],
+    )
+
+    overlapping_notes: list[OverlappingNote] = Field(
+        default_factory=list,
+        description='Notes with high similarity to the ingested content (>0.85).',
     )
 
 
@@ -668,6 +727,7 @@ class NodeDTO(BaseModel):
     id: UUID
     note_id: UUID
     vault_id: UUID
+    node_hash: str | None = None
     title: str
     text: str
     level: int
@@ -714,6 +774,8 @@ class NoteSearchResult(BaseModel):
     metadata: dict[str, Any]
     snippets: list[NoteSnippet]
     score: float = 0.0
+    vault_id: UUID | None = None
+    vault_name: str | None = None
     reasoning: list[dict[str, Any]] | None = Field(
         default=None,
         description='Identified sections with reasoning text and node IDs (populated when reason=True).',
@@ -721,6 +783,10 @@ class NoteSearchResult(BaseModel):
     answer: str | None = Field(
         default=None,
         description='LLM-generated answer when summarize=True.',
+    )
+    note_status: str | None = Field(
+        default=None,
+        description='Derived status: active, partially_superseded, superseded.',
     )
 
 
@@ -734,6 +800,15 @@ class NoteSearchRequest(BaseModel):
     fusion_strategy: str = 'rrf'
     strategies: list[str] = Field(default=['semantic', 'keyword', 'graph', 'temporal'])
     strategy_weights: dict[str, float] | None = Field(default=None)
+    after: dt.datetime | None = Field(
+        default=None, description='Only return notes created after this date (ISO 8601).'
+    )
+    before: dt.datetime | None = Field(
+        default=None, description='Only return notes created before this date (ISO 8601).'
+    )
+    tags: list[str] | None = Field(
+        default=None, description='Only return notes with ALL of these tags.'
+    )
     reason: bool = Field(
         default=False,
         description='Run skeleton-tree identification — returns reasoning + relevant section IDs.',
@@ -787,6 +862,10 @@ class PageMetadataDTO(BaseModel):
     tags: list[str] = Field(default_factory=list)
     publish_date: str | None = None
     source_uri: str | None = None
+    has_assets: bool = False
+    vault_id: UUID | None = None
+    vault_name: str | None = None
+    total_tokens: int | None = None
 
 
 class SectionSummaryDTO(BaseModel):
@@ -815,3 +894,4 @@ class PageIndexDTO(BaseModel):
 
     metadata: PageMetadataDTO
     toc: list[TOCNodeDTO]
+    total_tokens: int | None = None
