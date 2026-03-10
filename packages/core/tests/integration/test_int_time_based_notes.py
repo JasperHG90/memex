@@ -439,3 +439,32 @@ async def test_no_notes_have_publish_date(api, metastore, init_global_vault):
     )
     assert len(results) == 1
     assert results[0].title == 'new'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_notes_rest_endpoint_returns_publish_date(api, metastore, init_global_vault):
+    """REST endpoint includes publish_date in ndjson response."""
+    await api.initialize()
+    app.state.api = api
+
+    pub = datetime(2025, 3, 15, tzinfo=timezone.utc)
+
+    async with metastore.session() as session:
+        session.add(
+            _make_note(
+                title='with-publish-date',
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                publish_date=pub,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
+        response = await ac.get('/api/v1/notes')
+        assert response.status_code == 200
+        data = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+        assert len(data) >= 1
+        note = next(n for n in data if n['title'] == 'with-publish-date')
+        assert note['publish_date'] is not None
+        assert '2025-03-15' in note['publish_date']

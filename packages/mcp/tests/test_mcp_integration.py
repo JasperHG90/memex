@@ -72,3 +72,51 @@ async def test_integration_search_assets_resource(mock_api):
 
         # Verify it returns file:// URI for local images
         mock_api.get_resource_path.assert_called_once_with('assets/arch.png')
+
+
+@pytest.mark.asyncio
+async def test_list_notes_includes_publish_date(mock_api):
+    """memex_list_notes includes publish_date in its output."""
+    pub = dt.datetime(2025, 3, 15, tzinfo=dt.timezone.utc)
+    mock_api.list_notes = AsyncMock(
+        return_value=[
+            NoteDTO(
+                id=uuid4(),
+                title='Published Note',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+                publish_date=pub,
+                vault_id=uuid4(),
+            )
+        ]
+    )
+
+    async with Client(mcp) as client:
+        result = await client.call_tool('memex_list_notes', {})
+        text = result.content[0].text
+
+        assert '2025-03-15' in text
+        assert 'Published Note' in text
+
+
+@pytest.mark.asyncio
+async def test_recent_notes_includes_publish_date(mock_api):
+    """memex_recent_notes includes publish_date in its output."""
+    pub = dt.datetime(2025, 3, 15, tzinfo=dt.timezone.utc)
+    mock_api.get_recent_notes = AsyncMock(
+        return_value=[
+            NoteDTO(
+                id=uuid4(),
+                title='Recent Published',
+                created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+                publish_date=pub,
+                vault_id=uuid4(),
+            )
+        ]
+    )
+
+    async with Client(mcp) as client:
+        result = await client.call_tool('memex_recent_notes', {})
+        text = result.content[0].text
+
+        assert '2025-03-15' in text
+        assert 'Recent Published' in text

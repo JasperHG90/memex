@@ -13,7 +13,13 @@ def test_note_list(runner, mock_api, monkeypatch):
     result = runner.invoke(note_app, ['list'])
     assert result.exit_code == 0
     assert 'My Note' in result.stdout
-    mock_api.list_notes.assert_called_once_with(limit=50, offset=0, vault_ids=None)
+    mock_api.list_notes.assert_called_once_with(
+        limit=50,
+        offset=0,
+        vault_ids=None,
+        after=None,
+        before=None,
+    )
 
 
 def test_note_list_with_vault(runner, mock_api, monkeypatch):
@@ -24,7 +30,13 @@ def test_note_list_with_vault(runner, mock_api, monkeypatch):
 
     result = runner.invoke(note_app, ['list', '--vault', vault_id])
     assert result.exit_code == 0
-    mock_api.list_notes.assert_called_once_with(limit=50, offset=0, vault_ids=[vault_id])
+    mock_api.list_notes.assert_called_once_with(
+        limit=50,
+        offset=0,
+        vault_ids=[vault_id],
+        after=None,
+        before=None,
+    )
 
 
 def test_note_view(runner, mock_api, monkeypatch):
