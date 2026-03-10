@@ -592,6 +592,10 @@ class MemexAPI:
         """Update a note's title. Delegates to NoteService."""
         return await self._notes.update_note_title(note_id, new_title)
 
+    async def update_note_date(self, note_id: UUID, new_date: datetime) -> dict[str, Any]:
+        """Update a note's publish_date and cascade to memory units. Delegates to NoteService."""
+        return await self._notes.update_note_date(note_id, new_date)
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)

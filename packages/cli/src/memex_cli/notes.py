@@ -173,6 +173,44 @@ async def delete_note(
         console.print(f'[red]Note {note_id} not found.[/red]')
 
 
+@app.command('update-date')
+@async_command
+async def update_date(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note to update.')],
+    new_date: Annotated[
+        str, typer.Argument(help='New date (ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).')
+    ],
+):
+    """
+    Update a note's publish_date and cascade the delta to all memory unit timestamps.
+    """
+    from datetime import datetime
+
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    try:
+        parsed_date = datetime.fromisoformat(new_date)
+    except ValueError:
+        console.print(
+            f'[red]Invalid date format: {new_date}. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.[/red]'
+        )
+        raise typer.Exit(code=1)
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.update_note_date(uuid_obj, parsed_date)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print('[green]Note date updated successfully.[/green]')
+    console.print(f'  Old date: {result.get("old_date")}')
+    console.print(f'  New date: {result.get("new_date")}')
+    console.print(f'  Memory units updated: {result.get("units_updated", 0)}')
+
+
 @app.command('rename')
 @async_command
 async def rename_note(

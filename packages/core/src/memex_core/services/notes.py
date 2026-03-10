@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -91,6 +92,76 @@ class NoteService:
                 'note_id': str(note_id),
                 'status': status,
                 'linked_note_id': str(linked_note_id) if linked_note_id else None,
+            }
+
+    async def update_note_date(self, note_id: UUID, new_date: datetime) -> dict[str, Any]:
+        """Update the publish_date of a note, cascading delta to all memory unit timestamps."""
+        from datetime import timezone
+
+        from sqlmodel import update
+
+        from memex_core.memory.sql_models import MemoryUnit, Note
+
+        # Normalize to UTC if naive
+        if new_date.tzinfo is None:
+            new_date = new_date.replace(tzinfo=timezone.utc)
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            old_date = doc.publish_date or doc.created_at
+            delta = new_date - old_date
+
+            # Early return if no change
+            if delta == timedelta(0):
+                return {
+                    'note_id': str(note_id),
+                    'old_date': old_date.isoformat(),
+                    'new_date': new_date.isoformat(),
+                    'units_updated': 0,
+                }
+
+            # Update Note.publish_date
+            doc.publish_date = new_date
+
+            # Update doc_metadata
+            if doc.doc_metadata is None:
+                doc.doc_metadata = {}
+            meta = dict(doc.doc_metadata)
+            meta['publish_date'] = new_date.isoformat()
+            doc.doc_metadata = meta
+
+            # Update page_index metadata
+            if isinstance(doc.page_index, dict):
+                pi = dict(doc.page_index)
+                pi_meta = dict(pi.get('metadata') or {})
+                pi_meta['publish_date'] = new_date.isoformat()
+                pi['metadata'] = pi_meta
+                doc.page_index = pi
+
+            session.add(doc)
+
+            # Bulk update all MemoryUnit temporal fields by delta
+            result = await session.exec(
+                update(MemoryUnit)
+                .where(col(MemoryUnit.note_id) == note_id)
+                .values(
+                    event_date=MemoryUnit.event_date + delta,
+                    mentioned_at=MemoryUnit.mentioned_at + delta,  # type: ignore[operator]
+                    occurred_start=MemoryUnit.occurred_start + delta,  # type: ignore[operator]
+                    occurred_end=MemoryUnit.occurred_end + delta,  # type: ignore[operator]
+                )
+            )
+            units_updated: int = result.rowcount  # type: ignore[assignment]
+
+            await session.commit()
+            return {
+                'note_id': str(note_id),
+                'old_date': old_date.isoformat(),
+                'new_date': new_date.isoformat(),
+                'units_updated': units_updated,
             }
 
     async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
@@ -263,17 +334,46 @@ class NoteService:
             return [NodeDTO.model_validate(n) for n in results]
 
     async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
-        """Return metadata for multiple notes. Skips notes that are not found."""
-        results: list[dict[str, Any]] = []
-        for nid in note_ids:
-            try:
-                meta = await self.get_note_metadata(nid)
-                if meta:
-                    meta['note_id'] = str(nid)
-                    results.append(meta)
-            except Exception:
-                pass
-        return results
+        """Return metadata for multiple notes in a single query.
+
+        Skips notes that are not found or have no page_index metadata.
+        """
+        if not note_ids:
+            return []
+
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note, Vault
+
+        async with self.metastore.session() as session:
+            stmt = select(Note).where(col(Note.id).in_(note_ids))
+            notes = (await session.exec(stmt)).all()
+
+            # Collect unique vault IDs to batch-fetch vault names
+            vault_ids = {n.vault_id for n in notes if n.vault_id is not None}
+            vault_map: dict[UUID, str] = {}
+            if vault_ids:
+                vault_stmt = select(Vault).where(col(Vault.id).in_(list(vault_ids)))
+                vaults = (await session.exec(vault_stmt)).all()
+                vault_map = {v.id: v.name for v in vaults}
+
+            results: list[dict[str, Any]] = []
+            for doc in notes:
+                if doc.page_index is None or not isinstance(doc.page_index, dict):
+                    continue
+                metadata = doc.page_index.get('metadata')
+                if metadata is None:
+                    continue
+                metadata = dict(metadata)
+                metadata['has_assets'] = bool(doc.assets)
+                metadata.setdefault('vault_id', str(doc.vault_id))
+                vault_name = vault_map.get(doc.vault_id)
+                if vault_name:
+                    metadata.setdefault('vault_name', vault_name)
+                metadata['note_id'] = str(doc.id)
+                results.append(metadata)
+
+            return results
 
     async def list_notes(
         self,
@@ -329,13 +429,16 @@ class NoteService:
         Uses AsyncTransaction for atomicity across metastore + filestore.
         ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
         FileStore cleanup handles: assets and filestore_path.
-        After deletion, orphaned mental models (entities with no remaining links) are cleaned up.
+        After deletion, orphaned entities (and their mental models) are removed, and
+        mention_count is recalculated for entities still referenced by other notes.
         """
-        from sqlmodel import select
+        from sqlalchemy import update
+        from sqlmodel import func, select
 
         from memex_core.memory.sql_models import (
-            MentalModel,
+            Entity,
             MemoryUnit,
+            MentalModel,
             Note,
             UnitEntity,
         )
@@ -368,7 +471,7 @@ class NoteService:
             # ORM cascades handle memory_units, chunks, and their children
             await txn.db_session.delete(doc)
 
-            # Flush so cascades execute, then clean up orphaned mental models
+            # Flush so cascades execute, then clean up orphaned entities
             await txn.db_session.flush()
 
             if entity_ids_for_cleanup:
@@ -378,11 +481,29 @@ class NoteService:
                         select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
                     )
                     if remaining.first() is None:
-                        # No remaining links — delete mental models for this entity
+                        # No remaining links — delete entity and its mental models.
+                        # MentalModel has no FK CASCADE, so delete explicitly first.
                         mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
                         mm_result = await txn.db_session.exec(mm_stmt)
                         for mm in mm_result.all():
                             await txn.db_session.delete(mm)
+                        # Entity FK cascades handle aliases, cooccurrences, links
+                        entity = await txn.db_session.get(Entity, eid)
+                        if entity:
+                            await txn.db_session.delete(entity)
+                    else:
+                        # Update mention_count to reflect actual remaining links
+                        count_result = await txn.db_session.exec(
+                            select(func.count())
+                            .select_from(UnitEntity)
+                            .where(col(UnitEntity.entity_id) == eid)
+                        )
+                        actual_count = count_result.one()
+                        await txn.db_session.exec(
+                            update(Entity)
+                            .where(col(Entity.id) == eid)
+                            .values(mention_count=actual_count)
+                        )
 
         return True
 

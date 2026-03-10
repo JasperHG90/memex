@@ -183,6 +183,31 @@ async def set_note_status(
         raise _handle_error(e, 'Failed to set note status')
 
 
+class UpdateNoteDateRequest(BaseModel):
+    date: str
+
+
+@router.patch('/notes/{note_id}/date')
+async def update_note_date(
+    note_id: UUID,
+    request: Annotated[UpdateNoteDateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Update a note's publish_date and cascade delta to all memory unit timestamps."""
+    from datetime import datetime
+
+    try:
+        new_date = datetime.fromisoformat(request.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f'Invalid date format: {request.date!r}')
+
+    try:
+        result = await api.update_note_date(note_id, new_date)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to update note date')
+
+
 class RenameNoteRequest(BaseModel):
     new_title: str
 
