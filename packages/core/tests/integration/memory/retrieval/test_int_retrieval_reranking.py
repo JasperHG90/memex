@@ -171,7 +171,7 @@ class TestRetrievalReranking:
         await self._setup_scenario(session, embedder, data)
 
         # Retrieve
-        results = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
+        results, _ = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
 
         # Check Top 1
         assert len(results) >= 1
@@ -222,7 +222,7 @@ class TestRetrievalReranking:
 
         await self._setup_scenario(session, embedder, data)
 
-        results = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
+        results, _ = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
 
         assert len(results) >= 1
         top_result = results[0]
@@ -268,7 +268,7 @@ class TestRetrievalReranking:
 
         await self._setup_scenario(session, embedder, data)
 
-        results = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
+        results, _ = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=3))
 
         assert len(results) >= 1
         top_result = results[0]
@@ -324,7 +324,7 @@ class TestRetrievalReranking:
 
         # Retrieve
         # Limit=5 to ensure we get both if available, but RRF should rank Y high.
-        results = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=5))
+        results, _ = await engine_instance.retrieve(session, RetrievalRequest(query=query, limit=5))
 
         found = any('Project Y' in r.text for r in results)
         assert found, 'Graph strategy failed to retrieve co-occurring entity memory'

@@ -74,7 +74,7 @@ class TestRetrievalScoping:
 
         # Retrieve with context = [Vault A]
         request_a = RetrievalRequest(query=query_text, limit=10, vault_ids=[vault_a_id])
-        results_a = await engine_instance.retrieve(session, request_a)
+        results_a, _ = await engine_instance.retrieve(session, request_a)
 
         ids_a = {r.id for r in results_a}
 
@@ -148,7 +148,7 @@ class TestRetrievalScoping:
         request_mixed = RetrievalRequest(
             query=query_text, limit=10, vault_ids=[vault_a_id, GLOBAL_VAULT_ID]
         )
-        results_mixed = await engine_instance.retrieve(session, request_mixed)
+        results_mixed, _ = await engine_instance.retrieve(session, request_mixed)
 
         ids_mixed = {r.id for r in results_mixed}
 
@@ -186,12 +186,12 @@ class TestRetrievalScoping:
 
         # Request with vault_ids=None
         request_none = RetrievalRequest(query='Testing', limit=10, vault_ids=None)
-        results = await engine_instance.retrieve(session, request_none)
+        results, _ = await engine_instance.retrieve(session, request_none)
 
         assert unit.id in [r.id for r in results]
 
         # Request with vault_ids=[] (Empty List)
         request_empty = RetrievalRequest(query='Testing', limit=10, vault_ids=[])
-        results_empty = await engine_instance.retrieve(session, request_empty)
+        results_empty, _ = await engine_instance.retrieve(session, request_empty)
 
         assert unit.id in [r.id for r in results_empty]

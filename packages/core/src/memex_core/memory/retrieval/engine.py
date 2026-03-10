@@ -164,7 +164,7 @@ class RetrievalEngine:
         self,
         session: AsyncSession,
         request: RetrievalRequest,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], dict[str, Any] | None]:
         """
         Retrieve memories and synthesized observations using In-DB RRF.
         If a reranker is available, fetches a larger pool and re-ranks them.
@@ -265,13 +265,13 @@ class RetrievalEngine:
         del all_embeddings
 
         if not all_ranked_items:
-            return []
+            return ([], None)
 
         # 5. Multi-Query RRF Fusion (Final Blend)
         fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
 
         if not fused_items:
-            return []
+            return ([], None)
 
         # 6. Hydrate Objects
         final_results = await self._hydrate_results(session, fused_items)
@@ -330,9 +330,23 @@ class RetrievalEngine:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
 
-        # 10. Update Resonance
-        if final_results:
-            await self._update_resonance(session, final_results, vault_id=primary_vault_id)
+        # 10. Collect resonance update info (deferred to background)
+        resonance_context: dict[str, Any] | None = None
+        if final_results and self.queue_service:
+            try:
+                retrieved_unit_ids = [u.id for u in final_results]
+                stmt = select(UnitEntity.entity_id).where(
+                    col(UnitEntity.unit_id).in_(retrieved_unit_ids)
+                )
+                result = await session.exec(stmt)
+                active_entity_ids = set(result.all())
+                if active_entity_ids:
+                    resonance_context = {
+                        'entity_ids': active_entity_ids,
+                        'vault_id': primary_vault_id,
+                    }
+            except (ValueError, RuntimeError, OSError) as e:
+                logger.error(f'Failed to collect resonance data: {e}')
 
         # 10b. Attach debug info to results
         if debug_ctx is not None:
@@ -346,8 +360,8 @@ class RetrievalEngine:
             final_results = self._filter_by_token_budget(final_results, token_budget)
 
         if token_budget is not None:
-            return final_results  # token_budget is the sole constraint
-        return final_results[: request.limit]
+            return (final_results, resonance_context)
+        return (final_results[: request.limit], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int
@@ -891,28 +905,6 @@ class RetrievalEngine:
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
             return results
-
-    async def _update_resonance(
-        self, session: AsyncSession, units: list[MemoryUnit], vault_id: UUID = GLOBAL_VAULT_ID
-    ) -> None:
-        """Updates entity resonance priorities based on retrieval."""
-        if not self.queue_service:
-            return
-
-        try:
-            retrieved_unit_ids = [u.id for u in units]
-            stmt = select(UnitEntity.entity_id).where(
-                col(UnitEntity.unit_id).in_(retrieved_unit_ids)
-            )
-            result = await session.exec(stmt)
-            active_entity_ids = set(result.all())
-
-            if active_entity_ids:
-                await self.queue_service.handle_retrieval_event(
-                    session, active_entity_ids, vault_id=vault_id
-                )
-        except (ValueError, RuntimeError, OSError) as e:
-            logger.error(f'Failed to update resonance priorities: {e}')
 
     @staticmethod
     async def _compute_pairwise_cosine(

@@ -42,7 +42,7 @@ class SearchService:
         self._doc_search = doc_search
         self._vaults = vaults
 
-    async def retrieve(self, request: RetrievalRequest) -> list[MemoryUnit]:
+    async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories and synthesized observations using TEMPR Recall."""
         async with self.metastore.session() as session:
             return await self.memory.recall(session, request)
@@ -60,7 +60,7 @@ class SearchService:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
         Scopes to active vault + attached vaults if vault_ids is not provided.

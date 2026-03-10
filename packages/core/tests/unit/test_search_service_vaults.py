@@ -37,7 +37,7 @@ def search_service(vault_service):
     config.server.attached_vaults = ['extra-vault-1', 'extra-vault-2']
 
     memory = AsyncMock()
-    memory.recall = AsyncMock(return_value=[])
+    memory.recall = AsyncMock(return_value=([], None))
 
     svc = SearchService(
         metastore=MagicMock(),
@@ -59,7 +59,7 @@ async def test_search_resolves_attached_vaults_when_no_vault_ids(search_service,
     mock_session = AsyncMock()
     search_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
     search_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
-    search_service.memory.recall = AsyncMock(return_value=[])
+    search_service.memory.recall = AsyncMock(return_value=([], None))
 
     await search_service.search(query='test query', vault_ids=None)
 
@@ -75,7 +75,7 @@ async def test_search_uses_explicit_vault_ids_when_provided(search_service, vaul
     mock_session = AsyncMock()
     search_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
     search_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
-    search_service.memory.recall = AsyncMock(return_value=[])
+    search_service.memory.recall = AsyncMock(return_value=([], None))
 
     explicit_id = uuid4()
     await search_service.search(query='test', vault_ids=[explicit_id])
@@ -93,7 +93,7 @@ async def test_search_no_attached_vaults_only_active(vault_service):
     config.server.attached_vaults = []  # Empty
 
     memory = AsyncMock()
-    memory.recall = AsyncMock(return_value=[])
+    memory.recall = AsyncMock(return_value=([], None))
 
     svc = SearchService(
         metastore=MagicMock(),

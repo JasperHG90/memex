@@ -701,7 +701,7 @@ class MemexAPI:
         """Get daily aggregated token usage. Delegates to StatsService."""
         return await self._stats.get_daily_token_usage()
 
-    async def retrieve(self, request: RetrievalRequest) -> list[MemoryUnit]:
+    async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
         return await self._search.retrieve(request)
 
@@ -718,7 +718,7 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         tags: list[str] | None = None,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], Any]:
         """Search with reranking. Delegates to SearchService."""
         return await self._search.search(
             query=query,

@@ -60,7 +60,7 @@ async def test_retrieval_nplus1(session, metastore):
     try:
         # 4. Search
         req = RetrievalRequest(query='test', limit=20)
-        results = await engine.retrieve(session, req)
+        results, _ = await engine.retrieve(session, req)
 
         # 5. Access related attributes to trigger lazy loads if not eager
         # We simulate what downstream code (e.g., API response mapping) might do

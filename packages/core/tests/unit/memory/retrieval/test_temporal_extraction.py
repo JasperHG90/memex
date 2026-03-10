@@ -408,7 +408,7 @@ class TestTemporalExtractionDisabled:
             filters=original_filters,
         )
 
-        await engine.retrieve(session, request)
+        await engine.retrieve(session, request)  # return value not needed
 
         # Original filters should NOT be mutated (no start_date/end_date injected)
         assert 'start_date' not in original_filters

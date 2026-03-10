@@ -34,21 +34,24 @@ def mock_api():
         id=MOCK_VAULT_ID, name='Test Vault', description='A test vault'
     )
 
-    api_mock.search.return_value = [
-        SimpleNamespace(
-            id=MOCK_UNIT_ID,
-            text='Found memory',
-            fact_type=FactTypes.WORLD,
-            status='active',
-            mentioned_at=datetime.now(timezone.utc),
-            event_date=datetime.now(timezone.utc),
-            occurred_start=None,
-            occurred_end=None,
-            vault_id=MOCK_VAULT_ID,
-            unit_metadata={},
-            score=0.95,
-        )
-    ]
+    api_mock.search.return_value = (
+        [
+            SimpleNamespace(
+                id=MOCK_UNIT_ID,
+                text='Found memory',
+                fact_type=FactTypes.WORLD,
+                status='active',
+                mentioned_at=datetime.now(timezone.utc),
+                event_date=datetime.now(timezone.utc),
+                occurred_start=None,
+                occurred_end=None,
+                vault_id=MOCK_VAULT_ID,
+                unit_metadata={},
+                score=0.95,
+            )
+        ],
+        None,
+    )
 
     return api_mock
 

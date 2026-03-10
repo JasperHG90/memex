@@ -648,15 +648,18 @@ class TestMemorySearchEdgeCases:
         """If metadata batch call fails entirely, search still returns results."""
         nid = uuid4()
         uid = uuid4()
-        mock_api.search.return_value = [
-            MemoryUnitDTO(
-                id=uid,
-                text='Some fact.',
-                fact_type=FactTypes.WORLD,
-                note_id=nid,
-                vault_id=uuid4(),
-            )
-        ]
+        mock_api.search.return_value = (
+            [
+                MemoryUnitDTO(
+                    id=uid,
+                    text='Some fact.',
+                    fact_type=FactTypes.WORLD,
+                    note_id=nid,
+                    vault_id=uuid4(),
+                )
+            ],
+            None,
+        )
         mock_api.get_notes_metadata.side_effect = RuntimeError('metadata service down')
 
         result = await mcp_client.call_tool('memex_memory_search', {'query': 'test'})
@@ -670,15 +673,18 @@ class TestMemorySearchEdgeCases:
     async def test_result_with_none_note_id(self, mock_api, mcp_client):
         """Results with note_id=None should not render 'Note: None'."""
         uid = uuid4()
-        mock_api.search.return_value = [
-            MemoryUnitDTO(
-                id=uid,
-                text='Orphan fact.',
-                fact_type=FactTypes.WORLD,
-                note_id=None,
-                vault_id=uuid4(),
-            )
-        ]
+        mock_api.search.return_value = (
+            [
+                MemoryUnitDTO(
+                    id=uid,
+                    text='Orphan fact.',
+                    fact_type=FactTypes.WORLD,
+                    note_id=None,
+                    vault_id=uuid4(),
+                )
+            ],
+            None,
+        )
         mock_api.get_notes_metadata.return_value = []
 
         result = await mcp_client.call_tool('memex_memory_search', {'query': 'orphan'})
@@ -702,24 +708,27 @@ class TestMemorySearchEdgeCases:
         nid2 = uuid4()
         uid1 = uuid4()
         uid2 = uuid4()
-        mock_api.search.return_value = [
-            MemoryUnitDTO(
-                id=uid1,
-                text='Fact A.',
-                fact_type=FactTypes.WORLD,
-                note_id=nid1,
-                vault_id=uuid4(),
-                score=0.9,
-            ),
-            MemoryUnitDTO(
-                id=uid2,
-                text='Fact B.',
-                fact_type=FactTypes.WORLD,
-                note_id=nid2,
-                vault_id=uuid4(),
-                score=0.8,
-            ),
-        ]
+        mock_api.search.return_value = (
+            [
+                MemoryUnitDTO(
+                    id=uid1,
+                    text='Fact A.',
+                    fact_type=FactTypes.WORLD,
+                    note_id=nid1,
+                    vault_id=uuid4(),
+                    score=0.9,
+                ),
+                MemoryUnitDTO(
+                    id=uid2,
+                    text='Fact B.',
+                    fact_type=FactTypes.WORLD,
+                    note_id=nid2,
+                    vault_id=uuid4(),
+                    score=0.8,
+                ),
+            ],
+            None,
+        )
         # Only return metadata for nid1
         mock_api.get_notes_metadata.return_value = [{'note_id': str(nid1), 'title': 'Titled Note'}]
 
@@ -733,16 +742,19 @@ class TestMemorySearchEdgeCases:
     async def test_very_long_text_truncated(self, mock_api, mcp_client):
         """Search results with long text should be truncated to 300 chars."""
         long_text = 'x' * 500
-        mock_api.search.return_value = [
-            MemoryUnitDTO(
-                id=uuid4(),
-                text=long_text,
-                fact_type=FactTypes.WORLD,
-                note_id=uuid4(),
-                vault_id=uuid4(),
-                score=0.9,
-            )
-        ]
+        mock_api.search.return_value = (
+            [
+                MemoryUnitDTO(
+                    id=uuid4(),
+                    text=long_text,
+                    fact_type=FactTypes.WORLD,
+                    note_id=uuid4(),
+                    vault_id=uuid4(),
+                    score=0.9,
+                )
+            ],
+            None,
+        )
         mock_api.get_notes_metadata.return_value = []
 
         result = await mcp_client.call_tool('memex_memory_search', {'query': 'test'})
@@ -754,7 +766,7 @@ class TestMemorySearchEdgeCases:
 
     @pytest.mark.asyncio
     async def test_empty_results(self, mock_api, mcp_client):
-        mock_api.search.return_value = []
+        mock_api.search.return_value = ([], None)
 
         result = await mcp_client.call_tool('memex_memory_search', {'query': 'nothing'})
         assert 'No results' in result.content[0].text
