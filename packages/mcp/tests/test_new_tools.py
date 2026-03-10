@@ -731,7 +731,7 @@ async def test_memory_search_includes_note_titles(mock_api, mcp_client):
         note_id=nid,
         vault_id=uuid4(),
     )
-    mock_api.search.return_value = ([unit], None)
+    mock_api.search.return_value = [unit]
     mock_api.get_notes_metadata.return_value = [
         {'note_id': str(nid), 'title': 'Architecture Guide'}
     ]

@@ -28,20 +28,17 @@ async def test_integration_search_assets_resource(mock_api):
     # 1. Setup Search Data
     unit_id = uuid4()
     doc_id = uuid4()
-    mock_api.search.return_value = (
-        [
-            MemoryUnitDTO(
-                id=unit_id,
-                note_id=doc_id,
-                text='Architecture diagram shows the system layout.',
-                fact_type=FactTypes.WORLD,
-                score=0.95,
-                vault_id=uuid4(),
-                metadata={},
-            )
-        ],
-        None,
-    )
+    mock_api.search.return_value = [
+        MemoryUnitDTO(
+            id=unit_id,
+            note_id=doc_id,
+            text='Architecture diagram shows the system layout.',
+            fact_type=FactTypes.WORLD,
+            score=0.95,
+            vault_id=uuid4(),
+            metadata={},
+        )
+    ]
 
     # 2. Setup Document Data (for List Assets)
     mock_api.get_note.return_value = NoteDTO(
