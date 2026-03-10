@@ -11,20 +11,17 @@ async def test_mcp_search_expanded_output(mock_api, mcp_client):
     """Test that search tool output contains Unit ID, Note ID, and Type."""
     unit_id = uuid4()
     doc_id = uuid4()
-    mock_api.search.return_value = (
-        [
-            MemoryUnitDTO(
-                id=unit_id,
-                note_id=doc_id,
-                text='Python is a popular programming language.',
-                fact_type=FactTypes.WORLD,
-                score=0.95,
-                vault_id=uuid4(),
-                metadata={},
-            )
-        ],
-        None,
-    )
+    mock_api.search.return_value = [
+        MemoryUnitDTO(
+            id=unit_id,
+            note_id=doc_id,
+            text='Python is a popular programming language.',
+            fact_type=FactTypes.WORLD,
+            score=0.95,
+            vault_id=uuid4(),
+            metadata={},
+        )
+    ]
 
     result = await mcp_client.call_tool('memex_memory_search', {'query': 'python', 'limit': 1})
 
@@ -39,7 +36,7 @@ async def test_mcp_search_expanded_output(mock_api, mcp_client):
 @pytest.mark.asyncio
 async def test_mcp_search_with_budget(mock_api, mcp_client):
     """Test that search tool propagates token_budget."""
-    mock_api.search.return_value = ([], None)
+    mock_api.search.return_value = []
 
     await mcp_client.call_tool(
         'memex_memory_search', {'query': 'python', 'limit': 1, 'token_budget': 500}

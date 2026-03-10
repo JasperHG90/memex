@@ -365,7 +365,7 @@ async def search_memory(
 
     async with get_api_context(config) as api:
         try:
-            results, resonance_task = await api.search(
+            results = await api.search(
                 query=query,
                 limit=limit,
                 token_budget=token_budget,
@@ -373,9 +373,6 @@ async def search_memory(
                 vault_ids=vault_ids,
                 include_stale=include_stale,
             )
-            # Run resonance update inline — CLI has no timeout constraints
-            if resonance_task is not None:
-                await resonance_task()
         except Exception as e:
             handle_api_error(e)
 
