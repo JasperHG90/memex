@@ -17,6 +17,7 @@ from memex_core.server.common import (
     get_api,
     ndjson_openapi,
     ndjson_response,
+    resolve_vault_ids,
 )
 
 router = APIRouter(prefix='/api/v1')
@@ -34,7 +35,7 @@ async def list_notes(
     sort: Literal['-created_at'] | None = Query(
         None, description='Sort option: -created_at for recency'
     ),
-    vault_id: list[UUID] | None = Query(None, description='Filter by vault ID(s)'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """
     List notes.
@@ -43,13 +44,14 @@ async def list_notes(
     - limit: Maximum number of notes to return
     - offset: Number of notes to skip
     - sort: Optional sort option. Use '-created_at' for most recent first.
-    - vault_id: Optional vault ID(s) to filter by.
+    - vault_id: Optional vault ID(s) or name(s) to filter by.
     """
     try:
+        resolved = await resolve_vault_ids(api, vault_id)
         if sort == '-created_at':
-            docs = await api.get_recent_notes(limit=limit, vault_ids=vault_id)
+            docs = await api.get_recent_notes(limit=limit, vault_ids=resolved)
         else:
-            docs = await api.list_notes(limit=limit, offset=offset, vault_ids=vault_id)
+            docs = await api.list_notes(limit=limit, offset=offset, vault_ids=resolved)
         return ndjson_response([build_note_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list notes')
@@ -76,6 +78,10 @@ async def search_notes(
             strategy_weights=request.strategy_weights,
             reason=request.reason,
             summarize=request.summarize,
+            mmr_lambda=request.mmr_lambda,
+            after=request.after,
+            before=request.before,
+            tags=request.tags,
         )
         return ndjson_response(results)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -112,6 +118,38 @@ async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, 'Failed to get note')
 
 
+class BatchNodeRequest(BaseModel):
+    node_ids: list[UUID]
+
+
+@router.post('/nodes/batch', response_model=list[NodeDTO])
+async def get_nodes_batch(
+    request: Annotated[BatchNodeRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> list[NodeDTO]:
+    """Get multiple note nodes by ID."""
+    try:
+        return await api.get_nodes(request.node_ids)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get nodes batch')
+
+
+class BatchNoteMetadataRequest(BaseModel):
+    note_ids: list[UUID]
+
+
+@router.post('/notes/metadata/batch')
+async def get_notes_metadata_batch(
+    request: Annotated[BatchNoteMetadataRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Get metadata for multiple notes."""
+    try:
+        return await api.get_notes_metadata(request.note_ids)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get notes metadata batch')
+
+
 @router.get('/nodes/{node_id}', response_model=NodeDTO)
 async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) -> NodeDTO:
     """Get a specific note node by its ID."""
@@ -124,6 +162,43 @@ async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) ->
         raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get node')
+
+
+class SetNoteStatusRequest(BaseModel):
+    status: str
+    linked_note_id: UUID | None = None
+
+
+@router.patch('/notes/{note_id}/status')
+async def set_note_status(
+    note_id: UUID,
+    request: Annotated[SetNoteStatusRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Set note lifecycle status (active, superseded, appended)."""
+    try:
+        result = await api.set_note_status(note_id, request.status, request.linked_note_id)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to set note status')
+
+
+class RenameNoteRequest(BaseModel):
+    new_title: str
+
+
+@router.patch('/notes/{note_id}/title')
+async def rename_note(
+    note_id: UUID,
+    request: Annotated[RenameNoteRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Rename a note (updates title in metadata, page index, and doc_metadata)."""
+    try:
+        await api.update_note_title(note_id, request.new_title)
+        return {'status': 'success', 'note_id': str(note_id), 'new_title': request.new_title}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to rename note')
 
 
 @router.delete('/notes/{note_id}')

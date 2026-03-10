@@ -17,20 +17,19 @@ The Memex MCP server exposes these tools to connected AI clients:
 | `memex_memory_search` | Search memory units (facts, events, observations) via TEMPR |
 | `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
 | `memex_add_note` | Save new knowledge to Memex |
-| `memex_read_note` | Read full note content (fallback — prefer `get_page_index` + `get_node`) |
-| `memex_get_page_index` | Get the table of contents for a note |
-| `memex_get_node` | Retrieve a specific section of a note by node ID |
-| `memex_get_lineage` | Trace provenance of a memory unit back to its source |
-| `memex_reflect` | Manually trigger reflection on an entity |
-| `memex_list_assets` / `memex_get_resource` | Retrieve attached files (images, PDFs) |
+| `memex_set_note_status` | Set note lifecycle status (active, superseded, appended) |
+| `memex_rename_note` | Rename a note (updates title in metadata and page index) |
+| `memex_read_note` | Read full note content (fallback — prefer `memex_get_page_indices` + `memex_get_nodes`) |
+| `memex_get_page_indices` | Get the table of contents for 1+ notes |
+| `memex_get_nodes` | Retrieve note sections by node IDs (batch) |
+| `memex_get_notes_metadata` | Quick metadata check for 1+ notes (title, tags, dates) — ~50 tokens each |
+| `memex_list_assets` / `memex_get_resources` | Retrieve attached files (images, PDFs) |
 | `memex_get_template` | Get markdown templates for structured notes |
-| `memex_batch_ingest` / `memex_get_batch_status` | Bulk file ingestion |
-| `memex_ingest_url` | Ingest content from a URL |
 | `memex_list_vaults` / `memex_active_vault` | Vault management |
-| `memex_list_entities` / `memex_get_entity` | Browse the entity graph |
+| `memex_recent_notes` | Browse recent notes (not for discovery) |
+| `memex_list_entities` / `memex_get_entities` | Browse the entity graph |
 | `memex_get_entity_mentions` / `memex_get_entity_cooccurrences` | Entity relationships |
-| `memex_list_notes` | List notes (not recommended for discovery) |
-| `memex_get_memory_unit` | Retrieve a specific memory unit by UUID |
+| `memex_get_memory_units` | Batch lookup of memory units with contradiction context |
 
 ## Instructions
 
@@ -142,10 +141,9 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 ## Best Practices for AI Agents
 
 - **Search before answering**: Use `memex_memory_search` to ground responses in stored knowledge.
-- **Use lineage for sources**: When asked for citations, call `memex_get_lineage` to trace facts back to source documents.
 - **Use templates for consistency**: Call `memex_get_template` before saving structured notes (ADRs, tech briefs).
 - **Check the active vault**: Call `memex_active_vault` before writing to confirm the target vault.
-- **Prefer page index over full reads**: Use `memex_get_page_index` then `memex_get_node` instead of `memex_read_note` for large notes.
+- **Prefer page index over full reads**: Use `memex_get_page_indices` then `memex_get_nodes` instead of `memex_read_note` for large notes.
 
 ## See Also
 

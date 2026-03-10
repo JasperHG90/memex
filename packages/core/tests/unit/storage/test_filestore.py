@@ -99,14 +99,14 @@ async def test_staging_commit(store: LocalAsyncFileStore) -> None:
     data = b'staged content'
 
     store.begin_staging(txn_id)
-    await store.save(key, data)
+    await store.save(key, data, txn_id=txn_id)
 
     # Final file should not exist yet
     assert await store.exists(key) is False
     # Staged file should exist
     assert await store.exists(f'{key}.stage_{txn_id}') is True
 
-    await store.commit_staging()
+    await store.commit_staging(txn_id)
 
     # Final file should exist now
     assert await store.exists(key) is True
@@ -121,9 +121,9 @@ async def test_staging_rollback(store: LocalAsyncFileStore) -> None:
     key = 'rollback.txt'
 
     store.begin_staging(txn_id)
-    await store.save(key, b'will be rolled back')
+    await store.save(key, b'will be rolled back', txn_id=txn_id)
 
-    await store.rollback_staging()
+    await store.rollback_staging(txn_id)
 
     assert await store.exists(key) is False
     assert await store.exists(f'{key}.stage_{txn_id}') is False
@@ -133,9 +133,10 @@ async def test_staging_rollback(store: LocalAsyncFileStore) -> None:
 async def test_staging_context_manager(store: LocalAsyncFileStore) -> None:
     key = 'context.txt'
     data = b'context content'
+    txn_id = 'txn789'
 
-    async with store.staging('txn789'):
-        await store.save(key, data)
+    async with store.staging(txn_id):
+        await store.save(key, data, txn_id=txn_id)
         assert await store.exists(key) is False
 
     assert await store.exists(key) is True
@@ -145,30 +146,32 @@ async def test_staging_context_manager(store: LocalAsyncFileStore) -> None:
 @pytest.mark.asyncio
 async def test_staging_context_manager_error(store: LocalAsyncFileStore) -> None:
     key = 'error.txt'
+    txn_id = 'txn_fail'
 
     try:
-        async with store.staging('txn_fail'):
-            await store.save(key, b'fail')
+        async with store.staging(txn_id):
+            await store.save(key, b'fail', txn_id=txn_id)
             raise RuntimeError('something went wrong')
     except RuntimeError:
         pass
 
     assert await store.exists(key) is False
-    assert await store.exists(f'{key}.stage_txn_fail') is False
+    assert await store.exists(f'{key}.stage_{txn_id}') is False
 
 
 @pytest.mark.asyncio
 async def test_deferred_delete(store: LocalAsyncFileStore) -> None:
     key = 'delete_me.txt'
+    txn_id = 'txn_del'
     await store.save(key, b'initial')
 
-    store.begin_staging('txn_del')
-    await store.delete(key)
+    store.begin_staging(txn_id)
+    await store.delete(key, txn_id=txn_id)
 
     # Should still exist
     assert await store.exists(key) is True
 
-    await store.commit_staging()
+    await store.commit_staging(txn_id)
 
     # Now should be gone
     assert await store.exists(key) is False
@@ -197,6 +200,94 @@ async def test_move_file_directory(store: LocalAsyncFileStore, tmp_path: Path) -
     assert await store.load('dst/a.txt') == b'aaa'
     assert await store.load('dst/sub/b.txt') == b'bbb'
     assert await store.is_dir('src') is False
+
+
+# ---------------------------------------------------------------------------
+# Concurrent staging tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_staging_isolation(store: LocalAsyncFileStore) -> None:
+    """Two concurrent transactions on the same filestore must not interfere."""
+    # Transaction A starts and saves a file
+    store.begin_staging('txn_a')
+    await store.save('file_a.txt', b'data_a', txn_id='txn_a')
+
+    # Transaction B starts (previously this wiped A's staged_files)
+    store.begin_staging('txn_b')
+    await store.save('file_b.txt', b'data_b', txn_id='txn_b')
+
+    # Commit A — must still know about file_a
+    await store.commit_staging('txn_a')
+    assert await store.exists('file_a.txt') is True
+    assert await store.load('file_a.txt') == b'data_a'
+
+    # Commit B — must still know about file_b
+    await store.commit_staging('txn_b')
+    assert await store.exists('file_b.txt') is True
+    assert await store.load('file_b.txt') == b'data_b'
+
+
+@pytest.mark.asyncio
+async def test_concurrent_staging_rollback_isolation(store: LocalAsyncFileStore) -> None:
+    """Rolling back one transaction must not affect another's staged files."""
+    store.begin_staging('txn_a')
+    await store.save('keep.txt', b'keep', txn_id='txn_a')
+
+    store.begin_staging('txn_b')
+    await store.save('discard.txt', b'discard', txn_id='txn_b')
+
+    # Rollback B
+    await store.rollback_staging('txn_b')
+
+    # A's staged file must still be intact
+    assert await store.exists('keep.txt.stage_txn_a') is True
+
+    # Commit A
+    await store.commit_staging('txn_a')
+    assert await store.exists('keep.txt') is True
+    assert await store.exists('discard.txt') is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_staging_with_deletes(store: LocalAsyncFileStore) -> None:
+    """Deferred deletes in one transaction don't affect another."""
+    await store.save('shared.txt', b'original')
+
+    store.begin_staging('txn_a')
+    await store.delete('shared.txt', txn_id='txn_a')
+
+    store.begin_staging('txn_b')
+    await store.save('new.txt', b'new', txn_id='txn_b')
+
+    # Commit B first — shared.txt should still exist (A hasn't committed)
+    await store.commit_staging('txn_b')
+    assert await store.exists('shared.txt') is True
+    assert await store.exists('new.txt') is True
+
+    # Commit A — now shared.txt should be deleted
+    await store.commit_staging('txn_a')
+    assert await store.exists('shared.txt') is False
+
+
+@pytest.mark.asyncio
+async def test_begin_staging_duplicate_txn_id_raises(store: LocalAsyncFileStore) -> None:
+    store.begin_staging('txn_x')
+    with pytest.raises(ValueError, match='already active'):
+        store.begin_staging('txn_x')
+
+
+@pytest.mark.asyncio
+async def test_commit_unknown_txn_id_raises(store: LocalAsyncFileStore) -> None:
+    with pytest.raises(ValueError, match='No active staging'):
+        await store.commit_staging('nonexistent')
+
+
+@pytest.mark.asyncio
+async def test_save_without_txn_id_writes_directly(store: LocalAsyncFileStore) -> None:
+    await store.save('direct.txt', b'direct')
+    assert await store.exists('direct.txt') is True
 
 
 class TestPathTraversalPrevention:

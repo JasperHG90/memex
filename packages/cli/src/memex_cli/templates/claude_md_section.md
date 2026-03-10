@@ -16,26 +16,41 @@ Call `memex_add_note` (with `background: true`, `author: "claude-code"`) when an
 5. Resolved a tricky configuration/environment issue
 
 **Keep notes concise** (hard maximum: 300 tokens). Capture the key insight, not a detailed report. No per-file changelogs.
-
-A Stop hook will remind you via "MEMORY CHECK" at end of turn.
 </constraint>
 
 ### Retrieval
 
 Session start context is automatic via hook. Do NOT redundantly search at session start.
-PROHIBITED: `memex_list_notes` for discovery.
 
-**Search** (pick by query type, or run both in parallel when unsure):
-- `memex_memory_search` — memory search: atomic facts, observations, mental models. Best for broad queries.
-- `memex_note_search` — note search: ranked source notes via hybrid retrieval. Best for targeted doc lookup. `reason=True` annotates relevant sections.
+PROHIBITED:
+- `memex_recent_notes` for discovery.
+- Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
+- `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_indices` + `memex_get_nodes`.
+- Creating diagrams/charts without first checking assets for visual context via `memex_list_assets` → `memex_get_resources`.
 
-**Filter** (parallel per note):
-- `memex_get_note_metadata` — cheap (~50 tokens). Check title/tags/description to confirm relevance before reading.
+**Search** — pick by query type, or run both in parallel:
+- `memex_memory_search` — atomic facts, observations, mental models. Broad queries.
+- `memex_note_search` — ranked source notes with inline metadata. Targeted lookup.
 
-**Read** (only confirmed-relevant notes):
-1. `memex_get_page_index` (Note ID → TOC + node IDs) — expensive, skip for irrelevant notes
-2. `memex_get_node` (node ID → section text) — call multiple in parallel
-3. Fallback only: `memex_read_note`
+**Filter** — before reading:
+- After `memex_memory_search`: call `memex_get_notes_metadata` with Note IDs to check relevance.
+- After `memex_note_search`: use inline metadata directly.
+
+**Read** — only confirmed-relevant notes:
+1. `memex_get_page_indices` (accepts 1+ note IDs) → TOC + node IDs
+2. `memex_get_nodes` (batch) → section content
+3. `memex_read_note` → only when total_tokens < 500
+
+**Assets** — required when `has_assets: true`:
+- `memex_list_assets` → `memex_get_resources` (accepts 1+ paths) → render inline.
+
+### Citations
+
+When presenting information from Memex, use numbered citations [1], [2] etc. inline. Add a reference list at the end with the source type prefix:
+- `[note]` — title + note ID
+- `[memory]` — title + memory ID + source note ID
+- `[asset]` — filename + note ID
 
 ### Slash commands
 

@@ -303,6 +303,29 @@ class Note(SQLModel, table=True):  # type: ignore
         description='The publication or event date of the document content.',
     )
 
+    status: str = Field(
+        default='active',
+        sa_column=Column(
+            Text,
+            nullable=False,
+            server_default='active',
+            index=True,
+        ),
+        description='Note lifecycle status: active, superseded, appended.',
+    )
+
+    superseded_by: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='ID of the note that supersedes this one.',
+    )
+
+    appended_to: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='ID of the note this one was appended to.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -314,7 +337,13 @@ class Note(SQLModel, table=True):  # type: ignore
         back_populates='note', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
     )
 
-    __table_args__ = (Index('idx_notes_content_hash', 'content_hash'),)
+    __table_args__ = (
+        Index('idx_notes_content_hash', 'content_hash'),
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'appended')",
+            name='ck_notes_status',
+        ),
+    )
 
 
 class Chunk(SQLModel, table=True):  # type: ignore
@@ -572,6 +601,12 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Number of times the memory unit has been accessed.',
     )
 
+    confidence: float = Field(
+        default=1.0,
+        sa_column=Column(Float, nullable=False, server_default='1.0'),
+        description='Confidence score (0.0-1.0). Decreased when contradicted by newer information.',
+    )
+
     unit_metadata: dict[str, Any] = Field(
         default={},
         sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
@@ -616,6 +651,10 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         ),
         CheckConstraint("fact_type IN ('world', 'event', 'observation')"),
         CheckConstraint("status IN ('active', 'stale')", name='memory_units_status_check'),
+        CheckConstraint(
+            'confidence >= 0.0 AND confidence <= 1.0',
+            name='memory_units_confidence_check',
+        ),
         Index('idx_memory_units_note_id', 'note_id'),
         Index('idx_memory_units_chunk_id', 'chunk_id'),
         Index('idx_memory_units_status', 'status'),
@@ -624,6 +663,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             'idx_memory_units_access_count', 'access_count', postgresql_ops={'access_count': 'DESC'}
         ),
         Index('idx_memory_units_fact_type', 'fact_type'),
+        Index('idx_memory_units_confidence', 'confidence'),
         Index(
             'idx_memory_units_embedding',
             'embedding',
@@ -1144,6 +1184,12 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
         description='Optional UUID of the entity associated with this link.',
     )
 
+    link_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
+        description='Structured metadata for the link (e.g., supersession provenance).',
+    )
+
     weight: float = Field(
         default=1.0,
         sa_column=Column(Float, nullable=False, server_default='1.0'),
@@ -1167,7 +1213,7 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         CheckConstraint(
-            "link_type IN ('temporal', 'semantic', 'entity', 'causes', 'caused_by', 'enables', 'prevents')",
+            "link_type IN ('temporal', 'semantic', 'entity', 'causes', 'caused_by', 'enables', 'prevents', 'reinforces', 'weakens', 'contradicts')",
             name='memory_links_link_type_check',
         ),
         CheckConstraint('weight >= 0.0 AND weight <= 1.0', name='memory_links_weight_check'),

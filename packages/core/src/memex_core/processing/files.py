@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import fitz  # type: ignore
 import pymupdf4llm  # type: ignore
 from markitdown import MarkItDown
 from memex_core.processing.models import ExtractedContent
@@ -61,13 +62,31 @@ class FileContentProcessor:
                     if image_file.is_file():
                         images[image_file.name] = image_file.read_bytes()
 
+                metadata: dict[str, Any] = {}
+                try:
+                    with fitz.open(str(path)) as doc:
+                        pdf_meta = doc.metadata or {}
+                    if pdf_meta.get('title'):
+                        metadata['title'] = pdf_meta['title']
+                    if pdf_meta.get('author'):
+                        metadata['author'] = pdf_meta['author']
+                    creation = _parse_pdf_date(pdf_meta.get('creationDate'))
+                    if creation:
+                        metadata['creation_date'] = creation
+                except Exception:
+                    logger.debug('Could not read PDF metadata for %s', path)
+
+                file_mtime = _file_mtime_utc(path)
+                if file_mtime:
+                    metadata['file_mtime'] = file_mtime
+
                 return ExtractedContent(
                     content=md_text,
                     source=str(path),
                     content_type='pdf',
-                    metadata={},
+                    metadata=metadata,
                     images=images,
-                    document_date=_file_mtime_utc(path),
+                    document_date=None,
                 )
         except (OSError, RuntimeError, ValueError) as e:
             logger.error(f'Failed to extract content from PDF {path}: {e}')
@@ -97,6 +116,18 @@ class FileContentProcessor:
         except (OSError, RuntimeError, ValueError, TypeError) as e:
             logger.error(f'Failed to extract content from {path}: {e}')
             raise ValueError(f'Extraction failed for {path}: {e}') from e
+
+
+def _parse_pdf_date(raw: str | None) -> datetime | None:
+    """Parse a PDF date string (e.g. ``D:20260310064822Z00'00'``) into a UTC datetime."""
+    if not raw:
+        return None
+    s = raw[2:] if raw.startswith('D:') else raw
+    try:
+        dt = datetime.strptime(s[:14], '%Y%m%d%H%M%S')
+        return dt.replace(tzinfo=timezone.utc)
+    except (ValueError, IndexError):
+        return None
 
 
 def _file_mtime_utc(path: Path) -> datetime | None:

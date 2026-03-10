@@ -1,11 +1,11 @@
 import datetime as dt
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from fastmcp import Client
 from memex_mcp.server import mcp
-from memex_common.schemas import MemoryUnitDTO, FactTypes, LineageResponse, NoteDTO
+from memex_common.schemas import MemoryUnitDTO, FactTypes, NoteDTO
 
 
 @pytest.fixture
@@ -13,66 +13,10 @@ def mock_api():
     """Mock the RemoteMemexAPI."""
     mock = AsyncMock()
     mock.search = AsyncMock()
-    mock.get_entity_lineage = AsyncMock()
-    mock.get_note_lineage = AsyncMock()
+    mock.get_notes_metadata = AsyncMock(return_value=[])
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock
-
-
-@pytest.mark.asyncio
-async def test_integration_search_lineage(mock_api):
-    """Test flow: Search -> Get Lineage."""
-
-    # 1. Setup Search Data
-    obs_id = uuid4()
-    doc_id = uuid4()
-    mock_api.search.return_value = [
-        MemoryUnitDTO(
-            id=obs_id,
-            note_id=doc_id,
-            text='Python is preferred for data science.',
-            fact_type=FactTypes.OBSERVATION,
-            score=0.95,
-            vault_id=uuid4(),
-            metadata={},
-        )
-    ]
-
-    # 2. Setup Lineage Data
-    mock_lineage = LineageResponse(
-        entity_type='observation',
-        entity={'id': str(obs_id), 'content': 'Python is preferred...'},
-        derived_from=[
-            LineageResponse(
-                entity_type='fact',
-                entity={'id': str(uuid4()), 'text': 'Survey says 80% use Python.'},
-                derived_from=[],
-            )
-        ],
-    )
-    mock_api.get_entity_lineage.return_value = mock_lineage
-
-    async with Client(mcp) as client:
-        # Step 1: Search
-        search_result = await client.call_tool(
-            'memex_memory_search', {'query': 'python preference'}
-        )
-        search_text = search_result.content[0].text
-
-        # Verify Search Output contains ID and Type
-        assert str(obs_id) in search_text
-        assert 'observation' in search_text.lower()
-
-        # Step 2: Extract ID (simulated LLM action) and call Lineage
-        lineage_result = await client.call_tool(
-            'memex_get_lineage', {'unit_id': str(obs_id), 'entity_type': 'observation'}
-        )
-        lineage_text = lineage_result.content[0].text
-
-        # Verify Lineage Output
-        assert 'Python is preferred' in lineage_text
-        assert 'Survey says 80%' in lineage_text
 
 
 @pytest.mark.asyncio
@@ -106,6 +50,7 @@ async def test_integration_search_assets_resource(mock_api):
     )
 
     # 3. Setup Resource Data (for Get Resource)
+    mock_api.get_resource_path = MagicMock(return_value='/data/assets/arch.png')
     mock_api.get_resource.return_value = b'fake_image_bytes'
 
     async with Client(mcp) as client:
@@ -122,8 +67,8 @@ async def test_integration_search_assets_resource(mock_api):
         assert 'arch.png' in assets_text
         assert 'assets/arch.png' in assets_text
 
-        # Step 3: Get Resource
-        await client.call_tool('memex_get_resource', {'path': 'assets/arch.png'})
+        # Step 3: Get Resource (batch)
+        await client.call_tool('memex_get_resources', {'paths': ['assets/arch.png']})
 
-        # Verify it returns Image or Data
-        mock_api.get_resource.assert_called_once_with('assets/arch.png')
+        # Verify it returns file:// URI for local images
+        mock_api.get_resource_path.assert_called_once_with('assets/arch.png')

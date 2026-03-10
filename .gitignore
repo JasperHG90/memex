@@ -198,3 +198,5 @@ packages/openclaw/dist/
 recordings/dashboard/node_modules/
 recordings/dashboard/.tmp-recordings/
 recordings/cli/.casts/
+
+**/*/__about__.py

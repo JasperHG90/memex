@@ -4,13 +4,15 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
 import dspy
 from pydantic import BaseModel, Field as PydanticField
-from sqlalchemy import extract, func, literal, union_all, text
+from sqlalchemy import extract, func, literal, union_all, text, Integer
 from sqlalchemy import cast as sql_cast, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -18,7 +20,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.memory.models.embedding import FastEmbedder
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
-from memex_core.memory.retrieval.strategies import NoteGraphStrategy
+from memex_common.config import RetrievalConfig
+from memex_core.memory.retrieval.strategies import get_note_graph_strategy
 from memex_core.memory.sql_models import Chunk, Note, Node
 from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
 
@@ -87,10 +90,15 @@ class NoteSearchEngine:
         embedder: FastEmbedder,
         ner_model: FastNERModel | None = None,
         lm: dspy.LM | None = None,
+        retrieval_config: RetrievalConfig | None = None,
     ) -> None:
         self.embedder = embedder
         self.lm = lm
-        self.graph_strategy = NoteGraphStrategy(ner_model=ner_model)
+        _config = retrieval_config or RetrievalConfig()
+        self.graph_strategy = get_note_graph_strategy(
+            type=_config.graph_retriever_type,
+            ner_model=ner_model,
+        )
         self.expander = QueryExpander(lm=lm) if lm else None
 
     # ------------------------------------------------------------------
@@ -145,7 +153,14 @@ class NoteSearchEngine:
             return []
 
         results = await self._group_by_document(
-            session, merged, pool_size, mmr_lambda=request.mmr_lambda, final_limit=limit
+            session,
+            merged,
+            pool_size,
+            mmr_lambda=request.mmr_lambda,
+            final_limit=limit,
+            after=request.after,
+            before=request.before,
+            tags=request.tags,
         )
 
         # Skeleton-tree reasoning refinement
@@ -497,15 +512,29 @@ class NoteSearchEngine:
         limit: int,
         mmr_lambda: float | None = None,
         final_limit: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         # Group chunks by document
         doc_to_chunks: dict[UUID, list[tuple[Chunk, float]]] = {}
         for chunk, score in chunk_results:
             doc_to_chunks.setdefault(chunk.note_id, []).append((chunk, score))
 
-        # Fetch documents
+        # Fetch documents (with optional date/tag filters)
         doc_ids = list(doc_to_chunks.keys())
         doc_stmt = select(Note).where(col(Note.id).in_(doc_ids))
+        if after is not None:
+            date_col = func.coalesce(Note.publish_date, Note.created_at)
+            doc_stmt = doc_stmt.where(date_col >= after)
+        if before is not None:
+            date_col_b = func.coalesce(Note.publish_date, Note.created_at)
+            doc_stmt = doc_stmt.where(date_col_b <= before)
+        if tags:
+            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'
+            doc_stmt = doc_stmt.where(
+                col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+            )
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}
 
@@ -570,6 +599,15 @@ class NoteSearchEngine:
                     metadata['name'] = note_name
                     metadata['title'] = note_name
 
+            # Enrich with page_index metadata and asset info
+            if isinstance(doc.page_index, dict):
+                pi_meta = doc.page_index.get('metadata') or {}
+                for key in ('description', 'tags', 'publish_date', 'source_uri'):
+                    if key in pi_meta and pi_meta[key]:
+                        metadata.setdefault(key, pi_meta[key])
+            metadata.setdefault('has_assets', bool(doc.assets))
+            metadata['vault_id'] = str(doc.vault_id)
+
             final_results.append(
                 NoteSearchResult(
                     note_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
@@ -592,6 +630,41 @@ class NoteSearchEngine:
             )
         else:
             final_results = final_results[:effective_limit]
+
+        # Derive note_status from unit confidences
+        if final_results:
+            from memex_core.memory.sql_models import MemoryUnit as MU
+
+            note_ids = [r.note_id for r in final_results]
+            confidence_stmt = (
+                select(
+                    MU.note_id,
+                    func.count().label('total'),
+                    func.sum(func.cast(MU.confidence < 0.3, Integer)).label('low_conf'),
+                )
+                .where(col(MU.note_id).in_(note_ids))
+                .group_by(MU.note_id)
+            )
+            conf_rows = (await session.exec(confidence_stmt)).all()
+            status_map: dict[UUID, str] = {}
+            for row in conf_rows:
+                nid, total, low = row.note_id, row.total, row.low_conf
+                if total == 0:
+                    status_map[nid] = 'active'
+                elif low / total > 0.5:
+                    status_map[nid] = 'superseded'
+                elif low > 0:
+                    status_map[nid] = 'partially_superseded'
+                else:
+                    status_map[nid] = 'active'
+            for result in final_results:
+                # Prefer persisted note status over confidence-based derivation
+                doc = docs.get(result.note_id)
+                persisted = getattr(doc, 'status', None) if doc else None
+                if persisted and persisted != 'active':
+                    result.note_status = persisted
+                else:
+                    result.note_status = status_map.get(result.note_id, 'active')
 
         return final_results
 

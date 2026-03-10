@@ -4,6 +4,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -26,6 +27,13 @@ logger = logging.getLogger('memex.core.server')
 def get_api(request: Request) -> MemexAPI:
     """Dependency to get the MemexAPI instance."""
     return request.app.state.api
+
+
+async def resolve_vault_ids(api: MemexAPI, identifiers: list[str] | None) -> list[UUID] | None:
+    """Resolve a list of vault identifiers (UUIDs or names) to UUIDs."""
+    if not identifiers:
+        return None
+    return [await api.resolve_vault_identifier(v) for v in identifiers]
 
 
 def _handle_error(e: Exception, context: str) -> HTTPException:

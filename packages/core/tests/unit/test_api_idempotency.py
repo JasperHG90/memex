@@ -29,6 +29,7 @@ async def test_uuid_idempotency_same_file(
         extracted.content_type = 'pdf'
         extracted.document_date = None
         extracted.images = {}
+        extracted.metadata = {}
         api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
         with patch(

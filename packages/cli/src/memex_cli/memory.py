@@ -555,13 +555,20 @@ async def get_lineage(
 
     async with get_api_context(config) as api:
         try:
-            response = await api.get_lineage(
-                entity_type=entity_type,
-                entity_id=uuid_obj,
-                direction=direction,
-                depth=depth,
-                limit=limit,
-            )
+            if entity_type == 'note':
+                response = await api.get_note_lineage(
+                    note_id=uuid_obj,
+                    direction=direction,
+                    depth=depth,
+                    limit=limit,
+                )
+            else:
+                response = await api.get_entity_lineage(
+                    entity_id=uuid_obj,
+                    direction=direction,
+                    depth=depth,
+                    limit=limit,
+                )
         except Exception as e:
             handle_api_error(e)
 

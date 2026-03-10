@@ -16,7 +16,8 @@ The framework consists of three distinct processing loops, each operating at a d
 graph TD
     subgraph "1. Retention (Fast Path)"
         A[Raw Experiences] -->|Ingest| B[Extract Facts]
-        B -->|Store| C[(Knowledge Graph)]
+        B -->|Detect contradictions| B2[Adjust Confidence]
+        B2 -->|Store| C[(Knowledge Graph)]
     end
 
     subgraph "2. Recall (TEMPR)"
@@ -42,7 +43,8 @@ The retention loop captures raw information as quickly as possible. When a user 
 2. Splits the text into chunks (using Simple or PageIndex strategies)
 3. Extracts atomic facts, entities, and relationships via an LLM
 4. Generates vector embeddings for semantic search
-5. Persists everything atomically in the MetaStore
+5. Detects contradictions — triages new memory units to identify corrective facts, matches them against existing units via vector similarity, and records contradiction/supersession/update links with adjusted confidence scores
+6. Persists everything atomically in the MetaStore
 
 The design principle is *capture everything, lose nothing*. Speed matters here — the fast path should never block the user. That is why batch and background ingestion modes exist.
 
@@ -91,6 +93,18 @@ Priority = (weight_urgency * accumulated_evidence)
 ```
 
 Entities with more new evidence, more global mentions, and more user queries are reflected upon first.
+
+### Contradiction Detection (Retain-Time)
+
+Contradiction detection is an automatic post-extraction step within the Retention loop. When new memory units are extracted from an ingested note, the system:
+
+1. **Triage**: An LLM scans the new units and flags those that appear corrective — facts that update, contradict, or supersede prior knowledge.
+2. **Candidate retrieval**: For each flagged unit, the system retrieves existing memory units with high vector similarity (cosine threshold configurable via `contradiction.similarity_threshold`).
+3. **Classification**: An LLM classifies the relationship between the new unit and each candidate as one of: `contradicts`, `supersedes`, `updates`, `supports`, or `unrelated`.
+4. **Confidence adjustment**: Contradicted or superseded units have their confidence scores reduced by a configurable step size (`contradiction.alpha`). Units whose confidence drops below the `superseded_threshold` are marked as superseded.
+5. **Link recording**: All detected relationships are stored as `MemoryLink` records in the knowledge graph, enabling lineage tracing and supersession-aware retrieval.
+
+This ensures that when a newer note corrects or updates an older one, retrieval results naturally favor the most current information without requiring manual intervention.
 
 ## Design Principles
 

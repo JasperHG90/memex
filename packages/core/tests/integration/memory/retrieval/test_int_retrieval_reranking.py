@@ -131,6 +131,11 @@ class TestRetrievalReranking:
             'What is the consensus on the root cause of the Project Chimera outage last Tuesday?'
         )
 
+        # Compute "last Tuesday" relative to now so temporal extraction matches
+        now = datetime.now(timezone.utc)
+        days_since_tuesday = (now.weekday() - 1) % 7 or 7  # 1 = Tuesday
+        last_tuesday = now - timedelta(days=days_since_tuesday)
+
         data = [
             # GOLD STANDARD
             {
@@ -138,24 +143,28 @@ class TestRetrievalReranking:
                 'text': 'Post-mortem analysis indicates the Project Chimera outage was primarily caused by a redis cache stampede triggering a cascade failure.',
                 'is_target': True,
                 'entities': ['Project Chimera', 'Redis'],
+                'event_date': last_tuesday,
             },
             # Distractor 1 (Keyword Repeat)
             {
                 'type': 'fact',
                 'text': 'Project Chimera had a major outage on Tuesday.',
                 'entities': ['Project Chimera'],
+                'event_date': last_tuesday,
             },
             # Distractor 2 (Wrong Entity)
             {
                 'type': 'observation',
                 'text': 'The Project Pegasus outage was caused by a similar redis issue last year.',
                 'entities': ['Project Pegasus', 'Redis'],
+                'event_date': last_tuesday,
             },
             # Distractor 3 (General Context)
             {
                 'type': 'fact',
                 'text': 'Project Chimera uses Redis for caching and session storage.',
                 'entities': ['Project Chimera', 'Redis'],
+                'event_date': last_tuesday,
             },
         ]
 

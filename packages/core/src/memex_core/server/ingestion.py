@@ -1,6 +1,5 @@
 """Ingestion endpoints."""
 
-import asyncio
 import base64
 import binascii
 import hashlib
@@ -16,6 +15,7 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Depends,
     File,
@@ -47,6 +47,18 @@ logger = logging.getLogger('memex.core.server.ingestion')
 router = APIRouter(prefix='/api/v1')
 
 
+async def _run_contradiction(coro):
+    """Await the contradiction detection coroutine."""
+    await coro
+
+
+def _schedule_contradiction(background_tasks: BackgroundTasks, result: dict) -> None:
+    """Schedule the contradiction detection coroutine via FastAPI BackgroundTasks if present."""
+    coro = result.pop('contradiction_task', None)
+    if coro is not None:
+        background_tasks.add_task(_run_contradiction, coro)
+
+
 @router.post(
     '/ingestions',
     response_model=None,
@@ -55,6 +67,7 @@ router = APIRouter(prefix='/api/v1')
 async def ingest_note(
     request: Annotated[NoteCreateDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
     background: Annotated[bool, Query()] = False,
 ) -> IngestResponse | JSONResponse:
     """Ingest a note artifact."""
@@ -87,6 +100,7 @@ async def ingest_note(
             note_key=request.note_key,
         )
         result = await api.ingest(note, vault_id=request.vault_id)
+        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
 
     except HTTPException:
@@ -103,6 +117,7 @@ async def ingest_note(
 async def ingest_url(
     request: Annotated[IngestURLRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
     background: Annotated[bool, Query()] = False,
 ) -> IngestResponse | JSONResponse:
     try:
@@ -116,13 +131,12 @@ async def ingest_url(
                 raise HTTPException(status_code=400, detail='Invalid Base64 encoding in assets')
 
         if background:
-            asyncio.create_task(
-                api.ingest_from_url(
-                    url=request.url,
-                    vault_id=request.vault_id,
-                    reflect_after=request.reflect_after,
-                    assets=assets_bytes,
-                )
+            background_tasks.add_task(
+                api.ingest_from_url,
+                url=request.url,
+                vault_id=request.vault_id,
+                reflect_after=request.reflect_after,
+                assets=assets_bytes,
             )
             return JSONResponse(status_code=202, content={'status': 'accepted'})
 
@@ -132,6 +146,7 @@ async def ingest_url(
             reflect_after=request.reflect_after,
             assets=assets_bytes,
         )
+        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
@@ -139,7 +154,9 @@ async def ingest_url(
 
 @router.post('/ingestions/file', response_model=IngestResponse)
 async def ingest_file(
-    request: Annotated[IngestFileRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
+    request: Annotated[IngestFileRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
 ):
     """Ingest content from a local file on the server."""
     try:
@@ -148,6 +165,7 @@ async def ingest_file(
             vault_id=request.vault_id,
             reflect_after=request.reflect_after,
         )
+        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File ingestion failed')
@@ -160,6 +178,7 @@ async def ingest_file(
 )
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     metadata: str | None = Body(None),
     background: bool = Query(False),
@@ -195,11 +214,12 @@ async def ingest_upload(
                         if os.path.exists(path):
                             os.remove(path)
 
-                asyncio.create_task(_ingest_and_cleanup(tmp_path))
+                background_tasks.add_task(_ingest_and_cleanup, tmp_path)
                 return JSONResponse(status_code=202, content={'status': 'accepted'})
 
             try:
                 result = await api.ingest_from_file(tmp_path)
+                _schedule_contradiction(background_tasks, result)
                 return IngestResponse(**result)
             finally:
                 if os.path.exists(tmp_path):
@@ -244,10 +264,15 @@ async def ingest_upload(
         )
 
         if background:
-            asyncio.create_task(api.ingest(note, vault_id=parsed_metadata.get('vault_id')))
+            background_tasks.add_task(
+                api.ingest,
+                note,
+                vault_id=parsed_metadata.get('vault_id'),
+            )
             return JSONResponse(status_code=202, content={'status': 'accepted'})
 
         result = await api.ingest(note, vault_id=parsed_metadata.get('vault_id'))
+        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
 
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -274,6 +299,7 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 async def ingest_webhook(
     request: Request,
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
     x_webhook_signature: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
     """Ingest a note from an external webhook.
@@ -327,6 +353,7 @@ async def ingest_webhook(
 
     try:
         result = await api.ingest(note, vault_id=payload.vault_id)
+        _schedule_contradiction(background_tasks, result)
         return JSONResponse(
             status_code=202,
             content=IngestResponse(**result).model_dump(mode='json'),

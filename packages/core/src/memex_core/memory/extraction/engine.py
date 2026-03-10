@@ -25,7 +25,9 @@ from memex_core.memory.extraction.models import (
 from memex_core.memory.extraction.core import (
     extract_facts_from_text,
     extract_facts_from_chunks,
+    extract_facts_from_frontmatter,
     _convert_causal_relations,
+    _detect_frontmatter,
     ExtractSemanticFacts,
     stable_chunk_text,
     content_hash,
@@ -395,12 +397,46 @@ class ExtractionEngine:
                         context=ctx,
                         mentioned_at=event_date or contents[0].event_date,
                         payload=contents[0].payload or {},
+                        who=raw_fact.who,
                         where=raw_fact.where,
                         vault_id=vault_id,
                     )
                     all_extracted_facts.append(ef)
 
             usage = total_usage
+
+            # Extract facts from YAML frontmatter if present.
+            # Frontmatter is at the start, so assign to chunk 0.
+            fm_text, _ = _detect_frontmatter(combined_text)
+            if fm_text:
+                fm_facts, fm_usage = await extract_facts_from_frontmatter(
+                    frontmatter_text=fm_text,
+                    event_date=event_date or contents[0].event_date,
+                    lm=self.lm,
+                    semaphore=self.semaphore,
+                    vault_id=vault_id,
+                )
+                usage += fm_usage
+                for f in fm_facts:
+                    ef = ExtractedFact(
+                        fact_text=f.formatted_text,
+                        fact_type=f.fact_type,
+                        entities=f.entities,
+                        occurred_start=parse_datetime(f.occurred_start)
+                        if f.occurred_start
+                        else None,
+                        occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                        causal_relations=[],
+                        content_index=0,
+                        chunk_index=0,
+                        context='frontmatter',
+                        mentioned_at=event_date or contents[0].event_date,
+                        payload=contents[0].payload or {},
+                        who=f.who,
+                        where=f.where,
+                        vault_id=vault_id,
+                    )
+                    all_extracted_facts.append(ef)
 
             if all_extracted_facts:
                 add_temporal_offsets(all_extracted_facts, self.SECONDS_PER_FACT)
@@ -693,6 +729,7 @@ class ExtractionEngine:
                             context='',
                             mentioned_at=event_date or contents[0].event_date,
                             payload=contents[0].payload or {},
+                            who=f.who,
                             where=f.where,
                             vault_id=vault_id,
                         )
@@ -915,13 +952,47 @@ class ExtractionEngine:
                     context='',
                     mentioned_at=event_date or contents[0].event_date,
                     payload=contents[0].payload or {},
+                    who=f.who,
                     where=f.where,
                     vault_id=vault_id,
                 )
                 extracted_facts.append(ef)
                 global_fact_idx += 1
 
-        if not extracted_facts:
+        # Extract facts from YAML frontmatter if present.
+        # Frontmatter is at the start, so assign to the first block (seq 0).
+        fm_text, _ = _detect_frontmatter(combined_text)
+        if fm_text and contents:
+            first_block_seq = page_index_output.blocks[0].seq if page_index_output.blocks else 0
+            fm_facts, fm_usage = await extract_facts_from_frontmatter(
+                frontmatter_text=fm_text,
+                event_date=event_date or contents[0].event_date,
+                lm=self.lm,
+                semaphore=self.semaphore,
+                vault_id=vault_id,
+            )
+            usage += fm_usage
+            for f in fm_facts:
+                ef = ExtractedFact(
+                    fact_text=f.formatted_text,
+                    fact_type=f.fact_type,
+                    entities=f.entities,
+                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
+                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    causal_relations=[],
+                    content_index=0,
+                    chunk_index=first_block_seq,
+                    context='frontmatter',
+                    mentioned_at=event_date or contents[0].event_date,
+                    payload=contents[0].payload or {},
+                    who=f.who,
+                    where=f.where,
+                    vault_id=vault_id,
+                )
+                extracted_facts.append(ef)
+                global_fact_idx += 1
+
+        if not raw_facts and not extracted_facts:
             return [], usage, set()
 
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
@@ -1149,6 +1220,40 @@ class ExtractionEngine:
 
                 global_chunk_idx += 1
 
+        # Extract facts from YAML frontmatter if present.
+        # Frontmatter is at the start of the document, so assign to chunk 0.
+        combined_text = '\n'.join(c.content for c in contents)
+        fm_text, _ = _detect_frontmatter(combined_text)
+        if fm_text and contents:
+            event_date = contents[0].event_date
+            fm_facts, fm_usage = await extract_facts_from_frontmatter(
+                frontmatter_text=fm_text,
+                event_date=event_date,
+                lm=self.lm,
+                semaphore=self.semaphore,
+                vault_id=contents[0].vault_id,
+            )
+            total_usage += fm_usage
+            for f in fm_facts:
+                ef = ExtractedFact(
+                    fact_text=f.formatted_text,
+                    fact_type=f.fact_type,
+                    entities=f.entities,
+                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
+                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    causal_relations=[],
+                    content_index=0,
+                    chunk_index=0,
+                    context='frontmatter',
+                    mentioned_at=event_date,
+                    payload=contents[0].payload or {},
+                    who=f.who,
+                    where=f.where,
+                    vault_id=contents[0].vault_id,
+                )
+                extracted_facts.append(ef)
+                global_fact_idx += 1
+
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
         return extracted_facts, chunk_metadata, total_usage
 
@@ -1160,24 +1265,50 @@ class ExtractionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> set[UUID]:
         """Resolve entities and link them to units. Returns set of touched entity IDs."""
-        # Run NER on all fact texts to get entity type information
-        ner_type_map = await self._build_ner_type_map(facts)
+        import re
 
         entities_data = []
 
         for i, fact in enumerate(facts):
             unit_id = unit_ids[i]
+            # Collect entity names already in the entities list
+            existing_names = {ent.text.lower() for ent in fact.entities}
+
             for ent in fact.entities:
-                entity_type = ent.entity_type or ner_type_map.get(ent.text.lower())
                 entities_data.append(
                     {
                         'text': ent.text,
                         'event_date': fact.occurred_start or fact.mentioned_at,
                         'nearby_entities': [{'text': e.text} for e in fact.entities],
                         'unit_id': unit_id,
-                        'entity_type': entity_type,
+                        'entity_type': ent.entity_type,
                     }
                 )
+
+            # Discover person/location names from who/where fields
+            for field_text, default_type in [
+                (getattr(fact, 'who', None), 'Person'),
+                (getattr(fact, 'where', None), 'Location'),
+            ]:
+                if not field_text or field_text.upper() in ('N/A', 'NONE'):
+                    continue
+
+                # Extract capitalized names from who/where fields
+                # (e.g. "Emily, Sarah" or "San Francisco")
+                skip = {'the', 'and', 'for', 'with', 'from', 'via', 'n/a'}
+                for match in re.finditer(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', field_text):
+                    candidate = match.group(1)
+                    if candidate.lower() not in existing_names and candidate.lower() not in skip:
+                        entities_data.append(
+                            {
+                                'text': candidate,
+                                'event_date': fact.occurred_start or fact.mentioned_at,
+                                'nearby_entities': [{'text': e.text} for e in fact.entities],
+                                'unit_id': unit_id,
+                                'entity_type': default_type,
+                            }
+                        )
+                        existing_names.add(candidate.lower())
 
         if not entities_data:
             return set()
@@ -1196,38 +1327,3 @@ class ExtractionEngine:
         )
 
         return {UUID(rid) for rid in resolved_ids}
-
-    NER_TYPE_MAP: dict[str, str] = {
-        'PER': 'Person',
-        'ORG': 'Organization',
-        'LOC': 'Location',
-        'MISC': 'Misc',
-    }
-
-    async def _build_ner_type_map(self, facts: list[ProcessedFact]) -> dict[str, str]:
-        """Run NER on fact texts and build a lowercase entity name -> type mapping."""
-        try:
-            from memex_core.memory.models.ner import get_ner_model
-
-            ner_model = await get_ner_model()
-        except (ImportError, ValueError, RuntimeError, OSError) as e:
-            logger.debug('NER model unavailable, skipping entity type enrichment: %s', e)
-            return {}
-
-        type_map: dict[str, str] = {}
-        for fact in facts:
-            text = fact.fact_text
-            if not text:
-                continue
-            try:
-                ner_results = ner_model.predict(text)
-                for result in ner_results:
-                    word = result.get('word', '').lower()
-                    raw_type = result.get('type', '')
-                    mapped_type = self.NER_TYPE_MAP.get(raw_type)
-                    if word and mapped_type and word not in type_map:
-                        type_map[word] = mapped_type
-            except (ValueError, RuntimeError, OSError) as e:
-                logger.debug('NER prediction failed for fact text: %s', e, exc_info=True)
-
-        return type_map
