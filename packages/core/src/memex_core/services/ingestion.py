@@ -224,21 +224,23 @@ ingested_at: {now}
             files=extracted.images,
         )
 
-        # Resolve document date: LLM content extraction -> PDF metadata -> file mtime -> now()
-        # 1. LLM content date (highest priority)
+        # Resolve document date priority:
+        # 1. LLM content extraction (always attempted)
+        # 2. PDF metadata creation date
+        # 3. File processor's document_date (mtime)
+        # 4. Final fallback to now()
         event_date = None
-        if extracted.document_date is None:
-            async with self.metastore.session() as date_session:
-                event_date = await extract_document_date(
-                    extracted.content, self.lm, date_session, target_vault_id
-                )
-                await date_session.commit()
+        async with self.metastore.session() as date_session:
+            event_date = await extract_document_date(
+                extracted.content, self.lm, date_session, target_vault_id
+            )
+            await date_session.commit()
 
         # 2. PDF metadata creation date
         if event_date is None:
             event_date = extracted.metadata.get('creation_date')
 
-        # 3. File processor's document_date (mtime — will be None for PDFs now)
+        # 3. File processor's document_date (mtime)
         if event_date is None:
             event_date = extracted.document_date
 
