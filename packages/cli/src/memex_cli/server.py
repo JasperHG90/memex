@@ -270,6 +270,11 @@ def start(
             access_log = '-'  # gunicorn: stdout
             error_log = '-'  # gunicorn: stderr
 
+        # Worker timeout: Gunicorn kills workers that don't respond within this
+        # window (default 30s). ONNX model loading + LLM calls can exceed that,
+        # so allow override via GUNICORN_TIMEOUT env var.
+        timeout = os.environ.get('GUNICORN_TIMEOUT', '120')
+
         cmd = [
             'gunicorn',
             '-k',
@@ -278,6 +283,8 @@ def start(
             str(workers),
             '-b',
             f'{host}:{port}',
+            '--timeout',
+            timeout,
             '--access-logfile',
             access_log,
             '--error-logfile',
