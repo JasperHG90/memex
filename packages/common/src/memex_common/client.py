@@ -612,6 +612,10 @@ class RemoteMemexAPI:
         """Rename a note (updates title in metadata, page index, and doc_metadata)."""
         return await self._patch(f'notes/{note_id}/title', {'new_title': new_title})
 
+    async def update_note_date(self, note_id: UUID, new_date: dt.datetime) -> dict[str, Any]:
+        """Update a note's publish_date and cascade delta to memory unit timestamps."""
+        return await self._patch(f'notes/{note_id}/date', {'date': new_date.isoformat()})
+
     async def get_resource(self, path: str) -> bytes:
         """
         Retrieve a raw resource (file) from the server.
