@@ -13,15 +13,18 @@ class GroundTruthCheck:
     name: str
     description: str
     query: str
-    check_type: str  # 'keyword_in_results', 'entity_exists', 'entity_type_check',
-    #                   'entity_cooccurrence_check', 'entity_mention_check',
-    #                   'result_ordering', 'llm_judge'
+    check_type: str  # 'keyword_in_results', 'keyword_absent_from_results',
+    #   'entity_exists', 'entity_type_check',
+    #   'entity_cooccurrence_check', 'entity_mention_check',
+    #   'result_ordering', 'llm_judge'
     expected: str | list[str]
     expected_entity_type: str | None = None  # for entity_type_check
     search_type: str = 'memory'  # 'memory' or 'note'
     strategies: list[str] | None = None
     include_superseded: bool | None = None
     top_k: int = 10
+    vault_name: str | None = None  # for multi-vault checks
+    max_duration_ms: float | None = None  # timing assertion
 
 
 @dataclass
@@ -33,10 +36,16 @@ class SyntheticDoc:
     description: str
     content: str
     tags: list[str] = field(default_factory=list)
+    vault_name: str | None = None  # target vault for ingestion
+    files: dict[str, bytes] = field(default_factory=dict)  # assets
 
     @property
     def content_b64(self) -> bytes:
         return base64.b64encode(self.content.encode('utf-8'))
+
+    @property
+    def files_b64(self) -> dict[str, bytes]:
+        return {k: base64.b64encode(v) for k, v in self.files.items()}
 
 
 @dataclass
@@ -329,6 +338,14 @@ GROUP_CONTRADICTION = ScenarioGroup(
             include_superseded=False,
         ),
         GroundTruthCheck(
+            name='superseded_included',
+            description='With include_superseded=True, both old and new CI/CD facts appear.',
+            query='What CI/CD system does Project Nexus use?',
+            check_type='keyword_in_results',
+            expected=['GitHub Actions', 'Jenkins'],
+            include_superseded=True,
+        ),
+        GroundTruthCheck(
             name='llm_judge_migration',
             description='LLM judge: does the response correctly describe the migration?',
             query='Describe the Project Nexus tech stack migration that happened in 2025.',
@@ -480,17 +497,89 @@ GROUP_ENTITY_RESOLUTION = ScenarioGroup(
             check_type='entity_mention_check',
             expected=['NLP'],
         ),
+        GroundTruthCheck(
+            name='multi_hop_gpu_infrastructure',
+            description='Multi-hop: Elena → AI Research Lab → GPU infrastructure → Lisa Chang.',
+            query='Who manages the GPU infrastructure that supports the NLP pipeline?',
+            check_type='keyword_in_results',
+            expected=['Lisa Chang', 'GPU'],
+        ),
     ],
 )
 
 # ---------------------------------------------------------------------------
-# Group 4: Reflection (uses entities from Groups 1-3)
+# Group 4: Reflection & Mental Models
 # ---------------------------------------------------------------------------
+
+_DOC_SARAH_PROFILE = SyntheticDoc(
+    filename='sarah-chen-profile.md',
+    title='Sarah Chen Professional Profile',
+    description='Professional profile of Sarah Chen, engineering leader at Acme Corp.',
+    tags=['profile', 'leadership', 'acme-corp'],
+    content="""\
+# Sarah Chen — Professional Profile
+
+**Role:** Senior Engineering Leader, Acme Corp
+**Experience:** 12 years in software engineering and technical leadership
+
+## Background
+
+Sarah Chen is a senior engineering leader at Acme Corp with 12 years of experience
+in building large-scale distributed systems. She led Project Alpha from inception to
+successful Phase 1 delivery in Q2 2025.
+
+## Leadership Style
+
+Known for her data-driven decision making and ability to align cross-functional teams.
+She organizes teams into focused pods with weekly cross-pod syncs. She reports directly
+to the CTO and presents results to the Acme Corp board quarterly.
+
+## Key Achievements
+
+- Delivered Project Alpha Phase 1 on schedule (API layer + data pipeline)
+- Pipeline exceeded targets: 12,000 events/sec vs 10,000 target
+- Achieved 94% code coverage on integration tests
+- Selected PostgreSQL 16 over MySQL for pgvector support
+""",
+)
+
+_DOC_SARAH_TECH = SyntheticDoc(
+    filename='sarah-chen-tech-decisions.md',
+    title='Sarah Chen Technical Decisions Log',
+    description='Technical decision log for Sarah Chen on Project Alpha.',
+    tags=['decisions', 'architecture', 'acme-corp'],
+    content="""\
+# Technical Decision Log — Sarah Chen
+
+## Database Selection (March 2025)
+
+Sarah Chen chose PostgreSQL 16 over MySQL 8.0 for Project Alpha, citing pgvector
+support for future AI workloads and superior JSON handling.
+
+## Architecture Choices
+
+- Apache Kafka for event streaming (high throughput requirement)
+- Python 3.12 for improved type hints and performance
+- React + TypeScript for the analytics dashboard
+- FastAPI for the serving layer (async support)
+
+## Team Structure
+
+Sarah organized the team into pods: Backend (David Park), Data (Maria Santos),
+and Frontend (James Liu), with weekly cross-pod syncs.
+
+## Lessons Learned
+
+- Early investment in CI/CD (94% coverage) prevented regressions during Phase 1
+- Kafka partitioning strategy was key to exceeding throughput targets
+- Cross-pod syncs reduced integration issues by 60%
+""",
+)
 
 GROUP_REFLECTION = ScenarioGroup(
     name='reflection',
-    description='Tests reflection produces mental models with evidence from source docs.',
-    docs=[],  # No new docs — uses existing entities
+    description='Tests reflection produces mental models and mental_model retrieval strategy.',
+    docs=[_DOC_SARAH_PROFILE, _DOC_SARAH_TECH],
     checks=[
         GroundTruthCheck(
             name='reflection_mental_model',
@@ -499,6 +588,14 @@ GROUP_REFLECTION = ScenarioGroup(
             check_type='llm_judge',
             expected='Mental model should reference Project Alpha, her role as project lead, '
             'and Phase 1 completion.',
+        ),
+        GroundTruthCheck(
+            name='mental_model_strategy',
+            description='Mental model retrieval strategy returns results for reflected entity.',
+            query='Sarah Chen leadership',
+            check_type='keyword_in_results',
+            expected=['Sarah Chen'],
+            strategies=['mental_model'],
         ),
     ],
 )
@@ -598,6 +695,490 @@ GROUP_TEMPORAL = ScenarioGroup(
 )
 
 # ---------------------------------------------------------------------------
+# Group 6: Vault Isolation
+# ---------------------------------------------------------------------------
+
+_DOC_VAULT_A_GAMMA = SyntheticDoc(
+    filename='project-gamma.md',
+    title='Project Gamma Overview',
+    description='Project Gamma uses Elixir and Phoenix for real-time features.',
+    tags=['project', 'elixir'],
+    vault_name='bench-vault-a',
+    content="""\
+# Project Gamma — Real-Time Platform
+
+**Lead:** Carla Ruiz
+**Organization:** Polaris Labs
+
+## Overview
+
+Project Gamma is a real-time collaboration platform built at Polaris Labs.
+The system uses Elixir and the Phoenix framework for WebSocket-based communication.
+It supports 50,000 concurrent connections per node using the BEAM virtual machine.
+
+## Tech Stack
+
+- Language: Elixir 1.16
+- Framework: Phoenix LiveView
+- Database: CockroachDB
+- Message Broker: RabbitMQ
+""",
+)
+
+_DOC_VAULT_B_DELTA = SyntheticDoc(
+    filename='project-delta.md',
+    title='Project Delta Overview',
+    description='Project Delta uses Scala and Akka for distributed processing.',
+    tags=['project', 'scala'],
+    vault_name='bench-vault-b',
+    content="""\
+# Project Delta — Distributed Processing Engine
+
+**Lead:** Henrik Johansen
+**Organization:** Nordic Data Systems
+
+## Overview
+
+Project Delta is a distributed data processing engine built at Nordic Data Systems.
+The system uses Scala and the Akka framework for actor-based concurrency.
+It processes 2 billion events per day across a 200-node cluster.
+
+## Tech Stack
+
+- Language: Scala 3.4
+- Framework: Akka Cluster + Akka Streams
+- Database: Apache Cassandra
+- Orchestration: Apache Flink
+""",
+)
+
+GROUP_VAULT_ISOLATION = ScenarioGroup(
+    name='vault_isolation',
+    description='Tests that search results respect vault boundaries.',
+    docs=[_DOC_VAULT_A_GAMMA, _DOC_VAULT_B_DELTA],
+    checks=[
+        GroundTruthCheck(
+            name='vault_a_contains_gamma',
+            description='Vault A search finds Project Gamma.',
+            query='real-time platform',
+            check_type='keyword_in_results',
+            expected=['Elixir'],
+            vault_name='bench-vault-a',
+        ),
+        GroundTruthCheck(
+            name='vault_a_excludes_delta',
+            description='Vault A search does NOT contain Project Delta content.',
+            query='distributed processing engine',
+            check_type='keyword_absent_from_results',
+            expected=['Scala', 'Akka'],
+            vault_name='bench-vault-a',
+        ),
+        GroundTruthCheck(
+            name='vault_b_contains_delta',
+            description='Vault B search finds Project Delta.',
+            query='distributed processing engine',
+            check_type='keyword_in_results',
+            expected=['Scala'],
+            vault_name='bench-vault-b',
+        ),
+        GroundTruthCheck(
+            name='vault_b_excludes_gamma',
+            description='Vault B search does NOT contain Project Gamma content.',
+            query='real-time collaboration platform',
+            check_type='keyword_absent_from_results',
+            expected=['Elixir', 'Phoenix'],
+            vault_name='bench-vault-b',
+        ),
+        GroundTruthCheck(
+            name='vault_a_entity_isolation',
+            description='Entity "Polaris Labs" exists only in vault A.',
+            query='Polaris Labs',
+            check_type='entity_exists',
+            expected=['Polaris Labs'],
+            vault_name='bench-vault-a',
+        ),
+        GroundTruthCheck(
+            name='vault_b_entity_isolation',
+            description='Entity "Nordic Data Systems" exists only in vault B.',
+            query='Nordic Data Systems',
+            check_type='entity_exists',
+            expected=['Nordic Data Systems'],
+            vault_name='bench-vault-b',
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 7: Entity Edge Cases
+# ---------------------------------------------------------------------------
+
+_DOC_RODRIGUEZ_SYMPOSIUM = SyntheticDoc(
+    filename='rodriguez-symposium.md',
+    title='IEEE Quantum Symposium 2025 — J. Rodriguez',
+    description='Dr. J. Rodriguez presents at IEEE symposium on quantum error correction.',
+    tags=['quantum', 'conference', 'research'],
+    content="""\
+# IEEE Quantum Computing Symposium 2025
+
+**Speaker:** Dr. J. Rodriguez (QuantumTech Labs)
+**Topic:** Advances in Topological Quantum Error Correction
+
+## Presentation Summary
+
+Dr. J. Rodriguez, a senior quantum computing researcher at QuantumTech Labs, presented
+a breakthrough in topological quantum error correction. Rodriguez's work on topological
+qubits has achieved a 99.7% gate fidelity rate, drawing attention from DARPA and NSF.
+
+## Key Results
+
+- Demonstrated 99.7% gate fidelity on a 12-qubit topological processor
+- Error correction overhead reduced by 40% compared to surface codes
+- Partnership with DARPA to scale to 50 qubits by 2026
+
+## Collaborators
+
+Rodriguez acknowledged his colleague Dr. Amara Osei at QuantumTech Labs for her work
+on quantum control systems that enabled the high-fidelity measurements.
+""",
+)
+
+_DOC_RODRIGUEZ_AWARD = SyntheticDoc(
+    filename='rodriguez-award.md',
+    title='2025 Quantum Innovation Award — Juan Rodriguez',
+    description='Juan Rodriguez receives the Quantum Innovation Award.',
+    tags=['quantum', 'award', 'research'],
+    content="""\
+# 2025 Quantum Innovation Award
+
+**Recipient:** Juan Rodriguez, PhD
+**Affiliation:** QuantumTech Labs
+**Field:** Quantum Error Correction
+
+## Award Citation
+
+Juan Rodriguez received the 2025 Quantum Innovation Award for his groundbreaking
+work at QuantumTech Labs on topological quantum error correction. Rodriguez, who
+holds a PhD from MIT, has published 30 papers on quantum error correction and
+topological qubits.
+
+## Research Impact
+
+His topological qubit architecture has become the foundation for QuantumTech Labs'
+commercial quantum processor roadmap. The 99.7% gate fidelity breakthrough was
+highlighted as the year's most significant advance in quantum computing.
+
+## Background
+
+Rodriguez joined QuantumTech Labs in 2019 after completing his PhD at MIT under
+Professor Sarah Kim. He leads a team of 8 researchers in the Quantum Hardware division.
+""",
+)
+
+_DOC_OSEI_PROFILE = SyntheticDoc(
+    filename='osei-profile.md',
+    title='Dr. Amara Osei — Quantum Control Systems',
+    description='Profile of Dr. Amara Osei at QuantumTech Labs.',
+    tags=['quantum', 'research', 'profile'],
+    content="""\
+# Dr. Amara Osei — Research Profile
+
+**Title:** Principal Scientist, Quantum Control Systems
+**Affiliation:** QuantumTech Labs
+**Specialty:** Quantum measurement and control
+
+## Research
+
+Dr. Amara Osei leads the Quantum Control Systems group at QuantumTech Labs.
+Her team developed the high-fidelity measurement protocols used by Juan Rodriguez's
+topological qubit experiments. Osei's control systems achieve sub-nanosecond timing
+precision critical for maintaining quantum coherence.
+
+## Publications
+
+Amara Osei has co-authored 15 papers with J. Rodriguez on quantum error correction,
+including their landmark Nature paper on topological qubit control. She also
+collaborates with Professor Kim at MIT on quantum feedback mechanisms.
+""",
+)
+
+GROUP_ENTITY_EDGE_CASES = ScenarioGroup(
+    name='entity_edge_cases',
+    description='Tests entity resolution with abbreviated names and title variations.',
+    docs=[_DOC_RODRIGUEZ_SYMPOSIUM, _DOC_RODRIGUEZ_AWARD, _DOC_OSEI_PROFILE],
+    checks=[
+        GroundTruthCheck(
+            name='abbreviated_name_resolution',
+            description='"J. Rodriguez" and "Juan Rodriguez" resolve to the same entity.',
+            query='Juan Rodriguez',
+            check_type='entity_exists',
+            expected=['Rodriguez'],
+        ),
+        GroundTruthCheck(
+            name='title_variation_resolution',
+            description='"Dr. Amara Osei" and "Amara Osei" resolve to the same entity.',
+            query='Amara Osei',
+            check_type='entity_exists',
+            expected=['Osei'],
+        ),
+        GroundTruthCheck(
+            name='cross_doc_entity_cooccurrence',
+            description='Rodriguez co-occurs with Amara Osei across documents.',
+            query='Rodriguez',
+            check_type='entity_cooccurrence_check',
+            expected=['Osei'],
+        ),
+        GroundTruthCheck(
+            name='quantumtech_labs_entity',
+            description='QuantumTech Labs exists as an organization entity.',
+            query='QuantumTech Labs',
+            check_type='entity_type_check',
+            expected='QuantumTech Labs',
+            expected_entity_type='Organization',
+        ),
+        GroundTruthCheck(
+            name='cross_doc_facts_rodriguez',
+            description='Search connects facts about Rodriguez across symposium and award docs.',
+            query='What did Juan Rodriguez achieve in quantum computing?',
+            check_type='keyword_in_results',
+            expected=['topological', '99.7%'],
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 8: Scale Stress
+# ---------------------------------------------------------------------------
+
+_SCALE_DEPARTMENTS: list[tuple[str, str, int, str, str]] = [
+    (
+        'Engineering',
+        'Ruby Martinez',
+        45,
+        'Python, Go, Kubernetes',
+        'Building a new CI/CD platform using ArgoCD and Tekton pipelines.',
+    ),
+    (
+        'Marketing',
+        'Tom Bradley',
+        22,
+        'HubSpot, Google Analytics, Figma',
+        'Launching a brand refresh campaign targeting 12 international markets.',
+    ),
+    (
+        'Sales',
+        'Nina Patel',
+        38,
+        'Salesforce, Gong, Outreach',
+        'Expanding into the Asia-Pacific region with 5 new satellite offices.',
+    ),
+    (
+        'Product',
+        "Kevin O'Brien",
+        15,
+        'Jira, Amplitude, Miro',
+        'Redesigning the onboarding flow to reduce first-week churn by 20%.',
+    ),
+    (
+        'Data Science',
+        'Mei-Lin Zhao',
+        12,
+        'Snowflake, dbt, Jupyter',
+        'Building a customer lifetime value prediction model using gradient boosting.',
+    ),
+    (
+        'Customer Success',
+        'Aisha Johnson',
+        28,
+        'Zendesk, Gainsight, Slack',
+        'Implementing a proactive customer health score system with churn alerts.',
+    ),
+    (
+        'Finance',
+        'Roberto Escobar',
+        10,
+        'NetSuite, Stripe, Looker',
+        'Migrating billing from annual to monthly cycles with usage-based pricing.',
+    ),
+    (
+        'Legal',
+        'Catherine Wu',
+        6,
+        'DocuSign, Ironclad, OneTrust',
+        'Drafting GDPR and CCPA compliance frameworks for EU and California expansion.',
+    ),
+    (
+        'HR',
+        'David Okafor',
+        14,
+        'Workday, Greenhouse, Culture Amp',
+        'Rolling out a new 360-degree performance review framework company-wide.',
+    ),
+    (
+        'Security',
+        'Yuki Tanaka',
+        8,
+        'CrowdStrike, Snyk, HashiCorp Vault',
+        'Achieving SOC 2 Type II certification and implementing zero-trust access.',
+    ),
+    (
+        'AI Research',
+        'Dr. Alexei Volkov',
+        5,
+        'PyTorch, Weights & Biases, Ray',
+        'Developing a retrieval-augmented generation system for internal knowledge.',
+    ),
+]
+
+
+def _build_scale_docs() -> list[SyntheticDoc]:
+    docs = []
+    for dept, lead, headcount, tools, initiative in _SCALE_DEPARTMENTS:
+        slug = dept.lower().replace(' ', '-')
+        docs.append(
+            SyntheticDoc(
+                filename=f'dept-{slug}.md',
+                title=f'{dept} Department Overview',
+                description=f'Overview of the {dept} department at TechCo Global.',
+                tags=['department', slug, 'techco'],
+                content=f"""\
+# {dept} Department — TechCo Global
+
+**Department Head:** {lead}
+**Headcount:** {headcount} employees
+**Core Tools:** {tools}
+
+## Current Initiative
+
+{initiative}
+
+## Responsibilities
+
+The {dept} department at TechCo Global is responsible for all {dept.lower()}-related
+activities. The team of {headcount} reports to {lead}, who has led the department
+since 2024.
+""",
+            )
+        )
+    return docs
+
+
+_SCALE_DOCS = _build_scale_docs()
+
+GROUP_SCALE = ScenarioGroup(
+    name='scale',
+    description='Tests retrieval quality with many documents and specific fact lookup.',
+    sequential_ingest=True,
+    docs=_SCALE_DOCS,
+    checks=[
+        GroundTruthCheck(
+            name='scale_find_engineering_lead',
+            description='Find the Engineering department lead among 10 departments.',
+            query='Who leads the Engineering department at TechCo Global?',
+            check_type='keyword_in_results',
+            expected=['Ruby Martinez'],
+        ),
+        GroundTruthCheck(
+            name='scale_find_security_tools',
+            description='Find Security department tools among 10 departments.',
+            query='What tools does the Security team at TechCo use?',
+            check_type='keyword_in_results',
+            expected=['CrowdStrike', 'Snyk'],
+        ),
+        GroundTruthCheck(
+            name='scale_find_ai_initiative',
+            description='Find the AI Research initiative among 10 departments.',
+            query='What is the AI Research department working on at TechCo?',
+            check_type='keyword_in_results',
+            expected=['retrieval-augmented generation'],
+        ),
+        GroundTruthCheck(
+            name='scale_specific_headcount',
+            description='Retrieve a specific headcount among 10 departments.',
+            query='How many people are in the Legal department at TechCo Global?',
+            check_type='keyword_in_results',
+            expected=['6'],
+        ),
+        GroundTruthCheck(
+            name='scale_entity_exists',
+            description='Entity for a department lead is created from scale docs.',
+            query='Mei-Lin Zhao',
+            check_type='entity_exists',
+            expected=['Mei-Lin Zhao'],
+        ),
+        GroundTruthCheck(
+            name='scale_retrieval_speed',
+            description='Retrieval completes within 30 seconds even with many documents.',
+            query='TechCo Global department overview',
+            check_type='keyword_in_results',
+            expected=['TechCo'],
+            max_duration_ms=30000,
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 9: Asset Ingestion
+# ---------------------------------------------------------------------------
+
+_DOC_WITH_ASSET = SyntheticDoc(
+    filename='architecture-overview.md',
+    title='System Architecture Overview',
+    description='Architecture document with a system diagram asset.',
+    tags=['architecture', 'diagram', 'infrastructure'],
+    files={
+        'system-diagram.png': b'\x89PNG\r\n\x1a\n' + b'\x00' * 8 + b'fake-benchmark-image-data',
+    },
+    content="""\
+# System Architecture Overview
+
+![System Diagram](system-diagram.png)
+
+## Microservices Architecture
+
+The platform uses a microservices architecture with 5 core services:
+
+1. **API Gateway** — Routes requests using Kong with rate limiting and auth.
+2. **User Service** — Manages authentication via OAuth2 and OIDC.
+3. **Order Service** — Processes orders with CQRS and event sourcing patterns.
+4. **Notification Service** — Sends emails and push notifications via AWS SES and FCM.
+5. **Analytics Service** — Collects telemetry using OpenTelemetry and exports to Grafana.
+
+## Communication
+
+Services communicate via gRPC for synchronous calls and Apache Kafka for async events.
+The event schema registry uses Protobuf for type-safe message contracts.
+
+## Deployment
+
+All services are containerized with Docker and deployed on Kubernetes (EKS).
+Infrastructure is managed with Terraform and monitored with Prometheus + Grafana.
+""",
+)
+
+GROUP_ASSETS = ScenarioGroup(
+    name='assets',
+    description='Tests that notes with file assets are ingested and searchable.',
+    docs=[_DOC_WITH_ASSET],
+    checks=[
+        GroundTruthCheck(
+            name='asset_note_searchable',
+            description='Note with asset is ingested and content is searchable.',
+            query='microservices architecture API Gateway',
+            check_type='keyword_in_results',
+            expected=['Kong', 'rate limiting'],
+        ),
+        GroundTruthCheck(
+            name='asset_note_search',
+            description='Note search finds the architecture document.',
+            query='system architecture diagram',
+            check_type='keyword_in_results',
+            expected=['Architecture'],
+            search_type='note',
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
 # All scenario groups
 # ---------------------------------------------------------------------------
 
@@ -607,6 +1188,10 @@ ALL_GROUPS: list[ScenarioGroup] = [
     GROUP_ENTITY_RESOLUTION,
     GROUP_REFLECTION,
     GROUP_TEMPORAL,
+    GROUP_VAULT_ISOLATION,
+    GROUP_ENTITY_EDGE_CASES,
+    GROUP_SCALE,
+    GROUP_ASSETS,
 ]
 
 

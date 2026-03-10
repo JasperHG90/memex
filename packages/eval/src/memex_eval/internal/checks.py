@@ -30,6 +30,8 @@ def run_check(
     try:
         if check.check_type == 'keyword_in_results':
             result = _check_keyword_in_results(check, group_name, memory_results, note_results)
+        elif check.check_type == 'keyword_absent_from_results':
+            result = _check_keyword_absent(check, group_name, memory_results, note_results)
         elif check.check_type == 'entity_exists':
             result = _check_entity_exists(check, group_name, entity_names or [])
         elif check.check_type == 'entity_type_check':
@@ -121,6 +123,47 @@ def _check_keyword_in_results(
             query=check.query,
             expected=check.expected,
             actual=f'Missing: {", ".join(missing)}',
+        )
+
+
+def _check_keyword_absent(
+    check: GroundTruthCheck,
+    group_name: str,
+    memory_results: list[MemoryUnitDTO] | None,
+    note_results: list[NoteSearchResult] | None,
+) -> CheckResult:
+    """Check that none of the expected keywords appear in results (isolation test)."""
+    combined = _results_text(memory_results, note_results)
+    combined_lower = combined.lower()
+
+    expected_list = check.expected if isinstance(check.expected, list) else [check.expected]
+    leaked = []
+    absent = []
+    for keyword in expected_list:
+        if keyword.lower() in combined_lower:
+            leaked.append(keyword)
+        else:
+            absent.append(keyword)
+
+    if not leaked:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Correctly absent: {", ".join(absent)}',
+        )
+    else:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Leaked keywords found: {", ".join(leaked)}',
         )
 
 
