@@ -48,6 +48,7 @@ dependencies = [
     "structlog>=25.5.0",
     "alembic>=1.15.0",
     "dateparser>=1.2.2",
+    "pymupdf-layout>=1.27.2",
 ]
 
 [project.optional-dependencies]
