@@ -626,10 +626,17 @@ class MemexAPI:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
-            limit=limit, offset=offset, vault_id=vault_id, vault_ids=vault_ids
+            limit=limit,
+            offset=offset,
+            vault_id=vault_id,
+            vault_ids=vault_ids,
+            after=after,
+            before=before,
         )
 
     async def get_stats_counts(
@@ -645,17 +652,28 @@ class MemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
-            limit=limit, vault_id=vault_id, vault_ids=vault_ids
+            limit=limit,
+            vault_id=vault_id,
+            vault_ids=vault_ids,
+            after=after,
+            before=before,
         )
 
     async def list_entities_ranked(
-        self, limit: int = 100, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 100,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> AsyncGenerator[Any, None]:
         """Stream entities ranked by hybrid score. Delegates to EntityService."""
-        async for entity in self._entities.list_entities_ranked(limit=limit, vault_ids=vault_ids):
+        async for entity in self._entities.list_entities_ranked(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        ):
             yield entity
 
     async def get_entity_cooccurrences(
@@ -857,16 +875,27 @@ class MemexAPI:
         return await self._reflection.retry_dead_letter_item(item_id)
 
     async def get_top_entities(
-        self, limit: int = 5, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 5,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Get top entities by mention count. Delegates to EntityService."""
-        return await self._entities.get_top_entities(limit=limit, vault_ids=vault_ids)
+        return await self._entities.get_top_entities(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        )
 
     async def search_entities(
-        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Search entities by name. Delegates to EntityService."""
-        return await self._entities.search_entities(query, limit=limit, vault_ids=vault_ids)
+        return await self._entities.search_entities(
+            query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        )
 
     async def get_lineage(
         self,

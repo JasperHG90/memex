@@ -19,7 +19,10 @@ class EntityService(BaseService):
     """Entity CRUD, search, and graph traversal operations."""
 
     async def list_entities_ranked(
-        self, limit: int = 100, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 100,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> AsyncGenerator[Any, None]:
         """
         Stream entities ranked by hybrid score.
@@ -53,6 +56,9 @@ class EntityService(BaseService):
                 .where(col(UnitEntity.vault_id).in_(vault_ids))
                 .distinct()
             )
+
+        if entity_type:
+            stmt = stmt.where(Entity.entity_type == entity_type)
 
         stmt = stmt.order_by(
             desc(
@@ -207,7 +213,10 @@ class EntityService(BaseService):
         return True
 
     async def get_top_entities(
-        self, limit: int = 5, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 5,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Get top entities by mention count."""
         from memex_core.memory.sql_models import Entity, UnitEntity
@@ -221,11 +230,17 @@ class EntityService(BaseService):
                     .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            if entity_type:
+                stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def search_entities(
-        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Search for entities by canonical name using trigram similarity or ILIKE."""
         from memex_core.memory.sql_models import Entity, UnitEntity
@@ -240,5 +255,7 @@ class EntityService(BaseService):
                     .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            if entity_type:
+                stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
             return list((await session.exec(stmt)).all())

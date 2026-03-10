@@ -381,24 +381,34 @@ class NoteService:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """
         List ingested documents.
         Filters by the given vault_id(s), or returns all vaults if not provided.
+        Optional after/before filters use COALESCE(publish_date, created_at).
         """
-        from memex_core.memory.sql_models import Note
+        from sqlalchemy import func
         from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
 
         async with self.metastore.session() as session:
+            date_col = func.coalesce(Note.publish_date, Note.created_at)
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            if after is not None:
+                stmt = stmt.where(date_col >= after)
+            if before is not None:
+                stmt = stmt.where(date_col <= before)
 
-            stmt = stmt.offset(offset).limit(limit)
+            stmt = stmt.order_by(date_col.desc()).offset(offset).limit(limit)
             return list((await session.exec(stmt)).all())
 
     async def get_recent_notes(
@@ -406,19 +416,28 @@ class NoteService:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """Get the most recent notes."""
-        from memex_core.memory.sql_models import Note
+        from sqlalchemy import func
         from sqlmodel import desc, select
+
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
 
         async with self.metastore.session() as session:
-            stmt = select(Note).order_by(desc(Note.created_at))
+            date_col = func.coalesce(Note.publish_date, Note.created_at)
+            stmt = select(Note).order_by(desc(date_col))
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            if after is not None:
+                stmt = stmt.where(date_col >= after)
+            if before is not None:
+                stmt = stmt.where(date_col <= before)
             stmt = stmt.limit(limit)
             return list((await session.exec(stmt)).all())
 

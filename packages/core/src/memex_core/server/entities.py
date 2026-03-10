@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import EntityDTO, LineageResponse, MemoryUnitDTO
+from memex_common.schemas import EntityDTO, EntityType, LineageResponse, MemoryUnitDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -38,6 +38,10 @@ async def list_entities(
         None, description='Sort option: -mentions for top by mention count'
     ),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    entity_type: EntityType | None = Query(
+        None,
+        description='Filter by entity type.',
+    ),
 ):
     """
     List entities.
@@ -47,21 +51,28 @@ async def list_entities(
     - q: Optional search query for name-based search
     - sort: Optional sort option. Use '-mentions' for top entities by mention count.
     - vault_id: Optional vault ID(s) or name(s) to filter by. Repeat for multiple vaults.
+    - entity_type: Optional entity type filter.
     """
     vault_ids = await resolve_vault_ids(api, vault_id)
     if q:
         try:
-            entities = await api.search_entities(query=q, limit=limit, vault_ids=vault_ids)
+            entities = await api.search_entities(
+                query=q, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            )
             return ndjson_response([build_entity_dto(e) for e in entities])
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             raise _handle_error(e, 'Entity search failed')
 
     if sort == '-mentions':
-        entities = await api.get_top_entities(limit=limit, vault_ids=vault_ids)
+        entities = await api.get_top_entities(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        )
         return ndjson_response([build_entity_dto(e) for e in entities])
 
     async def ranked_stream():
-        async for entity in api.list_entities_ranked(limit=limit, vault_ids=vault_ids):
+        async for entity in api.list_entities_ranked(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        ):
             yield build_entity_dto(entity)
 
     return await async_ndjson_response(ranked_stream())

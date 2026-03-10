@@ -33,6 +33,14 @@ async def list_notes(
     limit: int = 50,
     offset: int = 0,
     vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    after: Annotated[
+        str | None,
+        typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -44,11 +52,34 @@ async def list_notes(
     """
     List all notes.
     """
+    from datetime import datetime
+
     config: MemexConfig = ctx.obj
+
+    parsed_after = None
+    parsed_before = None
+    if after is not None:
+        try:
+            parsed_after = datetime.fromisoformat(after)
+        except ValueError:
+            console.print(f'[red]Invalid --after date: {after}[/red]')
+            raise typer.Exit(code=1)
+    if before is not None:
+        try:
+            parsed_before = datetime.fromisoformat(before)
+        except ValueError:
+            console.print(f'[red]Invalid --before date: {before}[/red]')
+            raise typer.Exit(code=1)
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.list_notes(limit=limit, offset=offset, vault_ids=vault or None)
+            notes = await api.list_notes(
+                limit=limit,
+                offset=offset,
+                vault_ids=vault or None,
+                after=parsed_after,
+                before=parsed_before,
+            )
         except Exception as e:
             handle_api_error(e)
 
@@ -68,11 +99,15 @@ async def list_notes(
 
     table = Table(title='Notes')
     table.add_column('Title', style='cyan')
+    table.add_column('Publish Date', style='green')
     table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
 
     for d in notes:
-        table.add_row(d.name or 'Untitled', str(d.created_at), str(d.id))
+        pub_date = ''
+        if hasattr(d, 'publish_date') and d.publish_date:
+            pub_date = str(d.publish_date.date())
+        table.add_row(d.name or 'Untitled', pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 
@@ -83,6 +118,14 @@ async def list_recent(
     ctx: typer.Context,
     limit: int = 10,
     vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    after: Annotated[
+        str | None,
+        typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -94,11 +137,33 @@ async def list_recent(
     """
     Show most recent notes.
     """
+    from datetime import datetime
+
     config: MemexConfig = ctx.obj
+
+    parsed_after = None
+    parsed_before = None
+    if after is not None:
+        try:
+            parsed_after = datetime.fromisoformat(after)
+        except ValueError:
+            console.print(f'[red]Invalid --after date: {after}[/red]')
+            raise typer.Exit(code=1)
+    if before is not None:
+        try:
+            parsed_before = datetime.fromisoformat(before)
+        except ValueError:
+            console.print(f'[red]Invalid --before date: {before}[/red]')
+            raise typer.Exit(code=1)
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.get_recent_notes(limit=limit, vault_ids=vault or None)
+            notes = await api.get_recent_notes(
+                limit=limit,
+                vault_ids=vault or None,
+                after=parsed_after,
+                before=parsed_before,
+            )
         except Exception as e:
             handle_api_error(e)
 
@@ -118,11 +183,15 @@ async def list_recent(
 
     table = Table(title='Recent Notes')
     table.add_column('Title', style='cyan')
-    table.add_column('Created At', style='green')
+    table.add_column('Publish Date', style='green')
+    table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
 
     for d in notes:
-        table.add_row(d.name or 'Untitled', str(d.created_at), str(d.id))
+        pub_date = ''
+        if hasattr(d, 'publish_date') and d.publish_date:
+            pub_date = str(d.publish_date.date())
+        table.add_row(d.name or 'Untitled', pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 

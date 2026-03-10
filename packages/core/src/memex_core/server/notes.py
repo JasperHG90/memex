@@ -36,6 +36,8 @@ async def list_notes(
         None, description='Sort option: -created_at for recency'
     ),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    after: str | None = Query(None, description='Only notes on or after this date (ISO 8601).'),
+    before: str | None = Query(None, description='Only notes on or before this date (ISO 8601).'),
 ):
     """
     List notes.
@@ -45,13 +47,41 @@ async def list_notes(
     - offset: Number of notes to skip
     - sort: Optional sort option. Use '-created_at' for most recent first.
     - vault_id: Optional vault ID(s) or name(s) to filter by.
+    - after: ISO 8601 date string. Only notes with date >= after.
+    - before: ISO 8601 date string. Only notes with date <= before.
     """
+    from datetime import datetime as dt
+
+    parsed_after = None
+    parsed_before = None
+    try:
+        if after is not None:
+            parsed_after = dt.fromisoformat(after)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'Invalid "after" date format: {exc}')
+    try:
+        if before is not None:
+            parsed_before = dt.fromisoformat(before)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'Invalid "before" date format: {exc}')
+
     try:
         resolved = await resolve_vault_ids(api, vault_id)
         if sort == '-created_at':
-            docs = await api.get_recent_notes(limit=limit, vault_ids=resolved)
+            docs = await api.get_recent_notes(
+                limit=limit,
+                vault_ids=resolved,
+                after=parsed_after,
+                before=parsed_before,
+            )
         else:
-            docs = await api.list_notes(limit=limit, offset=offset, vault_ids=resolved)
+            docs = await api.list_notes(
+                limit=limit,
+                offset=offset,
+                vault_ids=resolved,
+                after=parsed_after,
+                before=parsed_before,
+            )
         return ndjson_response([build_note_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list notes')
