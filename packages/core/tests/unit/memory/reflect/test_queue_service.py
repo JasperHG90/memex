@@ -95,9 +95,14 @@ async def test_handle_retrieval_event(service):
     session = AsyncMock(spec=AsyncSession)
     entity_id = uuid4()
 
-    # Mock DB return
+    # Mock DB return — queue item is PROCESSING (mid-reflection)
     entity = Entity(id=entity_id, mention_count=100, retrieval_count=9)
-    queue_item = ReflectionQueue(entity_id=entity_id, accumulated_evidence=0, priority_score=0.0)
+    queue_item = ReflectionQueue(
+        entity_id=entity_id,
+        accumulated_evidence=0,
+        priority_score=0.0,
+        status=ReflectionStatus.PROCESSING,
+    )
 
     # Mock exec().all()
     mock_result = MagicMock()
@@ -113,6 +118,9 @@ async def test_handle_retrieval_event(service):
     # Verify priority updated (Evidence=0, Mentions=100 -> log=2 (0.4), Retrievals=10 -> log=1 (0.3))
     # Score = 0 + 0.4 + 0.3 = 0.7
     assert queue_item.priority_score == 0.7
+
+    # Retrieval should NOT re-queue for reflection — no new evidence was added
+    assert queue_item.status == ReflectionStatus.PROCESSING
 
 
 @pytest.mark.asyncio
