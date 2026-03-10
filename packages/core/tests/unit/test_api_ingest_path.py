@@ -74,6 +74,7 @@ async def test_ingest_from_file_markitdown(api, tmp_path):
         extracted.source = str(docx_file)
         extracted.document_date = None
         extracted.images = {}
+        extracted.metadata = {}
         api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
 
         with patch(
