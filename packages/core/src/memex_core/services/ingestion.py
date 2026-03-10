@@ -21,7 +21,11 @@ from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.processing.dates import extract_document_date
 from memex_core.processing.files import FileContentProcessor
-from memex_core.processing.titles import resolve_document_title
+from memex_core.processing.titles import (
+    _is_meaningful_name,
+    extract_title_via_llm,
+    resolve_document_title,
+)
 from memex_core.processing.web import WebContentProcessor
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -213,6 +217,16 @@ ingested_at: {now}
         original_hash = hashlib.md5(extracted.content.encode('utf-8')).hexdigest()
 
         name = extracted.metadata.get('title') or path.stem
+
+        # For file imports, prefer LLM title extraction over H1 regex
+        # when PDF metadata title is missing (path.stem is often meaningless).
+        if not _is_meaningful_name(name):
+            llm_title = await extract_title_via_llm(
+                extracted.content[:1500],
+                self.lm,
+            )
+            if llm_title:
+                name = llm_title
 
         note = NoteInput(
             name=name,
