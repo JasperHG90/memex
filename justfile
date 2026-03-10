@@ -85,13 +85,37 @@ dashboard-generate-api:
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 
-# Run internal quality benchmark (requires running Memex server)
-benchmark-internal server='http://localhost:8001/api/v1/':
-  uv run memex-eval run --server {{server}}
+# Start postgres, run server in a temp dir, execute benchmark, then tear down
+benchmark-internal server='http://localhost:8001/api/v1/' *args='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  TMPDIR=$(mktemp -d)
+  mkdir -p "$TMPDIR/filestore"
+  trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$TMPDIR"; docker compose stop db' EXIT
+  MEMEX_PORT=8001 MEMEX_SERVER__FILE_STORE__TYPE=local MEMEX_SERVER__FILE_STORE__ROOT="$TMPDIR/filestore" uv run memex server start &
+  SERVER_PID=$!
+  echo "Waiting for server on :8001..."
+  until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
+  uv run memex-eval run --server {{server}} {{args}}
 
-# Run internal benchmark (deterministic checks only, no LLM judge)
-benchmark-internal-fast server='http://localhost:8001/api/v1/':
-  uv run memex-eval run --server {{server}} --no-llm-judge
+# Start postgres, run server in a temp dir, execute benchmark (no LLM judge), then tear down
+benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  TMPDIR=$(mktemp -d)
+  mkdir -p "$TMPDIR/filestore"
+  trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$TMPDIR"; docker compose stop db' EXIT
+  MEMEX_PORT=8001 MEMEX_SERVER__FILE_STORE__TYPE=local MEMEX_SERVER__FILE_STORE__ROOT="$TMPDIR/filestore" uv run memex server start &
+  SERVER_PID=$!
+  echo "Waiting for server on :8001..."
+  until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
+  uv run memex-eval run --server {{server}} --no-llm-judge {{args}}
 
 # Run LongMemEval external benchmark
 benchmark-longmemeval dataset_path server='http://localhost:8001/api/v1/':
