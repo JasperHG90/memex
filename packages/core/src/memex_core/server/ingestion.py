@@ -209,7 +209,10 @@ async def ingest_upload(
 
                 async def _ingest_and_cleanup(path: str) -> None:
                     try:
-                        await api.ingest_from_file(path)
+                        result = await api.ingest_from_file(path)
+                        coro = result.pop('contradiction_task', None)
+                        if coro is not None:
+                            await coro
                     finally:
                         if os.path.exists(path):
                             os.remove(path)
