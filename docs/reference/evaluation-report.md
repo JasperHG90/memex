@@ -207,7 +207,7 @@ graph TD
 
 ### Simple + entity path (3 questions, 6%)
 
-A single search round with entity exploration. No deep reading needed — memory search alone returns enough. Lowest retrieval token usage (2,627/q) but also lowest score (0.67) — the missed cases lacked sufficient context without drilling into notes.
+A single search round with entity exploration. No deep reading needed — memory search alone returns enough. Lowest retrieval token usage (2,627/q). The 0.67 average score is misleading: both non-adversarial questions scored 1.0; the average is dragged down by q-035 (adversarial subject swap).
 
 ```mermaid
 graph LR
