@@ -116,5 +116,6 @@
       "help": "Group turns into a single session document instead of one note per turn.",
       "advanced": true
     }
-  }
+  },
+  "skills": ["skill/SKILL.md"]
 }

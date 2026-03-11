@@ -23,7 +23,14 @@ import {
   formatSessionNote,
   hashTurnKey,
 } from './memex-client';
-import type { EntityDTO, MemoryStrategy, NoteStatus, NoteStrategy, SessionTurn } from './types';
+import type {
+  EntityDTO,
+  MemoryStrategy,
+  NoteStatus,
+  NoteStrategy,
+  SectionSummaryDTO,
+  SessionTurn,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // Note templates (embedded client-side — no API call needed)
@@ -126,7 +133,7 @@ const memexPlugin = {
         name: 'memex_memory_search',
         label: 'Memex Search',
         description:
-          'Search Memex memories (facts, events, observations). Best for broad/exploratory queries ("What do I know about X?"). For targeted document lookup, use memex_note_search. When unsure, run both in parallel.\n\nStrategy hints:\n- strategies: ["temporal"] → chronological ordering\n- strategies: ["graph"] → entity-centric traversal\n- strategies: ["mental_model"] → synthesized observations\n- Default (all strategies) is best for general queries\n\nCITE SOURCES: Use numbered citations [1], [2] inline. Add reference list with title + note ID. For memory units, include both memory ID and source note ID.',
+          'Search extracted memories (facts, events, observations). Returns scored results with supersession context. Use strategies parameter to tune retrieval.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 8)' })),
@@ -205,7 +212,7 @@ const memexPlugin = {
         name: 'memex_store',
         label: 'Memex Store',
         description:
-          'Quick convenience wrapper to store a note in Memex. Use for capturing facts, decisions, or context. For full control over note creation (author, description, vault), use memex_add_note instead.',
+          'Quick note capture. For full control over metadata, use memex_add_note instead.',
         parameters: Type.Object({
           text: Type.String({ description: 'Content to store' }),
           name: Type.Optional(Type.String({ description: 'Note title' })),
@@ -254,7 +261,7 @@ const memexPlugin = {
         name: 'memex_add_note',
         label: 'Memex Add Note',
         description:
-          'Create a new note with full control over metadata. Returns overlap warnings when similar notes exist (similarity % + note IDs). Use memex_store for quick captures.',
+          'Create a note with full metadata control. Returns overlap warnings when similar notes exist.',
         parameters: Type.Object({
           title: Type.String({ description: 'Note title' }),
           markdown_content: Type.String({ description: 'Note content in Markdown (5-15 lines recommended)' }),
@@ -292,7 +299,8 @@ const memexPlugin = {
               background ?? false,
             );
 
-            const parts = [`Note created: ${result.document_id ?? 'queued'}`];
+            const noteId = result.note_id ?? result.document_id;
+            const parts = [`Note created: ${noteId ?? 'queued'}`];
             if (result.overlapping_notes && result.overlapping_notes.length > 0) {
               parts.push('\n⚠ Similar notes found:');
               for (const o of result.overlapping_notes) {
@@ -302,7 +310,7 @@ const memexPlugin = {
 
             return {
               content: [{ type: 'text', text: parts.join('\n') }],
-              details: { document_id: result.document_id, overlaps: result.overlapping_notes?.length ?? 0 },
+              details: { note_id: noteId, overlaps: result.overlapping_notes?.length ?? 0 },
             };
           } catch (err) {
             return {
@@ -322,7 +330,7 @@ const memexPlugin = {
         name: 'memex_note_search',
         label: 'Memex Note Search',
         description:
-          'Search source notes by hybrid retrieval. Returns ranked notes with inline metadata (title, description, tags) and snippets. Best for targeted document lookup ("Find the doc about X"). For broad exploration, use memex_memory_search. When unsure, run both in parallel.\n\nAfter memex_note_search: metadata is already inline — no extra memex_get_note_metadata calls needed.\nAfter memex_memory_search: still call memex_get_note_metadata per Note ID to filter.',
+          'Search source notes. Returns ranked notes with inline metadata and snippets — no extra metadata calls needed.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
@@ -331,6 +339,12 @@ const memexPlugin = {
           ),
           expand_query: Type.Optional(
             Type.Boolean({ description: 'Enable multi-query expansion' }),
+          ),
+          reason: Type.Optional(
+            Type.Boolean({ description: 'Run skeleton-tree identification for section-level reasoning' }),
+          ),
+          mmr_lambda: Type.Optional(
+            Type.Number({ description: 'MMR lambda (0-1): 1.0 = pure relevance, 0.0 = max diversity' }),
           ),
           strategies: Type.Optional(
             Type.Array(Type.String(), {
@@ -347,12 +361,16 @@ const memexPlugin = {
           ),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit, summarize, expand_query, strategies, after, before, tags, vault_ids } =
-            params as {
+          const {
+            query, limit, summarize, expand_query, reason, mmr_lambda,
+            strategies, after, before, tags, vault_ids,
+          } = params as {
               query: string;
               limit?: number;
               summarize?: boolean;
               expand_query?: boolean;
+              reason?: boolean;
+              mmr_lambda?: number;
               strategies?: NoteStrategy[];
               after?: string;
               before?: string;
@@ -365,6 +383,8 @@ const memexPlugin = {
               limit,
               summarize,
               expand_query,
+              reason,
+              mmr_lambda,
               strategies,
               after,
               before,
@@ -381,10 +401,14 @@ const memexPlugin = {
 
             const lines = results.map((r, i) => {
               const snippetText = r.snippets
-                .map((s) => `  - [${s.node_title}] ${s.text.slice(0, 200)}`)
+                .map((s) => `  - [${s.node_title ?? 'section'}] ${s.text.slice(0, 200)}`)
                 .join('\n');
               const answer = r.answer ? `\n  Answer: ${r.answer}` : '';
-              return `${i + 1}. Note ${r.note_id} (score: ${r.score ?? 'n/a'})${answer}\n${snippetText}`;
+              const status = r.note_status ? ` [${r.note_status}]` : '';
+              const reasoning = r.reasoning && r.reasoning.length > 0
+                ? `\n  Reasoning: ${r.reasoning.map((rr) => rr.reasoning ?? rr.text ?? '').join('; ')}`
+                : '';
+              return `${i + 1}. Note ${r.note_id} (score: ${r.score ?? 'n/a'})${status}${answer}${reasoning}\n${snippetText}`;
             });
 
             return {
@@ -410,7 +434,7 @@ const memexPlugin = {
       {
         name: 'memex_read_note',
         label: 'Memex Read Note',
-        description: 'Retrieve full content of a note by UUID. Prefer memex_get_note_metadata → memex_get_page_index → memex_get_node for selective reading.',
+        description: 'Read full note content. Only use when total_tokens < 500; otherwise use page_index + get_nodes.',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
         }),
@@ -441,7 +465,7 @@ const memexPlugin = {
         name: 'memex_get_note_metadata',
         label: 'Memex Note Metadata',
         description:
-          'Cheap relevance check (~50 tokens): returns title, description, tags, publish date, source URI. Call on memory search results before memex_get_page_index to filter out irrelevant notes. After memex_note_search, metadata is already inline — no extra calls needed.',
+          'Cheap relevance check (~50 tokens). Call after memory_search before page_index. Skip after note_search (metadata already inline).',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
         }),
@@ -450,8 +474,21 @@ const memexPlugin = {
 
           try {
             const result = await client.getNoteMetadata(note_id);
+            const meta = result.metadata as Record<string, unknown> | null;
+            const parts: string[] = [JSON.stringify(meta, null, 2)];
+
+            // Surface key fields for quick scanning
+            if (meta) {
+              const extras: string[] = [];
+              if (meta.has_assets) extras.push('has_assets: true');
+              if (meta.publish_date) extras.push(`publish_date: ${meta.publish_date}`);
+              if (meta.source_uri) extras.push(`source_uri: ${meta.source_uri}`);
+              if (meta.total_tokens != null) extras.push(`total_tokens: ${meta.total_tokens}`);
+              if (extras.length > 0) parts.push(`\n${extras.join(' | ')}`);
+            }
+
             return {
-              content: [{ type: 'text', text: JSON.stringify(result.metadata, null, 2) }],
+              content: [{ type: 'text', text: parts.join('') }],
               details: { note_id },
             };
           } catch (err) {
@@ -472,7 +509,7 @@ const memexPlugin = {
         name: 'memex_get_page_index',
         label: 'Memex Page Index',
         description:
-          'Get hierarchical page index (TOC) for a note. Only call after memex_get_note_metadata confirms relevance. Returns section titles, summaries, token estimates, and node IDs.\n\nProgressive reading: If total_tokens from metadata > 3000, use depth=0 first to get root sections, then use parent_node_id to drill into specific subtrees.',
+          'Get section TOC for a note. Call after metadata confirms relevance. For large notes (total_tokens > 3000), use depth=0 first.',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
           depth: Type.Optional(Type.Number({ description: 'Max tree depth (0=roots only, 1=roots+children, etc.)' })),
@@ -488,12 +525,19 @@ const memexPlugin = {
           try {
             const index = await client.getPageIndex(note_id, { depth, parent_node_id });
 
+            const formatSummary = (s: SectionSummaryDTO | string | null | undefined): string => {
+              if (!s) return '';
+              if (typeof s === 'string') return ` — ${s}`;
+              const parts = [s.what, s.who, s.how, s.when, s.where].filter(Boolean);
+              return parts.length > 0 ? ` — ${parts.join('; ')}` : '';
+            };
+
             const formatNode = (
-              node: { id: string; title: string; summary?: string | null; token_estimate?: number | null; level: number; children: unknown[] },
+              node: { id: string; title: string; summary?: SectionSummaryDTO | string | null; token_estimate?: number | null; level: number; children: unknown[] },
               indent: number,
             ): string => {
               const prefix = '  '.repeat(indent);
-              const summary = node.summary ? ` — ${node.summary}` : '';
+              const summary = formatSummary(node.summary);
               const tokens = node.token_estimate != null ? ` (~${node.token_estimate} tokens)` : '';
               const line = `${prefix}- [${node.id}] ${node.title}${summary}${tokens}`;
               const children = (node.children as typeof node[]).map((c) =>
@@ -528,7 +572,7 @@ const memexPlugin = {
       {
         name: 'memex_get_node',
         label: 'Memex Get Node',
-        description: 'Read a specific note section by node ID. Call multiple in parallel when reading several sections.',
+        description: 'Read a single note section by node ID. For multiple sections, use memex_get_nodes (batch).',
         parameters: Type.Object({
           node_id: Type.String({ description: 'The UUID of the node' }),
         }),
@@ -559,7 +603,7 @@ const memexPlugin = {
         name: 'memex_get_lineage',
         label: 'Memex Lineage',
         description:
-          'Retrieve the provenance chain (lineage) of a memory unit, observation, note, or mental model.',
+          'Retrieve the provenance chain of a memory unit or entity.',
         parameters: Type.Object({
           unit_id: Type.String({ description: 'The UUID of the entity' }),
           entity_type: Type.Optional(
@@ -596,7 +640,7 @@ const memexPlugin = {
         name: 'memex_list_entities',
         label: 'Memex List Entities',
         description:
-          'List or search entities in the knowledge graph. Without a query, returns top entities by relevance.\n\nEntity exploration workflow:\n1. memex_list_entities → browse/search entities by name\n2. memex_get_entity → get details (type, mention count)\n3. memex_get_entity_mentions → find facts/observations mentioning entity\n4. memex_get_entity_cooccurrences → find related entities',
+          'List or search entities in the knowledge graph. Returns names, types, and mention counts.',
         parameters: Type.Object({
           query: Type.Optional(Type.String({ description: 'Search term to filter by name' })),
           limit: Type.Optional(Type.Number({ description: 'Max entities to return (default: 20)' })),
@@ -648,7 +692,7 @@ const memexPlugin = {
         name: 'memex_get_entity',
         label: 'Memex Get Entity',
         description:
-          'Get details for a specific entity and its recent mentions in the knowledge graph.',
+          'Get entity details and recent mentions.',
         parameters: Type.Object({
           entity_id: Type.String({ description: 'The UUID of the entity' }),
         }),
@@ -697,7 +741,7 @@ const memexPlugin = {
         name: 'memex_get_entity_cooccurrences',
         label: 'Memex Entity Cooccurrences',
         description:
-          'Find entities that frequently co-occur with a given entity. Useful for discovering related people, concepts, or topics.',
+          'Find entities that frequently co-occur with a given entity.',
         parameters: Type.Object({
           entity_id: Type.String({ description: 'The UUID of the entity' }),
         }),
@@ -741,7 +785,7 @@ const memexPlugin = {
       {
         name: 'memex_get_memory_unit',
         label: 'Memex Get Memory Unit',
-        description: 'Retrieve a single memory unit by UUID. Returns full details including confidence, status, and supersession links.',
+        description: 'Retrieve a single memory unit by UUID with full details.',
         parameters: Type.Object({
           unit_id: Type.String({ description: 'The UUID of the memory unit' }),
         }),
@@ -771,7 +815,7 @@ const memexPlugin = {
       {
         name: 'memex_get_memory_units',
         label: 'Memex Get Memory Units (Batch)',
-        description: 'Batch lookup of memory units with contradiction/supersession context. Returns full details for multiple units at once.',
+        description: 'Batch lookup of memory units with supersession context.',
         parameters: Type.Object({
           unit_ids: Type.Array(Type.String(), { description: 'List of memory unit UUIDs' }),
         }),
@@ -812,7 +856,7 @@ const memexPlugin = {
         name: 'memex_set_note_status',
         label: 'Memex Set Note Status',
         description:
-          'Update note lifecycle status. Use to mark notes as superseded (replaced by another note) or appended (extended by another note). Link to the replacing/extending note via linked_note_id.',
+          'Update note lifecycle status (active, superseded, appended). Link to replacing note via linked_note_id.',
         parameters: Type.Object({
           note_id: Type.String({ description: 'The UUID of the note' }),
           status: Type.String({ description: 'New status: active, superseded, or appended' }),
@@ -880,7 +924,7 @@ const memexPlugin = {
         name: 'memex_reflect',
         label: 'Memex Reflect',
         description:
-          'Trigger reflection on an entity. Synthesizes observations into mental models from recent memories about the entity.',
+          'Trigger reflection on an entity to synthesize observations into mental models.',
         parameters: Type.Object({
           entity_id: Type.String({ description: 'The UUID of the entity to reflect on' }),
           limit: Type.Optional(Type.Number({ description: 'Recent memories to consider (default: 20)' })),
@@ -917,7 +961,7 @@ const memexPlugin = {
         name: 'memex_get_template',
         label: 'Memex Get Template',
         description:
-          'Get a markdown template for structured note creation. Available types: technical_brief, general_note, architectural_decision_record, request_for_comments, quick_note.',
+          'Get a markdown template for structured note creation.',
         parameters: Type.Object({
           type: Type.String({ description: 'Template type' }),
         }),
@@ -1011,7 +1055,7 @@ const memexPlugin = {
       {
         name: 'memex_list_notes',
         label: 'Memex List Notes',
-        description: 'List notes with pagination. Not recommended for discovery — use memex_note_search instead.',
+        description: 'List notes with pagination. Use memex_note_search for discovery.',
         parameters: Type.Object({
           limit: Type.Optional(Type.Number({ description: 'Max notes to return (default: 20)' })),
           offset: Type.Optional(Type.Number({ description: 'Pagination offset (default: 0)' })),
@@ -1123,6 +1167,181 @@ const memexPlugin = {
       { name: 'memex_ingest_url' },
     );
 
+    // ------ memex_get_nodes ------
+
+    api.registerTool(
+      {
+        name: 'memex_get_nodes',
+        label: 'Memex Get Nodes (Batch)',
+        description: 'Batch read multiple note sections by node ID. Preferred over calling memex_get_node multiple times.',
+        parameters: Type.Object({
+          node_ids: Type.Array(Type.String(), { description: 'List of node UUIDs to retrieve' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { node_ids } = params as { node_ids: string[] };
+
+          try {
+            const nodes = await client.getNodesBatch(node_ids);
+
+            if (nodes.length === 0) {
+              return {
+                content: [{ type: 'text', text: 'No nodes found.' }],
+                details: { count: 0 },
+              };
+            }
+
+            const text = nodes
+              .map((n, i) => `--- ${i + 1}. ${n.title} [${n.id}] ---\n${n.text}`)
+              .join('\n\n');
+
+            return {
+              content: [{ type: 'text', text }],
+              details: { count: nodes.length },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to get nodes: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_get_nodes' },
+    );
+
+    // ------ memex_get_notes_metadata ------
+
+    api.registerTool(
+      {
+        name: 'memex_get_notes_metadata',
+        label: 'Memex Get Notes Metadata (Batch)',
+        description: 'Batch metadata lookup for multiple notes. Call after memory_search to filter before reading.',
+        parameters: Type.Object({
+          note_ids: Type.Array(Type.String(), { description: 'List of note UUIDs' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { note_ids } = params as { note_ids: string[] };
+
+          try {
+            const results = await client.getNoteMetadataBatch(note_ids);
+
+            if (results.length === 0) {
+              return {
+                content: [{ type: 'text', text: 'No metadata found.' }],
+                details: { count: 0 },
+              };
+            }
+
+            const text = results
+              .map((r) => `Note ${r.note_id}:\n${JSON.stringify(r.metadata, null, 2)}`)
+              .join('\n\n');
+
+            return {
+              content: [{ type: 'text', text }],
+              details: { count: results.length },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to get notes metadata: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_get_notes_metadata' },
+    );
+
+    // ------ memex_update_note_date ------
+
+    api.registerTool(
+      {
+        name: 'memex_update_note_date',
+        label: 'Memex Update Note Date',
+        description: 'Update a note\'s date and cascade the delta to all memory unit timestamps.',
+        parameters: Type.Object({
+          note_id: Type.String({ description: 'The UUID of the note' }),
+          date: Type.String({ description: 'New date in ISO 8601 format' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { note_id, date } = params as { note_id: string; date: string };
+
+          try {
+            await client.updateNoteDate(note_id, date);
+            return {
+              content: [{ type: 'text', text: `Note ${note_id} date updated to ${date}.` }],
+              details: { note_id, date },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to update note date: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_update_note_date' },
+    );
+
+    // ------ memex_delete_note ------
+
+    api.registerTool(
+      {
+        name: 'memex_delete_note',
+        label: 'Memex Delete Note',
+        description: 'Delete a note and all associated data (memory units, chunks, assets).',
+        parameters: Type.Object({
+          note_id: Type.String({ description: 'The UUID of the note to delete' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { note_id } = params as { note_id: string };
+
+          try {
+            await client.deleteNote(note_id);
+            return {
+              content: [{ type: 'text', text: `Note ${note_id} deleted.` }],
+              details: { note_id },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to delete note: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_delete_note' },
+    );
+
+    // ------ memex_delete_memory ------
+
+    api.registerTool(
+      {
+        name: 'memex_delete_memory',
+        label: 'Memex Delete Memory',
+        description: 'Delete a memory unit and all associated data (entity links, evidence).',
+        parameters: Type.Object({
+          unit_id: Type.String({ description: 'The UUID of the memory unit to delete' }),
+        }),
+        async execute(_toolCallId, params) {
+          const { unit_id } = params as { unit_id: string };
+
+          try {
+            await client.deleteMemoryUnit(unit_id);
+            return {
+              content: [{ type: 'text', text: `Memory unit ${unit_id} deleted.` }],
+              details: { unit_id },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: 'text', text: `Failed to delete memory: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { name: 'memex_delete_memory' },
+    );
+
     // ========================================================================
     // Slash commands
     // ========================================================================
@@ -1229,6 +1448,11 @@ const memexPlugin = {
     // Lifecycle hooks
     // ========================================================================
 
+    const ROUTING_PREAMBLE = `<memex-instructions>
+Route by query type: relationships → entity tools, specific content → search tools, broad → both in parallel.
+Cite every Memex claim with [1], [2] inline. End with reference list: [note] title + ID | [memory] title + ID + source note ID.
+</memex-instructions>`;
+
     if (cfg.autoRecall) {
       api.on('before_agent_start', async (event) => {
         if (!event.prompt || event.prompt.length < 5) return;
@@ -1244,7 +1468,9 @@ const memexPlugin = {
 
           if (memories.length === 0) {
             breaker.recordSuccess();
-            return;
+            return {
+              prependContext: ROUTING_PREAMBLE,
+            };
           }
 
           // On every Nth turn, fetch entity profile (best-effort)
@@ -1265,7 +1491,7 @@ const memexPlugin = {
           breaker.recordSuccess();
 
           return {
-            prependContext: formatMemoryContext(memories, entities),
+            prependContext: ROUTING_PREAMBLE + '\n' + formatMemoryContext(memories, entities),
           };
         } catch (err) {
           breaker.recordFailure();
