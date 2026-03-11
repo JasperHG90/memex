@@ -58,6 +58,31 @@ def run(
         raise typer.Exit(code=1)
 
 
+@app.command('locomo-ingest')
+def locomo_ingest_cmd(
+    dataset_path: str = typer.Option(
+        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
+    ),
+    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
+    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
+    clean: bool = typer.Option(False, '--clean', help='Delete existing notes and re-ingest.'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Phase 0: Ingest LoCoMo conversation sessions into Memex."""
+    _setup_logging(verbose)
+
+    from memex_eval.external.locomo_ingest import ingest_locomo
+
+    asyncio.run(
+        ingest_locomo(
+            server_url=server,
+            dataset_path=dataset_path,
+            conversation_index=conversation,
+            clean=clean,
+        )
+    )
+
+
 @app.command('locomo-export')
 def locomo_export_cmd(
     dataset_path: str = typer.Option(
