@@ -97,3 +97,6 @@ dev = [
     "matplotlib>=3.10.8",
     "seaborn>=0.13.2",
 ]
+docs = [
+    "zensical>=0.0.25",
+]

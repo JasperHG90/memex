@@ -37,7 +37,9 @@ async def test_memex_note_search_returns_formatted_results(mock_api, mcp_client)
     doc = _make_result(title='My Research Paper', score=0.92)
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'research'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'research', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'My Research Paper' in text
@@ -51,7 +53,9 @@ async def test_memex_note_search_no_results(mock_api, mcp_client):
     """When no documents are found the tool returns a helpful message."""
     mock_api.search_notes.return_value = []
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'unknown topic'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'unknown topic', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'No notes' in text
@@ -64,7 +68,7 @@ async def test_memex_note_search_always_passes_summarize_false(mock_api, mcp_cli
     doc = _make_result(title='Any Doc')
     mock_api.search_notes.return_value = [doc]
 
-    await mcp_client.call_tool('memex_note_search', {'query': 'test'})
+    await mcp_client.call_tool('memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']})
 
     mock_api.search_notes.assert_called_once()
     call_kwargs = mock_api.search_notes.call_args[1]
@@ -77,7 +81,9 @@ async def test_memex_note_search_includes_source_uri(mock_api, mcp_client):
     doc = _make_result(title='Web Article', source_uri='https://example.com/article')
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'web content'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'web content', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'https://example.com/article' in text
@@ -95,7 +101,9 @@ async def test_memex_note_search_includes_snippets(mock_api, mcp_client):
     doc = _make_result(title='Rich Document', snippets=snippets)
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'passages'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'passages', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'First relevant passage.' in text
@@ -111,7 +119,9 @@ async def test_memex_note_search_snippet_node_title_prefix(mock_api, mcp_client)
     doc = _make_result(title='Structured Doc', snippets=snippets)
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'section'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'section', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert '[Introduction]' in text
@@ -129,7 +139,9 @@ async def test_memex_note_search_falls_back_to_name_key(mock_api, mcp_client):
     )
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'name fallback'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'name fallback', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'Named Document' in text
@@ -141,7 +153,9 @@ async def test_memex_note_search_exception_handling(mock_api, mcp_client):
     mock_api.search_notes.side_effect = RuntimeError('DB connection lost')
 
     with pytest.raises(ToolError, match='DB connection lost'):
-        await mcp_client.call_tool('memex_note_search', {'query': 'crash test'})
+        await mcp_client.call_tool(
+            'memex_note_search', {'query': 'crash test', 'vault_ids': ['test-vault']}
+        )
 
 
 @pytest.mark.asyncio
@@ -150,7 +164,9 @@ async def test_memex_note_search_tip_always_present(mock_api, mcp_client):
     doc = _make_result(title='Any Doc')
     mock_api.search_notes.return_value = [doc]
 
-    result = await mcp_client.call_tool('memex_note_search', {'query': 'anything'})
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'anything', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'memex_get_page_indices' in text

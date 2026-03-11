@@ -1,7 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 from fastmcp import Client
 from memex_mcp.server import mcp
+
+TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
 
 
 @pytest.fixture
@@ -31,6 +34,8 @@ def mock_api():
     mock.get_nodes = AsyncMock()
     mock.get_note_metadata = AsyncMock()
     mock.get_notes_metadata = AsyncMock()
+    # Vault resolution (required by all vault-scoped tools)
+    mock.resolve_vault_identifier = AsyncMock(return_value=TEST_VAULT_UUID)
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock

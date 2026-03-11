@@ -19,7 +19,9 @@ async def test_mcp_list_assets(mock_api, mcp_client):
         vault_id=uuid4(),
     )
 
-    result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+    result = await mcp_client.call_tool(
+        'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+    )
 
     text = result.content[0].text
 
@@ -43,7 +45,9 @@ async def test_mcp_list_assets_not_found(mock_api, mcp_client):
     )
 
     with pytest.raises(ToolError, match='not found'):
-        await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
 
 
 @pytest.mark.asyncio
@@ -83,7 +87,9 @@ async def test_mcp_list_assets_no_assets(mock_api, mcp_client):
         vault_id=uuid4(),
     )
 
-    result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+    result = await mcp_client.call_tool(
+        'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+    )
 
     text = result.content[0].text
     assert 'no assets' in text.lower()
@@ -102,7 +108,9 @@ async def test_mcp_list_assets_http_500_propagates(mock_api, mcp_client):
     )
 
     with pytest.raises(ToolError, match='List assets failed'):
-        await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
 
 
 @pytest.mark.asyncio
@@ -111,4 +119,6 @@ async def test_mcp_list_assets_invalid_uuid(mock_api, mcp_client):
     from fastmcp.exceptions import ToolError
 
     with pytest.raises(ToolError, match='Invalid Note UUID'):
-        await mcp_client.call_tool('memex_list_assets', {'note_id': 'not-a-uuid'})
+        await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': 'not-a-uuid', 'vault_id': 'test-vault'}
+        )

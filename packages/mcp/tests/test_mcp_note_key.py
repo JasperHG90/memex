@@ -20,6 +20,7 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
             'author': 'tester',
             'tags': ['tag1'],
             'note_key': key,
+            'vault_id': 'test-vault',
         },
     )
 
@@ -46,6 +47,7 @@ async def test_mcp_add_note_auto_derives_note_key(mock_api, mcp_client):
             'description': 'Description',
             'author': 'tester',
             'tags': ['tag1'],
+            'vault_id': 'test-vault',
         },
     )
 
