@@ -293,3 +293,52 @@ class TestRetrievalEngine:
                 session, RetrievalRequest(query='Short unit', limit=10, min_score=0.001)
             )
             assert len(results_loose) >= 1
+
+    async def test_graph_only_deduplication(self, session: AsyncSession, engine_instance, embedder):
+        """
+        Regression test: single-strategy graph retrieval must not return
+        duplicate MemoryUnit IDs when a unit is linked to multiple entities.
+        """
+        now = datetime.now(timezone.utc)
+        doc = Note(id=uuid4(), original_text='Dedup Test')
+        session.add(doc)
+
+        # Create 3 entities that will all be seed matches
+        entities = []
+        for name in ['Koen Horsthuis', 'Matthijs Vos', 'Alexander Janssen']:
+            e = Entity(id=uuid4(), canonical_name=name)
+            session.add(e)
+            entities.append(e)
+        await session.flush()
+
+        # Create a single MemoryUnit linked to ALL 3 entities
+        text = 'Koen Horsthuis, Matthijs Vos, and Alexander Janssen are architects.'
+        emb = embedder.encode([text])[0].tolist()
+        unit = MemoryUnit(
+            id=uuid4(),
+            text=text,
+            embedding=emb,
+            fact_type=FactTypes.WORLD,
+            event_date=now,
+            note_id=doc.id,
+        )
+        session.add(unit)
+        await session.flush()
+
+        for e in entities:
+            session.add(UnitEntity(unit_id=unit.id, entity_id=e.id))
+        await session.commit()
+
+        # Query with graph-only strategy — should return each unit at most once
+        results, _ = await engine_instance.retrieve(
+            session,
+            RetrievalRequest(
+                query='Koen Horsthuis Matthijs Vos Alexander Janssen',
+                strategies=['graph'],
+                limit=15,
+            ),
+        )
+
+        unit_ids = [r.id for r in results]
+        assert len(unit_ids) == len(set(unit_ids)), f'Duplicate unit IDs in results: {unit_ids}'
+        assert unit.id in unit_ids

@@ -83,7 +83,7 @@ def test_deduplicate_malformed_evidence_ids():
     )
 
     results = [u1, u2]
-    deduplicated = engine._deduplicate_and_cite(results)
+    deduplicated = engine._attach_citations(results)
 
     # Both units remain; citation metadata is attached to u2
     assert len(deduplicated) == 2

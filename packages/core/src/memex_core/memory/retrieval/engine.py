@@ -292,8 +292,8 @@ class RetrievalEngine:
         if request.fusion_strategy == 'position_aware' and use_reranker:
             final_results = self._apply_position_aware_blending(final_results)
 
-        # 9. Deduplicate and Cite
-        final_results = self._deduplicate_and_cite(final_results)
+        # 9. Attach Citations
+        final_results = self._attach_citations(final_results)
 
         # 9b. MMR diversity filtering
         mmr_lambda = request.mmr_lambda
@@ -429,7 +429,9 @@ class RetrievalEngine:
         """Fast path: run a single strategy without RRF overhead."""
         stmt = strategy.get_statement(query, query_embedding, limit=limit, **filters)
         subq = stmt.subquery(name=f'sq_{strategy_name}')
-        rank_order = subq.c.score.desc() if is_desc else subq.c.score.asc()
+
+        best_score = func.max(subq.c.score).label('best_score')
+        rank_order = best_score.desc() if is_desc else best_score.asc()
 
         final_stmt = (
             select(
@@ -437,6 +439,7 @@ class RetrievalEngine:
                 literal(result_type).label('type'),
             )
             .select_from(subq)
+            .group_by(subq.c.id)
             .order_by(rank_order)
             .limit(limit)
         )
@@ -1024,7 +1027,7 @@ class RetrievalEngine:
 
         return selected
 
-    def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
+    def _attach_citations(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """
         Identify 'Observation' units and their evidence.
         Attach citation metadata to observations that reference facts in the result set.
