@@ -21,14 +21,48 @@ export type NoteTemplateType =
   | 'request_for_comments'
   | 'quick_note';
 
+/** Per-strategy attribution for a retrieval result. */
+export interface StrategyDebugInfo {
+  strategy_name: string;
+  rank: number;
+  rrf_score: number;
+  raw_score?: number | null;
+  timing_ms?: number | null;
+}
+
+/** 5W summary of a document section. */
+export interface SectionSummaryDTO {
+  who?: string | null;
+  what?: string | null;
+  how?: string | null;
+  when?: string | null;
+  where?: string | null;
+}
+
+/** Body for PATCH /api/v1/notes/{id}/date */
+export interface UpdateNoteDateRequest {
+  date: string;
+}
+
+/** Body for POST /api/v1/nodes/batch */
+export interface BatchNodeRequest {
+  node_ids: string[];
+}
+
+/** Body for POST /api/v1/notes/metadata/batch */
+export interface BatchNoteMetadataRequest {
+  note_ids: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Memex REST API DTOs
 // ---------------------------------------------------------------------------
 
-/** Supersession link from contradiction detection. */
-export interface SupersessionLink {
+/** Supersession info from contradiction detection. */
+export interface SupersessionInfo {
   unit_id: string;
   unit_text: string;
+  note_title?: string | null;
   relation: string;
 }
 
@@ -37,18 +71,24 @@ export interface MemoryUnitDTO {
   id: string;
   text: string;
   fact_type: string;
+  status?: string;
   vault_id?: string | null;
-  document_id?: string | null;
-  source_document_ids: string[];
+  note_id?: string | null;
+  chunk_id?: string | null;
+  node_ids?: string[];
+  source_note_ids?: string[];
+  /** @deprecated Use source_note_ids */
+  source_document_ids?: string[];
   metadata: Record<string, unknown>;
   score?: number | null;
-  confidence?: number | null;
+  confidence: number;
+  debug_info?: StrategyDebugInfo[] | null;
+  superseded_by?: SupersessionInfo[] | null;
   mentioned_at?: string | null;
   occurred_start?: string | null;
   occurred_end?: string | null;
-  unit_metadata?: {
-    superseded_by?: SupersessionLink[];
-  } | null;
+  /** @deprecated Use top-level superseded_by */
+  unit_metadata?: { superseded_by?: SupersessionInfo[] } | null;
 }
 
 /** Body for POST /api/v1/memories/search */
@@ -95,6 +135,8 @@ export interface NoteCreateRequest {
 /** Response from POST /api/v1/ingestions */
 export interface IngestResponse {
   status: string;
+  note_id?: string | null;
+  /** @deprecated Use note_id */
   document_id?: string | null;
   unit_ids: string[];
   reason?: string | null;
@@ -118,6 +160,10 @@ export interface NoteSearchRequest {
   limit?: number;
   expand_query?: boolean;
   summarize?: boolean;
+  reason?: boolean;
+  mmr_lambda?: number | null;
+  fusion_strategy?: string;
+  strategy_weights?: Record<string, number> | null;
   strategies?: NoteStrategy[] | null;
   after?: string | null;
   before?: string | null;
@@ -127,16 +173,21 @@ export interface NoteSearchRequest {
 
 export interface NoteSearchSnippet {
   text: string;
-  node_title: string;
-  node_id: string;
+  score?: number;
+  node_id?: string | null;
+  node_title?: string | null;
+  node_level?: number | null;
 }
 
 export interface NoteSearchResult {
   note_id: string;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
   snippets: NoteSearchSnippet[];
-  score?: number | null;
-  reasoning?: string[];
+  score: number;
+  vault_id?: string | null;
+  vault_name?: string | null;
+  note_status?: string | null;
+  reasoning?: Record<string, unknown>[] | null;
   answer?: string | null;
 }
 
@@ -164,9 +215,13 @@ export interface MigrateNoteRequest {
 export interface NoteDTO {
   id: string;
   title: string;
-  created_at?: string | null;
-  vault_id?: string | null;
-  doc_metadata?: Record<string, unknown> | null;
+  name?: string | null;
+  original_text?: string | null;
+  created_at: string;
+  publish_date?: string | null;
+  vault_id: string;
+  assets?: string[];
+  doc_metadata?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +231,7 @@ export interface NoteDTO {
 export interface PageIndexNode {
   id: string;
   title: string;
-  summary?: string | null;
+  summary?: SectionSummaryDTO | null;
   level: number;
   seq: number;
   token_estimate?: number | null;
@@ -187,6 +242,11 @@ export interface PageMetadata {
   title?: string | null;
   description?: string | null;
   tags?: string[] | null;
+  publish_date?: string | null;
+  source_uri?: string | null;
+  has_assets?: boolean;
+  vault_id?: string | null;
+  vault_name?: string | null;
   total_tokens?: number | null;
 }
 
@@ -204,10 +264,14 @@ export interface NoteMetadataOutput {
 export interface NodeDTO {
   id: string;
   note_id: string;
+  vault_id?: string;
+  node_hash?: string | null;
   title: string;
   text: string;
   level: number;
   seq: number;
+  status?: string;
+  created_at?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +295,7 @@ export interface EntityDTO {
   name: string;
   entity_type?: string | null;
   mention_count?: number | null;
+  vault_id?: string | null;
 }
 
 export interface EntityMentionDTO {

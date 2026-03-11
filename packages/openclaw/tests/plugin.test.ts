@@ -36,7 +36,7 @@ function registerPlugin(configOverrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe('plugin registration', () => {
-  it('registers all 25 agent tools', () => {
+  it('registers all 30 agent tools', () => {
     const api = registerPlugin();
     const toolNames = [...api.tools.keys()];
     expect(toolNames).toEqual([
@@ -63,6 +63,11 @@ describe('plugin registration', () => {
       'memex_list_notes',
       'memex_migrate_note',
       'memex_ingest_url',
+      'memex_get_nodes',
+      'memex_get_notes_metadata',
+      'memex_update_note_date',
+      'memex_delete_note',
+      'memex_delete_memory',
     ]);
   });
 
@@ -420,9 +425,10 @@ describe('memex_note_search tool', () => {
   it('returns formatted results with snippets', async () => {
     const api = registerPlugin();
     fetchSpy.mockResolvedValueOnce(
-      jsonResponse([
+      ndjsonResponse([
         {
           note_id: 'note-1',
+          metadata: {},
           snippets: [{ text: 'snippet text', node_title: 'Section', node_id: 'n1' }],
           score: 0.95,
           answer: null,
@@ -443,7 +449,7 @@ describe('memex_note_search tool', () => {
 
   it('returns empty message when no notes found', async () => {
     const api = registerPlugin();
-    fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+    fetchSpy.mockResolvedValueOnce(ndjsonResponse([]));
 
     const tool = api.tools.get('memex_note_search')!;
     const result = await tool.execute('call-1', { query: 'test' }) as {

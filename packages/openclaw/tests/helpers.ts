@@ -36,6 +36,8 @@ export function makeMemoryUnit(overrides: Partial<MemoryUnitDTO> = {}): MemoryUn
     id: `mem-${memoryCounter}`,
     text: `Memory fact #${memoryCounter}`,
     fact_type: 'observation',
+    confidence: 1.0,
+    source_note_ids: [],
     source_document_ids: [],
     metadata: {},
     ...overrides,

@@ -57,10 +57,10 @@ export function formatMemoryUnit(m: MemoryUnitDTO, index: number): string {
   parts.push(line);
 
   // Unit/Note IDs for citation
-  parts.push(`   Unit: ${m.id} | Note: ${m.document_id ?? m.source_document_ids[0] ?? 'unknown'}`);
+  parts.push(`   Unit: ${m.id} | Note: ${m.note_id ?? m.source_note_ids?.[0] ?? m.source_document_ids?.[0] ?? 'unknown'}`);
 
   // Supersession context
-  const supersessions = m.unit_metadata?.superseded_by;
+  const supersessions = m.superseded_by ?? m.unit_metadata?.superseded_by;
   if (supersessions && supersessions.length > 0) {
     for (const s of supersessions) {
       parts.push(`   ⚠ Superseded by: ${s.unit_text} (${s.relation})`);
