@@ -102,7 +102,7 @@ async def test_list_entities_ranked(mock_api, mcp_client):
 
     mock_api.list_entities_ranked = _ranked
 
-    result = await mcp_client.call_tool('memex_list_entities', {})
+    result = await mcp_client.call_tool('memex_list_entities', {'vault_id': 'test-vault'})
     text = result.content[0].text
 
     assert '**Python**' in text
@@ -115,23 +115,26 @@ async def test_list_entities_with_query(mock_api, mcp_client):
     e1 = EntityDTO(id=uuid4(), name='Rust', mention_count=10)
     mock_api.search_entities.return_value = [e1]
 
-    result = await mcp_client.call_tool('memex_list_entities', {'query': 'rust'})
+    result = await mcp_client.call_tool(
+        'memex_list_entities', {'query': 'rust', 'vault_id': 'test-vault'}
+    )
     text = result.content[0].text
 
     assert '**Rust**' in text
-    mock_api.search_entities.assert_called_once_with(
-        'rust',
-        limit=20,
-        vault_ids=None,
-        entity_type=None,
-    )
+    mock_api.search_entities.assert_called_once()
+    call_kwargs = mock_api.search_entities.call_args
+    assert call_kwargs[0][0] == 'rust'
+    assert call_kwargs[1]['limit'] == 20
+    assert call_kwargs[1]['entity_type'] is None
 
 
 @pytest.mark.asyncio
 async def test_list_entities_empty(mock_api, mcp_client):
     mock_api.search_entities.return_value = []
 
-    result = await mcp_client.call_tool('memex_list_entities', {'query': 'nonexistent'})
+    result = await mcp_client.call_tool(
+        'memex_list_entities', {'query': 'nonexistent', 'vault_id': 'test-vault'}
+    )
     assert 'No entities found' in result.content[0].text
 
 
@@ -740,7 +743,9 @@ async def test_memory_search_includes_note_titles(mock_api, mcp_client):
         {'note_id': str(nid), 'title': 'Architecture Guide'}
     ]
 
-    result = await mcp_client.call_tool('memex_memory_search', {'query': 'architecture'})
+    result = await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'architecture', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert 'Architecture Guide' in text

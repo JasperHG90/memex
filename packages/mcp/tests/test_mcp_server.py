@@ -24,6 +24,7 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
             'description': 'Short description',
             'author': 'tester',
             'tags': ['tag1'],
+            'vault_id': 'test-vault',
         },
     )
 
@@ -53,7 +54,7 @@ async def test_mcp_search_tool(mock_api, mcp_client):
     ]
 
     result = await mcp_client.call_tool(
-        'memex_memory_search', {'query': 'python language', 'limit': 5}
+        'memex_memory_search', {'query': 'python language', 'limit': 5, 'vault_ids': ['test-vault']}
     )
 
     assert 'Found 1 results' in result.content[0].text
@@ -84,7 +85,9 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
         )
     ]
 
-    result = await mcp_client.call_tool('memex_memory_search', {'query': 'event'})
+    result = await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'event', 'vault_ids': ['test-vault']}
+    )
     text = result.content[0].text
 
     assert '(2025-06-15' in text
@@ -102,7 +105,9 @@ async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
 
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
-    assert call_args['vault_ids'] == [str(vault_id)]
+    # vault_ids are resolved through resolve_vault_identifier
+    assert len(call_args['vault_ids']) == 1
+    mock_api.resolve_vault_identifier.assert_called_once_with(str(vault_id))
 
 
 @pytest.mark.asyncio
@@ -113,8 +118,8 @@ async def test_mcp_search_invalid_vault_uuid(mock_api, mcp_client):
         'memex_memory_search', {'query': 'test', 'vault_ids': ['not-a-uuid']}
     )
     mock_api.search.assert_called_once()
-    call_args = mock_api.search.call_args[1]
-    assert call_args['vault_ids'] == ['not-a-uuid']
+    # vault_ids are resolved through resolve_vault_identifier
+    mock_api.resolve_vault_identifier.assert_called_once_with('not-a-uuid')
 
 
 @pytest.mark.asyncio

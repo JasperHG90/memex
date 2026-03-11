@@ -1,11 +1,13 @@
 import datetime as dt
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from fastmcp import Client
 from memex_mcp.server import mcp
 from memex_common.schemas import MemoryUnitDTO, FactTypes, NoteDTO
+
+TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
 
 
 @pytest.fixture
@@ -14,6 +16,7 @@ def mock_api():
     mock = AsyncMock()
     mock.search = AsyncMock()
     mock.get_notes_metadata = AsyncMock(return_value=[])
+    mock.resolve_vault_identifier = AsyncMock(return_value=TEST_VAULT_UUID)
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock
@@ -55,20 +58,26 @@ async def test_integration_search_assets_resource(mock_api):
 
     async with Client(mcp) as client:
         # Step 1: Search
-        search_result = await client.call_tool('memex_memory_search', {'query': 'architecture'})
+        search_result = await client.call_tool(
+            'memex_memory_search', {'query': 'architecture', 'vault_ids': ['test-vault']}
+        )
         search_text = search_result.content[0].text
 
         assert str(doc_id) in search_text
 
         # Step 2: List Assets using Document ID from search
-        assets_result = await client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        assets_result = await client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
         assets_text = assets_result.content[0].text
 
         assert 'arch.png' in assets_text
         assert 'assets/arch.png' in assets_text
 
         # Step 3: Get Resource (batch)
-        await client.call_tool('memex_get_resources', {'paths': ['assets/arch.png']})
+        await client.call_tool(
+            'memex_get_resources', {'paths': ['assets/arch.png'], 'vault_id': 'test-vault'}
+        )
 
         # Verify it returns file:// URI for local images
         mock_api.get_resource_path.assert_called_once_with('assets/arch.png')
@@ -91,7 +100,7 @@ async def test_list_notes_includes_publish_date(mock_api):
     )
 
     async with Client(mcp) as client:
-        result = await client.call_tool('memex_list_notes', {})
+        result = await client.call_tool('memex_list_notes', {'vault_id': 'test-vault'})
         text = result.content[0].text
 
         assert '2025-03-15' in text

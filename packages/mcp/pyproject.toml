@@ -29,6 +29,12 @@ version-file = "src/memex_mcp/__about__.py"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "types-aiofiles>=25.1.0.20251011",
+    "types-pyyaml>=6.0.12.20250915",
+]
+
 [tool.hatch.version]
 source = "vcs"
 raw-options.root = "../.."

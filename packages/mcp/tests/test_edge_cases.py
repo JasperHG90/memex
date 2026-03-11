@@ -659,7 +659,9 @@ class TestMemorySearchEdgeCases:
         ]
         mock_api.get_notes_metadata.side_effect = RuntimeError('metadata service down')
 
-        result = await mcp_client.call_tool('memex_memory_search', {'query': 'test'})
+        result = await mcp_client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
         text = result.content[0].text
 
         # Results should still appear, just without enriched title
@@ -681,7 +683,9 @@ class TestMemorySearchEdgeCases:
         ]
         mock_api.get_notes_metadata.return_value = []
 
-        result = await mcp_client.call_tool('memex_memory_search', {'query': 'orphan'})
+        result = await mcp_client.call_tool(
+            'memex_memory_search', {'query': 'orphan', 'vault_ids': ['test-vault']}
+        )
         text = result.content[0].text
 
         assert 'Note: None' not in text
@@ -692,7 +696,8 @@ class TestMemorySearchEdgeCases:
         """Malformed date strings should produce a ToolError, not crash."""
         with pytest.raises(ToolError, match='Search failed'):
             await mcp_client.call_tool(
-                'memex_memory_search', {'query': 'test', 'after': 'not-a-date'}
+                'memex_memory_search',
+                {'query': 'test', 'after': 'not-a-date', 'vault_ids': ['test-vault']},
             )
 
     @pytest.mark.asyncio
@@ -723,7 +728,9 @@ class TestMemorySearchEdgeCases:
         # Only return metadata for nid1
         mock_api.get_notes_metadata.return_value = [{'note_id': str(nid1), 'title': 'Titled Note'}]
 
-        result = await mcp_client.call_tool('memex_memory_search', {'query': 'facts'})
+        result = await mcp_client.call_tool(
+            'memex_memory_search', {'query': 'facts', 'vault_ids': ['test-vault']}
+        )
         text = result.content[0].text
 
         assert 'Titled Note' in text
@@ -745,7 +752,9 @@ class TestMemorySearchEdgeCases:
         ]
         mock_api.get_notes_metadata.return_value = []
 
-        result = await mcp_client.call_tool('memex_memory_search', {'query': 'test'})
+        result = await mcp_client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
         text = result.content[0].text
 
         # The snippet should be 300 chars + "..."
@@ -756,7 +765,9 @@ class TestMemorySearchEdgeCases:
     async def test_empty_results(self, mock_api, mcp_client):
         mock_api.search.return_value = []
 
-        result = await mcp_client.call_tool('memex_memory_search', {'query': 'nothing'})
+        result = await mcp_client.call_tool(
+            'memex_memory_search', {'query': 'nothing', 'vault_ids': ['test-vault']}
+        )
         assert 'No results' in result.content[0].text
 
 
@@ -1040,7 +1051,7 @@ class TestListEntitiesEdgeCases:
         mock_api.list_entities_ranked = _broken_generator
 
         with pytest.raises(ToolError, match='generator broke'):
-            await mcp_client.call_tool('memex_list_entities', {})
+            await mcp_client.call_tool('memex_list_entities', {'vault_id': 'test-vault'})
 
     @pytest.mark.asyncio
     async def test_entity_with_special_characters_in_name(self, mock_api, mcp_client):
@@ -1052,7 +1063,7 @@ class TestListEntitiesEdgeCases:
 
         mock_api.list_entities_ranked = _gen
 
-        result = await mcp_client.call_tool('memex_list_entities', {})
+        result = await mcp_client.call_tool('memex_list_entities', {'vault_id': 'test-vault'})
         text = result.content[0].text
 
         assert 'C++ & "Rust" <lang>' in text
@@ -1064,17 +1075,17 @@ class TestListEntitiesEdgeCases:
         mock_api.search_entities = AsyncMock(return_value=[e])
 
         result = await mcp_client.call_tool(
-            'memex_list_entities', {'query': 'alice', 'entity_type': 'person'}
+            'memex_list_entities',
+            {'query': 'alice', 'entity_type': 'person', 'vault_id': 'test-vault'},
         )
         text = result.content[0].text
 
         assert 'Alice' in text
-        mock_api.search_entities.assert_called_once_with(
-            'alice',
-            limit=20,
-            vault_ids=None,
-            entity_type='Person',
-        )
+        mock_api.search_entities.assert_called_once()
+        call_kwargs = mock_api.search_entities.call_args
+        assert call_kwargs[0][0] == 'alice'
+        assert call_kwargs[1]['limit'] == 20
+        assert call_kwargs[1]['entity_type'] == 'Person'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1133,7 +1144,7 @@ class TestSVGResourceHandling:
         mock_api.get_resource.return_value = b'<svg>...</svg>'
 
         result = await mcp_client.call_tool(
-            'memex_get_resources', {'paths': ['images/diagram.svg']}
+            'memex_get_resources', {'paths': ['images/diagram.svg'], 'vault_id': 'test-vault'}
         )
 
         # Should fall through to get_resource and return as File, not file:// URI
@@ -1150,7 +1161,9 @@ class TestSVGResourceHandling:
         mock_api.get_resource_path = MagicMock(return_value=None)
         mock_api.get_resource.return_value = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
-        result = await mcp_client.call_tool('memex_get_resources', {'paths': ['assets/chart.svg']})
+        result = await mcp_client.call_tool(
+            'memex_get_resources', {'paths': ['assets/chart.svg'], 'vault_id': 'test-vault'}
+        )
 
         contents = result.content
         assert len(contents) >= 1
@@ -1165,7 +1178,9 @@ class TestSVGResourceHandling:
         """Raster images (PNG) should still get file:// URI treatment."""
         mock_api.get_resource_path = MagicMock(return_value='/data/images/photo.png')
 
-        result = await mcp_client.call_tool('memex_get_resources', {'paths': ['images/photo.png']})
+        result = await mcp_client.call_tool(
+            'memex_get_resources', {'paths': ['images/photo.png'], 'vault_id': 'test-vault'}
+        )
 
         texts = [c.text for c in result.content if hasattr(c, 'text')]
         combined = ' '.join(texts)
@@ -1193,7 +1208,9 @@ class TestNoteTitleFallback:
             created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
         )
 
-        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        result = await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
         text = result.content[0].text
 
         assert 'Extracted Title' in text
@@ -1212,7 +1229,9 @@ class TestNoteTitleFallback:
             created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
         )
 
-        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        result = await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
         text = result.content[0].text
 
         assert 'From Metadata' in text
@@ -1230,7 +1249,9 @@ class TestNoteTitleFallback:
             created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
         )
 
-        result = await mcp_client.call_tool('memex_list_assets', {'note_id': str(doc_id)})
+        result = await mcp_client.call_tool(
+            'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
+        )
         text = result.content[0].text
 
         assert 'Untitled' in text

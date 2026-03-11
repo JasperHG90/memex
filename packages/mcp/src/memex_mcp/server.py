@@ -5,7 +5,7 @@ import os
 import pathlib as plb
 import asyncio
 import base64
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 from uuid import UUID
 import mimetypes
 
@@ -26,6 +26,45 @@ from memex_common.schemas import (
     PageMetadataDTO,
     TOCNodeDTO,
 )
+
+
+def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
+    """Validate vault_ids is a real list, not a stringified JSON array."""
+    if not isinstance(vault_ids, list):
+        raise ToolError(
+            f'vault_ids must be a list of strings, got {type(vault_ids).__name__}. '
+            'Pass a JSON array, e.g. ["my-vault"], not a string.'
+        )
+    for v in vault_ids:
+        if not isinstance(v, str):
+            raise ToolError(f'Each vault_id must be a string, got {type(v).__name__}: {v!r}')
+        if v.startswith('[') or v.startswith('"'):
+            raise ToolError(
+                f'vault_id looks like serialized JSON: {v!r}. '
+                'Pass plain vault names/UUIDs, e.g. ["my-vault"].'
+            )
+    return vault_ids
+
+
+async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list['UUID | str']:
+    """Resolve and validate that all vault identifiers exist."""
+    resolved: list[UUID | str] = []
+    for vid in vault_ids:
+        try:
+            r = await api.resolve_vault_identifier(vid)
+            resolved.append(r)
+        except Exception:
+            raise ToolError(f'Vault not found: {vid!r}')
+    return resolved
+
+
+async def _resolve_vault_id(api: Any, vault_id: str) -> 'UUID':
+    """Resolve and validate a single vault identifier exists."""
+    try:
+        return await api.resolve_vault_identifier(vault_id)
+    except Exception:
+        raise ToolError(f'Vault not found: {vault_id!r}')
+
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
 
@@ -84,12 +123,9 @@ async def memex_list_assets(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
     vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
-        ),
-    ] = None,
+        str,
+        Field(description="Vault UUID or name, e.g. 'rituals'."),
+    ],
 ) -> str:
     """List assets for a note."""
     try:
@@ -99,8 +135,7 @@ async def memex_list_assets(
         except ValueError:
             raise ToolError(f'Invalid Note UUID: {note_id}')
 
-        if vault_id:
-            await api.resolve_vault_identifier(vault_id)
+        await _resolve_vault_id(api, vault_id)
 
         try:
             note = await api.get_note(uuid_obj)
@@ -321,19 +356,14 @@ async def memex_get_resources(
     ctx: Context,
     paths: Annotated[list[str], Field(description='Resource path(s).')],
     vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Vault UUID or name, e.g. 'memex'. Omit for active vault.",
-        ),
-    ] = None,
+        str,
+        Field(description="Vault UUID or name, e.g. 'memex'."),
+    ],
 ) -> list[Image | Audio | File | str]:
     """Retrieve file resources. Returns a list of Image, Audio, File, or error strings."""
     try:
         api = get_api(ctx)
-
-        if vault_id:
-            await api.resolve_vault_identifier(vault_id)
+        await _resolve_vault_id(api, vault_id)
 
         results: list[Image | Audio | File | str] = []
         for path in paths:
@@ -431,18 +461,15 @@ async def memex_add_note(
         list[str],
         Field(description='Tags for retrieval.'),
     ],
+    vault_id: Annotated[
+        str,
+        Field(description="Target vault UUID or name, e.g. 'rituals'."),
+    ],
     supporting_files: Annotated[
         list[str] | None,
         Field(
             default=None,
             description='Absolute paths to supporting files.',
-        ),
-    ] = None,
-    vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Target vault UUID or name, e.g. 'rituals'. Omit for active vault.",
         ),
     ] = None,
     note_key: Annotated[
@@ -540,17 +567,16 @@ async def memex_add_note(
 async def memex_memory_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query.')],
+    vault_ids: Annotated[
+        list[str],
+        Field(
+            description="Vault UUIDs or names, e.g. ['rituals'].",
+        ),
+    ],
     limit: Annotated[
         int,
         Field(description='Max results. Ignored when token_budget is set.'),
     ] = 10,
-    vault_ids: Annotated[
-        list[str] | None,
-        Field(
-            default=None,
-            description="Vault UUIDs or names, e.g. ['rituals']. Omit for active vault.",
-        ),
-    ] = None,
     token_budget: Annotated[
         int | None,
         Field(
@@ -586,6 +612,8 @@ async def memex_memory_search(
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
+        _validate_vault_ids(vault_ids)
+        resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
         from datetime import datetime as _dt, timezone as _tz
 
@@ -595,7 +623,7 @@ async def memex_memory_search(
         results = await api.search(
             query=query,
             limit=limit,
-            vault_ids=cast(list[UUID | str] | None, vault_ids),
+            vault_ids=resolved_vids,
             token_budget=token_budget,
             strategies=strategies,
             include_superseded=include_superseded,
@@ -682,15 +710,14 @@ async def memex_memory_search(
 async def memex_note_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query.')],
+    vault_ids: Annotated[
+        list[str],
+        Field(
+            description="Vault UUIDs or names, e.g. ['rituals'].",
+        ),
+    ],
     limit: Annotated[int, Field(description='Max notes to return.')] = 5,
     expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
-    vault_ids: Annotated[
-        list[str] | None,
-        Field(
-            default=None,
-            description="Vault UUIDs or names, e.g. ['rituals']. Omit for active vault.",
-        ),
-    ] = None,
     strategies: Annotated[
         list[str] | None,
         Field(
@@ -714,6 +741,8 @@ async def memex_note_search(
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
+        _validate_vault_ids(vault_ids)
+        resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
         from datetime import datetime as _dt, timezone as _tz
 
@@ -726,7 +755,7 @@ async def memex_note_search(
             expand_query=expand_query,
             reason=False,
             summarize=False,
-            vault_ids=cast(list[UUID | str] | None, vault_ids),
+            vault_ids=resolved_vids,
             strategies=strategies,
             after=after_dt,
             before=before_dt,
@@ -1146,6 +1175,10 @@ async def memex_list_vaults(ctx: Context) -> str:
 )
 async def memex_list_notes(
     ctx: Context,
+    vault_id: Annotated[
+        str,
+        Field(description="Vault UUID or name, e.g. 'rituals'."),
+    ],
     after: Annotated[
         str | None,
         Field(
@@ -1161,22 +1194,13 @@ async def memex_list_notes(
         ),
     ] = None,
     limit: Annotated[int, Field(description='Max notes to return.')] = 50,
-    vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
-        ),
-    ] = None,
 ) -> str:
     """List notes with optional date filters."""
     from datetime import datetime as _dt
 
     try:
         api = get_api(ctx)
-        resolved_vault_id = None
-        if vault_id:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+        resolved_vault_id = await _resolve_vault_id(api, vault_id)
 
         parsed_after = None
         parsed_before = None
@@ -1308,17 +1332,14 @@ async def memex_recent_notes(
 )
 async def memex_list_entities(
     ctx: Context,
+    vault_id: Annotated[
+        str,
+        Field(description="Vault UUID or name, e.g. 'rituals'."),
+    ],
     query: Annotated[
         str | None, Field(default=None, description='Search term to filter by name.')
     ] = None,
     limit: Annotated[int, Field(description='Max entities to return.')] = 20,
-    vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
-        ),
-    ] = None,
     entity_type: Annotated[
         str | None,
         Field(
@@ -1336,20 +1357,18 @@ async def memex_list_entities(
         api = get_api(ctx)
         if entity_type:
             entity_type = entity_type.title()
-        vault_ids: list[UUID | str] | None = None
-        if vault_id:
-            resolved = await api.resolve_vault_identifier(vault_id)
-            vault_ids = [resolved] if resolved else None
+        resolved = await _resolve_vault_id(api, vault_id)
+        resolved_vids: list[UUID | str] = [resolved]
 
         if query:
             entities = await api.search_entities(
-                query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+                query, limit=limit, vault_ids=resolved_vids, entity_type=entity_type
             )
         else:
             entities = [
                 e
                 async for e in api.list_entities_ranked(
-                    limit=limit, vault_ids=vault_ids, entity_type=entity_type
+                    limit=limit, vault_ids=resolved_vids, entity_type=entity_type
                 )
             ]
 
