@@ -22,9 +22,9 @@ def test_e2e_incremental_idempotency(client: TestClient):
     # 1. Setup multi-block content with markdown headers for stable block boundaries.
     # Headers ensure the page indexer uses header-based splitting (not the LLM path),
     # which produces deterministic block boundaries across document versions.
-    block1 = '# Section One\n\n' + ('The quick brown fox jumps over the lazy dog.\n' * 40)
-    block2 = '# Section Two\n\n' + ("A wizard's quickly-moving jab excited a phantom.\n" * 40)
-    block3 = '# Section Three\n\n' + ('Bright vixens jump; dozy fowl quack.\n' * 40)
+    block1 = '# Section One\n\n' + ('The quick brown fox jumps over the lazy dog.\n' * 250)
+    block2 = '# Section Two\n\n' + ("A wizard's quickly-moving jab excited a phantom.\n" * 250)
+    block3 = '# Section Three\n\n' + ('Bright vixens jump; dozy fowl quack.\n' * 250)
 
     content_v1 = block1 + '\n\n' + block2 + '\n\n' + block3
 
@@ -59,7 +59,7 @@ def test_e2e_incremental_idempotency(client: TestClient):
     # 3. Incremental Update: Change only SECTION TWO
     print('\n--- Ingesting V2 (Incremental Update) ---')
     block2_mod = '# Section Two\n\n' + (
-        'The wizard was replaced by a giant robotic hamster.\n' * 40
+        'The wizard was replaced by a giant robotic hamster.\n' * 250
     )
     content_v2 = block1 + '\n\n' + block2_mod + '\n\n' + block3
 

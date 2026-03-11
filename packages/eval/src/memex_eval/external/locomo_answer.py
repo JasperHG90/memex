@@ -74,24 +74,58 @@ _CLAUDE_MD = """\
 You have access to Memex, a long-term memory system. Use it to answer questions \
 about conversations between people.
 
-## Retrieval
+## CRITICAL — First action
 
-`memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes with inline metadata (title, description, tags) \
-via hybrid retrieval. Use the metadata to filter before reading.
+Before doing anything else, fetch ALL tool schemas in a single call:
 
-## Note reading
+```
+ToolSearch(query="select:mcp__memex__memex_memory_search,mcp__memex__memex_note_search,\
+mcp__memex__memex_list_entities,mcp__memex__memex_get_entity_mentions,\
+mcp__memex__memex_get_entity_cooccurrences,mcp__memex__memex_get_notes_metadata,\
+mcp__memex__memex_get_page_indices,mcp__memex__memex_get_nodes,\
+mcp__memex__memex_read_note", max_results=9)
+```
 
-1. `memex_get_page_indices` (Note IDs -> table of contents)
-2. `memex_get_nodes` (node IDs -> section text)
-3. Fallback only: `memex_read_note`
+Do NOT call ToolSearch more than once. After this single call you have all the tools you need.
 
-## Workflow
+### Retrieval
 
-1. Search memories first with `memex_memory_search`
-2. If needed, search source notes with `memex_note_search`
-3. For verification, use two-speed reading: `memex_get_page_indices` then `memex_get_nodes`
-4. Answer the question concisely based on what you found
+Route by query type:
+
+IF query asks about relationships, connections, "how X relates to Y", or landscape:
+- `memex_list_entities(query="X")` → entity IDs, types, mention counts
+- `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts
+- `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+- Then read source notes via Search/Read below as needed
+
+IF query asks about specific content or document lookup:
+- **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
+- **Filter**: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. \
+After `memex_note_search`, metadata is inline — skip.
+- **Read**: `memex_get_page_indices` → `memex_get_nodes` (batch). \
+`memex_read_note` only when total_tokens < 500.
+- **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → \
+`memex_get_resources` for each. Use images as visual input. Reproduce diagrams as \
+Mermaid/ASCII in response. NEVER skip this step.
+
+IF query is broad: run entity exploration AND search in parallel.
+
+PROHIBITED:
+- `memex_recent_notes` for discovery.
+- Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
+- `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_indices` + `memex_get_nodes`.
+- Creating diagrams without first checking assets via `memex_list_assets` → `memex_get_resources`.
+- Presenting Memex information without citations.
+
+### Citations — MANDATORY
+
+Every response using Memex data MUST include:
+1. Inline numbered references [1], [2] on every claim from Memex.
+2. Reference list at end of response. Each entry uses a type prefix:
+   - `[note]` — title + note ID
+   - `[memory]` — title + memory ID + source note ID
+   - `[asset]` — filename + note ID
 """
 
 
@@ -121,6 +155,11 @@ def _setup_claude_workdir(server_url: str) -> str:
                     'allow': [
                         'mcp__memex__memex_memory_search',
                         'mcp__memex__memex_note_search',
+                        'mcp__memex__memex_list_entities',
+                        'mcp__memex__memex_get_entities',
+                        'mcp__memex__memex_get_entity_mentions',
+                        'mcp__memex__memex_get_entity_cooccurrences',
+                        'mcp__memex__memex_get_notes_metadata',
                         'mcp__memex__memex_get_page_indices',
                         'mcp__memex__memex_get_nodes',
                         'mcp__memex__memex_read_note',
@@ -279,12 +318,20 @@ def _collect_session_trace(
     try:
         # Claude Code stores project data under ~/.claude/projects/<slug>/
         # where slug = absolute path with / replaced by - (leading - kept).
+        # Claude Code may also replace underscores with dashes in the slug.
+        projects_root = Path.home() / '.claude' / 'projects'
         slug = workdir.replace('/', '-')
-        project_dir = Path.home() / '.claude' / 'projects' / slug
+        project_dir = projects_root / slug
 
         if not project_dir.exists():
-            logger.warning('Project dir not found at %s', project_dir)
-            return result
+            # Fallback: try with underscores also replaced by dashes
+            slug_alt = slug.replace('_', '-')
+            project_dir_alt = projects_root / slug_alt
+            if project_dir_alt.exists():
+                project_dir = project_dir_alt
+            else:
+                logger.warning('Project dir not found at %s (or %s)', project_dir, project_dir_alt)
+                return result
 
         # Find the most recently modified .jsonl (the trace for the last -p call)
         traces = sorted(
