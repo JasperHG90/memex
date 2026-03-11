@@ -268,42 +268,37 @@ def _collect_session_trace(
 ) -> dict[str, str | None]:
     """Copy the Claude Code session trace file for a question.
 
-    Reads ``~/.claude/history.jsonl`` to find the last session ID, then copies
-    the session trace from ``~/.claude/projects/<slug>/<session_id>.jsonl``
-    into ``<output_dir>/traces/<question_id>.jsonl``.
+    Finds the most recently modified ``.jsonl`` in the Claude Code project
+    directory for the workdir, then copies it into
+    ``<output_dir>/traces/<question_id>.jsonl``.
 
     Returns dict with ``session_id`` and ``trace_file`` (both may be None on failure).
     """
     result: dict[str, str | None] = {'session_id': None, 'trace_file': None}
 
     try:
-        history_path = Path.home() / '.claude' / 'history.jsonl'
-        if not history_path.exists():
-            logger.warning('No history.jsonl found at %s', history_path)
+        # Claude Code stores project data under ~/.claude/projects/<slug>/
+        # where slug = absolute path with / replaced by - (leading - kept).
+        slug = workdir.replace('/', '-')
+        project_dir = Path.home() / '.claude' / 'projects' / slug
+
+        if not project_dir.exists():
+            logger.warning('Project dir not found at %s', project_dir)
             return result
 
-        # Read last line to get most recent session
-        lines = history_path.read_text().strip().splitlines()
-        if not lines:
-            logger.warning('history.jsonl is empty')
+        # Find the most recently modified .jsonl (the trace for the last -p call)
+        traces = sorted(
+            project_dir.glob('*.jsonl'),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if not traces:
+            logger.warning('No session traces in %s', project_dir)
             return result
 
-        last_entry = json.loads(lines[-1])
-        session_id = last_entry.get('session_id') or last_entry.get('sessionId')
-        if not session_id:
-            logger.warning('No session_id in last history entry')
-            return result
-
+        trace_src = traces[0]
+        session_id = trace_src.stem
         result['session_id'] = session_id
-
-        # Compute project slug: absolute workdir path with / and _ replaced by -,
-        # leading - stripped (matches Claude Code's slug computation)
-        slug = workdir.replace('/', '-').replace('_', '-').lstrip('-')
-        trace_src = Path.home() / '.claude' / 'projects' / slug / f'{session_id}.jsonl'
-
-        if not trace_src.exists():
-            logger.warning('Session trace not found at %s', trace_src)
-            return result
 
         # Copy to output traces dir
         traces_dir = Path(output_dir) / 'traces'
@@ -317,6 +312,29 @@ def _collect_session_trace(
         logger.warning('Failed to collect session trace', exc_info=True)
 
     return result
+
+
+def _extract_tool_calls_from_trace(trace_path: str) -> list[dict[str, Any]]:
+    """Extract tool_use blocks from a Claude Code session trace file."""
+    tool_calls: list[dict[str, Any]] = []
+    try:
+        for line in Path(trace_path).read_text().strip().splitlines():
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            if obj.get('type') != 'assistant':
+                continue
+            for block in obj.get('message', {}).get('content', []):
+                if isinstance(block, dict) and block.get('type') == 'tool_use':
+                    tool_calls.append(
+                        {
+                            'name': block.get('name', ''),
+                            'input': block.get('input', {}),
+                        }
+                    )
+    except Exception:
+        logger.warning('Failed to extract tool calls from trace', exc_info=True)
+    return tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +383,14 @@ def answer_questions(
 
         result = _run_claude_code(q['question'], workdir=workdir)
 
-        # Capture session trace
+        # Capture session trace and extract tool calls from it
         output_dir = str(Path(output_path).parent)
         trace_info = _collect_session_trace(workdir, output_dir, q['id'])
+
+        # If stdout parsing missed tool calls, extract from the trace file
+        trace_file = trace_info.get('trace_file')
+        if not result['tool_calls'] and trace_file:
+            result['tool_calls'] = _extract_tool_calls_from_trace(trace_file)
 
         record = {
             'id': q['id'],
