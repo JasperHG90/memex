@@ -26,7 +26,7 @@ release version:
 
 # Serve documentation locally with live reload
 docs-serve:
-  uv run zensical serve --port 8005 --open
+  uv run zensical serve --dev-addr localhost:8005 --open
 
 # Build documentation site
 docs-build:
