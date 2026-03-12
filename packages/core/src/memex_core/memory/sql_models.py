@@ -206,7 +206,7 @@ class MentalModel(SQLModel, table=True):  # type: ignore
     )
 
     entity_metadata: dict[str, Any] = Field(
-        default={},
+        default_factory=dict,
         sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
         description='Structured metadata derived from observations (description, category, status).',
     )

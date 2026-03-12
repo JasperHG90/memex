@@ -204,6 +204,7 @@ class ReflectionEngine:
             try:
                 self.session.add(model)
                 flag_modified(model, 'observations')
+                flag_modified(model, 'entity_metadata')
                 await self.session.commit()
                 saved_count += 1
             except (SQLAlchemyError, OSError, RuntimeError) as inner_e:
@@ -261,7 +262,7 @@ class ReflectionEngine:
 
         # Phase 4: Compare (LLM)
         final_obs, entity_summary = await self._phase_4_compare(
-            updated_observations, validated, vault_id=vault_id
+            updated_observations, validated, vault_id=vault_id, entity_name=entity_name
         )
 
         # Phase 5: Finalize Model
@@ -695,6 +696,7 @@ class ReflectionEngine:
         existing: list[Observation],
         new_obs: list[ValidatedObservation],
         vault_id: UUID = GLOBAL_VAULT_ID,
+        entity_name: str = '',
     ) -> tuple[list[Observation], str]:
         """
         Phase 4: Merge new validated observations with existing ones.
@@ -793,6 +795,7 @@ class ReflectionEngine:
             lm=self.lm,
             predictor=compare_predictor,
             input_kwargs={
+                'entity_name': entity_name,
                 'evidence_context': evidence_context,
                 'existing_context': existing_ctx,
                 'new_context': new_ctx,

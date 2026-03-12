@@ -699,13 +699,13 @@ class MemexAPI:
         """Get entity mentions. Delegates to EntityService."""
         return await self._entities.get_entity_mentions(entity_id, limit=limit, vault_ids=vault_ids)
 
-    async def get_entity(self, entity_id: UUID | str) -> Any | None:
+    async def get_entity(self, entity_id: UUID | str, vault_id: UUID | None = None) -> Any | None:
         """Get an entity by ID. Delegates to EntityService."""
-        return await self._entities.get_entity(entity_id)
+        return await self._entities.get_entity(entity_id, vault_id=vault_id)
 
-    async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
+    async def get_entities(self, entity_ids: list[UUID], vault_id: UUID | None = None) -> list[Any]:
         """Get multiple entities by ID. Delegates to EntityService."""
-        return await self._entities.get_entities(entity_ids)
+        return await self._entities.get_entities(entity_ids, vault_id=vault_id)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
         """Get a memory unit by ID. Delegates to StatsService."""
