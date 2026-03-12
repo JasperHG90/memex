@@ -27,7 +27,7 @@ memex config init
 memex server start
 
 # Ingest a webpage
-memex memory add --url "https://example.com"
+memex note add --url "https://example.com"
 
 # Search for answers
 memex memory search "What are the key points?"

@@ -607,7 +607,7 @@ class TestHookTemplateContent:
     def test_session_end_references_memex_cli(self):
         content = _load_template('hooks/on_session_end.sh')
         assert 'memex' in content
-        assert 'memory add' in content
+        assert 'note add' in content
 
     def test_session_end_has_project_dir_placeholder(self):
         content = _load_template('hooks/on_session_end.sh')

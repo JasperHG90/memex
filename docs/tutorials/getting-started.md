@@ -117,7 +117,7 @@ We should see confirmation that the vault was created. Vaults keep different kno
 Now let's ingest our first piece of knowledge. We will add a quick inline note to the vault we just created:
 
 ```bash
-memex memory add -v notes "Memex provides long-term memory that evolves. It extracts structured facts from unstructured data and synthesizes mental models over time."
+memex note add -v notes "Memex provides long-term memory that evolves. It extracts structured facts from unstructured data and synthesizes mental models over time."
 ```
 
 We should see a response confirming the note was ingested, including a note ID.

@@ -39,7 +39,7 @@ Use the `--vault` or `-v` flag on any ingestion or search command:
 
 ```bash
 # Ingest into a specific vault
-memex memory add --url "https://example.com" --vault project-x
+memex note add --url "https://example.com" --vault project-x
 
 # Search across specific vaults
 memex memory search "Status" --vault project-x --vault global
