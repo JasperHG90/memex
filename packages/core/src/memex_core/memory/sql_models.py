@@ -205,6 +205,12 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         description='Synthesized observations about this entity, stored as a list of JSON-serialized Observation objects.',
     )
 
+    entity_metadata: dict[str, Any] = Field(
+        default={},
+        sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
+        description='Structured metadata derived from observations (description, category, status).',
+    )
+
     last_refreshed: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
         description='Last time this model was updated by the reflection engine.',
@@ -742,12 +748,6 @@ class Entity(SQLModel, table=True):  # type: ignore
         default=None,
         sa_column=Column(Text, index=True),
         description='Double Metaphone phonetic code for the canonical name.',
-    )
-
-    entity_metadata: dict[str, Any] = Field(
-        default={},
-        sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
-        description='Additional metadata associated with the entity (e.g. bio, type).',
     )
 
     entity_type: str | None = Field(

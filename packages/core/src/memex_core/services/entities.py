@@ -15,6 +15,12 @@ from memex_core.services.base import BaseService
 logger = logging.getLogger('memex.core.services.entities')
 
 
+def _attach_metadata(entity: Any, mental_model: Any | None) -> Any:
+    """Attach mental model entity_metadata to an entity as a transient attribute."""
+    entity._mental_model_metadata = (mental_model.entity_metadata if mental_model else None) or {}
+    return entity
+
+
 class EntityService(BaseService):
     """Entity CRUD, search, and graph traversal operations."""
 
@@ -28,7 +34,7 @@ class EntityService(BaseService):
         Stream entities ranked by hybrid score.
         Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
         """
-        from memex_core.memory.sql_models import Entity, EntityCooccurrence, UnitEntity
+        from memex_core.memory.sql_models import Entity, EntityCooccurrence, MentalModel, UnitEntity
         from sqlmodel import select, func, desc, col
 
         # Subquery for centrality (sum of cooccurrence counts)
@@ -48,7 +54,11 @@ class EntityService(BaseService):
             .group_by(Entity.id)
         ).subquery()
 
-        stmt = select(Entity).join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+        stmt = (
+            select(Entity, MentalModel)
+            .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+            .outerjoin(MentalModel, MentalModel.entity_id == Entity.id)
+        )
 
         if vault_ids:
             stmt = (
@@ -71,7 +81,7 @@ class EntityService(BaseService):
         async with self.metastore.session() as session:
             stream = await session.stream(stmt)
             async for row in stream:
-                yield row[0]
+                yield _attach_metadata(row[0], row[1])
 
     async def get_entity_cooccurrences(
         self,
@@ -143,21 +153,35 @@ class EntityService(BaseService):
             return [{'unit': unit, 'document': doc} for unit, doc in results]
 
     async def get_entity(self, entity_id: UUID | str) -> Any | None:
-        """Get an entity by ID."""
-        from memex_core.memory.sql_models import Entity
+        """Get an entity by ID, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel
+        from sqlmodel import select
 
         eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
-            return await session.get(Entity, eid)
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(MentalModel, MentalModel.entity_id == Entity.id)
+                .where(Entity.id == eid)
+            )
+            result = (await session.exec(stmt)).first()
+            if not result:
+                return None
+            return _attach_metadata(result[0], result[1])
 
     async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
-        """Get multiple entities by ID."""
-        from memex_core.memory.sql_models import Entity
+        """Get multiple entities by ID, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel
         from sqlmodel import select
 
         async with self.metastore.session() as session:
-            stmt = select(Entity).where(col(Entity.id).in_(entity_ids))
-            return list((await session.exec(stmt)).all())
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(MentalModel, MentalModel.entity_id == Entity.id)
+                .where(col(Entity.id).in_(entity_ids))
+            )
+            results = (await session.exec(stmt)).all()
+            return [_attach_metadata(row[0], row[1]) for row in results]
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """
@@ -218,12 +242,14 @@ class EntityService(BaseService):
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[Any]:
-        """Get top entities by mention count."""
-        from memex_core.memory.sql_models import Entity, UnitEntity
+        """Get top entities by mention count, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
         from sqlmodel import select, desc, col
 
         async with self.metastore.session() as session:
-            stmt = select(Entity)
+            stmt = select(Entity, MentalModel).outerjoin(
+                MentalModel, MentalModel.entity_id == Entity.id
+            )
             if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
@@ -233,7 +259,8 @@ class EntityService(BaseService):
             if entity_type:
                 stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
-            return list((await session.exec(stmt)).all())
+            results = (await session.exec(stmt)).all()
+            return [_attach_metadata(row[0], row[1]) for row in results]
 
     async def search_entities(
         self,
@@ -243,12 +270,15 @@ class EntityService(BaseService):
         entity_type: str | None = None,
     ) -> list[Any]:
         """Search for entities by canonical name using trigram similarity or ILIKE."""
-        from memex_core.memory.sql_models import Entity, UnitEntity
+        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
         from sqlmodel import select, col
 
         async with self.metastore.session() as session:
-            # Use ILIKE for broad matching
-            stmt = select(Entity).where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(MentalModel, MentalModel.entity_id == Entity.id)
+                .where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            )
             if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
@@ -258,4 +288,5 @@ class EntityService(BaseService):
             if entity_type:
                 stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
-            return list((await session.exec(stmt)).all())
+            results = (await session.exec(stmt)).all()
+            return [_attach_metadata(row[0], row[1]) for row in results]

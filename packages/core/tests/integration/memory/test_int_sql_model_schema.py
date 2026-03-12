@@ -224,7 +224,7 @@ async def test_entity_and_unit_association(session: AsyncSession):
     session.add(unit)
 
     # 2. Create Entity
-    entity = Entity(canonical_name='Elon Musk', entity_metadata={'role': 'CEO'})
+    entity = Entity(canonical_name='Elon Musk')
     session.add(entity)
     await session.commit()
 

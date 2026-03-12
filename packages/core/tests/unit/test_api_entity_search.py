@@ -8,12 +8,12 @@ from memex_core.memory.sql_models import Entity
 async def test_search_entities(api, mock_metastore):
     read_session = mock_metastore.session.return_value.__aenter__.return_value
 
-    # Mock entities
+    # Mock entities — service now returns (Entity, MentalModel|None) tuples from LEFT JOIN
     e1 = Entity(id=uuid4(), canonical_name='Apple Inc.')
     e2 = Entity(id=uuid4(), canonical_name='Pineapple')
 
     mock_res = MagicMock()
-    mock_res.all.return_value = [e1, e2]
+    mock_res.all.return_value = [(e1, None), (e2, None)]
     read_session.exec.return_value = mock_res
 
     result = await api.search_entities(query='apple')
@@ -49,6 +49,7 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
 
     # Override search_entities to return mock data
     e1 = Entity(id=uuid4(), canonical_name='Search Match')
+    e1._mental_model_metadata = {}
     api.search_entities = AsyncMock(return_value=[e1])
     api.initialize = AsyncMock()  # Mock initialize to avoid DB calls
 
