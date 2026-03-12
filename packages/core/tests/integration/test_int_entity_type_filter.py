@@ -23,7 +23,7 @@ async def test_filter_entities_by_type(api, metastore, init_global_vault):
 
     persons = await api.get_top_entities(limit=10, entity_type='Person')
     assert len(persons) == 1
-    assert persons[0].canonical_name == 'Alice'
+    assert persons[0].entity.canonical_name == 'Alice'
 
 
 @pytest.mark.integration
@@ -82,7 +82,7 @@ async def test_search_entities_with_type_filter(api, metastore, init_global_vaul
 
     results = await api.search_entities(query='Python', limit=10, entity_type='Technology')
     assert len(results) == 1
-    assert results[0].canonical_name == 'Python'
+    assert results[0].entity.canonical_name == 'Python'
 
 
 @pytest.mark.integration
@@ -99,8 +99,8 @@ async def test_get_top_entities_ranking_within_type(api, metastore, init_global_
 
     results = await api.get_top_entities(limit=10, entity_type='Technology')
     assert len(results) == 2
-    assert results[0].canonical_name == 'Python'
-    assert results[1].canonical_name == 'FastAPI'
+    assert results[0].entity.canonical_name == 'Python'
+    assert results[1].entity.canonical_name == 'FastAPI'
 
 
 @pytest.mark.integration
@@ -153,7 +153,7 @@ async def test_filter_entities_null_type_excluded(api, metastore, init_global_va
 
     results = await api.get_top_entities(limit=10, entity_type='Person')
     assert len(results) == 1
-    assert results[0].canonical_name == 'Alice'
+    assert results[0].entity.canonical_name == 'Alice'
 
 
 @pytest.mark.integration
@@ -186,7 +186,7 @@ async def test_list_entities_ranked_with_type_filter(api, metastore, init_global
     async for entity in api.list_entities_ranked(limit=10, entity_type='Technology'):
         results.append(entity)
     assert len(results) == 1
-    assert results[0].canonical_name == 'Python'
+    assert results[0].entity.canonical_name == 'Python'
 
 
 @pytest.mark.integration

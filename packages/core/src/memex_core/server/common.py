@@ -101,17 +101,25 @@ def build_note_dto(doc: Any) -> NoteDTO:
 
 
 def build_entity_dto(entity: Any) -> EntityDTO:
-    """Build an EntityDTO from an ORM entity object.
+    """Build an EntityDTO from an ORM entity object or EntityWithMetadata wrapper.
 
-    If the entity has a ``_mental_model_metadata`` attribute (attached by
-    the service layer via LEFT JOIN), it is included in the DTO.
+    Accepts either an ``EntityWithMetadata`` (preferred) or a plain ORM entity
+    (backward-compatible, produces empty metadata).
     """
-    metadata: dict[str, Any] = getattr(entity, '_mental_model_metadata', {}) or {}
+    from memex_core.services.entities import EntityWithMetadata
+
+    if isinstance(entity, EntityWithMetadata):
+        metadata = entity.metadata or {}
+        orm_entity = entity.entity
+    else:
+        metadata = {}
+        orm_entity = entity
+
     return EntityDTO(
-        id=entity.id,
-        name=entity.canonical_name,
-        mention_count=entity.mention_count,
-        entity_type=getattr(entity, 'entity_type', None),
+        id=orm_entity.id,
+        name=orm_entity.canonical_name,
+        mention_count=orm_entity.mention_count,
+        entity_type=getattr(orm_entity, 'entity_type', None),
         metadata=metadata,
     )
 

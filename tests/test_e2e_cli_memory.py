@@ -117,10 +117,10 @@ async def test_cli_memory_add(db_session: AsyncSession, setup_cli_e2e):
         ),
     ):
         mock_run_dspy.return_value = (mock_prediction, mock_usage)
-        result = runner.invoke(app, ['memory', 'add', content], env=os.environ)
+        result = runner.invoke(app, ['note', 'add', content], env=os.environ)
 
         assert result.exit_code == 0, f'Error: {result.stdout}'
-        assert 'Memory added successfully' in result.stdout
+        assert 'Note added successfully' in result.stdout
 
 
 @pytest.mark.asyncio

@@ -208,6 +208,7 @@ class ComparePhaseSignature(dspy.Signature):
     - If a new observation replicates an existing one, merge them (combine evidence).
     - If a new observation conflicts with an existing one, decide which is more supported or flag the conflict.
     - If a new observation is unique, add it.
+    - Also produce a one-sentence summary of the entity ('entity_summary').
 
     The 'evidence_context' list contains all unique facts/evidence referenced by the observations.
     Observations refer to these facts by their 0-based index in 'evidence_context'.
@@ -215,6 +216,7 @@ class ComparePhaseSignature(dspy.Signature):
     STRICT RULE: All output observations MUST be in English.
     """
 
+    entity_name: str = dspy.InputField(desc='The name of the entity being summarized.')
     evidence_context: list[ReflectEvidenceContext] = dspy.InputField(
         desc='List of unique evidence facts.'
     )

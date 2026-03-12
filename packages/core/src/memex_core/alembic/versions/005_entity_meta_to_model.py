@@ -1,6 +1,6 @@
 """Move entity_metadata from entities to mental_models.
 
-Revision ID: 005_entity_metadata_to_mental_model
+Revision ID: 005_entity_meta_to_model
 Revises: 004_note_status
 Create Date: 2026-03-12
 """
@@ -10,7 +10,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = '005_entity_metadata_to_mental_model'
+revision: str = '005_entity_meta_to_model'
 down_revision: Union[str, None] = '004_note_status'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

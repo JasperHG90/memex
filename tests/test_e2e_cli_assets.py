@@ -95,11 +95,11 @@ async def test_cli_memory_add_with_asset(db_session: AsyncSession, setup_cli_e2e
 
             content = f'Memory with asset {uuid4()}'
             result = runner.invoke(
-                app, ['memory', 'add', content, '--asset', str(asset_file)], env=os.environ
+                app, ['note', 'add', content, '--asset', str(asset_file)], env=os.environ
             )
 
             assert result.exit_code == 0
-            assert 'Memory added successfully' in result.stdout
+            assert 'Note added successfully' in result.stdout
             assert 'Loading 1 asset(s)...' in result.stdout
 
             found_assets = list(tmp_path.rglob('test_image.png'))
