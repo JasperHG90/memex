@@ -45,15 +45,15 @@ Feed it knowledge.
 memex vault create notes --description "Notes about things"
 
 # Inline note
-memex memory add -v notes "Memex provides long-term memory that evolves."
+memex note add -v notes "Memex provides long-term memory that evolves."
 
 # Capture a webpage
 # Goes to the 'global' vault
-memex memory add --url "https://docs.python.org/3/tutorial/"
+memex note add --url "https://docs.python.org/3/tutorial/"
 
 # Point it to local files
 # Supports: MD, PDF, docx, xlsx, outlook, pptx
-memex memory add --file /path/to/file.md --vault notes
+memex note add --file /path/to/file.md --vault notes
 ```
 
 ### 5. Search
@@ -135,10 +135,10 @@ Search memories with multi-strategy retrieval and AI summaries.
 Feed Memex from any source — plain text, Markdown, PDFs, Word docs, PowerPoint, Excel, Outlook emails, web pages, or entire directories. File conversion is handled automatically via [MarkItDown](https://github.com/microsoft/markitdown) and [PyMuPDF](https://pymupdf.readthedocs.io/). Background and batch ingestion modes let you import large document collections without blocking.
 
 ```bash
-memex memory add "Quick inline note"
-memex memory add --file ./research-papers/        # directory of PDFs
-memex memory add --url https://example.com/article
-memex memory add --file report.md --asset diagram.png --background
+memex note add "Quick inline note"
+memex note add --file ./research-papers/        # directory of PDFs
+memex note add --url https://example.com/article
+memex note add --file report.md --asset diagram.png --background
 ```
 
 ### Five-strategy retrieval (TEMPR)

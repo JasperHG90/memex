@@ -27,13 +27,13 @@ These options apply to all commands and must be specified before the subcommand.
 
 Ingest and search memories.
 
-### `memory add`
+### `note add`
 
 ```
-memex memory add [CONTENT] [OPTIONS]
+memex note add [CONTENT] [OPTIONS]
 ```
 
-Add a new memory to Memex. Accepts text content directly, a file/directory path, or a URL.
+Add a new note to Memex. Accepts text content directly, a file/directory path, or a URL.
 
 #### Arguments
 
@@ -56,25 +56,25 @@ Add a new memory to Memex. Accepts text content directly, a file/directory path,
 
 ```bash
 # Add text content
-memex memory add "The project uses PostgreSQL with pgvector for storage."
+memex note add "The project uses PostgreSQL with pgvector for storage."
 
 # Ingest a file
-memex memory add --file ./notes/meeting.md
+memex note add --file ./notes/meeting.md
 
 # Ingest a directory recursively
-memex memory add --file ./research-papers/
+memex note add --file ./research-papers/
 
 # Scrape and ingest a URL
-memex memory add --url https://example.com/article
+memex note add --url https://example.com/article
 
 # Add a note with attached assets
-memex memory add --file ./report.md --asset ./diagram.png --asset ./data.csv
+memex note add --file ./report.md --asset ./diagram.png --asset ./data.csv
 
 # Add with a stable key (for updates)
-memex memory add --file ./daily-log.md --key daily-log-2025-01-15
+memex note add --file ./daily-log.md --key daily-log-2025-01-15
 
 # Background ingestion
-memex memory add --file ./large-dataset/ --background
+memex note add --file ./large-dataset/ --background
 ```
 
 > [!WARNING]
