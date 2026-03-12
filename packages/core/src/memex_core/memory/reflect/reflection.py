@@ -173,7 +173,7 @@ class ReflectionEngine:
         self,
         req: ReflectionRequest,
         models_map: dict[UUID, MentalModel],
-        entities_map: dict[UUID, str],
+        entities_map: dict[UUID, Entity],
         memories_map: dict[UUID, list[MemoryUnit]],
         sem: asyncio.Semaphore,
         db_lock: asyncio.Lock,
@@ -182,10 +182,11 @@ class ReflectionEngine:
         eid = req.entity_id
         async with sem:
             try:
+                entity = entities_map.get(eid)
                 return await self._reflect_entity_internal(
                     entity_id=eid,
                     mental_model=models_map[eid],
-                    entity_name=entities_map.get(eid, 'Unknown'),
+                    entity=entity,
                     recent_memories=memories_map.get(eid, []),
                     db_lock=db_lock,
                     vault_id=req.vault_id,
@@ -214,12 +215,14 @@ class ReflectionEngine:
         self,
         entity_id: UUID,
         mental_model: MentalModel,
-        entity_name: str,
+        entity: Entity | None,
         recent_memories: list[MemoryUnit],
         db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> MentalModel:
         """Internal logic for single entity reflection, decoupled from DB fetching logic."""
+        entity_name = entity.canonical_name if entity else 'Unknown'
+        entity_type = entity.entity_type if entity else None
 
         # 0. Acquire Advisory Lock for this Entity to prevent concurrent reflection
         # Use transaction-level lock (automatically released at end of transaction/session)
@@ -257,10 +260,18 @@ class ReflectionEngine:
         validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
 
         # Phase 4: Compare (LLM)
-        final_obs = await self._phase_4_compare(updated_observations, validated, vault_id=vault_id)
+        final_obs, entity_summary = await self._phase_4_compare(
+            updated_observations, validated, vault_id=vault_id
+        )
 
         # Phase 5: Finalize Model
-        await self._phase_5_finalize(mental_model, final_obs, db_lock)
+        await self._phase_5_finalize(
+            mental_model,
+            final_obs,
+            db_lock,
+            entity_summary=entity_summary,
+            entity_type=entity_type,
+        )
 
         return mental_model
 
@@ -269,14 +280,22 @@ class ReflectionEngine:
         mental_model: MentalModel,
         final_obs: list[Observation],
         db_lock: asyncio.Lock,
+        entity_summary: str = '',
+        entity_type: str | None = None,
     ) -> None:
         """
         Phase 5: Prepare Model (CPU/GPU).
-        Updates observations, version, and embedding.
+        Updates observations, version, embedding, and entity metadata.
         """
         mental_model.observations = [obs.model_dump(mode='json') for obs in final_obs]
         mental_model.version += 1
         mental_model.last_refreshed = datetime.now(timezone.utc)
+
+        mental_model.entity_metadata = {
+            'description': entity_summary,
+            'category': entity_type,
+            'observation_count': len(final_obs),
+        }
 
         obs_text = ' '.join([f'{o.title} - {o.content}' for o in final_obs])
         full_text = format_for_embedding(
@@ -290,6 +309,7 @@ class ReflectionEngine:
         async with db_lock:
             self.session.add(mental_model)
             flag_modified(mental_model, 'observations')
+            flag_modified(mental_model, 'entity_metadata')
 
     async def _batch_get_or_create_models(
         self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID
@@ -308,7 +328,8 @@ class ReflectionEngine:
         if missing_ids:
             entities = await self._batch_get_entities(list(missing_ids))
             for eid in missing_ids:
-                name = entities.get(eid, 'Unknown')
+                entity = entities.get(eid)
+                name = entity.canonical_name if entity else 'Unknown'
                 new_model = MentalModel(
                     entity_id=eid, name=name, observations=[], vault_id=vault_id
                 )
@@ -317,10 +338,10 @@ class ReflectionEngine:
 
         return models_map
 
-    async def _batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, str]:
+    async def _batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, Entity]:
         query = select(Entity).where(col(Entity.id).in_(entity_ids))
         results = (await self.session.exec(query)).all()
-        return {e.id: e.canonical_name for e in results}
+        return {e.id: e for e in results}
 
     async def _batch_fetch_recent_memories(
         self,
@@ -674,12 +695,13 @@ class ReflectionEngine:
         existing: list[Observation],
         new_obs: list[ValidatedObservation],
         vault_id: UUID = GLOBAL_VAULT_ID,
-    ) -> list[Observation]:
+    ) -> tuple[list[Observation], str]:
         """
         Phase 4: Merge new validated observations with existing ones.
+        Returns (final_observations, entity_summary).
         """
         if not new_obs:
-            return existing
+            return existing, ''
 
         # 1. Collect all unique evidence to build a shared context
         all_uuids = set()
@@ -819,4 +841,6 @@ class ReflectionEngine:
                 )
             )
 
-        return final_list
+        raw_summary = getattr(result.result, 'entity_summary', '')
+        entity_summary = raw_summary if isinstance(raw_summary, str) else ''
+        return final_list, entity_summary

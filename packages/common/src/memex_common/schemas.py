@@ -456,6 +456,11 @@ class EntityDTO(BaseModel):
         examples=['Person', 'Technology'],
     )
 
+    metadata: dict[str, Any] = Field(
+        default={},
+        description='Vault-scoped metadata derived from reflection (description, category).',
+    )
+
 
 class VaultDTO(BaseModel):
     """DTO for a Vault."""

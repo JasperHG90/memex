@@ -181,6 +181,9 @@ class ComparePhaseOutput(BaseModel):
         description='The final merged list of observations.'
     )
     changes_summary: dict = Field(description='Summary of what was added, merged, or removed.')
+    entity_summary: str = Field(
+        description='One-sentence summary of this entity based on all observations. English only.'
+    )
 
 
 class ReflectEvidenceContext(BaseModel):

@@ -101,12 +101,18 @@ def build_note_dto(doc: Any) -> NoteDTO:
 
 
 def build_entity_dto(entity: Any) -> EntityDTO:
-    """Build an EntityDTO from an ORM entity object."""
+    """Build an EntityDTO from an ORM entity object.
+
+    If the entity has a ``_mental_model_metadata`` attribute (attached by
+    the service layer via LEFT JOIN), it is included in the DTO.
+    """
+    metadata: dict[str, Any] = getattr(entity, '_mental_model_metadata', {}) or {}
     return EntityDTO(
         id=entity.id,
         name=entity.canonical_name,
         mention_count=entity.mention_count,
         entity_type=getattr(entity, 'entity_type', None),
+        metadata=metadata,
     )
 
 
