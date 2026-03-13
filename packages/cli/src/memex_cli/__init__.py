@@ -152,19 +152,23 @@ def main(
         config = parse_memex_config(config_data)
 
         if vault:
-            config.server.active_vault = vault
+            config.vault.active = vault
             logger.info('Active vault overridden via --vault: "%s"', vault)
 
-        # Track which config source set active_vault
-        _local_vault = (local_data.get('server', {}) or {}).get('active_vault')
-        _global_vault = (global_data.get('server', {}) or {}).get('active_vault')
+        # Track which config source set active vault
+        _local_vault = (local_data.get('vault', {}) or {}).get('active') or (
+            local_data.get('server', {}) or {}
+        ).get('active_vault')
+        _global_vault = (global_data.get('vault', {}) or {}).get('active') or (
+            global_data.get('server', {}) or {}
+        ).get('active_vault')
         if vault:
             vault_source = 'cli'
         elif _local_vault:
             vault_source = 'local'
             logger.info(
                 'Active vault "%s" set by local config (overrides global).',
-                config.server.active_vault,
+                config.write_vault,
             )
         elif _global_vault:
             vault_source = 'global'

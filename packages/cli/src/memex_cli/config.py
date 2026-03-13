@@ -74,8 +74,8 @@ def show_config(
     source_label = source_labels.get(vault_source, vault_source)
     vault_section = (
         '\n[bold]Vault Configuration:[/bold]\n'
-        f'  Active (Writer): {config.server.active_vault}\n'
-        f'  Attached (Read):  {config.server.attached_vaults or "[none]"}\n'
+        f'  Active (Writer): {config.write_vault}\n'
+        f'  Read Vaults:      {config.read_vaults}\n'
         f'  Source:           {source_label}\n'
     )
     console.print(vault_section)
