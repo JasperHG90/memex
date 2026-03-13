@@ -5,8 +5,8 @@ import hashlib
 from uuid import UUID
 
 
-def test_calculate_uuid_from_dto_uses_key():
-    """Test that calculate_uuid_from_dto uses note_key."""
+def test_calculate_idempotency_key_from_dto_uses_key():
+    """Test that calculate_idempotency_key_from_dto uses note_key."""
     content = b'test content'
     encoded_content = base64.b64encode(content)
 
@@ -20,8 +20,8 @@ def test_calculate_uuid_from_dto_uses_key():
         note_key=valid_uuid,
     )
 
-    uuid = NoteInput.calculate_uuid_from_dto(dto)
-    assert uuid == valid_uuid
+    key = NoteInput.calculate_idempotency_key_from_dto(dto)
+    assert key == valid_uuid
 
 
 def test_note_init_with_key():
@@ -34,7 +34,7 @@ def test_note_init_with_key():
     )
 
     assert note.note_key == valid_uuid
-    assert note.uuid == valid_uuid
+    assert note.idempotency_key == valid_uuid
 
 
 def test_note_key_hashing():

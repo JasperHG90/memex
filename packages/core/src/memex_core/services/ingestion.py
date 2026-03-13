@@ -274,14 +274,14 @@ ingested_at: {now}
         Transactional ingestion of a note into Memex.
 
         Workflow:
-        1. Calculate ID (NoteInput.uuid).
+        1. Calculate ID (NoteInput.idempotency_key).
         2. Idempotency Check: Skip if exists in MetaStore.
         3. Transaction: Open AsyncTransaction.
         4. Stage Files: Save to FileStore.
         5. Extract Facts: Run MemoryEngine.retain in DB session.
         6. Commit: 2PC via AsyncTransaction.
         """
-        note_uuid = note.uuid
+        note_uuid = note.idempotency_key
         logger.info(f'Ingesting note: {note._metadata.name} (UUID: {note_uuid})')
 
         # Determine Target Vault
@@ -401,7 +401,7 @@ ingested_at: {now}
             vault_name = vault.name if vault else str(target_vault_id)
 
         # 2. Two-Gate Idempotency Check
-        note_uuids = [UUID(NoteInput.calculate_uuid_from_dto(n)) for n in notes]
+        note_uuids = [UUID(NoteInput.calculate_idempotency_key_from_dto(n)) for n in notes]
         note_fingerprints = [NoteInput.calculate_fingerprint_from_dto(n) for n in notes]
         async with self.metastore.session() as session:
             stmt = select(Note.id, Note.content_hash).where(col(Note.id).in_(note_uuids))
