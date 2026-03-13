@@ -195,6 +195,144 @@ class TestExtractFactsFromChunk:
         assert usage.total_tokens is None
 
 
+class TestExtractFactsFromChunkMalformedOutput:
+    """Tests for malformed LLM output handling in _extract_facts_from_chunk (AUDIT-031).
+
+    These tests patch ``run_dspy_operation`` to bypass the circuit breaker
+    and focus on how _extract_facts_from_chunk handles various error modes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_malformed_result_empty_facts(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """LLM returns a valid structure but with no facts."""
+        from memex_core.memory.sql_models import TokenUsage
+
+        mock_result = MagicMock()
+        mock_result.extracted_facts.extracted_facts = []
+
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            return_value=(mock_result, TokenUsage()),
+        ):
+            facts, usage = await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='ctx',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
+            assert facts == []
+            assert usage.total_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_value_error_from_dspy_parsing(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """DSPy raises ValueError on unparseable JSON -> returns empty list."""
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=ValueError('Could not parse LLM output as JSON'),
+        ):
+            facts, usage = await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='ctx',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
+            assert facts == []
+            assert usage.total_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_key_error_from_malformed_structure(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """KeyError when expected key missing in response -> returns empty list."""
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=KeyError('extracted_facts'),
+        ):
+            facts, usage = await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='ctx',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
+            assert facts == []
+            assert usage.total_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_os_error_returns_empty(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """OSError (network issue) -> returns empty list."""
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=OSError('Connection refused'),
+        ):
+            facts, usage = await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='ctx',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
+            assert facts == []
+            assert usage.total_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_runtime_error_non_context_returns_empty(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """RuntimeError that is NOT a context-length error -> returns empty list."""
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=RuntimeError('unexpected internal error'),
+        ):
+            facts, usage = await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='ctx',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
+            assert facts == []
+            assert usage.total_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_runtime_error_context_length_raises_output_too_long(
+        self, mock_lm: DummyLM, mock_predictor: MagicMock
+    ) -> None:
+        """RuntimeError with 'context_length_exceeded' -> re-raised as OutputTooLongException."""
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation',
+            side_effect=RuntimeError('context_length_exceeded'),
+        ):
+            with pytest.raises(OutputTooLongException):
+                await _extract_facts_from_chunk(
+                    chunk='test chunk',
+                    chunk_index=0,
+                    total_chunks=1,
+                    event_date=dt.datetime.now(),
+                    context='ctx',
+                    lm=mock_lm,
+                    predictor=mock_predictor,
+                )
+
+
 class TestExtractFactsWithAutoSplit:
     """Tests for _extract_facts_with_auto_split."""
 
