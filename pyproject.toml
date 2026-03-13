@@ -40,6 +40,7 @@ index-strategy = "first-index"
 [tool.ruff]
 lint.ignore = ["E501"]
 lint.extend-ignore = ["E402"]
+lint.select = ["E", "F", "W", "LOG"]
 extend-exclude = [
   "__pycache__",
   ".eggs",
@@ -52,6 +53,11 @@ extend-exclude = [
 ]
 line-length = 100
 indent-width = 4
+
+# Logging policy: new code should use structlog.get_logger() instead of
+# logging.getLogger(). Existing logging.getLogger() calls will be converted
+# opportunistically. The LOG rule set is enabled above to catch common
+# logging anti-patterns (e.g. LOG001: direct use of logging.WARN).
 
 [tool.ruff.format]
 quote-style = "single"
