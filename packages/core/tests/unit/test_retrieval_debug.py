@@ -24,7 +24,7 @@ from memex_core.memory.retrieval.models import (
 )
 from memex_core.server import app
 from memex_core.server.common import get_api
-from memex_core.server.retrieval import _build_retrieval_dtos
+from memex_core.server.common import build_memory_unit_dto
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ class TestBuildRetrievalDtosDebug:
                 )
             ]
         )
-        dtos = _build_retrieval_dtos([unit], debug=False)
+        dtos = [build_memory_unit_dto(unit, debug=False)]
         assert dtos[0].debug_info is None
 
     def test_debug_info_included_when_debug_true(self):
@@ -278,7 +278,7 @@ class TestBuildRetrievalDtosDebug:
             timing_ms=10.0,
         )
         unit = self._make_unit(debug_info=[contrib])
-        dtos = _build_retrieval_dtos([unit], debug=True)
+        dtos = [build_memory_unit_dto(unit, debug=True)]
         assert dtos[0].debug_info is not None
         assert len(dtos[0].debug_info) == 1
         info = dtos[0].debug_info[0]
@@ -290,7 +290,7 @@ class TestBuildRetrievalDtosDebug:
 
     def test_debug_info_none_when_no_debug_attr(self):
         unit = self._make_unit()  # no _debug_info attribute
-        dtos = _build_retrieval_dtos([unit], debug=True)
+        dtos = [build_memory_unit_dto(unit, debug=True)]
         assert dtos[0].debug_info is None
 
     def test_multiple_strategies_per_result(self):
@@ -312,7 +312,7 @@ class TestBuildRetrievalDtosDebug:
             ),
         ]
         unit = self._make_unit(debug_info=contribs)
-        dtos = _build_retrieval_dtos([unit], debug=True)
+        dtos = [build_memory_unit_dto(unit, debug=True)]
         assert len(dtos[0].debug_info) == 3
         strategy_names = {d.strategy_name for d in dtos[0].debug_info}
         assert strategy_names == {'semantic', 'keyword', 'graph'}
@@ -325,10 +325,10 @@ class TestBuildRetrievalDtosDebug:
 
 @pytest.fixture
 def mock_api():
-    api_mock = AsyncMock()
-    api_mock.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
-    api_mock.resolve_vault_identifier.return_value = UUID('00000000-0000-0000-0000-000000000001')
-    return api_mock
+    mock_api = AsyncMock()
+    mock_api.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
+    mock_api.resolve_vault_identifier.return_value = UUID('00000000-0000-0000-0000-000000000001')
+    return mock_api
 
 
 @pytest.fixture
