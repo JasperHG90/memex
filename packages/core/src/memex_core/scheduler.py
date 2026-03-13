@@ -4,6 +4,7 @@ import asyncpg
 from typing import TYPE_CHECKING
 from aioclock import AioClock
 from aioclock.triggers import Every
+from sqlalchemy.engine.url import make_url
 
 from memex_core.config import MemexConfig
 
@@ -67,10 +68,9 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     async def run_reflection_job():
         await periodic_reflection_task(api, batch_size)
 
-    # We need a raw connection string (no +asyncpg) for asyncpg
-    dsn = config.server.meta_store.instance.connection_string.replace(
-        'postgresql+asyncpg://', 'postgresql://'
-    )
+    # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
+    sa_url = make_url(config.server.meta_store.instance.connection_string)
+    dsn = sa_url.set(drivername='postgresql').render_as_string(hide_password=False)
 
     while True:
         conn = None
