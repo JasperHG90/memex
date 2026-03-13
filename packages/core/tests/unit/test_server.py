@@ -16,25 +16,25 @@ MOCK_UNIT_ID = UUID('00000000-0000-0000-0000-000000000002')
 @pytest.fixture
 def mock_api():
     """Provides a mocked MemexAPI instance."""
-    api_mock = AsyncMock()
+    mock_api = AsyncMock()
 
     # Mock Config
-    api_mock.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
-    api_mock.resolve_vault_identifier.return_value = MOCK_VAULT_ID
+    mock_api.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
+    mock_api.resolve_vault_identifier.return_value = MOCK_VAULT_ID
 
     # Setup default return values for common methods
-    api_mock.ingest.return_value = {
+    mock_api.ingest.return_value = {
         'status': 'success',
         'unit_ids': [MOCK_UNIT_ID],
         'note_id': 'doc_123',
     }
 
     # Use SimpleNamespace to simulate an object with attributes that Pydantic can read
-    api_mock.create_vault.return_value = SimpleNamespace(
+    mock_api.create_vault.return_value = SimpleNamespace(
         id=MOCK_VAULT_ID, name='Test Vault', description='A test vault'
     )
 
-    api_mock.search.return_value = (
+    mock_api.search.return_value = (
         [
             SimpleNamespace(
                 id=MOCK_UNIT_ID,
@@ -53,7 +53,7 @@ def mock_api():
         None,
     )
 
-    return api_mock
+    return mock_api
 
 
 @pytest.fixture
