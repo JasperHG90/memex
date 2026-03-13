@@ -21,6 +21,7 @@ from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import setup_auth
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.services.audit import AuditService
+from memex_core.server.kv import router as kv_router
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
@@ -160,3 +161,4 @@ app.include_router(resources_router)
 app.include_router(health_router)
 app.include_router(summary_router)
 app.include_router(audit_router)
+app.include_router(kv_router)

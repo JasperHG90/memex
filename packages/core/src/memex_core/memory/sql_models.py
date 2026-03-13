@@ -349,6 +349,11 @@ class Note(SQLModel, table=True):  # type: ignore
             "status IN ('active', 'superseded', 'appended')",
             name='ck_notes_status',
         ),
+        Index(
+            'idx_notes_title_trgm',
+            sql_text('lower(title) gin_trgm_ops'),
+            postgresql_using='gin',
+        ),
     )
 
 
@@ -1402,4 +1407,59 @@ class WebhookDelivery(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         Index('idx_webhook_deliveries_webhook_id', 'webhook_id'),
         Index('idx_webhook_deliveries_status', 'status'),
+    )
+
+
+class KVEntry(SQLModel, table=True):  # type: ignore
+    """
+    What it is: A key-value store entry scoped to a vault.
+    Function: Provides simple, named storage for configuration, preferences,
+    and structured data that doesn't fit the note/memory model.
+    Key Features:
+        - vault_id: NULL means global (cross-vault), otherwise scoped to a vault.
+        - Unique constraint on (vault_id, key) for scoped entries.
+        - Partial unique index on key WHERE vault_id IS NULL for global entries.
+        - Optional embedding for semantic search over values.
+    """
+
+    __tablename__ = 'kv_entries'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the KV entry.',
+    )
+
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), ForeignKey('vaults.id', ondelete='CASCADE'), index=True),
+        description='The vault this entry belongs to. NULL means global.',
+    )
+
+    key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The key for this entry.',
+    )
+
+    value: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The value stored under this key.',
+    )
+
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION)),
+        description='Optional embedding vector for semantic search over values.',
+    )
+
+    created_at: datetime = created_at_field()
+    updated_at: datetime = updated_at_field()
+
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'key', name='uq_kv_vault_key'),
+        Index(
+            'idx_kv_global_key',
+            'key',
+            unique=True,
+            postgresql_where=sql_text('vault_id IS NULL'),
+        ),
     )

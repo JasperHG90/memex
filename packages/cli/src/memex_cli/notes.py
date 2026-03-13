@@ -392,14 +392,70 @@ async def list_recent(
 def _print_compact_note(d: Any) -> None:
     """Print a single note in compact one-line format."""
     title = d.title or d.name or 'Untitled'
+    note_id = str(d.id) if d.id else ''
     date = str(d.created_at.date()) if d.created_at else 'unknown'
     desc = ''
     if d.doc_metadata:
         desc = d.doc_metadata.get('description', '') or ''
-    if len(desc) > 150:
-        desc = desc[:147] + '...'
+    if len(desc) > 120:
+        desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    print(f'- **{title}** ({date}){suffix}')
+    print(f'- **{title}** ({date}) [{note_id}]{suffix}')
+
+
+@app.command('find')
+@async_command
+async def find_note(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument(help='Approximate title to search for.')],
+    limit: int = 5,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    Find notes by approximate title match (trigram similarity).
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            results = await api.find_notes_by_title(
+                query=query,
+                vault_ids=vault or None,
+                limit=limit,
+            )
+        except Exception as e:
+            handle_api_error(e)
+
+    if not results:
+        console.print('[dim]No matching notes found.[/dim]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps(results, default=str))
+        return
+
+    table = Table(title=f'Notes matching "{query}"')
+    table.add_column('Title', style='cyan')
+    table.add_column('Score', style='yellow', justify='right')
+    table.add_column('Date', style='green')
+    table.add_column('Status', style='dim')
+    table.add_column('Note ID', style='dim')
+
+    for r in results:
+        date = r.get('publish_date') or r.get('created_at') or ''
+        if hasattr(date, 'date'):
+            date = str(date.date())
+        else:
+            date = str(date)[:10] if date else ''
+        table.add_row(
+            r.get('title', 'Untitled'),
+            f'{r.get("score", 0):.2f}',
+            date,
+            r.get('status', ''),
+            str(r.get('note_id', '')),
+        )
+
+    console.print(table)
 
 
 @app.command('delete')

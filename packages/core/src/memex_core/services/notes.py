@@ -9,6 +9,8 @@ from uuid import UUID
 
 from sqlmodel import col
 
+from sqlalchemy import text
+
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
 from memex_common.schemas import NodeDTO
 
@@ -440,6 +442,69 @@ class NoteService:
                 stmt = stmt.where(date_col <= before)
             stmt = stmt.limit(limit)
             return list((await session.exec(stmt)).all())
+
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Fuzzy-search notes by title using trigram similarity.
+
+        Uses the pg_trgm GIN index on lower(title) for efficient matching.
+        Returns results ordered by similarity score descending.
+        """
+        async with self.metastore.session() as session:
+            await session.exec(
+                text('SELECT set_limit(:threshold)'), params={'threshold': threshold}
+            )
+
+            if vault_ids:
+                stmt = text("""
+                    SELECT
+                        id, title,
+                        similarity(lower(title), lower(:query)) AS score,
+                        vault_id, created_at, publish_date, status
+                    FROM notes
+                    WHERE lower(title) % lower(:query)
+                      AND vault_id = ANY(:vault_ids)
+                    ORDER BY score DESC
+                    LIMIT :limit
+                """)
+                params: dict[str, Any] = {
+                    'query': query,
+                    'vault_ids': list(vault_ids),
+                    'limit': limit,
+                }
+            else:
+                stmt = text("""
+                    SELECT
+                        id, title,
+                        similarity(lower(title), lower(:query)) AS score,
+                        vault_id, created_at, publish_date, status
+                    FROM notes
+                    WHERE lower(title) % lower(:query)
+                    ORDER BY score DESC
+                    LIMIT :limit
+                """)
+                params = {'query': query, 'limit': limit}
+
+            result = await session.exec(stmt, params=params)
+            rows = []
+            for row in result:
+                rows.append(
+                    {
+                        'note_id': row[0],
+                        'title': row[1],
+                        'score': float(row[2]),
+                        'vault_id': row[3],
+                        'created_at': row[4],
+                        'publish_date': row[5],
+                        'status': row[6],
+                    }
+                )
+            return rows
 
     async def delete_note(self, note_id: UUID) -> bool:
         """

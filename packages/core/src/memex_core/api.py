@@ -50,6 +50,7 @@ from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
 from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
+from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.notes import NoteService
 from memex_core.services.reflection import ReflectionService
@@ -408,6 +409,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
             vaults=self._vaults,
+        )
+        self._kv = KVService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
         )
         self._ingestion = IngestionService(
             metastore=self.metastore,
@@ -916,3 +922,52 @@ class MemexAPI:
             depth=depth,
             limit=limit,
         )
+
+    # --- Note title search ---
+
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Fuzzy-search notes by title. Delegates to NoteService."""
+        return await self._notes.find_notes_by_title(
+            query=query, vault_ids=vault_ids, limit=limit, threshold=threshold
+        )
+
+    # --- KV store ---
+
+    async def kv_put(
+        self,
+        vault_id: UUID | None,
+        key: str,
+        value: str,
+        embedding: list[float] | None = None,
+    ) -> Any:
+        """Upsert a KV entry. Delegates to KVService."""
+        return await self._kv.put(vault_id=vault_id, key=key, value=value, embedding=embedding)
+
+    async def kv_get(self, key: str, vault_id: UUID | None = None) -> Any | None:
+        """Get a KV entry by key. Delegates to KVService."""
+        return await self._kv.get(key=key, vault_id=vault_id)
+
+    async def kv_search(
+        self,
+        query_embedding: list[float],
+        vault_id: UUID | None = None,
+        limit: int = 5,
+    ) -> list[Any]:
+        """Semantic search over KV entries. Delegates to KVService."""
+        return await self._kv.search(
+            query_embedding=query_embedding, vault_id=vault_id, limit=limit
+        )
+
+    async def kv_delete(self, key: str, vault_id: UUID | None = None) -> bool:
+        """Delete a KV entry. Delegates to KVService."""
+        return await self._kv.delete(key=key, vault_id=vault_id)
+
+    async def kv_list(self, vault_id: UUID | None = None) -> list[Any]:
+        """List KV entries. Delegates to KVService."""
+        return await self._kv.list_entries(vault_id=vault_id)
