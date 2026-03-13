@@ -829,6 +829,28 @@ class ServerConfig(BaseModel):
         return self
 
     @model_validator(mode='after')
+    def _check_default_db_password(self) -> 'ServerConfig':
+        """Reject default database password in production mode."""
+        if not isinstance(self.meta_store, PostgresMetaStoreConfig):
+            return self
+        pw = self.meta_store.instance.password.get_secret_value()
+        is_production = os.getenv('MEMEX_ENV', '').lower() == 'production'
+        if pw == 'postgres':
+            if is_production:
+                raise ValueError(
+                    'Default database password "postgres" is not allowed '
+                    'when MEMEX_ENV=production. Set a secure password via '
+                    'server.meta_store.instance.password or '
+                    'MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD.'
+                )
+            else:
+                logger.warning(
+                    'Using default database password "postgres". '
+                    'Set a secure password for production use.'
+                )
+        return self
+
+    @model_validator(mode='after')
     def sync_default_model(self) -> 'ServerConfig':
         """Propagate default_model to sub-configs where model is None."""
         dm = self.default_model
