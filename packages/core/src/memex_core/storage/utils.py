@@ -15,7 +15,6 @@ def calculate_deep_hash(metadata: bytes, content: bytes, aux_files: dict[str, by
     """
     hasher = hashlib.md5()
 
-    # TODO: Hash Metadata (Sorted keys for determinism)
     hasher.update(metadata)
 
     hasher.update(content)

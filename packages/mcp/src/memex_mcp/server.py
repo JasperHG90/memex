@@ -444,15 +444,25 @@ def memex_get_template(
 
 @mcp.tool(
     name='memex_active_vault',
-    description='Get the active vault name and ID. Shows both server default and client-resolved vault.',
+    description=(
+        '[DEPRECATED — use memex_list_vaults instead, which includes is_active flag] '
+        'Get the active vault name and ID. Shows both server default and client-resolved vault.'
+    ),
 )
 async def memex_active_vault(ctx: Context) -> str:
-    """Retrieve the currently active vault information."""
+    """Retrieve the currently active vault information.
+
+    .. deprecated::
+        Use ``memex_list_vaults`` which now includes an ``is_active`` flag
+        on each vault. This tool will be removed in a future version.
+    """
     try:
         api = get_api(ctx)
         config = get_config(ctx)
 
         lines: list[str] = []
+        lines.append('_Note: this tool is deprecated. Use memex_list_vaults instead._')
+        lines.append('')
 
         # Client-resolved vaults (from vault config + server defaults)
         lines.append(f'**Write vault (client):** {config.write_vault}')
@@ -1181,10 +1191,10 @@ async def memex_get_nodes(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all vaults.',
+    description='List all vaults. Each vault includes an is_active flag indicating the writer vault.',
 )
 async def memex_list_vaults(ctx: Context) -> str:
-    """List all available vaults."""
+    """List all available vaults with active status."""
     try:
         api = get_api(ctx)
         vaults = await api.list_vaults()
@@ -1195,7 +1205,8 @@ async def memex_list_vaults(ctx: Context) -> str:
         lines = [f'Found {len(vaults)} vault(s):\n']
         for i, v in enumerate(vaults, 1):
             desc = f' — {v.description}' if v.description else ''
-            lines.append(f'{i}. **{v.name}** (ID: {v.id}){desc}')
+            active = ' [ACTIVE]' if v.is_active else ''
+            lines.append(f'{i}. **{v.name}** (ID: {v.id}){active}{desc}')
 
         return '\n'.join(lines)
 
