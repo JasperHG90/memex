@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from memex_common.exceptions import MemexError
 from memex_common.schemas import LineageDirection, LineageResponse
@@ -36,8 +36,8 @@ async def get_note_lineage(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: LineageDirection = LineageDirection.UPSTREAM,
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
     """Get the lineage of a note."""
     try:
@@ -61,8 +61,8 @@ async def get_lineage(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: LineageDirection = LineageDirection.UPSTREAM,
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
     """Get the lineage of any entity type."""
     if entity_type not in VALID_LINEAGE_TYPES:
