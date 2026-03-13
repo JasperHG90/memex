@@ -108,12 +108,23 @@ async def require_admin_auth(request: Request) -> None:
     """
     auth_config: AuthConfig | None = getattr(request.app.state, 'auth_config', None)
 
+    audit = _get_audit_service(request)
     api_key = request.headers.get('X-API-Key')
     if not api_key:
+        if audit:
+            audit.log(
+                action='auth.admin.missing_key',
+                details={'path': request.url.path, 'method': request.method},
+            )
         raise HTTPException(
             status_code=401,
             detail=('Admin endpoints require authentication. Provide a valid X-API-Key header.'),
         )
 
     if auth_config is None or not _validate_key(api_key, auth_config):
+        if audit:
+            audit.log(
+                action='auth.admin.failure',
+                details={'path': request.url.path, 'method': request.method},
+            )
         raise HTTPException(status_code=403, detail='Invalid API key.')

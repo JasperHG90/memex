@@ -1,4 +1,5 @@
 from typing import cast, Self, Any, AsyncGenerator
+import asyncio
 import hashlib
 import pathlib as plb
 import logging
@@ -943,13 +944,14 @@ class MemexAPI:
 
     # --- Embeddings ---
 
-    def embed_text(self, text: str) -> list[float]:
+    async def embed_text(self, text: str) -> list[float]:
         """Generate an embedding vector for the given text.
 
         Exposes the embedding model through the public API so that callers
         (MCP, CLI) do not need to import core internals.
         """
-        return self.embedding_model.encode([text])[0].tolist()
+        result = await asyncio.to_thread(self.embedding_model.encode, [text])
+        return result[0].tolist()
 
     # --- KV store ---
 
@@ -982,6 +984,6 @@ class MemexAPI:
         """Delete a KV entry. Delegates to KVService."""
         return await self._kv.delete(key=key, vault_id=vault_id)
 
-    async def kv_list(self, vault_id: UUID | None = None) -> list[Any]:
+    async def kv_list(self, vault_id: UUID | None = None, limit: int = 100) -> list[Any]:
         """List KV entries. Delegates to KVService."""
-        return await self._kv.list_entries(vault_id=vault_id)
+        return await self._kv.list_entries(vault_id=vault_id, limit=limit)

@@ -1,15 +1,17 @@
 """Memex lifecycle model and response models"""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, List
 
 from pydantic import BaseModel, Field, PrivateAttr
 
 from memex_common.config import MemexConfig
-from memex_core.storage.filestore import FileStore
-from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
+    from memex_core.storage.filestore import FileStore
+    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
     from memex_common.client import RemoteMemexAPI
 
 

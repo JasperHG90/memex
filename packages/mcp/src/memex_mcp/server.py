@@ -732,14 +732,10 @@ async def memex_memory_search(
             )
 
             # Show supersession context if available
-            meta = getattr(res, 'metadata', {}) or getattr(res, 'unit_metadata', {}) or {}
-            superseded_by = meta.get('superseded_by')
+            superseded_by = getattr(res, 'superseded_by', None)
             if superseded_by:
                 for s in superseded_by:
-                    output.append(
-                        f'   \u26a0 Superseded by: {s.get("unit_text", "")[:100]}'
-                        f' ({s.get("relation")})'
-                    )
+                    output.append(f'   \u26a0 Superseded by: {s.unit_text[:100]} ({s.relation})')
 
         output.append(
             'Tip: Use memex_get_notes_metadata for tags/token counts. '
@@ -1667,15 +1663,14 @@ async def memex_get_memory_units(
                 lines.append(f'- **Note ID:** {unit.note_id}')
 
             # Show supersession info if available
-            meta = getattr(unit, 'metadata', {}) or getattr(unit, 'unit_metadata', {}) or {}
-            superseded_by = meta.get('superseded_by')
+            superseded_by = getattr(unit, 'superseded_by', None)
 
             if superseded_by:
                 lines.append('- **Superseded by:**')
                 for s in superseded_by:
-                    s_text = s.get('unit_text', '')[:150]
-                    s_rel = s.get('relation', 'unknown')
-                    s_note = s.get('note_title', '')
+                    s_text = s.unit_text[:150]
+                    s_rel = s.relation
+                    s_note = s.note_title or ''
                     lines.append(f'  - [{s_rel}] {s_text}')
                     if s_note:
                         lines.append(f'    From note: {s_note}')

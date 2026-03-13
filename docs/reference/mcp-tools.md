@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 20 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 25 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -84,6 +84,20 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 
 Returns note titles, IDs, scores, snippets, and inline metadata.
+
+---
+
+### `memex_find_note`
+
+Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. Use when you know (part of) the title. For content search, use `memex_note_search`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Title search query (partial or fuzzy match). |
+| `vault_ids` | string[] | No | - | Vault UUIDs or names to search in. `null` = all vaults. |
+| `limit` | int | No | `5` | Maximum results to return. |
+
+Returns note titles, IDs, similarity scores, status, and publish dates.
 
 ---
 
@@ -281,9 +295,66 @@ Returns unit text, type, confidence, note ID, and supersession context for each 
 
 ---
 
+## KV Store Tools
+
+### `memex_kv_write`
+
+Write a fact to the key-value store. Generates an embedding for semantic search. Use for storing structured preferences, settings, or facts. Key should be a short, namespaced identifier (e.g. `"tool:python:pkg_mgr"`).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `value` | string | Yes | - | The fact or preference text to store. |
+| `key` | string | Yes | - | Namespaced key, e.g. `"tool:python:pkg_mgr"`. |
+| `vault_id` | string | No | `null` (global) | Vault UUID or name. `null` = global (available in all vaults). |
+
+Returns the stored key-value pair and scope.
+
+---
+
+### `memex_kv_get`
+
+Get a fact by exact key from the KV store.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `key` | string | Yes | - | Exact key to look up. |
+| `vault_id` | string | No | - | Vault UUID or name. Checks vault-specific first, then global. |
+
+Returns the key, value, scope, and last updated timestamp. Returns "Key not found" if the key does not exist.
+
+---
+
+### `memex_kv_search`
+
+Fuzzy search facts in the KV store by semantic similarity. Returns the closest matching entries.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query text. |
+| `vault_id` | string | No | - | Vault UUID or name. `null` = search global entries only. |
+| `limit` | int | No | `5` | Maximum results to return. |
+
+Returns matching facts with keys, values, scopes, and timestamps.
+
+---
+
+### `memex_kv_list`
+
+List all facts in the KV store. Without `vault_id`, returns global entries only.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | No | - | Vault UUID or name. `null` = global entries only; with vault = both global and vault-scoped. |
+
+Returns all KV entries with keys, values, scopes, and timestamps.
+
+---
+
 ## Vault Tools
 
-### `memex_active_vault`
+### `memex_active_vault` [DEPRECATED]
+
+> **Deprecated.** Use `memex_list_vaults` instead, which now includes an `is_active` flag on each vault. This tool will be removed in a future version.
 
 Retrieve the currently active vault information. No parameters.
 
@@ -293,17 +364,19 @@ Returns the active vault name and ID.
 
 ### `memex_list_vaults`
 
-List all available vaults. No parameters.
+List all available vaults. Each vault includes an `is_active` flag indicating the current writer vault. No parameters.
 
-Returns vault names, IDs, and descriptions.
+Returns vault names, IDs, descriptions, and active status.
 
 ---
 
 ### `memex_recent_notes`
 
-Browse recent notes. Filter by vault name or UUID. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
+Browse recent notes. Defaults to all vaults. Filter by vault names/UUIDs and optional date range. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `limit` | int | No | `20` | Maximum notes to return. |
-| `vault_id` | string | No | - | Vault UUID or name to filter by. |
+| `vault_ids` | string[] | No | - | Vault UUIDs or names. Omit for all vaults. |
+| `after` | string | No | - | Only notes on/after this date (ISO 8601). |
+| `before` | string | No | - | Only notes on/before this date (ISO 8601). |

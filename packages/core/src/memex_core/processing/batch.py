@@ -70,6 +70,7 @@ class JobManager:
         self,
         coro_fn: Callable[..., Awaitable[dict[str, Any]]],
         vault_id: UUID | str | None = None,
+        background_tasks: Any | None = None,
         **kwargs: Any,
     ) -> UUID:
         """Create a tracked job that wraps a single async ingestion call.
@@ -82,11 +83,17 @@ class JobManager:
         The *vault_id* is used both for the job record and forwarded to
         *coro_fn* (as ``vault_id=...``) so the ingestion targets the same vault.
 
+        When *background_tasks* (a Starlette ``BackgroundTasks`` instance) is
+        provided, the job is scheduled through it so that the ASGI server runs
+        the task after the response is sent.  Otherwise an ``asyncio.Task`` is
+        created directly.
+
         Args:
             coro_fn: An async callable (e.g. ``api.ingest_from_url``) that
                 returns a dict result.
             vault_id: Optional vault identifier (resolved to UUID for job
                 record and forwarded to *coro_fn*).
+            background_tasks: Optional Starlette ``BackgroundTasks`` instance.
             **kwargs: Additional keyword arguments forwarded to *coro_fn*.
 
         Returns:
@@ -94,7 +101,7 @@ class JobManager:
         """
         job_id = uuid4()
         target_vault_id = await self.api.resolve_vault_identifier(
-            vault_id or self.api.config.server.active_vault
+            vault_id or self.api.config.server.default_active_vault
         )
 
         async with self.api.metastore.session() as session:
@@ -109,9 +116,12 @@ class JobManager:
 
         # Forward vault_id to the coroutine alongside caller-provided kwargs
         coro_kwargs: dict[str, Any] = {'vault_id': vault_id, **kwargs}
-        task = asyncio.create_task(self._run_single_job(job_id, coro_fn, **coro_kwargs))
-        self._active_tasks[job_id] = task
-        task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
+        if background_tasks is not None:
+            background_tasks.add_task(self._run_single_job, job_id, coro_fn, **coro_kwargs)
+        else:
+            task = asyncio.create_task(self._run_single_job(job_id, coro_fn, **coro_kwargs))
+            self._active_tasks[job_id] = task
+            task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
 
         return job_id
 
@@ -246,7 +256,7 @@ class JobManager:
 
         try:
             async with self.api.metastore.session() as session:
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if not job:
                     logger.error(f'Job {job_id} not found in database.')
                     return
@@ -264,7 +274,7 @@ class JobManager:
             note_id = result.get('note_id')
 
             async with self.api.metastore.session() as session:
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if not job:
                     return
                 job.status = BatchJobStatus.COMPLETED
@@ -278,7 +288,7 @@ class JobManager:
         except Exception as e:
             logger.error(f'Single job {job_id} failed: {e}', exc_info=True)
             async with self.api.metastore.session() as session:
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if job:
                     job.status = BatchJobStatus.FAILED
                     job.completed_at = datetime.now(timezone.utc)

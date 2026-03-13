@@ -34,7 +34,7 @@ async def embed_text(
 ):
     """Generate an embedding vector for the given text."""
     try:
-        embedding = api.embed_text(request.text)
+        embedding = await api.embed_text(request.text)
         return EmbedResponse(embedding=embedding)
     except (MemexError, ValueError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to generate embedding')
@@ -137,6 +137,7 @@ async def kv_delete(
 @router.get('/kv', response_model=list[KVEntryDTO])
 async def kv_list(
     api: Annotated[MemexAPI, Depends(get_api)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
     vault_id: str | None = Query(None, description='Vault ID or name'),
 ):
     """List key-value entries. Without vault_id returns global only; with vault_id returns both."""
@@ -145,7 +146,7 @@ async def kv_list(
         if vault_id is not None:
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
 
-        entries = await api.kv_list(vault_id=resolved_vault_id)
+        entries = await api.kv_list(vault_id=resolved_vault_id, limit=limit)
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list KV entries')

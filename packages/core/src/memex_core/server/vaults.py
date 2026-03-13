@@ -93,8 +93,17 @@ async def list_vaults(
 
         # Default: list all vaults
         vaults = await api.list_vaults()
+        active_vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         return ndjson_response(
-            [VaultDTO(id=v.id, name=v.name, description=v.description) for v in vaults]
+            [
+                VaultDTO(
+                    id=v.id,
+                    name=v.name,
+                    description=v.description,
+                    is_active=(v.id == active_vault_id),
+                )
+                for v in vaults
+            ]
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list vaults')

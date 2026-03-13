@@ -150,6 +150,7 @@ async def ingest_url(
             job_id = await api.batch_manager.create_single_job(
                 api.ingest_from_url,
                 vault_id=request.vault_id,
+                background_tasks=background_tasks,
                 url=request.url,
                 reflect_after=request.reflect_after,
                 assets=assets_bytes,
@@ -247,6 +248,7 @@ async def ingest_upload(
                 job_id = await api.batch_manager.create_single_job(
                     _ingest_file_and_cleanup,
                     vault_id=parsed_metadata.get('vault_id'),
+                    background_tasks=background_tasks,
                     file_path=tmp_path,
                 )
                 return JSONResponse(
@@ -307,6 +309,7 @@ async def ingest_upload(
             job_id = await api.batch_manager.create_single_job(
                 api.ingest,
                 vault_id=parsed_metadata.get('vault_id'),
+                background_tasks=background_tasks,
                 note=note,
             )
             return JSONResponse(

@@ -27,6 +27,58 @@ These options apply to all commands and must be specified before the subcommand.
 
 Ingest and search memories.
 
+### `memory add`
+
+```
+memex memory add [CONTENT] [OPTIONS]
+```
+
+Add a new memory to Memex. Accepts text content directly, a file/directory path, or a URL. Use `--asset` to attach auxiliary files (images, PDFs) to a note.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `CONTENT` | No | Text content to add. Required if `--file` and `--url` are not provided. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--file PATH` | `-f` | Path | Path to a file or directory to ingest. Directories are scanned recursively. |
+| `--url URL` | `-u` | str | URL to scrape and ingest. |
+| `--asset PATH` | `-a` | Path | Path to an asset file (image, PDF) to attach. Repeatable for multiple assets. |
+| `--vault NAME` | `-v` | str | Target vault for writing (overrides active vault). |
+| `--key KEY` | `-k` | str | Unique stable key for the note (enables idempotent updates). |
+| `--background` | `-b` | bool | Queue ingestion as a background job instead of waiting for completion. |
+
+#### Examples
+
+```bash
+# Add text content
+memex memory add "The project uses PostgreSQL with pgvector for storage."
+
+# Ingest a file
+memex memory add --file ./notes/meeting.md
+
+# Ingest a directory recursively
+memex memory add --file ./research-papers/
+
+# Scrape and ingest a URL
+memex memory add --url https://example.com/article
+
+# Add with attached assets
+memex memory add --file ./report.md --asset ./diagram.png --asset ./data.csv
+
+# Background ingestion
+memex memory add --file ./large-dataset/ --background
+```
+
+> [!WARNING]
+> `--asset` cannot be used with a directory `--file`. Point `--file` to a single file when using `--asset`.
+
+---
+
 ### `note add`
 
 ```
@@ -546,6 +598,157 @@ Delete the mental model for an entity in a specific vault. Does not delete the e
 |--------|-------|------|---------|-------------|
 | `--vault` | `-v` | str | Active vault | Vault UUID to target. Defaults to the active vault. |
 | `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+---
+
+## `kv`
+
+Key-value fact store (lightweight structured memory).
+
+### `kv write`
+
+```
+memex kv write VALUE [OPTIONS]
+```
+
+Write a fact to the KV store. Key is required (use MCP tool for auto-generation).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VALUE` | Yes | The fact/value to store. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--key KEY` | `-k` | str | Namespaced key, e.g. `"tool:python:pkg_mgr"`. **Required.** |
+| `--vault NAME` | `-v` | str | Target vault name or UUID. |
+
+#### Examples
+
+```bash
+# Store a preference
+memex kv write "always use uv, never pip" --key "tool:python:pkg_mgr"
+
+# Store a vault-scoped fact
+memex kv write "Staff Engineer" --key "user:role" --vault my-project
+```
+
+---
+
+### `kv get`
+
+```
+memex kv get KEY [OPTIONS]
+```
+
+Get a fact by exact key.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `KEY` | Yes | Key to look up. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--vault NAME` | `-v` | str | Vault name or UUID. |
+
+#### Examples
+
+```bash
+memex kv get "tool:python:pkg_mgr"
+memex kv get "user:role" --vault my-project
+```
+
+---
+
+### `kv search`
+
+```
+memex kv search QUERY [OPTIONS]
+```
+
+Fuzzy search facts by semantic similarity.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `QUERY` | Yes | Search query. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-l` | int | `5` | Maximum results to return. |
+| `--vault` | `-v` | str | - | Vault name or UUID. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+memex kv search "python package manager"
+memex kv search "deployment" --limit 10 --json
+```
+
+---
+
+### `kv list`
+
+```
+memex kv list [OPTIONS]
+```
+
+List all facts in the KV store.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault` | `-v` | str | - | Vault name or UUID. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+memex kv list
+memex kv list --vault my-project --json
+```
+
+---
+
+### `kv delete`
+
+```
+memex kv delete KEY [OPTIONS]
+```
+
+Delete a fact by key.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `KEY` | Yes | Key to delete. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault` | `-v` | str | - | Vault name or UUID. |
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+#### Examples
+
+```bash
+memex kv delete "tool:python:pkg_mgr"
+memex kv delete "user:role" --vault my-project --force
+```
 
 ---
 

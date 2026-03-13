@@ -33,6 +33,8 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 | `default_active_vault` | string | `global` | Server default vault for writing new memories. Clients can override via `vault.active`. |
 | `default_reader_vault` | string | `""` | Server default vault for read-only search. Clients can override via `vault.search`. |
 | `default_model` | [ModelConfig](#modelconfig) | `gemini/gemini-3-flash-preview` | System-wide default LLM. Sub-configs with `model: null` inherit this value. |
+| `allow_insecure` | bool | `false` | Allow binding to non-localhost addresses without authentication. When `false` (default), the server refuses to start on a non-localhost address unless auth is enabled. |
+| `cors` | object | — | CORS (Cross-Origin Resource Sharing) configuration. See [CORS](#cors-servercors). |
 
 ### Default Model Propagation
 
@@ -45,6 +47,17 @@ When the server starts, `default_model` is propagated to any sub-config whose `m
 - `server.document.model`
 
 Set a sub-config's `model` explicitly to override the default for that subsystem.
+
+---
+
+### CORS (`server.cors`)
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `origins` | list[string] | `["http://localhost:5173", "http://localhost:3000"]` | Allowed origins for CORS requests. |
+| `allow_credentials` | bool | `true` | Whether to allow credentials (cookies, auth headers) in CORS requests. |
+| `allow_methods` | list[string] | `["*"]` | HTTP methods allowed in CORS requests. |
+| `allow_headers` | list[string] | `["*"]` | HTTP headers allowed in CORS requests. |
 
 ---
 
@@ -395,6 +408,13 @@ export MEMEX_SERVER__AUTH__ENABLED=true
 export MEMEX_SERVER__AUTH__API_KEYS='["key1", "key2"]'
 export MEMEX_SERVER__AUTH__WEBHOOK_SECRET=my-webhook-secret
 
+# CORS
+export MEMEX_SERVER__CORS__ORIGINS='["http://localhost:5173", "https://app.example.com"]'
+export MEMEX_SERVER__CORS__ALLOW_CREDENTIALS=true
+
+# Security
+export MEMEX_SERVER__ALLOW_INSECURE=false
+
 # Rate limiting
 export MEMEX_SERVER__RATE_LIMIT__ENABLED=true
 export MEMEX_SERVER__RATE_LIMIT__INGESTION=20/minute
@@ -483,6 +503,12 @@ server:
   default_model:
     model: openai/gpt-4o
     api_key: sk-...
+
+  cors:
+    origins:
+      - "https://app.example.com"
+      - "https://admin.example.com"
+    allow_credentials: true
 
   auth:
     enabled: true

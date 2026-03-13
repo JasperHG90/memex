@@ -147,7 +147,7 @@ class KVService(BaseService):
             await session.commit()
             return True
 
-    async def list_entries(self, vault_id: UUID | None = None) -> list[Any]:
+    async def list_entries(self, vault_id: UUID | None = None, limit: int = 100) -> list[Any]:
         """List KV entries. No vault_id = global only; with vault_id = both vault-scoped + global."""
         from memex_core.memory.sql_models import KVEntry
 
@@ -163,6 +163,6 @@ class KVService(BaseService):
                 stmt = select(KVEntry).where(
                     col(KVEntry.vault_id).is_(None)  # type: ignore[union-attr]
                 )
-            stmt = stmt.order_by(col(KVEntry.key))
+            stmt = stmt.order_by(col(KVEntry.key)).limit(limit)
             result = await session.exec(stmt)
             return list(result.all())

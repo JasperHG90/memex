@@ -219,7 +219,7 @@ async def get_entity_lineage(
     id: UUID,
     response: Response,
     api: Annotated[MemexAPI, Depends(get_api)],
-    direction: str = 'upstream',
+    direction: LineageDirection = LineageDirection.UPSTREAM,
     depth: Annotated[int, Query(ge=1, le=10)] = 3,
     limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
@@ -240,7 +240,7 @@ async def get_entity_lineage(
         return await api.get_lineage(
             entity_type=resolved_type,
             entity_id=id,
-            direction=LineageDirection(direction),
+            direction=direction,
             depth=depth,
             limit=limit,
         )

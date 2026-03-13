@@ -2,11 +2,25 @@
 
 import datetime as dt
 import json
+import re
 from uuid import uuid4
 
 import pytest
 from fastmcp.exceptions import ToolError
 from memex_common.schemas import NodeDTO
+
+
+def _extract_page_index_json(text: str) -> dict:
+    """Extract and parse the JSON from the page index tool output.
+
+    The tool returns ``## Note: <id>\\n<json>`` — strip the header to get valid JSON.
+    """
+    # Remove the markdown header line(s) before the JSON object
+    json_str = re.sub(r'^## Note: .+\n', '', text).strip()
+    # If there are multiple notes separated by ---, take the first
+    if '\n---\n' in json_str:
+        json_str = json_str.split('\n---\n')[0].strip()
+    return json.loads(json_str)
 
 
 def _make_node(
@@ -67,20 +81,21 @@ async def test_memex_get_page_indices_no_index(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_memex_get_page_indices_invalid_uuid(mock_api, mcp_client):
-    """Tool raises ToolError for a malformed document UUID."""
-    with pytest.raises(ToolError, match='Invalid Note UUID'):
-        await mcp_client.call_tool('memex_get_page_indices', {'note_ids': ['not-a-uuid']})
-
+    """Tool returns error in output for a malformed document UUID."""
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': ['not-a-uuid']})
+    text = result.content[0].text
+    assert 'not-a-uuid' in text
     mock_api.get_note_page_index.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_memex_get_page_indices_exception_handling(mock_api, mcp_client):
-    """Tool raises ToolError on unexpected failure."""
+    """Tool reports errors in output on unexpected failure."""
     mock_api.get_note_page_index.side_effect = RuntimeError('DB offline')
 
-    with pytest.raises(ToolError, match='DB offline'):
-        await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    text = result.content[0].text
+    assert 'DB offline' in text
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +195,7 @@ async def test_memex_get_page_indices_includes_total_tokens(mock_api, mcp_client
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert data['total_tokens'] == 2000
     assert data['metadata']['total_tokens'] == 2000
@@ -188,15 +203,13 @@ async def test_memex_get_page_indices_includes_total_tokens(mock_api, mcp_client
 
 @pytest.mark.asyncio
 async def test_memex_get_page_indices_blocks_large_unfiltered(mock_api, mcp_client):
-    """Unfiltered page index whose TOC itself exceeds 3000 tokens raises ToolError."""
-    # Build a TOC with many nodes with long titles and summaries so the TOC
-    # serialized cost exceeds 3000, regardless of content token_estimate.
+    """Unfiltered page index whose TOC exceeds 3000 tokens reports error in output."""
     large_toc = []
     for i in range(60):
         large_toc.append(
             {
                 'id': str(uuid4()),
-                'title': f'Section {i}: ' + 'A' * 200,  # ~50 title tokens each
+                'title': f'Section {i}: ' + 'A' * 200,
                 'level': 1,
                 'token_estimate': 10,
                 'summary': {
@@ -212,8 +225,10 @@ async def test_memex_get_page_indices_blocks_large_unfiltered(mock_api, mcp_clie
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    text = result.content[0].text
+    assert 'Page index has' in text
+    assert 'depth=0' in text
 
 
 @pytest.mark.asyncio
@@ -241,7 +256,7 @@ async def test_memex_get_page_indices_allows_large_content_small_toc(mock_api, m
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # Should return successfully with the content total_tokens preserved
     assert data['total_tokens'] == 9999
@@ -274,8 +289,9 @@ async def test_memex_get_page_indices_toc_guard_includes_summaries(mock_api, mcp
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    text = result.content[0].text
+    assert 'Page index has' in text
 
 
 @pytest.mark.asyncio
@@ -322,8 +338,9 @@ async def test_memex_get_page_indices_toc_guard_counts_nested_children(mock_api,
     }
     mock_api.get_note_page_index.return_value = page_index
 
-    with pytest.raises(ToolError, match='Page index has'):
-        await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
+    text = result.content[0].text
+    assert 'Page index has' in text
 
 
 @pytest.mark.asyncio
@@ -346,7 +363,7 @@ async def test_memex_get_page_indices_small_toc_no_summaries_passes(mock_api, mc
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert data['total_tokens'] == 5000
     assert len(data['toc']) == 5
@@ -372,7 +389,7 @@ async def test_memex_get_page_indices_allows_large_with_depth(mock_api, mcp_clie
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # With depth=0, guard is not triggered — recursive sum used
     assert data['total_tokens'] == 100
@@ -404,7 +421,7 @@ async def test_memex_get_page_indices_falls_back_to_recursive_sum(mock_api, mcp_
     mock_api.get_note_page_index.return_value = page_index
 
     result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(uuid4())]})
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert data['total_tokens'] == 350
 
@@ -482,7 +499,7 @@ async def test_memex_get_page_indices_depth_filters_toc(mock_api, mcp_client):
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert len(data['toc']) == 2
     assert data['toc'][0]['title'] == 'Root 1'
@@ -505,7 +522,7 @@ async def test_memex_get_page_indices_parent_node_id_filters_subtree(mock_api, m
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'parent_node_id': root_id}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert len(data['toc']) == 1
     assert data['toc'][0]['title'] == 'Child 1.1'
@@ -522,7 +539,7 @@ async def test_memex_get_page_indices_filtered_total_tokens_uses_recursive_sum(
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # depth=0 includes roots + direct children (H1+H2), grandchildren trimmed
     # Root 1 (300) + Child 1.1 (150) + Root 2 (500) = 950
@@ -570,7 +587,7 @@ async def test_memex_get_page_indices_depth_0_includes_h2_children(mock_api, mcp
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert len(data['toc']) == 1
     assert len(data['toc'][0]['children']) == 2
@@ -614,7 +631,7 @@ async def test_memex_get_page_indices_depth_0_trims_grandchildren(mock_api, mcp_
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     child = data['toc'][0]['children'][0]
     assert child['title'] == 'Child'
@@ -630,7 +647,7 @@ async def test_memex_get_page_indices_depth_1_returns_full_tree(mock_api, mcp_cl
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 1}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # Full tree: grandchild should be present
     assert len(data['toc'][0]['children']) == 1
@@ -648,7 +665,7 @@ async def test_memex_get_page_indices_depth_1_total_tokens_includes_all(mock_api
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 1}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # All nodes: Root 1 (300) + Child 1.1 (150) + Grandchild 1.1.1 (50) + Root 2 (500)
     assert data['total_tokens'] == 1000
@@ -681,7 +698,7 @@ async def test_memex_get_page_indices_depth_0_flat_note(mock_api, mcp_client):
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 0}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     assert len(data['toc']) == 2
     assert data['toc'][0]['children'] == []
@@ -700,7 +717,7 @@ async def test_memex_get_page_indices_depth_0_with_parent_node(mock_api, mcp_cli
         'memex_get_page_indices',
         {'note_ids': [str(uuid4())], 'depth': 0, 'parent_node_id': root_id},
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # Subtree of Root 1 is [Child 1.1]; depth=0 includes its children
     assert len(data['toc']) == 1
@@ -718,7 +735,7 @@ async def test_memex_get_page_indices_depth_high_value_returns_full(mock_api, mc
     result = await mcp_client.call_tool(
         'memex_get_page_indices', {'note_ids': [str(uuid4())], 'depth': 99}
     )
-    data = json.loads(result.content[0].text)
+    data = _extract_page_index_json(result.content[0].text)
 
     # Full tree preserved
     grandchild = data['toc'][0]['children'][0]['children'][0]
