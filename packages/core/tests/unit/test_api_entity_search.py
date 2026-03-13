@@ -45,8 +45,8 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
 
     mock_config = MagicMock()
     mock_config.server.memory.extraction.model.model = 'test-model'
-    mock_config.server.active_vault = 'global'
-    mock_config.server.attached_vaults = []
+    mock_config.server.default_active_vault = 'global'
+    mock_config.server.default_reader_vault = 'global'
     mock_config.server.logging.level = 'WARNING'
     mock_config.server.logging.json_output = False
     mock_config.server.host = '127.0.0.1'

@@ -158,7 +158,7 @@ async def get_entities_batch(
 ):
     """Get multiple entities by ID."""
     try:
-        vault_id = await api.resolve_vault_identifier(api.config.server.active_vault)
+        vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         entities = await api.get_entities(request.entity_ids, vault_id=vault_id)
         return [build_entity_dto(e) for e in entities]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -169,7 +169,7 @@ async def get_entities_batch(
 async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get entity details."""
     try:
-        vault_id = await api.resolve_vault_identifier(api.config.server.active_vault)
+        vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         entity = await api.get_entity(id, vault_id=vault_id)
         if not entity:
             raise HTTPException(status_code=404, detail=f'Entity {id} not found')
@@ -253,7 +253,7 @@ async def delete_mental_model(
     """Delete a mental model for a specific entity in a specific vault."""
     try:
         resolved_vault_id = await api.resolve_vault_identifier(
-            vault_id or api.config.server.active_vault
+            vault_id or api.config.server.default_active_vault
         )
         await api.delete_mental_model(entity_id, resolved_vault_id)
         return {'status': 'success'}

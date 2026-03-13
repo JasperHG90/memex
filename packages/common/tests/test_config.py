@@ -59,7 +59,7 @@ def test_memex_config_defaults(tmp_path):
 
         config = MemexConfig(
             server=ServerConfig(
-                active_vault='test-vault',
+                default_active_vault='test-vault',
                 meta_store=PostgresMetaStoreConfig(
                     instance=PostgresInstanceConfig.model_validate(meta_store_data['instance'])
                 ),
@@ -69,7 +69,7 @@ def test_memex_config_defaults(tmp_path):
         )
 
         # Check defaults
-        assert config.server.active_vault == 'test-vault'
+        assert config.server.default_active_vault == 'test-vault'
         assert isinstance(config.server.file_store, LocalFileStoreConfig)
         assert config.server.file_store.type == 'local'
         # Check root sync

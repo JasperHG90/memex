@@ -303,7 +303,7 @@ def memex_config(postgres_uri: str) -> 'MemexConfig':
     parsed = urlparse(postgres_uri)
     return MemexConfig(
         server=ServerConfig(
-            active_vault=GLOBAL_VAULT_NAME,
+            default_active_vault=GLOBAL_VAULT_NAME,
             meta_store=PostgresMetaStoreConfig(
                 instance=PostgresInstanceConfig(
                     host=parsed.hostname or 'localhost',

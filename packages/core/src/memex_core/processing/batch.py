@@ -44,7 +44,7 @@ class JobManager:
         """
         job_id = uuid4()
         target_vault_id = await self.api.resolve_vault_identifier(
-            vault_id or self.api.config.server.active_vault
+            vault_id or self.api.config.server.default_active_vault
         )
 
         async with self.api.metastore.session() as session:

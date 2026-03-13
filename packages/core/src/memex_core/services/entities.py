@@ -38,7 +38,7 @@ class EntityService(BaseService):
         from memex_core.memory.sql_models import Vault
         from sqlmodel import select
 
-        vault_name = self.config.server.active_vault
+        vault_name = self.config.server.default_active_vault
         # Try parsing as UUID first
         try:
             return UUID(vault_name)

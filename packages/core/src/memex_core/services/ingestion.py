@@ -122,7 +122,7 @@ class IngestionService:
             raise
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         title = extracted.metadata.get('title') or None
@@ -195,7 +195,7 @@ publish_date: {extracted.metadata.get('date')}
             raise
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         now = datetime.now().isoformat()
@@ -286,7 +286,7 @@ ingested_at: {now}
 
         # Determine Target Vault
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         # 2. Two-Gate Idempotency Check
@@ -392,7 +392,7 @@ ingested_at: {now}
         from sqlmodel import select
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         # 1. Resolve Vault Name for path organization

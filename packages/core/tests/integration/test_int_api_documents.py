@@ -33,7 +33,7 @@ async def test_int_documents_api(api, metastore, memex_config):
         await session.commit()
 
     # Update config to search in the correct vault
-    memex_config.server.active_vault = str(vault_id)
+    memex_config.server.default_active_vault = str(vault_id)
 
     # 2. Test get_note
     doc_result = await api.get_note(doc_id)

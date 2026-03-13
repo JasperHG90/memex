@@ -114,7 +114,7 @@ async def test_int_list_documents_vault_filter(
         await session.commit()
 
     # 2. Config for Vault A
-    memex_config.server.active_vault = str(vault_a)
+    memex_config.server.default_active_vault = str(vault_a)
     api_a = MemexAPI(
         embedding_model=mock_embedding_model,
         reranking_model=mock_reranking_model,
@@ -129,7 +129,7 @@ async def test_int_list_documents_vault_filter(
     assert docs_a[0].vault_id == vault_a
 
     # 3. Config for Global
-    memex_config.server.active_vault = 'global'
+    memex_config.server.default_active_vault = 'global'
     api_global = MemexAPI(
         embedding_model=mock_embedding_model,
         reranking_model=mock_reranking_model,
