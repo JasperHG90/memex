@@ -737,14 +737,14 @@ class ServerConfig(BaseModel):
         description='Configuration for API rate limiting. Disabled by default.',
     )
 
-    active_vault: str = Field(
+    default_active_vault: str = Field(
         default=GLOBAL_VAULT_NAME,
-        description='The active vault for writing new memories. Defaults to "global".',
+        description='Server default vault for writes when no client preference is set.',
     )
 
-    attached_vaults: list[str] = Field(
-        default_factory=list,
-        description='List of additional read-only vaults to include in search/retrieval.',
+    default_reader_vault: str = Field(
+        default=GLOBAL_VAULT_NAME,
+        description='Server default vault for reads when no client preference is set.',
     )
 
     file_store: FileStoreBackend = Field(
@@ -775,23 +775,26 @@ class ServerConfig(BaseModel):
     )
 
     @model_validator(mode='after')
-    def _validate_vault_name(self) -> 'ServerConfig':
-        """Warn if active_vault looks like a typo."""
-        name = self.active_vault
-        if len(name) > 50:
-            warnings.warn(
-                f'active_vault name is suspiciously long ({len(name)} chars): "{name[:30]}..."',
-                UserWarning,
-                stacklevel=2,
-            )
-        if re.search(r'[^a-zA-Z0-9_\-.]', name):
-            warnings.warn(
-                f'active_vault "{name}" contains special characters. '
-                'Vault names typically use only alphanumeric characters, '
-                'hyphens, underscores, and dots.',
-                UserWarning,
-                stacklevel=2,
-            )
+    def _validate_vault_names(self) -> 'ServerConfig':
+        """Warn if vault names look like typos."""
+        for label, name in [
+            ('default_active_vault', self.default_active_vault),
+            ('default_reader_vault', self.default_reader_vault),
+        ]:
+            if len(name) > 50:
+                warnings.warn(
+                    f'{label} name is suspiciously long ({len(name)} chars): "{name[:30]}..."',
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if re.search(r'[^a-zA-Z0-9_\-.]', name):
+                warnings.warn(
+                    f'{label} "{name}" contains special characters. '
+                    'Vault names typically use only alphanumeric characters, '
+                    'hyphens, underscores, and dots.',
+                    UserWarning,
+                    stacklevel=2,
+                )
         return self
 
     @model_validator(mode='after')
@@ -810,6 +813,23 @@ class ServerConfig(BaseModel):
         if self.document.model is None:
             self.document.model = dm
         return self
+
+
+class VaultConfig(BaseModel):
+    """Client-side vault preferences.
+
+    Controls which vault CLI/MCP writes to and searches.
+    Separate from ServerConfig defaults, which are the server's own fallback.
+    """
+
+    active: str | None = Field(
+        default=None,
+        description='Active vault for writes. Falls back to server.default_active_vault if None.',
+    )
+    search: list[str] | None = Field(
+        default=None,
+        description='Vaults to search/read. Falls back to [active] or server default if None.',
+    )
 
 
 class DashboardConfig(BaseModel):
@@ -836,6 +856,11 @@ class MemexConfig(BaseSettings):
         'If empty, derived from server.host and server.port.',
     )
 
+    vault: VaultConfig = Field(
+        default_factory=VaultConfig,
+        description='Client-side vault preferences (CLI, MCP). Overrides server defaults when set.',
+    )
+
     server: ServerConfig = Field(
         default_factory=ServerConfig,
         description='Configuration for the API server.',
@@ -845,6 +870,20 @@ class MemexConfig(BaseSettings):
         default_factory=DashboardConfig,
         description='Configuration for the dashboard.',
     )
+
+    @property
+    def write_vault(self) -> str:
+        """Resolved write vault for clients: vault.active > server.default_active_vault."""
+        return self.vault.active or self.server.default_active_vault
+
+    @property
+    def read_vaults(self) -> list[str]:
+        """Resolved read vaults for clients: vault.search > [vault.active] > server default."""
+        if self.vault.search is not None:
+            return self.vault.search
+        if self.vault.active is not None:
+            return [self.vault.active]
+        return [self.server.default_reader_vault]
 
     @model_validator(mode='after')
     def sync_derived_settings(self) -> 'MemexConfig':
@@ -914,6 +953,7 @@ __all__ = [
     'parse_memex_config',
     'GLOBAL_VAULT_ID',
     'GLOBAL_VAULT_NAME',
+    'VaultConfig',
     'SecretStr',
     'deep_merge',
     'GlobalYamlConfigSettingsSource',
