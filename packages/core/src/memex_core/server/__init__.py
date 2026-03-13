@@ -62,13 +62,21 @@ async def lifespan(app: FastAPI):
         allow_headers=cors.allow_headers,
     )
 
-    # Warn when binding to a non-localhost address without authentication
-    if config.server.host != '127.0.0.1' and not config.server.auth.enabled:
-        logger.warning(
-            'Server is binding to %s without authentication enabled. '
-            'Set server.auth.enabled=true and configure API keys for production.',
-            config.server.host,
-        )
+    # Refuse to bind to a non-localhost address without authentication
+    _is_localhost = config.server.host in ('127.0.0.1', 'localhost')
+    if not _is_localhost and not config.server.auth.enabled:
+        if config.server.allow_insecure:
+            logger.warning(
+                'Server is binding to %s without authentication (--allow-insecure). '
+                'This is NOT recommended for production.',
+                config.server.host,
+            )
+        else:
+            raise RuntimeError(
+                f'Refusing to bind to {config.server.host} without authentication. '
+                'Either enable auth (server.auth.enabled=true) or set '
+                'server.allow_insecure=true to override this check.'
+            )
 
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
