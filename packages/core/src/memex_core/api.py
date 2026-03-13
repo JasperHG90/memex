@@ -938,6 +938,16 @@ class MemexAPI:
             query=query, vault_ids=vault_ids, limit=limit, threshold=threshold
         )
 
+    # --- Embeddings ---
+
+    def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for the given text.
+
+        Exposes the embedding model through the public API so that callers
+        (MCP, CLI) do not need to import core internals.
+        """
+        return self.embedding_model.encode([text])[0].tolist()
+
     # --- KV store ---
 
     async def kv_put(

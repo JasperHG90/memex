@@ -1,9 +1,10 @@
-"""Key-value store endpoints."""
+"""Key-value store and embedding endpoints."""
 
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
 from memex_common.schemas import KVEntryDTO, KVPutRequest, KVSearchRequest
@@ -12,6 +13,31 @@ from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api
 
 router = APIRouter(prefix='/api/v1')
+
+
+class EmbedRequest(BaseModel):
+    """Request to embed a text string."""
+
+    text: str
+
+
+class EmbedResponse(BaseModel):
+    """Response with the embedding vector."""
+
+    embedding: list[float]
+
+
+@router.post('/embed', response_model=EmbedResponse)
+async def embed_text(
+    request: Annotated[EmbedRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Generate an embedding vector for the given text."""
+    try:
+        embedding = api.embed_text(request.text)
+        return EmbedResponse(embedding=embedding)
+    except (MemexError, ValueError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to generate embedding')
 
 
 @router.put('/kv', response_model=KVEntryDTO)
