@@ -1,14 +1,14 @@
 import base64
+import time
 import uuid
-import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_batch_ingest_progress_polling(client: TestClient):
+def test_batch_ingest_progress_polling(client: TestClient):
     """
     Test that batch ingestion progress is updated and can be polled.
     We ingest multiple notes with a small batch size to ensure multiple progress updates.
@@ -57,7 +57,7 @@ async def test_batch_ingest_progress_polling(client: TestClient):
             assert 'Completed' in data['progress']
             break
 
-        await asyncio.sleep(0.5)
+        time.sleep(0.5)
 
     assert found_progress, (
         f"Progress field was never populated with 'Processed X/5' string. Final data: {data}"

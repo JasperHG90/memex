@@ -1,15 +1,14 @@
-import asyncio
 import base64
+import time
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_ingest_background_returns_job_id(client: TestClient):
+def test_ingest_background_returns_job_id(client: TestClient):
     """Background ingestion returns a job_id and completes successfully."""
     note = {
         'name': 'Background Test',
@@ -36,7 +35,7 @@ async def test_ingest_background_returns_job_id(client: TestClient):
         status = status_data['status']
         if status in ('completed', 'failed'):
             break
-        await asyncio.sleep(1)
+        time.sleep(1)
 
     assert status == 'completed', f'Job did not complete: {status_data}'
     result = status_data['result']
@@ -45,10 +44,9 @@ async def test_ingest_background_returns_job_id(client: TestClient):
     assert len(result['note_ids']) == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_ingest_foreground_still_works(client: TestClient):
+def test_ingest_foreground_still_works(client: TestClient):
     """Without background flag, ingestion still returns 200 with note_id."""
     note = {
         'name': 'Foreground Test',
