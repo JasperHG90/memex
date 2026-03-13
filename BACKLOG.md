@@ -1,283 +1,462 @@
-# Backlog: Pluggable Graph Retrieval + Memory Link Strategies
+# Code Audit Backlog
 
-## Execution Order
+> Generated from comprehensive codebase audit (2026-03-13). 10 senior developers scanned the entire repository. Findings reviewed by 4 staff engineers and 2 SE reviewers. Duplicates merged, false positives dropped, estimates and priorities calibrated.
 
-```
-T1 (Pluggable Infrastructure) → T2 (Causal) ─┐
-                                → T3 (Semantic Seeding) ─┤
-                                → T4 (LinkExpansion) ─────┤
-T5 (DateParser) ──────────────────────────────────────────┤ [independent]
-T6 (Cross-Encoder Boosts) ────────────────────────────────┤ [independent]
-T7 (Fact-Type RRF) ───────────────────────────────────────┘ [independent]
-```
+## Priority Legend
+- **P0 (Critical)**: Fix before next release
+- **P1 (High)**: Fix this sprint
+- **P2 (Medium)**: Schedule this quarter
+- **P3 (Low)**: Nice-to-have / opportunistic
 
-T1 is the only blocker. T2/T3/T4 depend on T1. T5/T6/T7 are fully independent.
+## Summary
 
----
-
-## T1: Pluggable Graph Retriever — Size M
-
-**Goal**: Make graph retrieval strategy selectable via config without changing default behavior.
-
-**Files**:
-- `packages/core/src/memex_core/memory/retrieval/strategies.py` — Rename + extract + factory
-- `packages/common/src/memex_common/config.py` — New config field
-- `packages/core/src/memex_core/memory/retrieval/engine.py` (~line 149) — Use factory
-- `packages/core/src/memex_core/memory/retrieval/document_search.py` (~line 95) — Accept config, use factory
-- `packages/core/src/memex_core/api.py` — Pass config through
-
-**Sub-tasks**:
-1. Rename `GraphStrategy` → `EntityCooccurrenceGraphStrategy` (keep alias)
-2. Rename `NoteGraphStrategy` → `EntityCooccurrenceNoteGraphStrategy` (keep alias)
-3. Extract `build_seed_entity_cte(query, ner_model, similarity_threshold, ...)` helper from lines 176-251. **Note**: `vault_id` is NOT used in seed entity building — vault filtering is applied downstream via `apply_vault_filters` on first/second order queries. Also note that `NoteGraphStrategy._build_seed_entities()` (line 413) has additional `ilike` fuzzy matches per entity name in the NER path that `GraphStrategy` does not — the unified helper must reconcile this divergence (recommend including the `ilike` path with an opt-in flag).
-4. Add `graph_retriever_type: str = 'entity_cooccurrence'` to `RetrievalConfig`
-5. Create `get_graph_strategy(type, ner_model, **kwargs)` factory
-6. Create `get_note_graph_strategy(type, ner_model, **kwargs)` factory
-7. Wire factory into `RetrievalEngine.__init__()` replacing hardcoded constructor
-8. Wire factory into `NoteSearchEngine.__init__()`, accept `retrieval_config` param
-9. Pass `retrieval_config` through `MemexAPI.__init__()` → `NoteSearchEngine`
-10. Tests: default behavior unchanged, factory returns correct types, unknown type → ValueError
-
-**AC**: Default config identical to current behavior. `build_seed_entity_cte()` reusable. `just prek` passes.
+- **Total tickets:** 40
+- **By priority:** P0: 3 | P1: 7 | P2: 24 | P3: 6
+- **By category:** Architecture: 10 | Security: 8 | Code Quality: 12 | Testing: 10
 
 ---
 
-## T2: Causal Expansion Strategy — Size M *(depends: T1)*
+## P0 — Critical
 
-**Goal**: Add `CausalGraphStrategy` expanding from NER seeds through `memory_links` causal edges.
+### AUDIT-001: MCP server violates layer boundaries — direct core imports
+**Category:** Architecture
+**Size:** M
+**Files:** `packages/mcp/src/memex_mcp/server.py`, `packages/core/src/memex_core/api.py`
 
-**Files**:
-- `strategies.py` — New `CausalGraphStrategy` + `CausalNoteGraphStrategy`
-- `config.py` — `causal_weight_threshold: float = 0.3`
+**Description:** The MCP server bypasses the API layer in two places: (1) `server.py:1746` imports `get_embedding_model` directly from core internals to generate embeddings for KV writes — embedding generation should be delegated to a new `MemexAPI.embed_text()` method. (2) `server.py:876` calls `NoteService._filter_toc()`, a private method — expose this through `MemexAPI` or the page index endpoint. Both violations couple MCP to core implementation details and pull heavyweight ML dependencies into the MCP process.
 
-**SQL CTE design**:
-```
-seed_entities    → build_seed_entity_cte() [from T1]
-first_order      → seed → UnitEntity → MemoryUnit (score = 1.0 + temporal_decay)
-causal_expansion → first_order.id → memory_links WHERE link_type IN
-                   ('causes','caused_by','enables','prevents') AND weight >= threshold
-                   → to_unit_id → MemoryUnit (score = link_weight × 0.8)
-combined         → UNION ALL + GROUP BY id, MAX(score)
-```
-
-**Sub-tasks**:
-1. `CausalGraphStrategy` with seed + 1st order CTEs (reuse `build_seed_entity_cte`). **Note**: `MemoryLink` is not currently imported in `strategies.py` — add import.
-2. Causal expansion CTE joining `MemoryLink` (use `idx_memory_links_from_weight` index, which has partial filter `weight >= 0.1`)
-3. Score combination via UNION ALL + GROUP BY MAX
-4. `CausalNoteGraphStrategy` mirror for Chunk-based search
-5. `causal_weight_threshold` config field (default 0.3)
-6. Register `'causal'` in both factory functions
-7. Unit tests: SQL compilation, threshold filtering, score ordering
-8. Integration test: retain causal facts → query → verify causal neighbors returned
-
-**AC**: `graph_retriever_type='causal'` activates. 2nd order scores < 1st order. No N+1 queries. `just prek` passes.
+**Why:** A core refactor (renaming `_filter_toc`, changing embedding model init) silently breaks MCP at runtime with no compile-time signal. The embedding import forces the MCP process to load ML model weights unnecessarily.
 
 ---
 
-## T3: Semantic-Seeded Graph Discovery — Size S *(depends: T1)*
+### AUDIT-002: N+1 semantic dedup queries in extraction storage
+**Category:** Architecture
+**Size:** M
+**Files:** `packages/core/src/memex_core/memory/extraction/storage.py`
 
-**Goal**: Augment NER-based seed entity discovery with semantic seeds from `query_embedding`.
+**Description:** `check_duplicates_in_window` (storage.py:366-392) issues one `SELECT` with a cosine distance filter per extracted fact. For a note with 30-50 facts, this means 30-50 sequential database roundtrips, each involving a pgvector index scan. Batch into a single query using a CTE/`VALUES` clause, `unnest()` with a parameterized array, or at minimum `asyncio.gather()` for parallel execution.
 
-**Rationale**: Current graph entry requires entities explicitly named in query. Implicit queries ("Who recommended the national park?") fail because NER won't extract "Yosemite". Semantic seeding finds top-K similar MemoryUnits, reverse-traverses `UnitEntity` to discover their entities.
-
-**Files**:
-- `strategies.py` — Modify `build_seed_entity_cte()` or add `build_semantic_seed_cte()`
-- `config.py` — 3 fields: `graph_semantic_seeding: bool = True`, `graph_semantic_seed_top_k: int = 5`, `graph_semantic_seed_weight: float = 0.7`
-
-**SQL design**:
-```
-ner_seeds      → current NER path (weight = 1.0)
-semantic_seeds → MemoryUnit WHERE status = 'active'
-                 ORDER BY embedding <=> query_embedding LIMIT top_k
-               → JOIN UnitEntity → SELECT DISTINCT entity_id (weight = 0.7)
-               (NOTE: WHERE status = 'active' required to use idx_memory_units_embedding_active HNSW index)
-seed_entities  → UNION ALL ner_seeds + semantic_seeds
-               → GROUP BY id, MAX(weight) [NER wins on overlap]
-```
-
-**Sub-tasks**:
-1. Add `build_semantic_seed_cte(query_embedding, vault_id, top_k, weight)` helper
-2. Modify `build_seed_entity_cte()` to accept optional `query_embedding` and union semantic seeds
-3. Add 3 config fields to `RetrievalConfig`
-4. Pass config through to strategy constructors
-5. Update 1st-order score to use `seed_entities.c.weight` instead of `literal(1.0)` (line 286)
-6. Unit tests: SQL with/without embedding, semantic_seeding=False skips it
-7. Integration test: implicit entity query returns results via semantic path
-
-**AC**: With embedding → UNION seed CTEs. Without → identical to current. NER weight (1.0) > semantic weight (0.7). Uses existing HNSW index `idx_memory_units_embedding_active`. `just prek` passes.
+**Why:** Ingestion is already the slowest user-facing operation. This N+1 pattern is the single largest contributor to per-note latency. Batching could reduce dedup time by 10-30x for typical notes. Without fixing it, scaling requires proportionally more database capacity.
 
 ---
 
-## T4: Link Expansion Strategy — Size M *(depends: T1)*
+### AUDIT-003: Broken async/sync pattern in E2E tests
+**Category:** Testing
+**Size:** S
+**Files:** `tests/test_background_ingestion.py`, `tests/test_e2e_batch.py`, `tests/test_e2e_batch_progress.py`
 
-**Goal**: Port Hindsight's LinkExpansion as a new graph strategy — single CTE expanding through 3 signals (entity co-occurrence, semantic kNN, causal chains) with additive scoring.
+**Description:** Three E2E test files use `async def` test functions with `await asyncio.sleep()` inside polling loops but receive a synchronous `TestClient` fixture. `TestClient` runs requests synchronously with its own internal event loop. The `await asyncio.sleep()` calls work by accident. Fix by converting to sync `def` tests with `time.sleep()`, or switching to the existing `async_client` fixture (httpx `AsyncClient`, defined in `conftest.py:309`).
 
-**Reference**: `.temp/hindsight/hindsight-api/hindsight_api/engine/search/link_expansion_retrieval.py`
-
-**Files**:
-- `strategies.py` — New `LinkExpansionGraphStrategy` + `LinkExpansionNoteGraphStrategy`
-- `config.py` — `link_expansion_causal_threshold: float = 0.3`
-
-**SQL CTE design** (3 parallel expansion CTEs from 1st-order seed units):
-```
-entity_expanded  → seed units → memory_links(type='entity') → target units
-                   score = tanh(COUNT(DISTINCT entity_id) × 0.5)
-semantic_expanded → seed units → memory_links(type='semantic') → target units
-                   UNION seed units ← memory_links(type='semantic', to_unit_id=seed)
-                   score = MAX(weight) [bidirectional kNN]
-causal_expanded  → seed units → memory_links(type IN causal_types) → target units
-                   score = weight, WHERE weight >= threshold
-combined         → UNION ALL all 3 → GROUP BY id
-                   final_score = SUM(entity_score + semantic_score + causal_score) [additive, range 0-3]
-```
-
-**Sub-tasks**:
-1. `LinkExpansionGraphStrategy` class with `build_seed_entity_cte()` + 1st order
-2. Entity expansion CTE: `memory_links(type='entity')` → `COUNT(DISTINCT entity_id)` → `tanh(count × 0.5)`. **Note**: `MemoryLink.entity_id` is nullable — filter `WHERE entity_id IS NOT NULL` to avoid incorrect counts.
-3. Semantic expansion CTE: bidirectional join on `memory_links(type='semantic')` → `MAX(weight)`
-4. Causal expansion CTE: `memory_links(type IN causal_types)` → `DISTINCT ON` best weight
-5. Additive score combination across 3 signals
-6. `LinkExpansionNoteGraphStrategy` mirror
-7. Register `'link_expansion'` in factories
-8. Config field for causal threshold
-9. Unit tests: each expansion CTE individually, combined scoring
-10. Integration test: facts with entity + semantic + causal links → all discovered
-
-**AC**: Single SQL statement per call. Additive scores [0,3]. Each signal independently contributes. `tanh` normalization on entity counts. `just prek` passes.
+**Why:** These tests pass by coincidence. A pytest-asyncio version upgrade or event loop policy change could produce false passes where background jobs appear to complete instantly. Covers core async workflows (background ingestion, batch processing).
 
 ---
 
-## T5: Dateparser Temporal Extraction — Size S *(independent)*
+## P1 — High
 
-**Goal**: Add NLP-based temporal constraint extraction from queries using `dateparser`.
+### AUDIT-004: Add CORS middleware to FastAPI server
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/__init__.py`, `packages/common/src/memex_common/config.py`
 
-**Rationale**: Memex's `TemporalStrategy` only accepts pre-parsed `start_date`/`end_date` from the API request. It can't parse "last week" or "in March 2024" from natural language queries. Hindsight has `DateparserQueryAnalyzer` that handles this.
+**Description:** The FastAPI application does not configure any CORS middleware. Add `CORSMiddleware` with configurable allowed origins via `MemexConfig`. Default to restrictive settings (localhost only). The dashboard already communicates with the API and will break in browser contexts without proper CORS headers.
 
-**Files**:
-- `packages/core/src/memex_core/memory/retrieval/temporal_extraction.py` — New module
-- `packages/core/src/memex_core/memory/retrieval/engine.py` — Call extraction before strategy dispatch
-- `pyproject.toml` (core package) — Add `dateparser` dependency
-
-**Design**:
-```python
-# temporal_extraction.py
-def extract_temporal_constraint(
-    query: str, reference_date: datetime | None = None
-) -> tuple[datetime, datetime] | None:
-    """Parse natural language temporal expressions. Returns (start, end) or None."""
-    import dateparser
-    # Use dateparser.search.search_dates() to find temporal expressions
-    # Convert to (start_date, end_date) range
-    # Handle: "last week", "in March", "yesterday", "3 days ago", etc.
-```
-
-**Sub-tasks**:
-1. Add `dateparser` to core package dependencies
-2. Create `temporal_extraction.py` with `extract_temporal_constraint()`
-3. Integrate into `RetrievalEngine.retrieve()` **upstream** of `_perform_rrf_retrieval()` — dates are assembled in the `retrieve()` method before being passed to RRF. Extract temporal constraint from query, merge into the `filters` dict (explicit `start_date`/`end_date` wins).
-4. Add `temporal_extraction_enabled: bool = True` config field
-5. Unit tests: various temporal expressions → correct date ranges
-6. Integration test: query "what happened last week" → temporal strategy receives parsed dates
-
-**AC**: Natural language dates parsed correctly. Explicit `start_date`/`end_date` override extracted ones. Disabled by config flag. No impact when query has no temporal expression. `just prek` passes.
+**Why:** Without CORS headers, browsers reject all cross-origin requests. The dashboard and any third-party web integrations cannot function in standard deployment topologies where API and frontend are served from different origins. This is a deployment blocker.
 
 ---
 
-## T6: Cross-Encoder Recency + Temporal Boosts — Size S *(independent)*
+### AUDIT-005: Enforce authentication for non-localhost binding
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/__init__.py`
 
-**Goal**: Add multiplicative recency and temporal proximity boosts to cross-encoder reranking.
+**Description:** Binding to a non-localhost address without authentication (server/__init__.py:56) only emits a `logger.warning`. Change to a startup error (or require an explicit `--allow-insecure` flag) when `host != '127.0.0.1'` and auth is disabled. The current behavior silently exposes an unauthenticated API to the network.
 
-**Rationale**: Memex reranking uses raw cross-encoder score only (engine.py lines 704-741). Hindsight applies `combined = ce_norm × recency_boost × temporal_boost` where each boost is `1 ± 10%`. The position-aware blending method in Memex is currently a NO-OP (lines 341-355).
-
-**Reference**: Hindsight `reranking.py` lines 18-69: `_RECENCY_ALPHA = 0.2`, `_TEMPORAL_ALPHA = 0.2`
-
-**Files**:
-- `packages/core/src/memex_core/memory/retrieval/engine.py` — Modify `_rerank_results()`
-- `packages/common/src/memex_common/config.py` — 2 config fields
-
-**Design**:
-```python
-# In _rerank_results(), after getting cross-encoder scores:
-for unit, ce_score in zip(results, scores):
-    # Recency: linear decay over 365 days, [0.1, 1.0], neutral at 0.5
-    days_ago = (now - (unit.event_date or now)).days
-    recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
-    recency_boost = 1.0 + recency_alpha * (recency - 0.5)  # [0.9, 1.1]
-
-    # Temporal: use temporal_proximity if available, else neutral
-    temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)  # [0.9, 1.1]
-
-    combined = ce_score * recency_boost * temporal_boost
-```
-
-**Sub-tasks**:
-1. Add `reranking_recency_alpha: float = 0.2` and `reranking_temporal_alpha: float = 0.2` to `RetrievalConfig`
-2. Implement recency calculation (linear decay, 365 days, floor 0.1)
-3. Apply multiplicative boosts in `_rerank_results()`
-4. Pass `RetrievalConfig` to reranking method
-5. Unit tests: verify boost ranges, neutral case (alpha=0), edge cases (no event_date)
-6. Remove or implement the NO-OP `_apply_position_aware_blending` (clean up dead code). **Note**: method IS called at line 259 gated on `fusion_strategy == 'position_aware'` — removing it also requires removing the call site and potentially the `fusion_strategy` config option from `RetrievalRequest`.
-
-**AC**: Boosts bounded to [0.9, 1.1] with default alpha. Setting alpha=0 → no boost. Missing event_date → neutral (0.5). `just prek` passes.
+**Why:** A warning log is easily missed. An operator who binds to `0.0.0.0` and forgets to enable auth exposes the entire memory store (read, write, delete) as publicly writable. Fail-closed is the only safe default.
 
 ---
 
-## T7: Fact-Type Partitioned RRF — Size M *(independent)*
+### AUDIT-006: Inconsistent 202 response payloads across ingestion endpoints
+**Category:** Architecture
+**Size:** M
+**Files:** `packages/core/src/memex_core/server/ingestion.py`
 
-**Goal**: Run retrieval strategies per fact type independently, then fuse results — preventing popular fact types from drowning out rare ones.
+**Description:** Five ingestion endpoints return three different 202 payloads. `/ingestions?background=true` returns a trackable `BatchJobStatus`; `/ingestions/url` and `/ingestions/upload` return `{'status': 'accepted'}` with no job ID (untrackable fire-and-forget); `/ingestions/webhook` returns a full `IngestResponse` (not actually async). Standardize all 202 responses to return `BatchJobStatus` with a `job_id`. Route background URL and upload ingestion through `JobManager`.
 
-**Rationale**: Current RRF (engine.py lines 462-526) treats all fact types (world, event, observation) in a single pool. If world facts dominate, events get pushed out. Hindsight's `retrieve_all_fact_types_parallel()` runs per-type and keeps results separate until final merge.
-
-**Files**:
-- `packages/core/src/memex_core/memory/retrieval/engine.py` — Major refactor of `_perform_rrf_retrieval()`
-- `packages/common/src/memex_common/config.py` — Config fields
-
-**Design**:
-```
-For each fact_type in [world, event, observation]:
-  1. Run all strategies with WHERE fact_type = X filter
-  2. RRF merge within that fact type → top-N per type
-  3. Collect per-type results
-
-Final: interleave or weighted merge across fact types
-```
-
-**Sub-tasks**:
-1. Add `fact_type_partitioned_rrf: bool = False` config field (opt-in)
-2. Add `fact_type_budget: int = 20` (per-type candidate limit)
-3. Refactor `_perform_rrf_retrieval()` to accept optional `fact_type` filter
-4. Create `_perform_partitioned_rrf()` that loops over fact types and calls `_perform_rrf_retrieval()` per type. Use `asyncio.gather()` to run per-type queries in parallel (3 sequential queries would triple DB roundtrips). **Note**: `MentalModelStrategy` explicitly skips `apply_generic_filters` (line 347-349) because mental models have no `fact_type` — handle mental models outside the per-type loop (run once, merge into final results).
-5. Merge per-type results: interleave round-robin or weighted by type priority
-6. Ensure debug mode works with partitioned path
-7. Unit tests: verify per-type isolation, merge order
-8. Integration test: insert mixed fact types → verify balanced representation in results
-
-**AC**: Opt-in via config (default off — no behavioral change). Each fact type gets independent ranking. No fact type starved in results. Performance acceptable (parallel execution per type). `just prek` passes.
+**Why:** Users calling `/ingestions/url?background=true` receive "accepted" with no mechanism to detect failure. This is a silent data loss vector for any integration that relies on background ingestion.
 
 ---
 
-## Future: MPFP Meta-Path Forward Push — Size L
+### AUDIT-007: Vault ID resolution returns inconsistent types between server and MCP
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/common.py`, `packages/mcp/src/memex_mcp/server.py`, `packages/core/src/memex_core/server/entities.py`
 
-Sublinear graph traversal with 7 predefined meta-path patterns (`[semantic,semantic]`, `[entity,temporal]`, `[semantic,causes]`, etc.) and Forward Push mass propagation with α=0.15 teleport. Complex implementation requiring `EdgeCache` with asyncio locks, hop-synchronized edge loading, and per-pattern budget allocation. Filed as future research item in memex vault.
+**Description:** *Partially addressed by vault config refactor (commits `b73e06c`–`21a3cc4`).* MCP vault params are now optional with config defaults, but two issues remain: (1) Server `resolve_vault_ids()` returns `list[UUID] | None` while MCP `_resolve_vault_ids()` returns `list[UUID | str]` — type mismatch. (2) Entity endpoints `get_entity` and `get_entities_batch` (entities.py:161,172) still hardcode `api.config.server.default_active_vault` instead of accepting a `vault_id` parameter. Fix: tighten MCP return type to `list[UUID]`, add `vault_id` param to entity detail endpoints.
+
+**Why:** Entity detail endpoints are locked to the server's default vault, breaking multi-vault workflows where a user queries a non-default vault. The type mismatch is a latent bug for UUID comparison in SQL queries.
 
 ---
 
-## Key Files
+### AUDIT-008: Path traversal validation inconsistency and LRU cache sharing bug in filestore
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/src/memex_core/storage/filestore.py`
 
-| File | Role |
-|------|------|
-| `packages/core/src/memex_core/memory/retrieval/strategies.py` | All strategy classes + factories |
-| `packages/core/src/memex_core/memory/retrieval/engine.py` | `RetrievalEngine`, RRF, reranking |
-| `packages/core/src/memex_core/memory/retrieval/document_search.py` | `NoteSearchEngine` |
-| `packages/common/src/memex_common/config.py` | `RetrievalConfig` |
-| `packages/core/src/memex_core/api.py` | Config passthrough |
-| `packages/core/src/memex_core/memory/sql_models.py` | `MemoryLink`, `MemoryUnit`, `UnitEntity` |
-| `packages/core/src/memex_core/memory/retrieval/temporal_extraction.py` | New: NLP temporal parsing |
+**Description:** Four separate path traversal validation checks exist with similar but not identical logic (Base uses POSIX normpath; Local uses `os.path.realpath`; S3/GCS use POSIX normpath). Extract a single `validate_path_safe()` function. Additionally, `LocalAsyncFileStore.join_path` (lines 306-307) uses `@cached(cache=LRUCache(maxsize=128))` on an instance method. While `self` is included in the cache key (preventing cross-instance path pollution), the cache is shared across all instances — causing shared eviction pressure and retaining references to dead instances (memory leak for short-lived stores). Move the cache to an instance attribute.
 
-## Verification
+**Why:** If one of the four validation paths is weaker than the others, an attacker could route requests through it. The shared LRU cache causes eviction interference across instances and potential memory leaks.
 
-1. `just prek` — ruff + mypy pass (after each ticket)
-2. `uv run pytest packages/core/tests/unit/memory/retrieval/ -v` — unit tests
-3. `uv run pytest packages/common/tests/ -v` — config tests
-4. `uv run pytest packages/core/tests/integration/memory/retrieval/ -v -m integration` — integration tests
-5. Default behavior: all new features off or backward-compatible by default
+---
+
+### AUDIT-009: Misleading `.uuid` property naming in NoteInput and test_api_idempotency
+**Category:** Code Quality
+**Size:** XS
+**Files:** `packages/core/src/memex_core/api.py`, `packages/core/tests/unit/test_api_idempotency.py`
+
+**Description:** `NoteInput.uuid` (api.py:143) returns `self.note_key`, which is an MD5 hex digest — not a UUID object or UUID-formatted string. The test at line 51-52 works correctly (both sides produce matching hex strings), but the property name `.uuid` and the test comment "Verify the UUID format" are misleading. Rename the property to `.note_key` or `.idempotency_key` and update the test comment.
+
+**Why:** Developers encountering `.uuid` will expect a UUID-formatted string with dashes. The current naming creates confusion when integrating with systems that expect actual UUIDs (e.g., database UUID columns, which auto-cast but mask the format mismatch).
+
+---
+
+### AUDIT-010: Monitor high-risk third-party dependencies
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/pyproject.toml`, CI configuration
+
+**Description:** Three dependencies warrant active monitoring: `trafilatura` (parses untrusted HTML), `cloudscraper` (executes untrusted code patterns), and `pymupdf4llm` (processes untrusted binary PDFs). Set up automated dependency scanning (`pip-audit` in CI, Dependabot/Renovate) and pin to reviewed versions rather than open-ended `>=` ranges.
+
+**Why:** The ingestion pipeline processes arbitrary URLs and files from users. These libraries are historically frequent sources of CVEs. A vulnerability could allow remote code execution via crafted input. Without active monitoring, known vulnerabilities go unpatched indefinitely.
+
+---
+
+## P2 — Medium
+
+### AUDIT-011: Validate and cap limit/offset query parameters
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/entities.py`, `packages/core/src/memex_core/server/reflection.py`, `packages/core/src/memex_core/server/notes.py`
+
+**Description:** Several server endpoints accept `limit` parameters without upper-bound validation. The audit endpoint correctly uses `Query(ge=1, le=500)` — adopt this pattern everywhere. Add `ge=1, le=<reasonable_max>` constraints to all `limit` and `offset` parameters.
+
+**Why:** Unbounded limits are a DoS vector. A single request with `limit=999999999` can exhaust database and server memory.
+
+---
+
+### AUDIT-012: Add production-mode check for default database password
+**Category:** Security
+**Size:** XS
+**Files:** `packages/common/src/memex_common/config.py`
+
+**Description:** `config.py:761` sets `password=SecretStr('postgres')` as the default `PostgresInstanceConfig` password. The default is acceptable for local development, but production deployments should not inherit it. Add a production-mode check: when a production indicator is set (e.g., `MEMEX_ENV=production` or a config flag), fail at startup if the password is still the default. Emit a warning in dev mode.
+
+**Why:** Default credentials are a leading cause of database breaches. Any deployment guide that omits password configuration silently inherits `postgres`.
+
+---
+
+### AUDIT-013: Restore MCP error logging
+**Category:** Security
+**Size:** XS
+**Files:** `packages/mcp/src/memex_mcp/server.py`
+
+**Description:** FastMCP server is initialized with `log_level='CRITICAL'` (server.py:128), suppressing all error and warning logs. Change to a configurable log level (default `WARNING`) controlled via `MEMEX_MCP_LOG_LEVEL` environment variable.
+
+**Why:** Silent failures in the MCP layer mean LLM tool calls fail with no diagnostic trail. MCP is the primary LLM integration surface where failures are most likely and hardest to reproduce.
+
+---
+
+### AUDIT-014: Audit endpoint access control
+**Category:** Security
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/audit.py`
+
+**Description:** The audit endpoint at `/api/v1/admin/audit` relies entirely on global auth middleware. When auth is disabled (the default), the audit log is freely readable. Require auth for `/admin/*` routes regardless of global setting, or add a separate router with its own auth dependency.
+
+**Why:** Audit logs contain sensitive operational data (actor identifiers, API key prefixes, request paths). Exposing them without authentication aids reconnaissance.
+
+---
+
+### AUDIT-015: Dead webhooks module — register or remove
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/webhooks.py`, `packages/core/src/memex_core/server/__init__.py`
+
+**Description:** `server/webhooks.py` contains a complete CRUD router with DTOs and validation, but `server/__init__.py` never registers it and `webhook_service` is never initialized in the lifespan. This is dead code that will silently break as surrounding code evolves. Either register the router behind a config flag (preferred, since the code is already written) or remove the module entirely.
+
+**Why:** Dead code that references uninitialized state misleads developers into thinking webhooks are functional. The module accumulates maintenance cost from refactors it participates in but cannot serve.
+
+---
+
+### AUDIT-016: O(N) DB roundtrips in reindex_blocks and batch job race condition
+**Category:** Architecture
+**Size:** M
+**Files:** `packages/core/src/memex_core/memory/extraction/storage.py`, `packages/core/src/memex_core/processing/batch.py`
+
+**Description:** Two issues: (1) `reindex_blocks` (storage.py:522-524) issues one `UPDATE chunks SET chunk_index = ? WHERE id = ?` per block — 100 sequential roundtrips for a 100-chunk note. Batch into a single `CASE WHEN` UPDATE or `executemany`. (2) Batch job status updates (batch.py:135-142) perform read-modify-write cycles across separate sessions with no optimistic locking. Add a `version` column for optimistic locking or use `SELECT ... FOR UPDATE`.
+
+**Why:** Reindex runs on every incremental re-ingestion and latency is noticeable on large notes. The batch race condition, while rare (single-writer by design), can result in a job stuck in PROCESSING forever after a server restart during reconciliation.
+
+---
+
+### AUDIT-017: Redundant lineage endpoints
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/entities.py`, `packages/core/src/memex_core/server/resources.py`
+
+**Description:** Three endpoints all call `api.get_lineage()`: entity-specific (hardcodes `entity_type='mental_model'`), note-specific (hardcodes `entity_type='note'`), and generic (accepts any type). The generic endpoint is a strict superset. Deprecate the specific endpoints with response headers and remove after one release cycle.
+
+**Why:** Each endpoint is an independent maintenance target. The entity endpoint has a bug where it hardcodes `entity_type='mental_model'` instead of inferring from the actual entity. When lineage logic changes, all three must be updated in lockstep.
+
+---
+
+### AUDIT-018: Extract shared MemoryUnitDTO builder in server layer
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/core/src/memex_core/server/retrieval.py`, `packages/core/src/memex_core/server/memories.py`, `packages/core/src/memex_core/server/entities.py`
+
+**Description:** Three server files independently construct `MemoryUnitDTO` from `MemoryUnit` models with slight variations. Extract a shared `build_memory_unit_dto()` helper into `server/common.py` and call it from all three endpoints.
+
+**Why:** Adding a field to `MemoryUnitDTO` requires finding and updating three separate builder sites. Drift between them causes inconsistent API responses.
+
+---
+
+### AUDIT-019: Deduplicate vault resolution logic across MCP and client
+**Category:** Code Quality
+**Size:** M
+**Files:** `packages/mcp/src/memex_mcp/server.py`, `packages/common/src/memex_common/client.py`, `packages/core/src/memex_core/server/vaults.py`
+
+**Description:** *Scope reduced by vault config refactor (commits `b73e06c`–`21a3cc4`).* MCP now has `_default_write_vault()` and `_default_read_vaults()` helpers and vault params are optional with defaults, reducing some duplication. However, the vault ID list assembly pattern (`ids = list(vault_ids) if vault_ids else []; if vault_id and vault_id not in ids: ids.append(vault_id)`) is still repeated ~7 times in `client.py`. Extract a shared `_resolve_vault_list()` utility in `memex_common` and consolidate remaining client-side duplication.
+
+**Why:** The client-side vault list assembly is still duplicated across 7+ methods. A change to vault resolution semantics requires updating each site individually, risking inconsistency.
+
+---
+
+### AUDIT-020: Consolidate duplicate date/datetime parsing functions
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/core/src/memex_core/processing/files.py`, `packages/core/src/memex_core/processing/web.py`, `packages/core/src/memex_core/processing/dates.py`
+
+**Description:** Three redundant date parsing implementations exist with subtly different behavior (timezone handling, format precedence). The CLI also has its own DateTime parsing. Consolidate into a single `parse_datetime()` in `processing/dates.py` and update all callers. Note: sequence this before T5 (Dateparser Temporal Extraction) to avoid building on fragmented date parsing.
+
+**Why:** Subtle differences across modules cause silent data inconsistencies. When a bug is found in one parser, the other two are typically forgotten.
+
+---
+
+### AUDIT-021: CLI output layer cleanup — remove debug print and centralize formatting
+**Category:** Code Quality
+**Size:** M
+**Files:** `packages/cli/src/memex_cli/__init__.py`, `packages/cli/src/memex_cli/` (multiple files)
+
+**Description:** Three issues: (1) A debug `print()` statement at `__init__.py:190` leaks to stdout. (2) Mixed `console.print()` and bare `print()` across ~16 files (~293 calls). (3) Output formatting logic duplicated across ~19 locations. Fix: remove the debug print, standardize on Rich `console.print()`, extract shared formatters.
+
+**Why:** The debug print is visible to users. Mixed print/console.print means some output ignores `--quiet`/`--no-color` flags. Duplicated formatting causes visual inconsistencies.
+
+---
+
+### AUDIT-022: Clean up server endpoint inconsistencies — base64 dedup and unreachable reflection code
+**Category:** Code Quality
+**Size:** M
+**Files:** `packages/core/src/memex_core/server/ingestion.py`, `packages/core/src/memex_core/server/reflection.py`
+
+**Description:** Duplicate Base64 decoding logic in `ingestion.py` — extract a shared `_decode_base64_dict()` helper. Note: lineage endpoint duplication is tracked in AUDIT-017; 202 response inconsistency is tracked in AUDIT-006; unreachable reflection code is tracked in AUDIT-040.
+
+**Why:** Duplicate decoding diverges over time. Different error messages and handling between the two sites create inconsistent client-facing behavior.
+
+---
+
+### AUDIT-023: Fix inconsistent MCP supersession metadata and return types
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/mcp/src/memex_mcp/server.py`
+
+**Description:** Supersession metadata handling differs between `server.py:697` and `server.py:1632` — one path sets it, the other does not. Additionally, `memex_get_page_indices` returns `str | PageIndexDTO` depending on code path. Standardize supersession handling and make `memex_get_page_indices` always return a consistent type.
+
+**Why:** Inconsistent supersession metadata breaks note version history traversal and could cause reflection to process stale data. Inconsistent return types force LLM callers to handle two shapes.
+
+---
+
+### AUDIT-024: Deduplicate entity resolution logic across CLI and core
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/cli/src/memex_cli/`, `packages/core/src/memex_core/memory/`
+
+**Description:** Entity resolution logic exists in both CLI and core packages. The CLI should delegate entirely to core's entity resolver rather than reimplementing matching/deduplication logic.
+
+**Why:** If the CLI resolves entities differently than the API/MCP server, users get different results depending on how they interact with Memex. Especially confusing for entity merging and search.
+
+---
+
+### AUDIT-025: Remove dead DuckDB module
+**Category:** Code Quality
+**Size:** XS
+**Files:** `packages/core/src/memex_core/duckdb.py`
+
+**Description:** `duckdb.py` is unused dead code. The project uses PostgreSQL+pgvector exclusively. Remove the file and any residual imports.
+
+**Why:** Creates a false impression that DuckDB is a supported storage backend. Accumulates linting debt and confuses contributors evaluating the architecture.
+
+---
+
+### AUDIT-026: Fix fixture leak in test_server_upload.py
+**Category:** Testing
+**Size:** XS
+**Files:** `tests/test_server_upload.py`
+
+**Description:** Module-level `mock_api = MagicMock()` accumulates call state across tests. The `client` fixture sets `app.dependency_overrides[get_api]` but never cleans it up. Add teardown to clear overrides and reset `mock_api` before each test.
+
+**Why:** Module-level mutable mock state is a classic source of order-dependent test flakiness. Will surface as intermittent CI failures as the test suite grows.
+
+---
+
+### ~~AUDIT-027: Implement tests in empty test_memory_cli.py~~ RESOLVED
+> Resolved by commit `a27aec0` — file now has 126 lines of real tests covering `add`, `search`, `list`, and error cases.
+
+---
+
+### AUDIT-028: Replace MockAsyncClientContext anti-pattern in test_e2e_cli.py
+**Category:** Testing
+**Size:** M
+**Files:** `tests/test_e2e_cli.py`
+
+**Description:** A 60+ line `MockAsyncClientContext` class manually reconstructs `MemexAPI` initialization, meaning the test validates the mock, not the actual CLI-to-server integration. Replace with the existing `client` or `async_client` fixture, or mock at the HTTP client level (e.g., `respx`).
+
+**Why:** The mock has already diverged from production bootstrap (manually calls `get_embedding_model()` etc.). Every server change risks widening this gap silently. The test gives false confidence.
+
+---
+
+### AUDIT-029: Strengthen test_metadata_flow.py assertions
+**Category:** Testing
+**Size:** S
+**Files:** `tests/test_metadata_flow.py`
+
+**Description:** Uses fragile positional arg unpacking (lines 54-57) that breaks if `retain()` signature changes. Also only verifies `source_uri`, not other payload fields. Switch to keyword-only assertions (`call_args.kwargs['contents']`) and add assertions for all payload fields.
+
+**Why:** The `retain()` method signature has already changed once. Future changes will silently break this test's arg unpacking rather than producing a clear failure.
+
+---
+
+### AUDIT-030: Verify create_task scheduling in test_batch_manager.py
+**Category:** Testing
+**Size:** XS
+**Files:** `tests/test_batch_manager.py`
+
+**Description:** The test patches `_run_job` but never asserts that the background task was actually scheduled. The test's own comments document this gap. Assert that `_run_job` was called with expected arguments or patch `asyncio.create_task` directly. Remove the dead comments.
+
+**Why:** Background task scheduling is the core purpose of `create_job`. If it stops scheduling background work, tests would still pass.
+
+---
+
+### AUDIT-031: Add missing error path and edge case tests
+**Category:** Testing
+**Size:** L
+**Files:** Multiple test files across `packages/core/tests/` and `tests/`
+
+**Description:** Three sub-items:
+1. **Formatting + summary error paths:** Empty string input, None fact_type, None date in `format_for_reranking`; empty texts list, None query, invalid LLM summary in `test_summary.py`.
+2. **Extraction + retrieval edge cases:** LLM extraction failures, malformed output, budget exhaustion mid-retrieval.
+3. **Vault isolation tests:** Verify queries scoped to vault A cannot return results from vault B. This is a data isolation and security-adjacent concern.
+
+**Why:** Production systems fail in error paths, not happy paths. Vault isolation gaps are a data correctness risk. The current suite validates that things work when everything goes right but provides no confidence about degraded behavior.
+
+---
+
+### AUDIT-032: Add test coverage for eval framework
+**Category:** Testing
+**Size:** XL
+**Files:** `packages/eval/src/memex_eval/`
+
+**Description:** The entire `packages/eval/` package has zero test coverage. Needs tests for scenario generation, check logic (exact match, semantic similarity, LLM judge), report generation, and edge cases (malformed scenarios, LLM judge failures).
+
+**Why:** The eval framework is the quality gate for the entire memory system. A bug in check logic could make a regression look like an improvement. Without tests, changes to scoring logic could silently change what "0.958 accuracy" means.
+
+---
+
+### AUDIT-033: Test infrastructure hygiene sweep
+**Category:** Testing
+**Size:** M
+**Files:** `tests/conftest.py`, multiple test files
+
+**Description:** Multiple cross-cutting issues: (1) Inconsistent mock naming (`mock_api` vs `api_mock` vs `MockMemexAPI`). (2) Inconsistent embedding mock types (numpy arrays vs plain lists). (3) Commented-out test code in `test_cli_utils.py:54-55`. (4) Hard-coded threshold magic numbers. (5) Misleading test name (`test_list_vaults` is actually a health check). (6) Missing `@pytest.mark.parametrize` in repetitive tests.
+
+Additionally, a fixture scope mismatch in E2E conftest deserves separate attention: `init_db` is session-scoped and creates the global vault once, but if a test truncates tables without `db_session`, the vault may be missing. This is a latent ordering bug that should be treated as a medium-priority sub-item.
+
+**Why:** Test infrastructure debt compounds. Mocks silently diverge from production, failures are hard to diagnose, and new contributors copy bad patterns.
+
+---
+
+### AUDIT-038: Dependency version skew — dspy, platformdirs, and python-box
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/core/pyproject.toml`, `packages/eval/pyproject.toml`, `packages/cli/pyproject.toml`, `packages/common/pyproject.toml`
+
+**Description:** Three conflicts: (1) `dspy`: core requires `>=3.1.0`, eval requires `>=2.6` — incompatible major versions with breaking API changes. (2) `platformdirs`: CLI requires `>=4.2.0`, common requires `>=4.5.1` — CLI's lower bound is meaningless since it depends on common. (3) `python-box`: CLI requires `>=7.1.1`, common requires `>=7.3.2` — same issue. Align all shared dependencies to consistent ranges. For dspy, upgrade eval to 3.x.
+
+**Why:** The dspy major version mismatch means core and eval cannot coexist in the same environment. A `uv lock --upgrade` could resolve to incompatible versions, breaking eval or CLI.
+
+---
+
+## P3 — Low
+
+### AUDIT-034: Remove empty callback functions and centralize CLI option patterns
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/cli/src/memex_cli/config.py`, `packages/cli/src/memex_cli/setup_claude_code.py`
+
+**Description:** Empty Typer callback stubs at `config.py:31` and `setup_claude_code.py:32` do nothing. Additionally, ~5+ commands duplicate the same CLI option patterns (vault, output format, limit). Extract shared option decorators or a common options factory.
+
+**Why:** Empty callbacks confuse future developers. Duplicated option patterns mean adding a global option (e.g., `--profile`) requires touching every command.
+
+---
+
+### AUDIT-035: Fix fragile DSN string manipulation in scheduler
+**Category:** Code Quality
+**Size:** XS
+**Files:** `packages/core/src/memex_core/scheduler.py`
+
+**Description:** Lines 71-73 use string manipulation to modify the database DSN. This breaks on DSNs with query parameters, IPv6 hosts, or non-standard formats. Replace with `sqlalchemy.engine.url.make_url()` for proper URL manipulation.
+
+**Why:** Any user with a non-trivial DSN (connection pooler, SSL params, IPv6) will hit a hard-to-debug scheduler failure. The fix is trivial.
+
+---
+
+### AUDIT-036: Deduplicate eval extraction wait logic and clean up eval code
+**Category:** Code Quality
+**Size:** S
+**Files:** `packages/eval/src/memex_eval/runner.py`, `packages/eval/src/memex_eval/locomo_ingest.py`, `packages/eval/src/memex_eval/checks.py`
+
+**Description:** Extraction wait logic duplicated between `runner.py` and `locomo_ingest.py`. Check function dispatch uses if/elif chain instead of dispatch table. Hardcoded excluded question IDs should be configurable. Extract shared wait helper, use dispatch dict, move exclusions to config.
+
+**Why:** The eval framework is actively developed. Duplication slows iteration when adding new eval checks or ingestion methods.
+
+---
+
+### AUDIT-037: Remove TODO comments without issue numbers
+**Category:** Code Quality
+**Size:** S
+**Files:** Codebase-wide
+
+**Description:** Audit for TODO comments lacking tracking issue numbers. Create issues for actionable TODOs and add references, or remove stale TODOs that will never be addressed.
+
+**Why:** TODOs without tracking become invisible debt. Over time developers learn to ignore all TODOs, including important ones.
+
+---
+
+### AUDIT-039: Establish structlog adoption policy — lint rule to prevent stdlib logging spread
+**Category:** Architecture
+**Size:** XS
+**Files:** `packages/core/src/memex_core/logging_config.py`, ruff/linting configuration
+
+**Description:** structlog is configured in `logging_config.py` but only 3-4 files use it; ~91 files use `logging.getLogger()`. The current structlog-wrapping-stdlib config works, so no bulk migration is needed. Add a ruff rule or linting check that flags new `logging.getLogger()` calls. For new code, use `structlog.get_logger()`. Convert existing files opportunistically.
+
+**Why:** Two logging systems means inconsistent output (some structured JSON, most plain text). The XS policy fix prevents the gap from widening without requiring a large migration.
+
+---
+
+### AUDIT-040: Prune unused schema fields and superfluous MCP tools
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/common/src/memex_common/`, `packages/mcp/src/memex_mcp/server.py`, `packages/core/src/memex_core/server/reflection.py`
+
+**Description:** Two cleanup items: (1) `NoteMetadata` has unused fields (`embedding`, `etag`, `project`) that are never populated — remove or deprecate. (2) `memex_active_vault` MCP tool provides the only way to determine the active vault (since `VaultDTO` has no `is_active` field) — add an `is_active` flag to `VaultDTO` in `memex_list_vaults` output, then deprecate `memex_active_vault`. Note: unreachable reflection code is tracked in AUDIT-022.
+
+**Why:** Every unused `NoteMetadata` field consumes tokens when LLMs process API responses. Consolidating vault tools reduces MCP tool count and context window cost (~200 tokens/session).
