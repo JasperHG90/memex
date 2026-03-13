@@ -3,12 +3,18 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import EntityDTO, EntityType, LineageResponse, MemoryUnitDTO
+from memex_common.schemas import (
+    EntityDTO,
+    EntityType,
+    LineageDirection,
+    LineageResponse,
+    MemoryUnitDTO,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -209,20 +215,32 @@ async def get_entity_cooccurrences(
         raise _handle_error(e, f'Failed to fetch co-occurrences for entity {id}')
 
 
+# Deprecated: use GET /lineage/{entity_type}/{id} instead. Remove after 2026-06-01.
 @router.get('/entities/{id}/lineage', response_model=LineageResponse)
 async def get_entity_lineage(
     id: UUID,
+    response: Response,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: str = 'upstream',
     depth: Annotated[int, Query(ge=1, le=10)] = 3,
     limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
-    """Get the lineage of an entity."""
+    """Get the lineage of an entity.
+
+    .. deprecated:: Use ``GET /api/v1/lineage/{entity_type}/{id}`` instead.
+    """
+    response.headers['Deprecation'] = 'true'
+    response.headers['Sunset'] = '2026-06-01'
+    response.headers['Link'] = '</api/v1/lineage>; rel="successor-version"'
     try:
-        from memex_common.schemas import LineageDirection
+        # Infer entity type from the actual entity rather than hardcoding.
+        entity = await api.get_entity(id)
+        if not entity:
+            raise HTTPException(status_code=404, detail=f'Entity {id} not found')
+        resolved_type = 'mental_model' if entity.entity_type == 'entity' else entity.entity_type
 
         return await api.get_lineage(
-            entity_type='mental_model',
+            entity_type=resolved_type,
             entity_id=id,
             direction=LineageDirection(direction),
             depth=depth,
