@@ -51,6 +51,10 @@ rtk_setup:
 # Install python dependencies and pre-commit hooks
 setup: install prek_setup rtk_setup
 
+# Audit dependencies for known vulnerabilities
+audit:
+  uv run pip-audit
+
 # Run pre-commit
 prek:
  uv run prek run -a

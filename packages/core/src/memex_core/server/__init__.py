@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from memex_core.api import MemexAPI
@@ -52,13 +53,31 @@ async def lifespan(app: FastAPI):
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
 
-    # Warn when binding to a non-localhost address without authentication
-    if config.server.host != '127.0.0.1' and not config.server.auth.enabled:
-        logger.warning(
-            'Server is binding to %s without authentication enabled. '
-            'Set server.auth.enabled=true and configure API keys for production.',
-            config.server.host,
-        )
+    # Configure CORS
+    cors = config.server.cors
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors.origins,
+        allow_credentials=cors.allow_credentials,
+        allow_methods=cors.allow_methods,
+        allow_headers=cors.allow_headers,
+    )
+
+    # Refuse to bind to a non-localhost address without authentication
+    _is_localhost = config.server.host in ('127.0.0.1', 'localhost')
+    if not _is_localhost and not config.server.auth.enabled:
+        if config.server.allow_insecure:
+            logger.warning(
+                'Server is binding to %s without authentication (--allow-insecure). '
+                'This is NOT recommended for production.',
+                config.server.host,
+            )
+        else:
+            raise RuntimeError(
+                f'Refusing to bind to {config.server.host} without authentication. '
+                'Either enable auth (server.auth.enabled=true) or set '
+                'server.allow_insecure=true to override this check.'
+            )
 
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)

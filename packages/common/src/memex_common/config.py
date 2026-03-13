@@ -589,6 +589,27 @@ class AuthConfig(BaseModel):
     )
 
 
+class CorsConfig(BaseModel):
+    """Configuration for CORS (Cross-Origin Resource Sharing)."""
+
+    origins: list[str] = Field(
+        default_factory=lambda: ['http://localhost:5173', 'http://localhost:3000'],
+        description='Allowed origins for CORS requests.',
+    )
+    allow_credentials: bool = Field(
+        default=True,
+        description='Whether to allow credentials (cookies, auth headers) in CORS requests.',
+    )
+    allow_methods: list[str] = Field(
+        default_factory=lambda: ['*'],
+        description='HTTP methods allowed in CORS requests.',
+    )
+    allow_headers: list[str] = Field(
+        default_factory=lambda: ['*'],
+        description='HTTP headers allowed in CORS requests.',
+    )
+
+
 class RateLimitConfig(BaseModel):
     """Configuration for API rate limiting."""
 
@@ -716,6 +737,14 @@ class ServerConfig(BaseModel):
         default=4,
         description='Number of worker processes.',
     )
+    allow_insecure: bool = Field(
+        default=False,
+        description=(
+            'Allow binding to non-localhost addresses without authentication. '
+            'When False (default), the server refuses to start on a non-localhost '
+            'address unless auth is enabled.'
+        ),
+    )
 
     default_model: ModelConfig = Field(
         default_factory=lambda: ModelConfig(model='gemini/gemini-3-flash-preview'),
@@ -730,6 +759,11 @@ class ServerConfig(BaseModel):
     auth: AuthConfig = Field(
         default_factory=AuthConfig,
         description='API key authentication. Disabled by default.',
+    )
+
+    cors: CorsConfig = Field(
+        default_factory=CorsConfig,
+        description='CORS (Cross-Origin Resource Sharing) configuration.',
     )
 
     rate_limit: RateLimitConfig = Field(
@@ -794,6 +828,28 @@ class ServerConfig(BaseModel):
                     'hyphens, underscores, and dots.',
                     UserWarning,
                     stacklevel=2,
+                )
+        return self
+
+    @model_validator(mode='after')
+    def _check_default_db_password(self) -> 'ServerConfig':
+        """Reject default database password in production mode."""
+        if not isinstance(self.meta_store, PostgresMetaStoreConfig):
+            return self
+        pw = self.meta_store.instance.password.get_secret_value()
+        is_production = os.getenv('MEMEX_ENV', '').lower() == 'production'
+        if pw == 'postgres':
+            if is_production:
+                raise ValueError(
+                    'Default database password "postgres" is not allowed '
+                    'when MEMEX_ENV=production. Set a secure password via '
+                    'server.meta_store.instance.password or '
+                    'MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD.'
+                )
+            else:
+                logger.warning(
+                    'Using default database password "postgres". '
+                    'Set a secure password for production use.'
                 )
         return self
 
@@ -924,6 +980,7 @@ def parse_memex_config(data: dict | None = None) -> MemexConfig:
 
 __all__ = [
     'AuthConfig',
+    'CorsConfig',
     'ConfigWithRoot',
     'FileStoreConfig',
     'LocalFileStoreConfig',
