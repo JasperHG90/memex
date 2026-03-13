@@ -31,6 +31,13 @@ CATEGORY_NAMES: dict[str, str] = {
 }
 QUESTION_TYPES = list(CATEGORY_NAMES.keys())
 
+# Image-dependent questions excluded from scoring (content only visible in images).
+EXCLUDED_QUESTION_IDS: dict[str, str] = {
+    'q-018': 'Book title only visible in shared image (book cover)',
+    'q-027': 'Precautionary sign content only visible in shared photo',
+    'q-037': 'References a photo not available to the memory system',
+}
+
 
 def load_dataset(dataset_path: str) -> list[dict]:
     """Load the LoCoMo dataset from a directory or file path."""
