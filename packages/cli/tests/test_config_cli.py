@@ -62,6 +62,8 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
             'search': ['local-read'],
         },
         'server': {
+            'default_active_vault': 'local-write',
+            'default_reader_vault': 'local-read',
             'meta_store': {
                 'type': 'postgres',
                 'instance': {
@@ -104,7 +106,7 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
         # Verify Cascade:
         assert 'active: local-write' in result.stdout
         assert 'global-write' not in result.stdout
-        assert '- local-read' in result.stdout
+        assert 'default_reader_vault: local-read' in result.stdout
         assert 'host: local-host' in result.stdout
         assert 'port: 9999' in result.stdout
 
