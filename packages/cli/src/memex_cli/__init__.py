@@ -158,10 +158,10 @@ def main(
         # Track which config source set active vault
         _local_vault = (local_data.get('vault', {}) or {}).get('active') or (
             local_data.get('server', {}) or {}
-        ).get('active_vault')
+        ).get('default_active_vault')
         _global_vault = (global_data.get('vault', {}) or {}).get('active') or (
             global_data.get('server', {}) or {}
-        ).get('active_vault')
+        ).get('default_active_vault')
         if vault:
             vault_source = 'cli'
         elif _local_vault:

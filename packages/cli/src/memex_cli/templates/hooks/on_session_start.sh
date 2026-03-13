@@ -9,14 +9,14 @@ command -v uv >/dev/null 2>&1 || exit 0
 # --- Vault context from local .memex.yaml ---
 for cfg in .memex.yaml memex_core.yaml memex_core.config.yaml; do
     if [ -f "$cfg" ]; then
-        active=$(grep -oP '^\s*active_vault:\s*\K\S+' "$cfg" 2>/dev/null || true)
-        attached=$(grep -A 20 'attached_vaults:' "$cfg" 2>/dev/null | grep -oP '^\s*-\s*\K\S+' || true)
-        if [ -n "$active" ] || [ -n "$attached" ]; then
+        active=$(grep -oP '^\s*active:\s*\K\S+' "$cfg" 2>/dev/null || true)
+        search=$(grep -A 20 'search:' "$cfg" 2>/dev/null | grep -oP '^\s*-\s*\K\S+' || true)
+        if [ -n "$active" ] || [ -n "$search" ]; then
             echo "## Memex Vault Context"
             echo ""
             [ -n "$active" ] && echo "- **Writer vault**: $active"
-            if [ -n "$attached" ]; then
-                echo "- **Attached vaults** (read-only): $(echo "$attached" | tr '\n' ', ' | sed 's/,$//')"
+            if [ -n "$search" ]; then
+                echo "- **Search vaults**: $(echo "$search" | tr '\n' ', ' | sed 's/,$//')"
             fi
             echo ""
         fi

@@ -70,7 +70,7 @@ async def add_note(
     config: MemexConfig = ctx.obj
     # Override active vault if specified
     if vault:
-        config.server.active_vault = vault
+        config.vault.active = vault
 
     # Determine input source
     if file:
@@ -107,9 +107,7 @@ async def add_note(
                         assets_dict[asset_path.name] = base64.b64encode(asset_data)
 
                 console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
-                req = IngestURLRequest(
-                    url=url, assets=assets_dict, vault_id=config.server.active_vault
-                )
+                req = IngestURLRequest(url=url, assets=assets_dict, vault_id=config.write_vault)
                 result = await api.ingest_url(req, background=background)
             except Exception as e:
                 handle_api_error(e)
@@ -146,8 +144,8 @@ async def add_note(
                     f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
                 )
                 metadata = {}
-                if config.server.active_vault:
-                    metadata['vault_id'] = str(config.server.active_vault)
+                if config.write_vault:
+                    metadata['vault_id'] = str(config.write_vault)
 
                 result = await api.ingest_upload(
                     files=files_to_upload, metadata=metadata, background=background
@@ -197,7 +195,7 @@ async def add_note(
                     files=assets_dict,
                     tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
                     note_key=key,
-                    vault_id=config.server.active_vault,
+                    vault_id=config.write_vault,
                 )
 
                 result = await api.ingest(note, background=background)
