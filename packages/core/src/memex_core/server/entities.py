@@ -32,7 +32,7 @@ router = APIRouter(prefix='/api/v1')
 )
 async def list_entities(
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 100,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
     q: str | None = None,
     sort: Literal['-mentions'] | None = Query(
         None, description='Sort option: -mentions for top by mention count'
@@ -115,7 +115,7 @@ async def get_bulk_cooccurrences(
 async def get_entity_mentions(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 20,
+    limit: Annotated[int, Query(ge=1, le=500)] = 20,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get mentions for an entity."""
@@ -184,7 +184,7 @@ async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
 async def get_entity_cooccurrences(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 50,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get co-occurrence edges for an entity."""
@@ -214,8 +214,8 @@ async def get_entity_lineage(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: str = 'upstream',
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
     """Get the lineage of an entity."""
     try:
