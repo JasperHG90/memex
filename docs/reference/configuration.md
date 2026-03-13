@@ -284,12 +284,12 @@ Reusable model configuration block used by `default_model`, `extraction.model`, 
 
 ## Vault Settings (`vault`)
 
-Client-side vault overrides. These take precedence over `server.default_active_vault` and `server.default_reader_vault`.
+Client-side vault preferences for CLI and MCP. These control which vaults are used for writes and reads, separate from the server's own defaults.
 
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `active` | string | `""` | Client write vault name. Overrides `server.default_active_vault`. |
-| `search` | list[string] | `[]` | Client read vault names for search scope. Overrides `server.default_reader_vault`. |
+| `active` | string \| null | `null` | Client write vault name. Overrides `server.default_active_vault`. |
+| `search` | list[string] \| null | `null` | Client read vault names for search scope. Overrides `server.default_reader_vault`. |
 
 ### Convenience Properties on `MemexConfig`
 
@@ -297,6 +297,65 @@ Client-side vault overrides. These take precedence over `server.default_active_v
 |:---------|:-----------------|:------------|
 | `config.write_vault` | `vault.active` > `server.default_active_vault` | Resolved write vault name. |
 | `config.read_vaults` | `vault.search` > `[vault.active]` > `[server.default_reader_vault]` | Resolved list of read vault names. |
+
+### Resolution Precedence
+
+The write and read vaults are resolved identically for both CLI and MCP:
+
+| Priority | Write vault | Read vaults |
+|:---------|:------------|:------------|
+| 1 (highest) | Explicit param (`--vault` / tool `vault_id`) | Explicit param (`--vault` / tool `vault_ids`) |
+| 2 | Env var `MEMEX_VAULT__ACTIVE` | Env var `MEMEX_VAULT__SEARCH` |
+| 3 | `.memex.yaml` → `vault.active` | `.memex.yaml` → `vault.search` |
+| 4 | Global config → `vault.active` | Global config → `vault.search` |
+| 5 (lowest) | `server.default_active_vault` (default: `global`) | `[server.default_reader_vault]` (default: `[global]`) |
+
+> **CLI vs MCP:** The CLI always picks up `.memex.yaml` from CWD because you control the working directory. MCP is spawned as a subprocess by the IDE — whether it inherits the project CWD is **not guaranteed**. For consistent behavior across both, use environment variables.
+
+### Environment Variables for Vault Config
+
+```bash
+# In a shell (CLI)
+export MEMEX_VAULT__ACTIVE=my-project
+export MEMEX_VAULT__SEARCH='["my-project", "shared"]'
+```
+
+```json
+// In .claude/mcp.json (MCP)
+{
+  "env": {
+    "MEMEX_VAULT__ACTIVE": "my-project",
+    "MEMEX_VAULT__SEARCH": "[\"my-project\", \"shared\"]"
+  }
+}
+```
+
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation. Pydantic-settings automatically JSON-decodes string env vars when the target field is a complex type like `list[str]`, so the string `'["a", "b"]'` becomes the Python list `["a", "b"]`.
+
+### Example Configurations
+
+**Per-project** (`.memex.yaml` — reliable for CLI, not guaranteed for MCP):
+
+```yaml
+vault:
+  active: my-project
+  search: [my-project, shared-knowledge]
+```
+
+**Simple** — only set write vault, reads default to `[active]`:
+
+```yaml
+vault:
+  active: my-project
+```
+
+**No vault section** — falls back to server defaults:
+
+```yaml
+server:
+  default_active_vault: global
+  default_reader_vault: global
+```
 
 ---
 
@@ -371,8 +430,8 @@ export MEMEX_SERVER__MEMORY__CONTRADICTION__ALPHA=0.1
 | `MEMEX_CONFIG_PATH` | Explicit path to a YAML config file. Overrides local file search. |
 | `MEMEX_LOAD_GLOBAL_CONFIG` | Set to `false` to skip loading `~/.config/memex/config.yaml`. |
 | `MEMEX_LOAD_LOCAL_CONFIG` | Set to `false` to skip searching CWD and parents for config files. |
-| `MEMEX_VAULT__ACTIVE` | Client write vault override. Equivalent to `vault.active` in YAML. |
-| `MEMEX_VAULT__SEARCH` | Client read vaults override. Must be a **string** containing a JSON array (e.g., `'["a", "b"]'`). Equivalent to `vault.search` in YAML. |
+| `MEMEX_VAULT__ACTIVE` | Client write vault override. Equivalent to `vault.active` in YAML. See [Vault Settings](#vault-settings-vault). |
+| `MEMEX_VAULT__SEARCH` | Client read vaults override. Must be a **string** containing a JSON array (e.g., `'["a", "b"]'`). Pydantic-settings JSON-decodes it automatically. Equivalent to `vault.search` in YAML. See [Vault Settings](#vault-settings-vault). |
 
 ---
 
