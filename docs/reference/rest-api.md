@@ -930,7 +930,7 @@ List vaults. Returns an NDJSON stream. Supports filtering by state.
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `state` | string | - | Use `active` to return only the active (writer) vault. |
-| `is_default` | bool | - | Use `true` to return the active vault plus all attached (read) vaults. |
+| `is_default` | bool | - | Use `true` to return the default write vault plus the default reader vault. |
 
 #### Examples
 
@@ -938,10 +938,10 @@ List vaults. Returns an NDJSON stream. Supports filtering by state.
 # List all vaults
 curl http://localhost:8000/api/v1/vaults
 
-# Get only the active vault
+# Get only the default write vault
 curl "http://localhost:8000/api/v1/vaults?state=active"
 
-# Get default vaults (active + attached)
+# Get default vaults (write + reader)
 curl "http://localhost:8000/api/v1/vaults?is_default=true"
 ```
 
@@ -1017,7 +1017,7 @@ Delete a vault.
 
 ### `POST /api/v1/vaults/{identifier}/set-writer`
 
-Set the active (writer) vault for the current server session. This is a runtime override; on restart, config file values apply again.
+Set the default write vault for the current server session. This is a runtime override of `server.default_active_vault`; on restart, config file values apply again.
 
 #### Path Parameters
 
@@ -1035,7 +1035,7 @@ Set the active (writer) vault for the current server session. This is a runtime 
 
 ### `POST /api/v1/vaults/{identifier}/toggle-attached`
 
-Attach or detach a vault for read-only search inclusion. This is a runtime override.
+Attach or detach a vault for read-only search inclusion. This is a runtime override of `server.default_reader_vault`.
 
 #### Path Parameters
 
@@ -1052,7 +1052,7 @@ Attach or detach a vault for read-only search inclusion. This is a runtime overr
 #### Response (200)
 
 ```json
-{"status": "success", "attached_vaults": ["vault-a", "vault-b"]}
+{"status": "success", "reader_vaults": ["vault-a", "vault-b"]}
 ```
 
 ---

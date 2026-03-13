@@ -54,7 +54,7 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 |-----------|------|----------|---------|-------------|
 | `query` | string | Yes | - | The search query. |
 | `limit` | int | No | `10` | Maximum number of results to return. |
-| `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
+| `vault_ids` | string[] | No | from config | List of vault UUIDs or names to search in. Defaults to `config.read_vaults`. |
 | `token_budget` | int | No | - | Token budget for retrieval. |
 | `strategies` | string[] | No | all | Strategies to run: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
 | `include_superseded` | bool | No | `false` | Include superseded (low-confidence) memory units. |
@@ -63,6 +63,8 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
 Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
+
+All vault parameters are optional and default to the resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads).
 
 ---
 
@@ -75,7 +77,7 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `query` | string | Yes | - | The note search query. |
 | `limit` | int | No | `5` | Maximum number of notes to return. |
 | `expand_query` | bool | No | `false` | Enable multi-query expansion via LLM. |
-| `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
+| `vault_ids` | string[] | No | from config | List of vault UUIDs or names to search in. Defaults to `config.read_vaults`. |
 | `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
 | `after` | string | No | - | Only notes after this ISO 8601 date. |
 | `before` | string | No | - | Only notes before this ISO 8601 date. |
@@ -139,7 +141,7 @@ Read full note content. Only when total_tokens < 500. Otherwise use `memex_get_p
 
 ### `memex_add_note`
 
-Add a note to the Memex knowledge base. Confirm the target vault with the user before calling; use `memex_active_vault` to check or `memex_list_vaults` to enumerate.
+Add a note to the Memex knowledge base. The vault parameter is optional and defaults to `config.write_vault`. Use `memex_active_vault` to check the current write vault or `memex_list_vaults` to enumerate.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -149,7 +151,7 @@ Add a note to the Memex knowledge base. Confirm the target vault with the user b
 | `author` | string | Yes | - | Name of the model authoring this note. |
 | `tags` | string[] | Yes | - | Tags for easier retrieval. |
 | `supporting_files` | string[] | No | - | Absolute paths to supporting files (images, CSVs). |
-| `vault_id` | string | No | Active vault | UUID or name of the vault to add the note to. Defaults to active vault. |
+| `vault_id` | string | No | `config.write_vault` | UUID or name of the vault to add the note to. Defaults to resolved write vault from config. |
 | `note_key` | string | No | - | Unique stable key for incremental updates. |
 | `background` | bool | No | `false` | Queue ingestion in background. |
 
@@ -211,7 +213,7 @@ Retrieve 1+ file resources (images, audio, documents) by path. Get paths from `m
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `paths` | string[] | Yes | Resource path(s). |
-| `vault_id` | string | No | Vault UUID or name. Omit for active vault. |
+| `vault_id` | string | No | Vault UUID or name. Defaults to `config.write_vault`. |
 
 Returns `Image`, `Audio`, `File`, or error strings for each path. Per-item failures don't block other resources.
 

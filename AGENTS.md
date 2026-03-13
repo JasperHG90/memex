@@ -150,6 +150,8 @@ IF storing/retrieving structured facts, preferences, or conventions:
 - When the user states a preference, convention, or static fact (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
 - Deletion is user-only (CLI `memex kv delete`). Do NOT attempt to delete KV entries.
 
+All vault parameters on MCP tools are **optional** — they default to resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads). You do not need to pass `vault_id` or `vault_ids` unless targeting a non-default vault.
+
 PROHIBITED:
 - `memex_recent_notes` for discovery.
 - Fabricating Note/Node/Unit IDs. Only use IDs from tool output.

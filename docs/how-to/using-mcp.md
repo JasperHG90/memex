@@ -48,12 +48,14 @@ Add the following to your `claude_desktop_config.json`:
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+        "MEMEX_VAULT__ACTIVE": "global"
       }
     }
   }
 }
 ```
+
+All vault parameters on MCP tools are optional and default to the resolved config values. Set `MEMEX_VAULT__ACTIVE` to control the write vault and `MEMEX_VAULT__SEARCH` (JSON array) to control read scope.
 
 ### Configure for Claude Code
 
@@ -74,7 +76,7 @@ To manually configure, add to your `.claude/settings.json`:
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "my-project"
+        "MEMEX_VAULT__ACTIVE": "my-project"
       }
     }
   }
@@ -92,7 +94,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json` in your project root):
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+        "MEMEX_VAULT__ACTIVE": "global"
       }
     }
   }
@@ -126,7 +128,7 @@ Then configure your client to connect via SSE instead of spawning a subprocess:
 | "memex_mcp is not installed" | Missing MCP extra | Run `uv tool install git+https://github.com/JasperHG90/memex.git[mcp]` |
 | Tools not appearing in client | Config file in wrong location | Check the path for your OS (see above) |
 | "Connection refused" errors | Memex server not running | Start with `memex server start` |
-| Wrong vault in results | `MEMEX_SERVER__ACTIVE_VAULT` not set | Add the env var to your MCP config |
+| Wrong vault in results | `MEMEX_VAULT__ACTIVE` not set | Add the env var to your MCP config |
 | Slow tool responses | Large result sets | Reduce `limit` parameter or set `token_budget` |
 | "No results found" | Empty vault or unprocessed notes | Check `memex note list` and wait for extraction to complete |
 
