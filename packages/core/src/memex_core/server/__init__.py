@@ -41,6 +41,11 @@ from memex_core.memory.models import get_embedding_model, get_reranking_model, g
 
 logger = logging.getLogger('memex.core.server')
 
+# Parse CORS config at module level (middleware must be added before app starts).
+# The full config is re-parsed in lifespan() so test fixtures can set env vars
+# before the server starts.
+_cors_config = parse_memex_config().server.cors
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,18 +58,8 @@ async def lifespan(app: FastAPI):
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
 
-    # Configure CORS
-    cors = config.server.cors
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors.origins,
-        allow_credentials=cors.allow_credentials,
-        allow_methods=cors.allow_methods,
-        allow_headers=cors.allow_headers,
-    )
-
     # Refuse to bind to a non-localhost address without authentication
-    _is_localhost = config.server.host in ('127.0.0.1', 'localhost')
+    _is_localhost = config.server.host in ('127.0.0.1', 'localhost', '::1')
     if not _is_localhost and not config.server.auth.enabled:
         if config.server.allow_insecure:
             logger.warning(
@@ -147,6 +142,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='Memex Core API', lifespan=lifespan)
+
+# Configure CORS (must be added before app starts, not in lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_config.origins,
+    allow_credentials=_cors_config.allow_credentials,
+    allow_methods=_cors_config.allow_methods,
+    allow_headers=_cors_config.allow_headers,
+)
+
 Instrumentator().instrument(app).expose(app, endpoint='/api/v1/metrics')
 
 

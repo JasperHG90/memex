@@ -936,7 +936,7 @@ class KVSearchRequest(BaseModel):
 
     vault_id: str | UUID | None = None
     query: str
-    limit: int = 5
+    limit: int = Field(5, ge=1, le=500)
 
 
 class FindNoteResult(BaseModel):

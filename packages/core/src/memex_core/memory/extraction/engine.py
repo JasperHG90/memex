@@ -34,7 +34,7 @@ from memex_core.memory.extraction.core import (
     index_document,
 )
 from memex_core.memory.models.embedding import get_embedding_model
-from memex_core.memory.extraction.utils import parse_datetime
+from memex_core.memory.extraction.utils import parse_iso_datetime
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
     assemble_llm_chunks,
@@ -382,10 +382,10 @@ class ExtractionEngine:
                         fact_text=raw_fact.formatted_text,
                         fact_type=raw_fact.fact_type,
                         entities=raw_fact.entities,
-                        occurred_start=parse_datetime(raw_fact.occurred_start)
+                        occurred_start=parse_iso_datetime(raw_fact.occurred_start)
                         if raw_fact.occurred_start
                         else None,
-                        occurred_end=parse_datetime(raw_fact.occurred_end)
+                        occurred_end=parse_iso_datetime(raw_fact.occurred_end)
                         if raw_fact.occurred_end
                         else None,
                         causal_relations=_convert_causal_relations(
@@ -422,10 +422,10 @@ class ExtractionEngine:
                         fact_text=f.formatted_text,
                         fact_type=f.fact_type,
                         entities=f.entities,
-                        occurred_start=parse_datetime(f.occurred_start)
+                        occurred_start=parse_iso_datetime(f.occurred_start)
                         if f.occurred_start
                         else None,
-                        occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                         causal_relations=[],
                         content_index=0,
                         chunk_index=0,
@@ -716,10 +716,12 @@ class ExtractionEngine:
                             fact_text=f.formatted_text,
                             fact_type=f.fact_type,
                             entities=f.entities,
-                            occurred_start=parse_datetime(f.occurred_start)
+                            occurred_start=parse_iso_datetime(f.occurred_start)
                             if f.occurred_start
                             else None,
-                            occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                            occurred_end=parse_iso_datetime(f.occurred_end)
+                            if f.occurred_end
+                            else None,
                             causal_relations=_convert_causal_relations(
                                 relations_from_llm=f.causal_relations,
                                 fact_start_idx=global_fact_idx,
@@ -941,8 +943,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=_convert_causal_relations(
                         relations_from_llm=f.causal_relations,
                         fact_start_idx=global_fact_idx,
@@ -977,8 +981,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=[],
                     content_index=0,
                     chunk_index=first_block_seq,
@@ -1199,10 +1205,10 @@ class ExtractionEngine:
                         fact_text=f.formatted_text,
                         fact_type=f.fact_type,
                         entities=f.entities,
-                        occurred_start=parse_datetime(f.occurred_start)
+                        occurred_start=parse_iso_datetime(f.occurred_start)
                         if f.occurred_start
                         else None,
-                        occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                         causal_relations=_convert_causal_relations(
                             relations_from_llm=f.causal_relations,
                             fact_start_idx=chunk_start_fact_idx,
@@ -1239,8 +1245,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=[],
                     content_index=0,
                     chunk_index=0,

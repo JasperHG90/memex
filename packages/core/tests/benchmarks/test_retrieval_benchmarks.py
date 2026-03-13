@@ -261,12 +261,12 @@ def test_format_facts_for_embedding_batch(benchmark):
 @pytest.mark.benchmark(group='extraction')
 def test_parse_datetime_batch(benchmark):
     """Benchmark parsing 100 ISO datetime strings."""
-    from memex_core.memory.extraction.utils import parse_datetime
+    from memex_core.memory.extraction.utils import parse_iso_datetime
 
     dates = [f'2025-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}T{i % 24:02d}:00:00Z' for i in range(100)]
 
     def run():
         for d in dates:
-            parse_datetime(d)
+            parse_iso_datetime(d)
 
     benchmark(run)

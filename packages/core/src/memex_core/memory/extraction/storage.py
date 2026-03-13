@@ -4,7 +4,6 @@ Fact storage for retain pipeline.
 Handles insertion of facts into the database using SQLModel.
 """
 
-import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta
@@ -361,13 +360,13 @@ async def check_duplicates_in_window(
         else:
             indices_to_check_semantic.append(i)
 
-    # 2. Semantic Check — run all queries concurrently via asyncio.gather
+    # 2. Semantic Check — run sequentially (single session is not safe for concurrent use)
     if indices_to_check_semantic:
         from typing import Any, cast
 
         distance_threshold = 1.0 - similarity_threshold
 
-        async def _check_semantic(idx: int) -> tuple[int, bool]:
+        for idx in indices_to_check_semantic:
             emb = embeddings[idx]
             similarity_expr = (
                 cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb) < distance_threshold
@@ -390,11 +389,7 @@ async def check_duplicates_in_window(
                 statement = statement.where(col(MemoryUnit.vault_id).in_(vault_ids))
 
             result = await session.exec(statement)
-            return (idx, result.first() is not None)
-
-        results = await asyncio.gather(*[_check_semantic(i) for i in indices_to_check_semantic])
-        for idx, is_dup in results:
-            if is_dup:
+            if result.first() is not None:
                 is_duplicate[idx] = True
 
     return is_duplicate

@@ -129,7 +129,7 @@ async def find_notes_by_title(
     api: Annotated[MemexAPI, Depends(get_api)],
     query: str = Query(..., description='Title search query'),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
-    limit: int = Query(5, description='Maximum results to return'),
+    limit: Annotated[int, Query(ge=1, le=500, description='Maximum results to return')] = 5,
 ):
     """Fuzzy-search notes by title using trigram similarity."""
     try:

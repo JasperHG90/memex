@@ -536,6 +536,54 @@ Each line is a `NoteSearchResult`:
 
 ---
 
+### `GET /api/v1/notes/find`
+
+Fuzzy-search notes by title using trigram similarity. Returns approximate title matches ranked by similarity score.
+
+#### Query Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `query` | string | (required) | Title search query. |
+| `vault_id` | string (list) | - | Filter by vault ID(s) or name(s). Repeat for multiple. |
+| `limit` | int | `5` | Maximum results to return (1-500). |
+
+#### Response (200)
+
+Returns `FindNoteResult[]`:
+
+```json
+[
+  {
+    "note_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Meeting Notes - Q4 Planning",
+    "score": 0.78,
+    "vault_id": "550e8400-e29b-41d4-a716-446655440000",
+    "created_at": "2025-01-15T10:00:00Z",
+    "publish_date": "2025-01-15T10:00:00Z",
+    "status": "active"
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `note_id` | UUID | Note ID. |
+| `title` | string | Note title. |
+| `score` | float | Trigram similarity score (0.0-1.0). |
+| `vault_id` | UUID | Vault the note belongs to. |
+| `created_at` | datetime | Note creation timestamp. |
+| `publish_date` | datetime | Optional publish date. |
+| `status` | string | Note lifecycle status. |
+
+#### Example
+
+```bash
+curl "http://localhost:8000/api/v1/notes/find?query=meeting+notes&limit=10"
+```
+
+---
+
 ### `GET /api/v1/notes/{note_id}`
 
 Get a note by ID.
@@ -923,7 +971,7 @@ Each line is a claimed `ReflectionQueueDTO`.
 
 ### `GET /api/v1/vaults`
 
-List vaults. Returns an NDJSON stream. Supports filtering by state.
+List vaults. Returns an NDJSON stream. Supports filtering by state. Each `VaultDTO` includes an `is_active` boolean indicating whether the vault is the current writer vault.
 
 #### Query Parameters
 
@@ -931,6 +979,21 @@ List vaults. Returns an NDJSON stream. Supports filtering by state.
 |------|------|---------|-------------|
 | `state` | string | - | Use `active` to return only the active (writer) vault. |
 | `is_default` | bool | - | Use `true` to return the default write vault plus the default reader vault. |
+
+#### Response (200 — NDJSON)
+
+Each line is a `VaultDTO`:
+
+```json
+{"id": "uuid", "name": "my-project", "description": "Notes for my-project development", "is_active": true}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Vault ID. |
+| `name` | string | Vault name. |
+| `description` | string or null | Vault description. |
+| `is_active` | bool | Whether this vault is the currently active (writer) vault. |
 
 #### Examples
 
@@ -973,7 +1036,8 @@ Returns a `VaultDTO`:
 {
   "id": "uuid",
   "name": "my-project",
-  "description": "Notes for my-project development"
+  "description": "Notes for my-project development",
+  "is_active": false
 }
 ```
 
@@ -1033,9 +1097,9 @@ Set the default write vault for the current server session. This is a runtime ov
 
 ---
 
-### `POST /api/v1/vaults/{identifier}/toggle-attached`
+### `POST /api/v1/vaults/{identifier}/set-reader`
 
-Attach or detach a vault for read-only search inclusion. This is a runtime override of `server.default_reader_vault`.
+Set the default reader vault for search and retrieval. This is a runtime override of `server.default_reader_vault`; on restart, config file values apply again.
 
 #### Path Parameters
 
@@ -1043,16 +1107,10 @@ Attach or detach a vault for read-only search inclusion. This is a runtime overr
 |------|------|-------------|
 | `identifier` | string | Vault name or UUID. |
 
-#### Query Parameters
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `attach` | bool | Yes | `true` to attach, `false` to detach. |
-
 #### Response (200)
 
 ```json
-{"status": "success", "reader_vaults": ["vault-a", "vault-b"]}
+{"status": "success", "default_reader_vault": "uuid"}
 ```
 
 ---
@@ -1207,138 +1265,236 @@ Prometheus-compatible metrics endpoint. Exposed by `prometheus-fastapi-instrumen
 
 ---
 
-## Webhooks (CRUD)
+## Embeddings
 
-Manage outgoing webhook subscriptions. Memex delivers event notifications to registered URLs.
+### `POST /api/v1/embed`
 
-### `POST /api/v1/webhooks`
-
-Register a new webhook endpoint.
+Generate an embedding vector for a given text string.
 
 #### Request Body
 
 ```json
 {
-  "url": "https://example.com/webhook",
-  "secret": "your-secret-key-min-16-chars",
-  "events": ["note.created", "reflection.completed"],
-  "active": true
+  "text": "PostgreSQL connection pooling best practices"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string (HTTPS) | Yes | Delivery URL. |
-| `secret` | string | Yes | Shared secret for HMAC signing (16-255 characters). |
-| `events` | string[] | Yes | Event types to subscribe to (minimum 1). |
-| `active` | bool | No | Whether the webhook starts enabled (default: `true`). |
+| `text` | string | Yes | Text to embed. |
 
-#### Response (201)
+#### Response (200)
 
-Returns a `WebhookDTO`.
+```json
+{
+  "embedding": [0.0123, -0.0456, 0.0789, ...]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `embedding` | float[] | The embedding vector. |
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/embed \
+  -H "Content-Type: application/json" \
+  -d '{"text": "PostgreSQL connection pooling"}'
+```
 
 ---
 
-### `GET /api/v1/webhooks`
+## Key-Value Store
 
-List all registered webhooks.
+The KV store provides a simple key-value interface for storing structured facts, preferences, and conventions. Entries can be scoped to a vault or stored globally. Semantic search is supported via embedding similarity.
+
+### `PUT /api/v1/kv`
+
+Create or update a key-value entry.
+
+#### Request Body
+
+```json
+{
+  "key": "preferred-language",
+  "value": "Python 3.12",
+  "vault_id": "550e8400-e29b-41d4-a716-446655440000",
+  "embedding": [0.0123, -0.0456, ...]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `key` | string | Yes | Unique key for the entry. |
+| `value` | string | Yes | Value to store. |
+| `vault_id` | string or UUID | No | Vault to scope the entry to. Global if omitted. |
+| `embedding` | float[] | No | Pre-computed embedding vector. If omitted, one is generated automatically. |
+
+#### Response (200)
+
+Returns a `KVEntryDTO`:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "vault_id": null,
+  "key": "preferred-language",
+  "value": "Python 3.12",
+  "created_at": "2025-01-15T10:00:00Z",
+  "updated_at": "2025-01-15T10:00:00Z"
+}
+```
+
+#### Example
+
+```bash
+curl -X PUT http://localhost:8000/api/v1/kv \
+  -H "Content-Type: application/json" \
+  -d '{"key": "preferred-language", "value": "Python 3.12"}'
+```
+
+---
+
+### `GET /api/v1/kv/{key}`
+
+Get a key-value entry by exact key. Checks vault-specific entries first, then falls back to global.
+
+#### Path Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `key` | string | The key to look up. |
 
 #### Query Parameters
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `active_only` | bool | `false` | Only return active webhooks. |
+| `vault_id` | string | - | Vault ID or name to scope the lookup. |
 
 #### Response (200)
 
-Returns `WebhookDTO[]`.
+Returns a `KVEntryDTO`.
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `404` | KV entry not found. |
+
+#### Example
+
+```bash
+curl "http://localhost:8000/api/v1/kv/preferred-language"
+```
 
 ---
 
-### `GET /api/v1/webhooks/{webhook_id}`
+### `POST /api/v1/kv/search`
 
-Get a webhook by ID.
+Semantic search over key-value entries by embedding similarity.
 
-#### Response (200)
-
-Returns a `WebhookDTO`:
+#### Request Body
 
 ```json
 {
-  "id": "uuid",
-  "url": "https://example.com/webhook",
-  "events": ["note.created"],
-  "active": true,
-  "created_at": "2025-01-15T10:00:00Z"
+  "query": "what programming language do I prefer",
+  "vault_id": "550e8400-e29b-41d4-a716-446655440000",
+  "limit": 5
 }
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query text. |
+| `vault_id` | string or UUID | No | - | Vault to scope the search. |
+| `limit` | int | No | `5` | Maximum results to return. |
+
+#### Response (200)
+
+Returns `KVEntryDTO[]`:
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "vault_id": null,
+    "key": "preferred-language",
+    "value": "Python 3.12",
+    "created_at": "2025-01-15T10:00:00Z",
+    "updated_at": "2025-01-15T10:00:00Z"
+  }
+]
+```
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/kv/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "programming language preference", "limit": 5}'
+```
+
+---
+
+### `GET /api/v1/kv`
+
+List all key-value entries. Without `vault_id`, returns global entries only. With `vault_id`, returns both vault-scoped and global entries.
+
+#### Query Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `vault_id` | string | - | Vault ID or name. |
+
+#### Response (200)
+
+Returns `KVEntryDTO[]`.
+
+#### Example
+
+```bash
+# List global KV entries
+curl "http://localhost:8000/api/v1/kv"
+
+# List entries for a specific vault (includes global)
+curl "http://localhost:8000/api/v1/kv?vault_id=my-project"
+```
+
+---
+
+### `DELETE /api/v1/kv/{key}`
+
+Delete a key-value entry by key.
+
+#### Path Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `key` | string | The key to delete. |
+
+#### Query Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `vault_id` | string | - | Vault ID or name to scope the deletion. |
+
+#### Response (200)
+
+```json
+{"status": "success"}
 ```
 
 #### Errors
 
 | Status | Description |
 |--------|-------------|
-| `404` | Webhook not found. |
+| `404` | KV entry not found. |
 
----
+#### Example
 
-### `PATCH /api/v1/webhooks/{webhook_id}`
-
-Update an existing webhook. All fields are optional.
-
-#### Request Body
-
-```json
-{
-  "url": "https://example.com/new-webhook",
-  "events": ["note.created", "note.deleted"],
-  "active": false
-}
-```
-
-#### Response (200)
-
-Returns the updated `WebhookDTO`.
-
----
-
-### `DELETE /api/v1/webhooks/{webhook_id}`
-
-Delete a webhook registration.
-
-#### Response (204)
-
-No content.
-
----
-
-### `GET /api/v1/webhooks/{webhook_id}/deliveries`
-
-List delivery records for a webhook (history of event deliveries and their status).
-
-#### Query Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `limit` | int | `50` | Maximum deliveries to return (1-500). |
-| `offset` | int | `0` | Pagination offset. |
-
-#### Response (200)
-
-Returns `WebhookDeliveryDTO[]`:
-
-```json
-[
-  {
-    "id": "uuid",
-    "webhook_id": "uuid",
-    "event": "note.created",
-    "payload": {},
-    "status": "delivered",
-    "attempts": 1,
-    "last_error": null,
-    "created_at": "2025-01-15T10:00:00Z"
-  }
-]
+```bash
+curl -X DELETE "http://localhost:8000/api/v1/kv/preferred-language"
 ```
 
 ---

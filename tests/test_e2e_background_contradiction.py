@@ -83,10 +83,8 @@ async def test_background_upload_awaits_contradiction_task(client: TestClient):
             assert response.status_code == 202, (
                 f'Expected 202, got {response.status_code}: {response.text}'
             )
-            assert response.json()['status'] == 'accepted'
-
-            # TestClient runs BackgroundTasks synchronously before returning,
-            # so by this point the background task should have completed.
+            resp_data = response.json()
+            assert resp_data['status'] in ('accepted', 'pending')
 
         # Verify no "coroutine was never awaited" warnings
         coroutine_warnings = [

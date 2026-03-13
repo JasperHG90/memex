@@ -13,6 +13,7 @@ from memex_common.schemas import (
     NoteDTO,
     NodeDTO,
     FactTypes,
+    SupersessionInfo,
 )
 
 
@@ -615,15 +616,14 @@ class TestGetMemoryUnitsEdgeCases:
             status='superseded',
             note_id=nid,
             vault_id=uuid4(),
-            metadata={
-                'superseded_by': [
-                    {
-                        'unit_text': 'Updated fact that replaces the old one.',
-                        'relation': 'correction',
-                        'note_title': 'Corrections Doc',
-                    }
-                ]
-            },
+            superseded_by=[
+                SupersessionInfo(
+                    unit_id=uuid4(),
+                    unit_text='Updated fact that replaces the old one.',
+                    relation='correction',
+                    note_title='Corrections Doc',
+                )
+            ],
         )
         mock_api.get_memory_unit.return_value = unit
 

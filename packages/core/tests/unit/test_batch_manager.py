@@ -47,11 +47,11 @@ async def test_run_job_success(manager, mock_api, mock_session):
     vault_id = uuid4()
     notes = [MagicMock()]
 
-    # Mock job retrieval
+    # Mock job retrieval (via SELECT ... FOR UPDATE)
     job = BatchJob(
         id=job_id, vault_id=vault_id, status=BatchJobStatus.PENDING, notes_count=len(notes)
     )
-    mock_session.get.return_value = job
+    mock_session.exec.return_value.first.return_value = job
 
     # Mock API ingestion to return an async generator
     async def mock_ingest_gen(*args, **kwargs):
@@ -83,7 +83,7 @@ async def test_run_job_failure(manager, mock_api, mock_session):
     job = BatchJob(
         id=job_id, vault_id=vault_id, status=BatchJobStatus.PENDING, notes_count=len(notes)
     )
-    mock_session.get.return_value = job
+    mock_session.exec.return_value.first.return_value = job
 
     # Mock API ingestion to raise exception when iterated
     async def mock_ingest_gen_fail(*args, **kwargs):
