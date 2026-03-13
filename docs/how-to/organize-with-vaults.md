@@ -57,7 +57,9 @@ vault:
 
 The `vault.active` setting is used for write operations. `vault.search` controls which vaults are included in search results.
 
-**Environment variable override:**
+> **Note:** `.memex.yaml` is reliable for the CLI (which runs in your shell's CWD), but MCP servers are spawned as subprocesses by AI clients — the working directory they inherit is not guaranteed to be your project root. If you use both CLI and MCP, prefer environment variables for consistent vault resolution. See [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp) for details.
+
+**Environment variable override (recommended for CLI + MCP consistency):**
 
 ```bash
 export MEMEX_VAULT__ACTIVE=project-x

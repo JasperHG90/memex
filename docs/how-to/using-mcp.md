@@ -101,6 +101,31 @@ Add to your Cursor MCP settings (`.cursor/mcp.json` in your project root):
 }
 ```
 
+### Vault Configuration for MCP
+
+MCP servers are spawned as subprocesses by your AI client (Claude Desktop, Claude Code, Cursor, etc.). Unlike the CLI — which runs in your shell and reliably finds `.memex.yaml` from your working directory — MCP subprocesses are **not guaranteed** to inherit your project's CWD. This means a `.memex.yaml` in your project root may not be found by the MCP server.
+
+For this reason, always set vault configuration via environment variables in the MCP server config:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "mcp", "run"],
+      "env": {
+        "MEMEX_VAULT__ACTIVE": "my-project",
+        "MEMEX_VAULT__SEARCH": "[\"my-project\", \"shared\"]"
+      }
+    }
+  }
+}
+```
+
+> **Tip:** Running `memex setup claude-code --vault my-project` sets `MEMEX_VAULT__ACTIVE` in the MCP config automatically.
+
+For the full vault resolution precedence (shared by CLI and MCP), see [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp).
+
 ### Use SSE Transport (Remote Server)
 
 For remote or shared deployments, run the MCP server in SSE mode instead of stdio:

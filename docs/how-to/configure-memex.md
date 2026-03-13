@@ -17,6 +17,57 @@ Memex loads configuration from multiple sources. Later sources override earlier 
 
 Environment variables always win. This means you can set defaults in YAML and override specific values per-session or in CI.
 
+## Vault Resolution for CLI and MCP
+
+If you use both the CLI and MCP (e.g., Claude Code), it's important to understand how each resolves the active vault — and why environment variables are the most reliable approach.
+
+### Resolution Precedence
+
+Both CLI and MCP follow the same precedence chain:
+
+| Priority | Source | Example |
+| :--- | :--- | :--- |
+| 1 (highest) | Explicit parameter | `--vault` (CLI) or `vault_id` (MCP tool) |
+| 2 | Environment variable | `MEMEX_VAULT__ACTIVE` |
+| 3 | Local config file | `.memex.yaml` in CWD or parent dirs |
+| 4 | Global config | `~/.config/memex/config.yaml` |
+| 5 (lowest) | Server defaults | `server.default_active_vault` / `server.default_reader_vault` |
+
+### Why Environment Variables Are Recommended
+
+- **CLI** runs in your shell, so it always picks up `.memex.yaml` from the current working directory (or parent directories). This works reliably because you control where you run the command.
+- **MCP** is spawned as a subprocess by your IDE or AI client. Whether the subprocess inherits your project's working directory depends on the client implementation — it is **not guaranteed**. This means `.memex.yaml` may or may not be found.
+- **Environment variables** work identically for both CLI and MCP regardless of working directory. They are the recommended approach for consistent behavior.
+
+### Setting Env Vars for MCP
+
+Set vault env vars in your MCP server config (e.g., `.claude/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "mcp", "run"],
+      "env": {
+        "MEMEX_VAULT__ACTIVE": "my-project",
+        "MEMEX_VAULT__SEARCH": "[\"my-project\", \"shared\"]"
+      }
+    }
+  }
+}
+```
+
+> **Tip:** `memex setup claude-code --vault my-project` generates this configuration automatically.
+
+### Setting Env Vars for CLI
+
+You have three options for the CLI:
+
+1. **Shell profile** (always active) — add `export MEMEX_VAULT__ACTIVE=my-project` to `~/.bashrc` or `~/.zshrc`
+2. **`.memex.yaml`** (per-project, picked up from CWD) — reliable since you control the working directory
+3. **`--vault` flag** (per-command override) — `memex note add --vault my-project ...`
+
 ## Instructions
 
 ### 1. Set Up the Global Configuration
