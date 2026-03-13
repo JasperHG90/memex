@@ -97,7 +97,7 @@ async def reflect_batch(
 )
 async def list_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 10,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
     status: Literal['queued'] | None = Query(None, description='Filter by status'),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
@@ -134,7 +134,10 @@ async def list_reflections(
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionQueueDTO, 'Stream of claimed reflection queue items.'),
 )
-async def claim_reflections(api: Annotated[MemexAPI, Depends(get_api)], limit: int = 10):
+async def claim_reflections(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
+):
     """Claim reflection queue items for processing."""
     try:
         items = await api.claim_reflection_queue_batch(limit=limit)

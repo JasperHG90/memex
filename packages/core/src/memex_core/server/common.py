@@ -16,7 +16,7 @@ from memex_common.exceptions import (
     ResourceNotFoundError,
     VaultNotFoundError,
 )
-from memex_common.schemas import NoteDTO, EntityDTO
+from memex_common.schemas import MemoryUnitDTO, NoteDTO, EntityDTO, StrategyDebugInfo
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
@@ -121,6 +121,54 @@ def build_entity_dto(entity: Any) -> EntityDTO:
         mention_count=orm_entity.mention_count,
         entity_type=getattr(orm_entity, 'entity_type', None),
         metadata=metadata,
+    )
+
+
+def build_memory_unit_dto(
+    unit: Any,
+    *,
+    debug: bool = False,
+) -> MemoryUnitDTO:
+    """Build a MemoryUnitDTO from a MemoryUnit ORM/model object.
+
+    Handles all field variations across retrieval, mentions, and single-unit
+    endpoints.  Optional ``debug`` flag controls whether per-strategy
+    attribution data is included.
+    """
+    doc_id = getattr(unit, 'note_id', None)
+    source_docs: list[UUID] = [doc_id] if doc_id else []
+
+    debug_info: list[StrategyDebugInfo] | None = None
+    if debug:
+        raw_debug = getattr(unit, '_debug_info', None)
+        if raw_debug:
+            debug_info = [
+                StrategyDebugInfo(
+                    strategy_name=c.strategy_name,
+                    rank=c.rank,
+                    rrf_score=c.rrf_score,
+                    raw_score=c.raw_score,
+                    timing_ms=c.timing_ms,
+                )
+                for c in raw_debug
+            ]
+
+    return MemoryUnitDTO(
+        id=unit.id,
+        note_id=doc_id,
+        source_note_ids=source_docs,
+        text=unit.text,
+        fact_type=unit.fact_type,
+        status=unit.status,
+        mentioned_at=unit.mentioned_at or getattr(unit, 'event_date', None),
+        occurred_start=unit.occurred_start,
+        occurred_end=unit.occurred_end,
+        vault_id=unit.vault_id,
+        metadata=unit.unit_metadata,
+        score=getattr(unit, 'score', None),
+        chunk_id=getattr(unit, 'chunk_id', None),
+        confidence=getattr(unit, 'confidence', 1.0) or 1.0,
+        debug_info=debug_info,
     )
 
 

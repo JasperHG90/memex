@@ -10,9 +10,9 @@
 
 ## Summary
 
-- **Total tickets:** 40
-- **By priority:** P0: 3 | P1: 7 | P2: 24 | P3: 6
-- **By category:** Architecture: 10 | Security: 8 | Code Quality: 12 | Testing: 10
+- **Total tickets:** 41
+- **By priority:** P0: 3 | P1: 8 | P2: 24 | P3: 6
+- **By category:** Architecture: 11 | Security: 8 | Code Quality: 12 | Testing: 10
 
 ---
 
@@ -127,6 +127,23 @@
 **Description:** Three dependencies warrant active monitoring: `trafilatura` (parses untrusted HTML), `cloudscraper` (executes untrusted code patterns), and `pymupdf4llm` (processes untrusted binary PDFs). Set up automated dependency scanning (`pip-audit` in CI, Dependabot/Renovate) and pin to reviewed versions rather than open-ended `>=` ranges.
 
 **Why:** The ingestion pipeline processes arbitrary URLs and files from users. These libraries are historically frequent sources of CVEs. A vulnerability could allow remote code execution via crafted input. Without active monitoring, known vulnerabilities go unpatched indefinitely.
+
+---
+
+### AUDIT-041: `memex_recent_notes` (MCP) and `memex note recent` (CLI) have inconsistent vault scoping defaults
+**Category:** Architecture
+**Size:** S
+**Files:** `packages/mcp/src/memex_mcp/server.py`, `packages/cli/src/memex_cli/notes.py`, `packages/core/src/memex_core/services/notes.py`
+
+**Description:** The MCP tool and CLI command handle vault scoping differently when no vault is specified, and neither defaults to "all vaults":
+
+1. **MCP (`memex_recent_notes`, server.py:1291):** Accepts a single `vault_id: str | None`. When omitted, passes `vault_id=None` to `api.get_recent_notes()`, which reaches `NoteService.get_recent_notes()` with an empty `ids` list — effectively querying all vaults. However, it only accepts a single vault, not a list. Users cannot scope to 2 of 5 vaults.
+2. **CLI (`memex note recent`, notes.py:352):** Falls back to `config.read_vaults` when no `--vault` flag is given. `read_vaults` resolves through `vault.search > [vault.active] > [server.default_reader_vault]` — always scoping to at least one configured vault, never all vaults. Multi-vault via `--vault a --vault b` works but the default is restrictive.
+3. **NoteService (notes.py:395-403):** Already supports the correct behavior — when both `vault_id` and `vault_ids` are `None`, no vault filter is applied and all vaults are queried.
+
+Fix: (a) Change MCP tool to accept `vault_ids: list[str] | None` (matching `memex_memory_search` and `memex_note_search` patterns). Default to `None` (all vaults). (b) Change CLI fallback from `config.read_vaults` to `None` when no `--vault` is passed, so the default is all vaults. (c) Both surfaces should support optional multi-vault filtering while defaulting to cross-vault queries.
+
+**Why:** Users with multiple vaults see different results from `memex note recent` vs `memex_recent_notes` for the same data. The CLI silently hides notes from non-default vaults, which is confusing when a user knows a note exists but `recent` does not show it. The MCP tool cannot scope to a subset of vaults (e.g., 2 of 5), forcing all-or-one. Aligning both surfaces to default to all vaults with optional multi-vault filtering matches the existing behavior of `memex_memory_search` and `memex_note_search`.
 
 ---
 

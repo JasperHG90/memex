@@ -3,17 +3,23 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import EntityDTO, EntityType, LineageResponse, MemoryUnitDTO
+from memex_common.schemas import (
+    EntityDTO,
+    EntityType,
+    LineageDirection,
+    LineageResponse,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
     _handle_error,
     async_ndjson_response,
+    build_memory_unit_dto,
     build_note_dto,
     build_entity_dto,
     get_api,
@@ -32,7 +38,7 @@ router = APIRouter(prefix='/api/v1')
 )
 async def list_entities(
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 100,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
     q: str | None = None,
     sort: Literal['-mentions'] | None = Query(
         None, description='Sort option: -mentions for top by mention count'
@@ -115,7 +121,7 @@ async def get_bulk_cooccurrences(
 async def get_entity_mentions(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 20,
+    limit: Annotated[int, Query(ge=1, le=500)] = 20,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get mentions for an entity."""
@@ -124,20 +130,7 @@ async def get_entity_mentions(
         results = await api.get_entity_mentions(id, limit=limit, vault_ids=vault_ids)
         items = [
             {
-                'unit': MemoryUnitDTO(
-                    id=r['unit'].id,
-                    text=r['unit'].text,
-                    fact_type=r['unit'].fact_type,
-                    status=r['unit'].status,
-                    metadata=r['unit'].unit_metadata,
-                    note_id=r['unit'].note_id,
-                    vault_id=r['unit'].vault_id,
-                    mentioned_at=r['unit'].mentioned_at,
-                    occurred_start=r['unit'].occurred_start,
-                    occurred_end=r['unit'].occurred_end,
-                    chunk_id=getattr(r['unit'], 'chunk_id', None),
-                    confidence=getattr(r['unit'], 'confidence', 1.0) or 1.0,
-                ),
+                'unit': build_memory_unit_dto(r['unit']),
                 'note': build_note_dto(r['document']),
             }
             for r in results
@@ -195,7 +188,7 @@ async def get_entity(
 async def get_entity_cooccurrences(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 50,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
 ):
     """Get co-occurrence edges for an entity."""
@@ -220,20 +213,32 @@ async def get_entity_cooccurrences(
         raise _handle_error(e, f'Failed to fetch co-occurrences for entity {id}')
 
 
+# Deprecated: use GET /lineage/{entity_type}/{id} instead. Remove after 2026-06-01.
 @router.get('/entities/{id}/lineage', response_model=LineageResponse)
 async def get_entity_lineage(
     id: UUID,
+    response: Response,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: str = 'upstream',
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
-    """Get the lineage of an entity."""
+    """Get the lineage of an entity.
+
+    .. deprecated:: Use ``GET /api/v1/lineage/{entity_type}/{id}`` instead.
+    """
+    response.headers['Deprecation'] = 'true'
+    response.headers['Sunset'] = '2026-06-01'
+    response.headers['Link'] = '</api/v1/lineage>; rel="successor-version"'
     try:
-        from memex_common.schemas import LineageDirection
+        # Infer entity type from the actual entity rather than hardcoding.
+        entity = await api.get_entity(id)
+        if not entity:
+            raise HTTPException(status_code=404, detail=f'Entity {id} not found')
+        resolved_type = 'mental_model' if entity.entity_type == 'entity' else entity.entity_type
 
         return await api.get_lineage(
-            entity_type='mental_model',
+            entity_type=resolved_type,
             entity_id=id,
             direction=LineageDirection(direction),
             depth=depth,

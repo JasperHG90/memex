@@ -962,8 +962,8 @@ class TestRecentNotesEdgeCases:
         """If vault resolution fails, the tool should raise ToolError."""
         mock_api.resolve_vault_identifier = AsyncMock(side_effect=RuntimeError('no such vault'))
 
-        with pytest.raises(ToolError, match='no such vault'):
-            await mcp_client.call_tool('memex_recent_notes', {'vault_id': 'nonexistent-vault'})
+        with pytest.raises(ToolError, match='Vault not found'):
+            await mcp_client.call_tool('memex_recent_notes', {'vault_ids': ['nonexistent-vault']})
 
     @pytest.mark.asyncio
     async def test_note_without_title(self, mock_api, mcp_client):

@@ -349,7 +349,7 @@ async def list_recent(
             console.print(f'[red]Invalid --before date: {before}[/red]')
             raise typer.Exit(code=1)
 
-    vault_ids = vault if vault else config.read_vaults
+    vault_ids = vault if vault else None
 
     async with get_api_context(config) as api:
         try:
