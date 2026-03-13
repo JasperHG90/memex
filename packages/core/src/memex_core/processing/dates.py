@@ -106,16 +106,23 @@ async def extract_document_date(
         )
         return None
 
-    return _parse_iso_date(extraction.normalized_date)
+    return parse_datetime(extraction.normalized_date)
 
 
-def _parse_iso_date(date_str: str) -> datetime | None:
-    """Parse an ISO date string into a timezone-aware UTC datetime."""
+def parse_datetime(date_str: str) -> datetime | None:
+    """Parse a date/datetime string into a timezone-aware UTC datetime.
+
+    Handles ISO 8601, natural-language dates, and other formats supported by
+    ``dateutil.parser.parse``.  Naive results are assumed UTC.
+
+    Returns:
+        A timezone-aware ``datetime`` or ``None`` if parsing fails.
+    """
     try:
         parsed = dateutil_parser.parse(date_str)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
     except (ValueError, OverflowError):
-        logger.warning(f'Could not parse LLM-extracted date: {date_str!r}')
+        logger.warning('Could not parse date string: %s', date_str)
         return None
