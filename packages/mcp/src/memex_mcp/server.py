@@ -1231,7 +1231,7 @@ async def memex_list_notes(
 
     try:
         api = get_api(ctx)
-        vault_id = vault_id or _default_write_vault(ctx)
+        vault_id = vault_id or _default_read_vaults(ctx)[0]
         resolved_vault_id = await _resolve_vault_id(api, vault_id)
 
         parsed_after = None
@@ -1387,7 +1387,7 @@ async def memex_list_entities(
     """List or search entities."""
     try:
         api = get_api(ctx)
-        vault_id = vault_id or _default_write_vault(ctx)
+        vault_id = vault_id or _default_read_vaults(ctx)[0]
         if entity_type:
             entity_type = entity_type.title()
         resolved = await _resolve_vault_id(api, vault_id)
