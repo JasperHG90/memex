@@ -140,12 +140,9 @@ class RemoteMemexAPI:
         response = await self.client.post(f'vaults/{identifier}/set-writer')
         return await self._handle_response(response)
 
-    async def toggle_attached_vault(self, identifier: str, attach: bool = True) -> dict[str, Any]:
-        """Attach or detach a vault for read-only search inclusion."""
-        response = await self.client.post(
-            f'vaults/{identifier}/toggle-attached',
-            params={'attach': str(attach).lower()},
-        )
+    async def set_reader_vault(self, identifier: str) -> dict[str, Any]:
+        """Set the default reader vault on the server."""
+        response = await self.client.post(f'vaults/{identifier}/set-reader')
         return await self._handle_response(response)
 
     # --- Memory ---
