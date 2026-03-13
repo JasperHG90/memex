@@ -101,6 +101,22 @@ class JobManager:
 
         return count
 
+    async def _get_job_for_update(self, session: Any, job_id: UUID) -> BatchJob | None:
+        """Fetch a BatchJob row with SELECT ... FOR UPDATE to prevent race conditions.
+
+        Args:
+            session: Active async database session.
+            job_id: The job UUID to fetch.
+
+        Returns:
+            The locked BatchJob instance, or None if not found.
+        """
+        from sqlmodel import select
+
+        stmt = select(BatchJob).where(BatchJob.id == job_id).with_for_update()
+        result = await session.exec(stmt)
+        return result.first()
+
     async def _run_job(
         self, job_id: UUID, notes: list[Any], vault_id: UUID, batch_size: int = 32
     ) -> None:
@@ -110,7 +126,7 @@ class JobManager:
         try:
             # 1. Update status to PROCESSING
             async with self.api.metastore.session() as session:
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if not job:
                     logger.error(f'Job {job_id} not found in database.')
                     return
@@ -133,7 +149,7 @@ class JobManager:
                 total_done = processed + failed + skipped
 
                 async with self.api.metastore.session() as session:
-                    job = await session.get(BatchJob, job_id)
+                    job = await self._get_job_for_update(session, job_id)
                     if job:
                         job.processed_count = processed
                         job.failed_count = failed
@@ -143,8 +159,7 @@ class JobManager:
 
             # 3. Finalize Job Status
             async with self.api.metastore.session() as session:
-                # Re-fetch job to ensure session binding
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if not job:
                     return
 
@@ -163,7 +178,7 @@ class JobManager:
         except Exception as e:
             logger.error(f'Batch job {job_id} failed: {e}', exc_info=True)
             async with self.api.metastore.session() as session:
-                job = await session.get(BatchJob, job_id)
+                job = await self._get_job_for_update(session, job_id)
                 if job:
                     job.status = BatchJobStatus.FAILED
                     job.completed_at = datetime.now(timezone.utc)

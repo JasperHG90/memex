@@ -521,13 +521,19 @@ async def reindex_blocks(
 ) -> None:
     """Batch-update chunk_index for retained blocks.
 
+    Uses a single UPDATE with CASE/WHEN to avoid O(N) roundtrips.
+
     Args:
         session: Active database session.
         block_updates: List of ``(chunk_id, new_chunk_index)`` tuples.
     """
-    for chunk_id, new_index in block_updates:
-        stmt = update(Chunk).where(col(Chunk.id) == chunk_id).values(chunk_index=new_index)
-        await session.exec(stmt)
+    if not block_updates:
+        return
+
+    chunk_ids = [cid for cid, _ in block_updates]
+    whens = [(Chunk.id == cid, new_idx) for cid, new_idx in block_updates]
+    stmt = update(Chunk).where(col(Chunk.id).in_(chunk_ids)).values(chunk_index=case(*whens))
+    await session.exec(stmt)
 
 
 # --- Node CRUD operations ---
