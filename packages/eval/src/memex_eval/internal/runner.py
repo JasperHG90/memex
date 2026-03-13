@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import logging
 import time
@@ -17,6 +16,7 @@ from memex_common.schemas import (
     ReflectionRequest,
 )
 
+from memex_eval.helpers import wait_for_extraction
 from memex_eval.internal.checks import run_check
 from memex_eval.internal.scenarios import (
     ALL_GROUPS,
@@ -191,35 +191,14 @@ async def _ingest_docs(
 
 async def _wait_for_extraction(api: RemoteMemexAPI, vault_id: UUID) -> None:
     """Poll stats until extraction stabilizes."""
-    logger.info('  Waiting for extraction to complete...')
-    prev_count = -1
-    stable_ticks = 0
-    start = time.monotonic()
-    consecutive_errors = 0
-
-    while time.monotonic() - start < POLL_TIMEOUT:
-        await asyncio.sleep(POLL_INTERVAL)
-        try:
-            stats = await api.get_stats_counts(vault_id=vault_id)
-            consecutive_errors = 0
-        except Exception as e:
-            consecutive_errors += 1
-            logger.warning('  Poll error (%d): %s', consecutive_errors, e)
-            if consecutive_errors >= 5:
-                raise
-            continue
-        current = stats.memories
-
-        if current == prev_count and current > 0:
-            stable_ticks += 1
-            if stable_ticks >= 2:
-                logger.info('  Extraction stable at %d memories.', current)
-                return
-        else:
-            stable_ticks = 0
-        prev_count = current
-
-    logger.warning('  Extraction poll timed out after %.0fs.', POLL_TIMEOUT)
+    await wait_for_extraction(
+        api,
+        vault_id,
+        poll_interval=POLL_INTERVAL,
+        poll_timeout=POLL_TIMEOUT,
+        stable_ticks_required=2,
+        max_consecutive_errors=5,
+    )
 
 
 async def _trigger_reflections(api: RemoteMemexAPI, vault_id: UUID) -> None:
