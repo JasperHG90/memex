@@ -1,13 +1,13 @@
-import pytest
-import asyncio
 import base64
+import time
+
+import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_e2e_batch_ingestion(client: TestClient):
+def test_e2e_batch_ingestion(client: TestClient):
     """
     Test full batch ingestion flow:
     1. POST /api/v1/ingestions/batch
@@ -52,7 +52,7 @@ async def test_e2e_batch_ingestion(client: TestClient):
             completed_job = status_data
             break
 
-        await asyncio.sleep(poll_interval)
+        time.sleep(poll_interval)
 
     assert completed_job is not None, 'Job timed out'
     assert completed_job['status'] == 'completed', f'Job failed: {completed_job.get("result")}'
@@ -76,16 +76,15 @@ async def test_e2e_batch_ingestion(client: TestClient):
         if status_data['status'] == 'completed':
             completed_job_dup = status_data
             break
-        await asyncio.sleep(poll_interval)
+        time.sleep(poll_interval)
 
     assert completed_job_dup is not None
     assert completed_job_dup['result']['processed_count'] == 0
     assert completed_job_dup['result']['skipped_count'] == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.integration
-async def test_e2e_batch_job_not_found(client: TestClient):
+def test_e2e_batch_job_not_found(client: TestClient):
     """Verify 404 for non-existent job ID."""
     fake_id = '00000000-0000-0000-0000-000000000000'
     response = client.get(f'/api/v1/ingestions/{fake_id}')
