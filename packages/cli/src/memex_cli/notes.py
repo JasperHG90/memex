@@ -206,7 +206,7 @@ def _print_compact_note(d: Any) -> None:
     if len(desc) > 150:
         desc = desc[:147] + '...'
     suffix = f': {desc}' if desc else ''
-    print(f'- **{title}** ({date}){suffix}')
+    console.print(f'- **{title}** ({date}){suffix}')
 
 
 @app.command('delete')
