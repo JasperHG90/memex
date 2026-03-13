@@ -589,6 +589,27 @@ class AuthConfig(BaseModel):
     )
 
 
+class CorsConfig(BaseModel):
+    """Configuration for CORS (Cross-Origin Resource Sharing)."""
+
+    origins: list[str] = Field(
+        default_factory=lambda: ['http://localhost:5173', 'http://localhost:3000'],
+        description='Allowed origins for CORS requests.',
+    )
+    allow_credentials: bool = Field(
+        default=True,
+        description='Whether to allow credentials (cookies, auth headers) in CORS requests.',
+    )
+    allow_methods: list[str] = Field(
+        default_factory=lambda: ['*'],
+        description='HTTP methods allowed in CORS requests.',
+    )
+    allow_headers: list[str] = Field(
+        default_factory=lambda: ['*'],
+        description='HTTP headers allowed in CORS requests.',
+    )
+
+
 class RateLimitConfig(BaseModel):
     """Configuration for API rate limiting."""
 
@@ -730,6 +751,11 @@ class ServerConfig(BaseModel):
     auth: AuthConfig = Field(
         default_factory=AuthConfig,
         description='API key authentication. Disabled by default.',
+    )
+
+    cors: CorsConfig = Field(
+        default_factory=CorsConfig,
+        description='CORS (Cross-Origin Resource Sharing) configuration.',
     )
 
     rate_limit: RateLimitConfig = Field(
@@ -885,6 +911,7 @@ def parse_memex_config(data: dict | None = None) -> MemexConfig:
 
 __all__ = [
     'AuthConfig',
+    'CorsConfig',
     'ConfigWithRoot',
     'FileStoreConfig',
     'LocalFileStoreConfig',
