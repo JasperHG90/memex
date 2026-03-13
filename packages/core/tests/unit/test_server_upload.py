@@ -4,14 +4,21 @@ from unittest.mock import AsyncMock, MagicMock
 from memex_core.server import app
 from memex_core.server.common import get_api
 
-# Mock API dependency
+# Module-level mock — reset before each test via the fixture below.
 mock_api = MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def _reset_mock_api():
+    """Reset mock_api call state before each test to prevent cross-test leakage."""
+    mock_api.reset_mock()
 
 
 @pytest.fixture
 def client():
     app.dependency_overrides[get_api] = lambda: mock_api
-    return TestClient(app)
+    yield TestClient(app)
+    app.dependency_overrides.pop(get_api, None)
 
 
 def test_ingest_upload_single_md(client):
