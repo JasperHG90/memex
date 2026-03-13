@@ -443,16 +443,27 @@ def memex_get_template(
 
 @mcp.tool(
     name='memex_active_vault',
-    description='Get the active vault name and ID.',
+    description='Get the active vault name and ID. Shows both server default and client-resolved vault.',
 )
 async def memex_active_vault(ctx: Context) -> str:
     """Retrieve the currently active vault information."""
     try:
         api = get_api(ctx)
+        config = get_config(ctx)
+
+        lines: list[str] = []
+
+        # Client-resolved vaults (from vault config + server defaults)
+        lines.append(f'**Write vault (client):** {config.write_vault}')
+        lines.append(f'**Read vaults (client):** {", ".join(config.read_vaults)}')
+
+        # Server defaults
         vault = await api.get_active_vault()
-        if not vault:
-            return 'No active vault found.'
-        return f'Active Vault: {vault.name} (ID: {vault.id})'
+        if vault:
+            lines.append(f'**Server default write:** {vault.name} (ID: {vault.id})')
+        lines.append(f'**Server default read:** {config.server.default_reader_vault}')
+
+        return '\n'.join(lines)
 
     except Exception as e:
         logging.error(f'Get active vault failed: {e}', exc_info=True)

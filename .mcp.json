@@ -21,7 +21,9 @@
         "run"
       ],
       "env": {
-        "MEMEX_VAULT__ACTIVE": "memex"
+        "MEMEX_SERVER_URL": "http://host.docker.internal:8000",
+        "MEMEX_VAULT__ACTIVE": "memex",
+        "MEMEX_VAULT__SEARCH": "[\"memex\"]"
       }
     }
   }

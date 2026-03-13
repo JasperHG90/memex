@@ -7,6 +7,7 @@ from memex_common.schemas import (
     NoteDTO,
     MemoryUnitDTO,
     FactTypes,
+    VaultDTO,
 )
 
 
@@ -206,6 +207,38 @@ async def test_mcp_list_tools(mcp_client):
     page_desc = tool_by_name['memex_get_page_indices'].description
     assert 'leaf' in page_desc.lower(), 'page_indices description should mention leaf nodes'
     assert 'memex_get_nodes' in page_desc, 'page_indices description should reference get_nodes'
+
+
+@pytest.mark.asyncio
+async def test_active_vault_shows_server_and_client(mock_api, mock_config, mcp_client):
+    """memex_active_vault should show both client-resolved and server default vaults."""
+    vault_id = uuid4()
+    mock_api.get_active_vault.return_value = VaultDTO(id=vault_id, name='global', description=None)
+
+    result = await mcp_client.call_tool('memex_active_vault', {})
+    text = result.content[0].text
+
+    assert '**Write vault (client):** my-project' in text
+    assert '**Read vaults (client):** my-project, shared' in text
+    assert '**Server default write:** global' in text
+    assert f'(ID: {vault_id})' in text
+    assert '**Server default read:** global' in text
+
+
+@pytest.mark.asyncio
+async def test_active_vault_without_server_vault(mock_api, mock_config, mcp_client):
+    """memex_active_vault should handle missing server vault gracefully."""
+    mock_api.get_active_vault.return_value = None
+
+    result = await mcp_client.call_tool('memex_active_vault', {})
+    text = result.content[0].text
+
+    # Client info still present
+    assert '**Write vault (client):** my-project' in text
+    assert '**Read vaults (client):** my-project, shared' in text
+    # Server write line absent, but server read still shown
+    assert 'Server default write' not in text
+    assert '**Server default read:** global' in text
 
 
 @pytest.mark.asyncio
