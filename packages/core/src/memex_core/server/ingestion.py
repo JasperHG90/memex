@@ -10,6 +10,7 @@ import os
 import pathlib as plb
 import shutil
 import tempfile
+from collections.abc import Mapping
 from typing import Annotated, cast
 from uuid import UUID
 
@@ -59,6 +60,29 @@ def _schedule_contradiction(background_tasks: BackgroundTasks, result: dict) -> 
         background_tasks.add_task(_run_contradiction, coro)
 
 
+def _decode_base64_dict(
+    data: Mapping[str, str | bytes] | None,
+    field_name: str = 'content',
+) -> dict[str, bytes]:
+    """Decode a ``{name: base64_value}`` mapping to ``{name: bytes}``.
+
+    Values may be ``str`` (raw base64 text, e.g. from ``IngestURLRequest.assets``)
+    or ``bytes`` (validated-but-not-decoded ``Base64Bytes`` from Pydantic).
+
+    Raises :class:`~fastapi.HTTPException` (400) on invalid Base64 input.
+    Returns an empty dict when *data* is ``None`` or empty.
+    """
+    if not data:
+        return {}
+    try:
+        return {name: base64.b64decode(content) for name, content in data.items()}
+    except binascii.Error:
+        raise HTTPException(
+            status_code=400,
+            detail=f'Invalid Base64 encoding in {field_name}',
+        )
+
+
 @router.post(
     '/ingestions',
     response_model=None,
@@ -85,11 +109,9 @@ async def ingest_note(
 
         try:
             decoded_content = base64.b64decode(request.content)
-            decoded_files = {
-                name: base64.b64decode(content) for name, content in request.files.items()
-            }
         except binascii.Error:
             raise HTTPException(status_code=400, detail='Invalid Base64 encoding in note content')
+        decoded_files = _decode_base64_dict(request.files, 'files')
 
         note = NoteInput(
             name=request.name,
@@ -112,7 +134,7 @@ async def ingest_note(
 @router.post(
     '/ingestions/url',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': dict}},
+    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
 )
 async def ingest_url(
     request: Annotated[IngestURLRequest, Body()],
@@ -122,23 +144,20 @@ async def ingest_url(
 ) -> IngestResponse | JSONResponse:
     try:
         # Decode assets if present
-        assets_bytes = {}
-        if request.assets:
-            try:
-                for name, content in request.assets.items():
-                    assets_bytes[name] = base64.b64decode(content)
-            except binascii.Error:
-                raise HTTPException(status_code=400, detail='Invalid Base64 encoding in assets')
+        assets_bytes = _decode_base64_dict(request.assets, 'assets')
 
         if background:
-            background_tasks.add_task(
+            job_id = await api.batch_manager.create_single_job(
                 api.ingest_from_url,
-                url=request.url,
                 vault_id=request.vault_id,
+                url=request.url,
                 reflect_after=request.reflect_after,
                 assets=assets_bytes,
             )
-            return JSONResponse(status_code=202, content={'status': 'accepted'})
+            return JSONResponse(
+                status_code=202,
+                content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
+            )
 
         result = await api.ingest_from_url(
             url=request.url,
@@ -148,6 +167,8 @@ async def ingest_url(
         )
         _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
+    except HTTPException:
+        raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
 
@@ -174,7 +195,7 @@ async def ingest_file(
 @router.post(
     '/ingestions/upload',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': dict}},
+    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
 )
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -192,7 +213,7 @@ async def ingest_upload(
         parsed_metadata = json.loads(metadata) if metadata else {}
         # We look for NOTE.md, README.md, or the single file if it's .md
         main_content = b''
-        aux_files = {}
+        aux_files: dict[str, bytes] = {}
         main_filename = ''
         # Priority: NOTE.md > README.md > index.md > first .md file
         md_files = [f for f in files if f.filename and f.filename.lower().endswith('.md')]
@@ -207,18 +228,34 @@ async def ingest_upload(
 
             if background:
 
-                async def _ingest_and_cleanup(path: str) -> None:
+                async def _ingest_file_and_cleanup(
+                    file_path: str | plb.Path,
+                    vault_id: UUID | str | None = None,
+                    reflect_after: bool = True,
+                ) -> dict:
+                    """Wrap ingest_from_file with temp-file cleanup."""
                     try:
-                        result = await api.ingest_from_file(path)
-                        coro = result.pop('contradiction_task', None)
-                        if coro is not None:
-                            await coro
+                        return await api.ingest_from_file(
+                            file_path,
+                            vault_id=vault_id,
+                            reflect_after=reflect_after,
+                        )
                     finally:
-                        if os.path.exists(path):
-                            os.remove(path)
+                        if os.path.exists(str(file_path)):
+                            os.remove(str(file_path))
 
-                background_tasks.add_task(_ingest_and_cleanup, tmp_path)
-                return JSONResponse(status_code=202, content={'status': 'accepted'})
+                job_id = await api.batch_manager.create_single_job(
+                    _ingest_file_and_cleanup,
+                    vault_id=parsed_metadata.get('vault_id'),
+                    file_path=tmp_path,
+                )
+                return JSONResponse(
+                    status_code=202,
+                    content=BatchJobStatus(
+                        job_id=job_id,
+                        status='pending',
+                    ).model_dump(mode='json'),
+                )
 
             try:
                 result = await api.ingest_from_file(tmp_path)
@@ -255,7 +292,7 @@ async def ingest_upload(
                 main_content = content
                 if f.filename is not None:
                     main_filename = f.filename
-            else:
+            elif f.filename is not None:
                 aux_files[f.filename] = content
 
         note = NoteInput(
@@ -267,17 +304,25 @@ async def ingest_upload(
         )
 
         if background:
-            background_tasks.add_task(
+            job_id = await api.batch_manager.create_single_job(
                 api.ingest,
-                note,
                 vault_id=parsed_metadata.get('vault_id'),
+                note=note,
             )
-            return JSONResponse(status_code=202, content={'status': 'accepted'})
+            return JSONResponse(
+                status_code=202,
+                content=BatchJobStatus(
+                    job_id=job_id,
+                    status='pending',
+                ).model_dump(mode='json'),
+            )
 
         result = await api.ingest(note, vault_id=parsed_metadata.get('vault_id'))
         _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
 
+    except HTTPException:
+        raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
 
@@ -297,12 +342,11 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 @router.post(
     '/ingestions/webhook',
     status_code=202,
-    response_model=IngestResponse,
+    response_model=BatchJobStatus,
 )
 async def ingest_webhook(
     request: Request,
     api: Annotated[MemexAPI, Depends(get_api)],
-    background_tasks: BackgroundTasks,
     x_webhook_signature: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
     """Ingest a note from an external webhook.
@@ -311,7 +355,8 @@ async def ingest_webhook(
     When a webhook secret is configured, the ``X-Webhook-Signature`` header
     must contain ``hex(HMAC-SHA256(secret, raw_body))``.
 
-    Returns 202 Accepted with the ingestion result.
+    Returns 202 Accepted with a ``BatchJobStatus`` containing a trackable
+    ``job_id``.
     """
     # Read raw body for HMAC validation (must happen before Pydantic parsing)
     raw_body = await request.body()
@@ -355,11 +400,14 @@ async def ingest_webhook(
     )
 
     try:
-        result = await api.ingest(note, vault_id=payload.vault_id)
-        _schedule_contradiction(background_tasks, result)
+        job_id = await api.batch_manager.create_single_job(
+            api.ingest,
+            vault_id=payload.vault_id,
+            note=note,
+        )
         return JSONResponse(
             status_code=202,
-            content=IngestResponse(**result).model_dump(mode='json'),
+            content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')

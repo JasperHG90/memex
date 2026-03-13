@@ -19,10 +19,10 @@ async def test_note_from_file_source_uri(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ingest_payload_source_uri(api, mock_metastore, mock_session):
+async def test_ingest_payload_fields(api, mock_metastore, mock_session):
     from uuid import UUID
 
-    # Verify ingest puts source_uri into payload
+    # Verify ingest populates the full RetainContent payload
     api.memory.retain = AsyncMock(return_value={'status': 'success'})
 
     # Mock resolve_vault_identifier on the ingestion service's vault service
@@ -38,24 +38,32 @@ async def test_ingest_payload_source_uri(api, mock_metastore, mock_session):
     mock_txn = AsyncMock()
     mock_txn.db_session = mock_session
     mock_txn.__aenter__.return_value = mock_txn
-    # We need to mock the AsyncTransaction context manager
     with patch('memex_core.services.ingestion.AsyncTransaction', return_value=mock_txn):
-        note = NoteInput('name', 'desc', b'content', source_uri='http://source.com')
+        note = NoteInput(
+            'my-note',
+            'a test description',
+            b'content',
+            source_uri='http://source.com',
+            tags=['alpha', 'beta'],
+        )
         await api.ingest(note)
 
-    # Check retain call
+    # Use keyword-based access so this test is resilient to retain() signature changes
     call_args = api.memory.retain.call_args
     assert call_args is not None, 'memory.retain was not called'
-
-    # call_args is (args, kwargs)
-    # retain signature: (session, contents, ...)
-    # contents is the second arg or kwargs['contents']
-
-    if 'contents' in call_args[1]:
-        contents = call_args[1]['contents']
-    else:
-        contents = call_args[0][1]
+    contents = call_args.kwargs['contents']
 
     assert len(contents) == 1
     rc = contents[0]
-    assert rc.payload['source_uri'] == 'http://source.com'
+    payload = rc.payload
+
+    # Verify all expected payload fields
+    assert payload['source'] == 'note'
+    assert payload['note_name'] == 'my-note'
+    assert payload['note_description'] == 'a test description'
+    assert payload['source_uri'] == 'http://source.com'
+    assert payload['tags'] == ['alpha', 'beta']
+    assert payload['content_fingerprint'] is not None
+    assert 'uuid' in payload
+    assert 'filestore_path' in payload
+    assert 'assets' in payload

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
@@ -61,6 +62,55 @@ class JobManager:
         task = asyncio.create_task(self._run_job(job_id, notes, target_vault_id, batch_size))
         self._active_tasks[job_id] = task
         # Clean up task reference when done
+        task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
+
+        return job_id
+
+    async def create_single_job(
+        self,
+        coro_fn: Callable[..., Awaitable[dict[str, Any]]],
+        vault_id: UUID | str | None = None,
+        **kwargs: Any,
+    ) -> UUID:
+        """Create a tracked job that wraps a single async ingestion call.
+
+        Unlike :meth:`create_job` (which processes a list of notes via
+        ``ingest_batch_internal``), this method runs an arbitrary coroutine
+        (e.g. ``api.ingest_from_url``) under the same job-tracking lifecycle
+        so callers get a ``job_id`` they can poll.
+
+        The *vault_id* is used both for the job record and forwarded to
+        *coro_fn* (as ``vault_id=...``) so the ingestion targets the same vault.
+
+        Args:
+            coro_fn: An async callable (e.g. ``api.ingest_from_url``) that
+                returns a dict result.
+            vault_id: Optional vault identifier (resolved to UUID for job
+                record and forwarded to *coro_fn*).
+            **kwargs: Additional keyword arguments forwarded to *coro_fn*.
+
+        Returns:
+            UUID of the newly created job.
+        """
+        job_id = uuid4()
+        target_vault_id = await self.api.resolve_vault_identifier(
+            vault_id or self.api.config.server.active_vault
+        )
+
+        async with self.api.metastore.session() as session:
+            job = BatchJob(
+                id=job_id,
+                vault_id=target_vault_id,
+                status=BatchJobStatus.PENDING,
+                notes_count=1,
+            )
+            session.add(job)
+            await session.commit()
+
+        # Forward vault_id to the coroutine alongside caller-provided kwargs
+        coro_kwargs: dict[str, Any] = {'vault_id': vault_id, **kwargs}
+        task = asyncio.create_task(self._run_single_job(job_id, coro_fn, **coro_kwargs))
+        self._active_tasks[job_id] = task
         task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
 
         return job_id
@@ -182,5 +232,56 @@ class JobManager:
                 if job:
                     job.status = BatchJobStatus.FAILED
                     job.completed_at = datetime.now(timezone.utc)
+                    job.error_info = str(e)
+                    await session.commit()
+
+    async def _run_single_job(
+        self,
+        job_id: UUID,
+        coro_fn: Callable[..., Awaitable[dict[str, Any]]],
+        **kwargs: Any,
+    ) -> None:
+        """Execute a single ingestion coroutine with job lifecycle tracking."""
+        logger.info(f'Starting single job {job_id}')
+
+        try:
+            async with self.api.metastore.session() as session:
+                job = await session.get(BatchJob, job_id)
+                if not job:
+                    logger.error(f'Job {job_id} not found in database.')
+                    return
+                job.status = BatchJobStatus.PROCESSING
+                job.started_at = datetime.now(timezone.utc)
+                await session.commit()
+
+            result = await coro_fn(**kwargs)
+
+            # Run contradiction detection inline (no BackgroundTasks available)
+            contradiction_task = result.pop('contradiction_task', None)
+            if contradiction_task is not None:
+                await contradiction_task
+
+            note_id = result.get('note_id')
+
+            async with self.api.metastore.session() as session:
+                job = await session.get(BatchJob, job_id)
+                if not job:
+                    return
+                job.status = BatchJobStatus.COMPLETED
+                job.completed_at = datetime.now(timezone.utc)
+                job.processed_count = 1
+                job.note_ids = [note_id] if note_id else []
+                job.progress = 'Completed: 1/1 processed'
+                await session.commit()
+                logger.info(f'Single job {job_id} completed successfully.')
+
+        except Exception as e:
+            logger.error(f'Single job {job_id} failed: {e}', exc_info=True)
+            async with self.api.metastore.session() as session:
+                job = await session.get(BatchJob, job_id)
+                if job:
+                    job.status = BatchJobStatus.FAILED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.failed_count = 1
                     job.error_info = str(e)
                     await session.commit()
