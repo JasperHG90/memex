@@ -155,22 +155,31 @@ class BatchEntityRequest(BaseModel):
 async def get_entities_batch(
     request: Annotated[BatchEntityRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: str | None = Query(None, description='Vault ID or name to scope the lookup'),
 ):
     """Get multiple entities by ID."""
     try:
-        vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
-        entities = await api.get_entities(request.entity_ids, vault_id=vault_id)
+        resolved_vault_id = await api.resolve_vault_identifier(
+            vault_id or api.config.server.default_active_vault
+        )
+        entities = await api.get_entities(request.entity_ids, vault_id=resolved_vault_id)
         return [build_entity_dto(e) for e in entities]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get entities batch')
 
 
 @router.get('/entities/{id}', response_model=EntityDTO)
-async def get_entity(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+async def get_entity(
+    id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: str | None = Query(None, description='Vault ID or name to scope the lookup'),
+):
     """Get entity details."""
     try:
-        vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
-        entity = await api.get_entity(id, vault_id=vault_id)
+        resolved_vault_id = await api.resolve_vault_identifier(
+            vault_id or api.config.server.default_active_vault
+        )
+        entity = await api.get_entity(id, vault_id=resolved_vault_id)
         if not entity:
             raise HTTPException(status_code=404, detail=f'Entity {id} not found')
         return build_entity_dto(entity)

@@ -46,13 +46,13 @@ def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     return vault_ids
 
 
-async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list['UUID | str']:
+async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
     """Resolve and validate that all vault identifiers exist."""
-    resolved: list[UUID | str] = []
+    resolved: list[UUID] = []
     for vid in vault_ids:
         try:
             r = await api.resolve_vault_identifier(vid)
-            resolved.append(r)
+            resolved.append(UUID(str(r)) if not isinstance(r, UUID) else r)
         except Exception:
             raise ToolError(f'Vault not found: {vid!r}')
     return resolved
@@ -1704,7 +1704,7 @@ async def memex_find_note(
     try:
         api = get_api(ctx)
 
-        resolved_vids: list[UUID | str] | None = None
+        resolved_vids: list[UUID] | None = None
         if vault_ids:
             _validate_vault_ids(vault_ids)
             resolved_vids = await _resolve_vault_ids(api, vault_ids)
