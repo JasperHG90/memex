@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from memex_core.api import MemexAPI
@@ -50,6 +51,16 @@ async def lifespan(app: FastAPI):
     configure_logging(level=log_level, json_output=config.server.logging.json_output)
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
+
+    # Configure CORS
+    cors = config.server.cors
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors.origins,
+        allow_credentials=cors.allow_credentials,
+        allow_methods=cors.allow_methods,
+        allow_headers=cors.allow_headers,
+    )
 
     # Warn when binding to a non-localhost address without authentication
     if config.server.host != '127.0.0.1' and not config.server.auth.enabled:
