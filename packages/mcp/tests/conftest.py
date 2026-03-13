@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 from fastmcp import Client
 from memex_mcp.server import mcp
@@ -39,6 +39,18 @@ def mock_api():
 
     with patch('memex_mcp.server.get_api', return_value=mock):
         yield mock
+
+
+@pytest.fixture
+def mock_config():
+    """Mock MemexConfig for tools that use get_config (e.g. vault defaults)."""
+    config = MagicMock()
+    config.write_vault = 'my-project'
+    config.read_vaults = ['my-project', 'shared']
+    config.server.default_active_vault = 'global'
+    config.server.default_reader_vault = 'global'
+    with patch('memex_mcp.server.get_config', return_value=config):
+        yield config
 
 
 @pytest.fixture
