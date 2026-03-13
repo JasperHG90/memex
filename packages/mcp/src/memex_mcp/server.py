@@ -25,6 +25,7 @@ from memex_common.schemas import (
     PageIndexDTO,
     PageMetadataDTO,
     TOCNodeDTO,
+    filter_toc,
 )
 
 
@@ -76,7 +77,7 @@ def _default_read_vaults(ctx: Context) -> list[str]:
 
 prompts_dir = plb.Path(__file__).parent / 'prompts'
 
-configure_logging(level='CRITICAL')
+configure_logging(level=os.environ.get('MEMEX_MCP_LOG_LEVEL', 'WARNING'))
 
 persona_logger = logging.getLogger('persona')
 persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
@@ -721,7 +722,8 @@ async def memex_memory_search(
             )
 
             # Show supersession context if available
-            superseded_by = getattr(res, 'unit_metadata', {}).get('superseded_by')
+            meta = getattr(res, 'metadata', {}) or getattr(res, 'unit_metadata', {}) or {}
+            superseded_by = meta.get('superseded_by')
             if superseded_by:
                 for s in superseded_by:
                     output.append(
@@ -901,9 +903,7 @@ async def _get_single_page_index(
     raw_toc = page_index.get('toc', [])
 
     if depth is not None or parent_node_id is not None:
-        from memex_core.services.notes import NoteService
-
-        raw_toc = NoteService._filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
+        raw_toc = filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
 
     toc = [TOCNodeDTO.model_validate(n) for n in raw_toc]
 
@@ -954,16 +954,12 @@ async def memex_get_page_indices(
         str | None,
         Field(default=None, description='Return only the subtree under this node ID.'),
     ] = None,
-) -> str | PageIndexDTO:
+) -> str:
     """Get the hierarchical page index for one or more notes."""
     try:
         api = get_api(ctx)
 
-        # Single note: preserve original return type (PageIndexDTO)
-        if len(note_ids) == 1:
-            return await _get_single_page_index(api, note_ids[0], depth, parent_node_id)
-
-        # Multiple notes: process each, collect results and errors
+        # Process all notes uniformly — collect results and errors
         sections: list[str] = []
         errors: list[str] = []
 
@@ -1286,16 +1282,16 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_recent_notes',
-    description='Browse recent notes. Filter by vault name or UUID and optional date range.',
+    description='Browse recent notes. Defaults to all vaults. '
+    'Filter by vault names/UUIDs and optional date range.',
 )
 async def memex_recent_notes(
     ctx: Context,
     limit: Annotated[int, Field(description='Max notes to return.')] = 20,
-    vault_id: Annotated[
-        str | None,
+    vault_ids: Annotated[
+        list[str] | None,
         Field(
-            default=None,
-            description="Vault UUID or name, e.g. 'rituals'. Omit for active vault.",
+            description='Vault UUIDs or names. Omit for all vaults.',
         ),
     ] = None,
     after: Annotated[
@@ -1318,9 +1314,10 @@ async def memex_recent_notes(
 
     try:
         api = get_api(ctx)
-        resolved_vault_id = None
-        if vault_id:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+        resolved_vids = None
+        if vault_ids:
+            _validate_vault_ids(vault_ids)
+            resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
         parsed_after = None
         parsed_before = None
@@ -1337,7 +1334,7 @@ async def memex_recent_notes(
 
         notes = await api.get_recent_notes(
             limit=limit,
-            vault_id=resolved_vault_id,
+            vault_ids=resolved_vids,
             after=parsed_after,
             before=parsed_before,
         )
@@ -1772,11 +1769,8 @@ async def memex_kv_write(
             resolved_uuid = await _resolve_vault_id(api, vault_id)
             resolved_vault = str(resolved_uuid)
 
-        # Generate embedding for semantic search
-        from memex_core.memory.models.embedding import get_embedding_model
-
-        embed_model = await get_embedding_model()
-        embedding = embed_model.encode([value])[0].tolist()
+        # Generate embedding for semantic search via the API layer
+        embedding = await api.embed_text(value)
 
         entry = await api.kv_put(
             value=value,
