@@ -22,13 +22,13 @@ async def setup_cli_e2e(db_session: AsyncSession):
     """Additional setup for CLI E2E tests."""
     os.environ['MEMEX_CLI__SERVER_URL'] = 'http://test'
     os.environ['MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL'] = 'gemini/flash'
-    os.environ['MEMEX_SERVER__ACTIVE_VAULT'] = 'test-vault'
+    os.environ['MEMEX_SERVER__DEFAULT_ACTIVE_VAULT'] = 'test-vault'
 
     yield
 
     os.environ.pop('MEMEX_CLI__SERVER_URL', None)
     os.environ.pop('MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL', None)
-    os.environ.pop('MEMEX_SERVER__ACTIVE_VAULT', None)
+    os.environ.pop('MEMEX_SERVER__DEFAULT_ACTIVE_VAULT', None)
 
 
 class MockEmbedder:

@@ -183,7 +183,7 @@ def test_add_note_with_vault(runner, mock_api, mock_config, monkeypatch):
     result = runner.invoke(note_app, ['add', 'test', '--vault', 'MyVault'], obj=mock_config)
     assert result.exit_code == 0
     assert captured_config is not None
-    assert captured_config.server.active_vault == 'MyVault'
+    assert captured_config.vault.active == 'MyVault'
 
 
 def test_add_note_with_key(runner, mock_api, mock_config, monkeypatch):
