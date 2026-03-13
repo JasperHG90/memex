@@ -122,6 +122,8 @@ For this reason, always set vault configuration via environment variables in the
 }
 ```
 
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation.
+
 > **Tip:** Running `memex setup claude-code --vault my-project` sets `MEMEX_VAULT__ACTIVE` in the MCP config automatically.
 
 For the full vault resolution precedence (shared by CLI and MCP), see [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp).

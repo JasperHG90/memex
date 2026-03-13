@@ -58,6 +58,8 @@ Set vault env vars in your MCP server config (e.g., `.claude/mcp.json`):
 }
 ```
 
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation.
+
 > **Tip:** `memex setup claude-code --vault my-project` generates this configuration automatically.
 
 ### Setting Env Vars for CLI
