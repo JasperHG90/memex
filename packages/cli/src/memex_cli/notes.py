@@ -431,7 +431,7 @@ async def find_note(
         return
 
     if json_output:
-        console.print_json(json.dumps(results, default=str))
+        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
         return
 
     table = Table(title=f'Notes matching "{query}"')
@@ -442,17 +442,17 @@ async def find_note(
     table.add_column('Note ID', style='dim')
 
     for r in results:
-        date = r.get('publish_date') or r.get('created_at') or ''
+        date = r.publish_date or r.created_at
         if hasattr(date, 'date'):
             date = str(date.date())
         else:
             date = str(date)[:10] if date else ''
         table.add_row(
-            r.get('title', 'Untitled'),
-            f'{r.get("score", 0):.2f}',
+            r.title or 'Untitled',
+            f'{r.score:.2f}',
             date,
-            r.get('status', ''),
-            str(r.get('note_id', '')),
+            r.status or '',
+            str(r.note_id),
         )
 
     console.print(table)

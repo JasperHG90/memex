@@ -6,29 +6,12 @@ import logging
 from typing import Any
 from uuid import UUID
 
-import dspy
 from sqlalchemy import text
 from sqlmodel import col, or_, select
 
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.kv')
-
-
-class ExtractKVKey(dspy.Signature):
-    """Extract a short, namespaced key from user preference or configuration text.
-
-    Return a lowercase, dot-separated key path that categorizes the preference.
-    Examples: 'tool:python:pkg_mgr', 'style:code:indent', 'pref:editor:theme'.
-    If no clear key can be extracted, return an empty string.
-    """
-
-    text: str = dspy.InputField(
-        desc='User preference or configuration text to extract a key from.',
-    )
-    key: str = dspy.OutputField(
-        desc='A short namespaced key (e.g. tool:python:pkg_mgr). Empty if unclear.',
-    )
 
 
 class KVService(BaseService):
@@ -183,24 +166,3 @@ class KVService(BaseService):
             stmt = stmt.order_by(col(KVEntry.key))
             result = await session.exec(stmt)
             return list(result.all())
-
-    async def extract_key(self, value_text: str, lm: dspy.LM) -> str | None:
-        """Use LLM to extract a short namespaced key from preference text."""
-        from memex_core.llm import run_dspy_operation
-
-        predictor = dspy.Predict(ExtractKVKey)
-
-        try:
-            prediction, _ = await run_dspy_operation(
-                lm=lm,
-                predictor=predictor,
-                input_kwargs={'text': value_text},
-                context_metadata={'operation': 'kv_key_extraction'},
-            )
-        except (ValueError, RuntimeError, OSError, KeyError) as e:
-            logger.warning('LLM key extraction failed: %s', e, exc_info=True)
-            return None
-
-        raw: str = getattr(prediction, 'key', '') or ''
-        key = raw.strip().strip('"\'').strip()
-        return key if key else None
