@@ -13,8 +13,8 @@ dependencies = [
     "rich>=13.7.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0.1",
-    "platformdirs>=4.2.0",
-    "python-box>=7.1.1",
+    "platformdirs>=4.5.1",
+    "python-box>=7.3.2",
     "aiofiles>=25.1.0",
 ]
 
