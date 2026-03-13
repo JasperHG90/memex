@@ -63,9 +63,11 @@ _MCP_JSON_TEMPLATE = """\
 
 _MEMEX_YAML_TEMPLATE = """\
 server_url: {server_url}
+vault:
+  active: "{vault}"
 server:
-  active_vault: "{vault}"
-  attached_vaults: []
+  default_active_vault: "{vault}"
+  default_reader_vault: "{vault}"
 """
 
 _CLAUDE_MD = """\

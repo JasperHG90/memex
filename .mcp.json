@@ -21,7 +21,7 @@
         "run"
       ],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "memex"
+        "MEMEX_VAULT__ACTIVE": "memex"
       }
     }
   }
