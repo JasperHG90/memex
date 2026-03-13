@@ -372,7 +372,7 @@ export MEMEX_SERVER__MEMORY__CONTRADICTION__ALPHA=0.1
 | `MEMEX_LOAD_GLOBAL_CONFIG` | Set to `false` to skip loading `~/.config/memex/config.yaml`. |
 | `MEMEX_LOAD_LOCAL_CONFIG` | Set to `false` to skip searching CWD and parents for config files. |
 | `MEMEX_VAULT__ACTIVE` | Client write vault override. Equivalent to `vault.active` in YAML. |
-| `MEMEX_VAULT__SEARCH` | Client read vaults override (JSON array). Equivalent to `vault.search` in YAML. |
+| `MEMEX_VAULT__SEARCH` | Client read vaults override. Must be a **string** containing a JSON array (e.g., `'["a", "b"]'`). Equivalent to `vault.search` in YAML. |
 
 ---
 
