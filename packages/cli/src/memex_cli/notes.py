@@ -402,7 +402,7 @@ def _print_compact_note(d: Any) -> None:
     if len(desc) > 120:
         desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    print(f'- **{title}** ({date}) [{note_id}]{suffix}')
+    console.print(f'- **{title}** ({date}) [{note_id}]{suffix}')
 
 
 @app.command('find')

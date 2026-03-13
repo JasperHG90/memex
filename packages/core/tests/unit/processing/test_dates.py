@@ -6,14 +6,14 @@ import pytest
 
 from memex_core.processing.dates import (
     DateExtraction,
-    _parse_iso_date,
+    parse_datetime,
     extract_document_date,
 )
 
 
 class TestParseIsoDate:
     def test_valid_iso(self):
-        result = _parse_iso_date('2023-06-15')
+        result = parse_datetime('2023-06-15')
         assert result is not None
         assert result.year == 2023
         assert result.month == 6
@@ -21,16 +21,16 @@ class TestParseIsoDate:
         assert result.tzinfo is not None
 
     def test_valid_with_timezone(self):
-        result = _parse_iso_date('2024-01-01T12:00:00+05:00')
+        result = parse_datetime('2024-01-01T12:00:00+05:00')
         assert result is not None
         assert result.year == 2024
         assert result.tzinfo is not None
 
     def test_invalid_string(self):
-        assert _parse_iso_date('not-a-date') is None
+        assert parse_datetime('not-a-date') is None
 
     def test_empty_string(self):
-        assert _parse_iso_date('') is None
+        assert parse_datetime('') is None
 
 
 class TestExtractDocumentDate:

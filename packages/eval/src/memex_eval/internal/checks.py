@@ -14,6 +14,9 @@ from memex_eval.metrics import CheckResult, CheckStatus
 logger = logging.getLogger('memex_eval.checks')
 
 
+from typing import Callable
+
+
 def run_check(
     check: GroundTruthCheck,
     group_name: str,
@@ -28,23 +31,8 @@ def run_check(
     """Execute a single ground-truth check and return the result."""
     start = time.monotonic()
     try:
-        if check.check_type == 'keyword_in_results':
-            result = _check_keyword_in_results(check, group_name, memory_results, note_results)
-        elif check.check_type == 'keyword_absent_from_results':
-            result = _check_keyword_absent(check, group_name, memory_results, note_results)
-        elif check.check_type == 'entity_exists':
-            result = _check_entity_exists(check, group_name, entity_names or [])
-        elif check.check_type == 'entity_type_check':
-            result = _check_entity_type(check, group_name, entities)
-        elif check.check_type == 'entity_cooccurrence_check':
-            result = _check_entity_cooccurrence(check, group_name, cooccurrences)
-        elif check.check_type == 'entity_mention_check':
-            result = _check_entity_mention(check, group_name, mentions)
-        elif check.check_type == 'result_ordering':
-            result = _check_result_ordering(check, group_name, memory_results)
-        elif check.check_type == 'llm_judge':
-            result = _check_llm_judge(check, group_name, memory_results, note_results, judge)
-        else:
+        handler = _CHECK_DISPATCH.get(check.check_type)
+        if handler is None:
             result = CheckResult(
                 name=check.name,
                 group=group_name,
@@ -53,6 +41,18 @@ def run_check(
                 query=check.query,
                 expected=check.expected,
                 actual=f'Unknown check type: {check.check_type}',
+            )
+        else:
+            result = handler(
+                check=check,
+                group_name=group_name,
+                memory_results=memory_results,
+                note_results=note_results,
+                entity_names=entity_names or [],
+                judge=judge,
+                entities=entities,
+                cooccurrences=cooccurrences,
+                mentions=mentions,
             )
     except Exception as e:
         result = CheckResult(
@@ -90,6 +90,7 @@ def _check_keyword_in_results(
     group_name: str,
     memory_results: list[MemoryUnitDTO] | None,
     note_results: list[NoteSearchResult] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that all expected keywords appear in top-K results."""
     combined = _results_text(memory_results, note_results)
@@ -131,6 +132,7 @@ def _check_keyword_absent(
     group_name: str,
     memory_results: list[MemoryUnitDTO] | None,
     note_results: list[NoteSearchResult] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that none of the expected keywords appear in results (isolation test)."""
     combined = _results_text(memory_results, note_results)
@@ -171,6 +173,7 @@ def _check_entity_exists(
     check: GroundTruthCheck,
     group_name: str,
     entity_names: list[str],
+    **_kwargs,
 ) -> CheckResult:
     """Check that expected entities exist in the system."""
     expected_list = check.expected if isinstance(check.expected, list) else [check.expected]
@@ -211,6 +214,7 @@ def _check_result_ordering(
     check: GroundTruthCheck,
     group_name: str,
     memory_results: list[MemoryUnitDTO] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that results appear in the expected order (first expected before second)."""
     if not isinstance(check.expected, list) or len(check.expected) < 2:
@@ -301,6 +305,7 @@ def _check_llm_judge(
     memory_results: list[MemoryUnitDTO] | None,
     note_results: list[NoteSearchResult] | None,
     judge: Judge | None,
+    **_kwargs,
 ) -> CheckResult:
     """Use LLM judge to evaluate result quality."""
     if judge is None:
@@ -349,6 +354,7 @@ def _check_entity_type(
     check: GroundTruthCheck,
     group_name: str,
     entities: list[EntityDTO] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that an entity has the expected type."""
     if not entities:
@@ -409,6 +415,7 @@ def _check_entity_cooccurrence(
     check: GroundTruthCheck,
     group_name: str,
     cooccurrences: list[dict] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that expected entities appear in co-occurrence results."""
     if not cooccurrences:
@@ -468,6 +475,7 @@ def _check_entity_mention(
     check: GroundTruthCheck,
     group_name: str,
     mentions: list[dict] | None,
+    **_kwargs,
 ) -> CheckResult:
     """Check that entity mentions contain expected keywords."""
     if not mentions:
@@ -521,3 +529,19 @@ def _check_entity_mention(
             expected=check.expected,
             actual=f'Missing keywords: {", ".join(missing)}',
         )
+
+
+# ---------------------------------------------------------------------------
+# Dispatch table: check_type -> handler function
+# ---------------------------------------------------------------------------
+
+_CHECK_DISPATCH: dict[str, Callable[..., CheckResult]] = {
+    'keyword_in_results': _check_keyword_in_results,
+    'keyword_absent_from_results': _check_keyword_absent,
+    'entity_exists': _check_entity_exists,
+    'entity_type_check': _check_entity_type,
+    'entity_cooccurrence_check': _check_entity_cooccurrence,
+    'entity_mention_check': _check_entity_mention,
+    'result_ordering': _check_result_ordering,
+    'llm_judge': _check_llm_judge,
+}

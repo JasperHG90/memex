@@ -384,7 +384,7 @@ async def search_memory(
         if compact:
             for unit in results:
                 text = unit.text.replace('\n', ' ')[:200]
-                print(f'- [{unit.fact_type}] {text}')
+                console.print(f'- \\[{unit.fact_type}] {text}')
             return
 
         if json_output:
