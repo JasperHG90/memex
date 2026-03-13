@@ -737,6 +737,14 @@ class ServerConfig(BaseModel):
         default=4,
         description='Number of worker processes.',
     )
+    allow_insecure: bool = Field(
+        default=False,
+        description=(
+            'Allow binding to non-localhost addresses without authentication. '
+            'When False (default), the server refuses to start on a non-localhost '
+            'address unless auth is enabled.'
+        ),
+    )
 
     default_model: ModelConfig = Field(
         default_factory=lambda: ModelConfig(model='gemini/gemini-3-flash-preview'),
