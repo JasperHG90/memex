@@ -89,37 +89,37 @@ async def _initialize_database(config):
                 session.add(vault)
 
             # 2. Ensure Active Vault (if different)
-            if config.server.active_vault != GLOBAL_VAULT_NAME:
+            if config.server.default_active_vault != GLOBAL_VAULT_NAME:
                 from sqlmodel import select
 
                 # Check by name first
-                stmt = select(Vault).where(Vault.name == config.server.active_vault)
+                stmt = select(Vault).where(Vault.name == config.server.default_active_vault)
                 active_vault = (await session.exec(stmt)).first()
 
                 if not active_vault:
                     # Check if it's a UUID
                     try:
-                        v_id = UUID(config.server.active_vault)
+                        v_id = UUID(config.server.default_active_vault)
                         active_vault = await session.get(Vault, v_id)
                     except ValueError:
                         pass
 
                 if not active_vault:
                     console.print(
-                        f"[dim]Seeding Active Vault: '{config.server.active_vault}'...[/dim]"
+                        f"[dim]Seeding Active Vault: '{config.server.default_active_vault}'...[/dim]"
                     )
                     # If it's a UUID string, use it as ID
                     try:
-                        v_id = UUID(config.server.active_vault)
+                        v_id = UUID(config.server.default_active_vault)
                         new_vault = Vault(
                             id=v_id,
-                            name=config.server.active_vault,
-                            description=f'Auto-initialized vault (ID: {config.server.active_vault})',
+                            name=config.server.default_active_vault,
+                            description=f'Auto-initialized vault (ID: {config.server.default_active_vault})',
                         )
                     except ValueError:
                         new_vault = Vault(
-                            name=config.server.active_vault,
-                            description=f'Auto-initialized vault: {config.server.active_vault}',
+                            name=config.server.default_active_vault,
+                            description=f'Auto-initialized vault: {config.server.default_active_vault}',
                         )
                     session.add(new_vault)
 

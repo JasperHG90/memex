@@ -1,12 +1,17 @@
 """
-Memory Management Commands (Search & Manage).
+Memory Management Commands (Ingest & Retrieval).
 """
 
 import json
 import logging
+import pathlib as plb
 from typing import Annotated
 from uuid import UUID
 import itertools
+import base64
+import mimetypes
+
+import aiofiles
 
 import dspy
 import typer
@@ -24,8 +29,12 @@ from memex_cli.utils import (
 )
 from memex_common.config import MemexConfig
 from memex_common.schemas import (
+    BatchJobStatus,
+    IngestResponse,
     ReflectionRequest,
     MemoryUnitDTO,
+    NoteCreateDTO,
+    IngestURLRequest,
     LineageDirection,
 )
 
@@ -34,7 +43,7 @@ console = Console()
 
 app = typer.Typer(
     name='memory',
-    help='Search and manage memories.',
+    help='Ingest and Search memories.',
     no_args_is_help=True,
 )
 
@@ -101,6 +110,188 @@ async def delete_memory(
         console.print(f'[red]Memory unit {unit_id} not found.[/red]')
 
 
+@app.command('add')
+@async_command
+async def add_memory(
+    ctx: typer.Context,
+    content: Annotated[str | None, typer.Argument(help='The content of the memory to add.')] = None,
+    file: Annotated[
+        plb.Path | None,
+        typer.Option('--file', '-f', help='Path to a file or directory to ingest.', dir_okay=True),
+    ] = None,
+    url: Annotated[
+        str | None,
+        typer.Option('--url', '-u', help='URL to scrape and ingest.'),
+    ] = None,
+    asset: Annotated[
+        list[plb.Path] | None,
+        typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
+    ] = None,
+    vault: Annotated[
+        str | None, typer.Option('--vault', '-v', help='Target vault (write).')
+    ] = None,
+    key: Annotated[
+        str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
+    ] = None,
+    background: Annotated[
+        bool, typer.Option('--background', '-b', help='Queue as background job.')
+    ] = False,
+):
+    """
+    Add a new memory to Memex.
+    You can provide text directly, use --file to load from disk, or --url to scrape a website.
+    Use --asset to attach auxiliary files (images, PDFs) to a note.
+    """
+    config: MemexConfig = ctx.obj
+    # Override active vault if specified
+    if vault:
+        config.vault.active = vault
+
+    # Determine input source
+    if file:
+        file_path = file
+        if not file_path.exists():
+            console.print(f'[red]Error: Path does not exist: {file_path}[/red]')
+            raise typer.Exit(1)
+    elif url:
+        pass  # Valid input
+    elif content:
+        pass
+    else:
+        console.print('[red]Error: Must provide content, --file, or --url.[/red]')
+        raise typer.Exit(1)
+
+    console.print('[bold green]Adding Memory[/bold green]')
+
+    async with get_api_context(config) as api:
+        result: IngestResponse | BatchJobStatus | dict[str, str]
+        if url:
+            try:
+                # Load assets if provided
+                assets_dict = {}
+                if asset:
+                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
+                    for asset_path in asset:
+                        if not asset_path.exists():
+                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
+                            continue
+
+                        async with aiofiles.open(asset_path, 'rb') as f:
+                            asset_data = await f.read()
+
+                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
+
+                console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
+                req = IngestURLRequest(url=url, assets=assets_dict, vault_id=config.write_vault)
+                result = await api.ingest_url(req, background=background)
+            except Exception as e:
+                handle_api_error(e)
+        elif file and not asset:
+            # Multi-part upload using aiofiles (Traditional path)
+            try:
+                files_to_upload = []
+                if file.is_dir():
+                    console.print(f'[cyan]Scanning directory {file.name}...[/cyan]')
+                    # Recursively find all files
+                    for p in file.rglob('*'):
+                        if p.is_file() and not p.name.startswith('.'):
+                            async with aiofiles.open(p, 'rb') as f:
+                                data = await f.read()
+
+                            mime_type, _ = mimetypes.guess_type(p)
+                            mime_type = mime_type or 'application/octet-stream'
+                            # Use relative path as filename to preserve structure
+                            rel_path = str(p.relative_to(file))
+                            files_to_upload.append(('files', (rel_path, data, mime_type)))
+                else:
+                    console.print(f'[cyan]Reading file {file.name}...[/cyan]')
+                    async with aiofiles.open(file, 'rb') as f:
+                        data = await f.read()
+                    mime_type, _ = mimetypes.guess_type(file)
+                    mime_type = mime_type or 'application/octet-stream'
+                    files_to_upload.append(('files', (file.name, data, mime_type)))
+
+                if not files_to_upload:
+                    console.print('[red]Error: No files found to upload.[/red]')
+                    raise typer.Exit(1)
+
+                console.print(
+                    f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
+                )
+                metadata = {}
+                if config.write_vault:
+                    metadata['vault_id'] = str(config.write_vault)
+
+                result = await api.ingest_upload(
+                    files=files_to_upload, metadata=metadata, background=background
+                )
+            except Exception as e:
+                handle_api_error(e)
+        else:
+            # Handle NoteDTO path (content + assets or file + assets)
+            try:
+                note_content = ''
+                note_name = 'Quick Note'
+                note_description = 'Added via CLI'
+
+                if file:
+                    if file.is_dir():
+                        console.print(
+                            '[red]Error: --asset cannot be used with a directory --file. Point --file to a markdown file instead.[/red]'
+                        )
+                        raise typer.Exit(1)
+
+                    console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
+                    async with aiofiles.open(file, 'r', encoding='utf-8') as f:
+                        note_content = await f.read()
+                    note_name = file.stem
+                else:
+                    note_content = content or ''
+
+                # Encode content
+                # Load assets
+                assets_dict = {}
+                if asset:
+                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
+                    for asset_path in asset:
+                        if not asset_path.exists():
+                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
+                            continue
+
+                        async with aiofiles.open(asset_path, 'rb') as f:
+                            asset_data = await f.read()
+
+                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
+
+                note = NoteCreateDTO(
+                    name=note_name,
+                    description=note_description,
+                    content=base64.b64encode(note_content.encode('utf-8')),
+                    files=assets_dict,
+                    tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
+                    note_key=key,
+                    vault_id=config.write_vault,
+                )
+
+                result = await api.ingest(note, background=background)
+            except Exception as e:
+                handle_api_error(e)
+
+        # 4. Show Result
+        if isinstance(result, BatchJobStatus):
+            console.print(f'[bold green]Queued.[/bold green] Job ID: [cyan]{result.job_id}[/cyan]')
+            console.print(f'[dim]Poll: GET /api/v1/ingestions/{result.job_id}[/dim]')
+        elif isinstance(result, dict):
+            # Fire-and-forget background (url/upload): server accepted but no job ID
+            console.print('[bold green]Accepted.[/bold green] Ingestion running in background.')
+        elif result.status == 'skipped':
+            console.print(f'[yellow]Memory skipped: {result.reason}[/yellow]')
+        else:
+            console.print(f'[green]Memory added successfully![/green] UUID: {result.note_id}')
+            if result.unit_ids:
+                console.print(f'Extracted {len(result.unit_ids)} memory units.')
+
+
 @app.command('search')
 @async_command
 async def search_memory(
@@ -144,10 +335,6 @@ async def search_memory(
     Search for memories.
     """
     config: MemexConfig = ctx.obj
-    if vault:
-        # Override config: treat provided vaults as the full search scope
-        config.server.active_vault = vault[0]
-        config.server.attached_vaults = vault[1:]
 
     # Compute strategy inclusion list from exclusion flags
     all_strategies = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model']
@@ -165,10 +352,12 @@ async def search_memory(
     if strategies is not None:
         console.print(f'[dim]Active strategies: {", ".join(strategies)}[/dim]')
 
-    # Resolve vault_ids to pass directly to the server
+    # Resolve vault_ids: explicit --vault flags take precedence, else use config
     vault_ids: list[str] | None = None
     if vault:
         vault_ids = [v.strip() for v in vault]
+    else:
+        vault_ids = config.read_vaults
 
     async with get_api_context(config) as api:
         try:

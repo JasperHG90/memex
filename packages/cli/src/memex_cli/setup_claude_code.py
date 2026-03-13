@@ -239,7 +239,7 @@ async def setup_claude_code(
     config: MemexConfig | None = ctx.obj
 
     # --- Resolve vault name ---------------------------------------------------
-    vault_name = vault or (config.server.active_vault if config else 'global')
+    vault_name = vault or (config.write_vault if config else 'global')
 
     # --- Health check ---------------------------------------------------------
     check_url = server_url or (config.server_url if config else None)

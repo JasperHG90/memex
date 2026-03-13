@@ -47,8 +47,9 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
     global_data = MINIMAL_VALID_CONFIG.copy()
 
     # We need to deeply update for the test
-    global_data['server']['active_vault'] = 'global-write'
-    global_data['server']['attached_vaults'] = ['global-read']
+    global_data.setdefault('vault', {})['active'] = 'global-write'
+    global_data['server']['default_active_vault'] = 'global-write'
+    global_data['server']['default_reader_vault'] = 'global-read'
     global_data['server']['meta_store']['instance']['host'] = 'global-host'  # type: ignore
 
     with open(global_config, 'w') as f:
@@ -56,9 +57,11 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
 
     # 2. Mock Local Config content
     local_data = {
+        'vault': {
+            'active': 'local-write',
+            'search': ['local-read'],
+        },
         'server': {
-            'active_vault': 'local-write',
-            'attached_vaults': ['local-read'],
             'meta_store': {
                 'type': 'postgres',
                 'instance': {
@@ -68,7 +71,7 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
                     'password': 'password',
                 },
             },
-        }
+        },
     }
 
     # Patch user_config_dir and CWD
@@ -99,7 +102,7 @@ def test_config_cascade(tmp_path, runner, monkeypatch):
         assert result.exit_code == 0
 
         # Verify Cascade:
-        assert 'active_vault: local-write' in result.stdout
+        assert 'active: local-write' in result.stdout
         assert 'global-write' not in result.stdout
         assert '- local-read' in result.stdout
         assert 'host: local-host' in result.stdout

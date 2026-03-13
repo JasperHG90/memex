@@ -264,12 +264,14 @@ async def list_notes(
             console.print(f'[red]Invalid --before date: {before}[/red]')
             raise typer.Exit(code=1)
 
+    vault_ids = vault if vault else config.read_vaults
+
     async with get_api_context(config) as api:
         try:
             notes = await api.list_notes(
                 limit=limit,
                 offset=offset,
-                vault_ids=vault or None,
+                vault_ids=vault_ids,
                 after=parsed_after,
                 before=parsed_before,
             )
@@ -349,11 +351,13 @@ async def list_recent(
             console.print(f'[red]Invalid --before date: {before}[/red]')
             raise typer.Exit(code=1)
 
+    vault_ids = vault if vault else config.read_vaults
+
     async with get_api_context(config) as api:
         try:
             notes = await api.get_recent_notes(
                 limit=limit,
-                vault_ids=vault or None,
+                vault_ids=vault_ids,
                 after=parsed_after,
                 before=parsed_before,
             )
@@ -808,12 +812,14 @@ async def search_notes(
     if strategies is not None:
         console.print(f'[dim]Active strategies: {", ".join(strategies)}[/dim]')
 
+    vault_ids = vault if vault else config.read_vaults
+
     async with get_api_context(config) as api:
         try:
             results = await api.search_notes(
                 query=query,
                 limit=limit,
-                vault_ids=vault or None,
+                vault_ids=vault_ids,
                 expand_query=expand,
                 fusion_strategy=fusion_strategy,
                 strategies=strategies,
@@ -990,7 +996,9 @@ async def export_notes(
             notes = [note]
         else:
             try:
-                notes = await api.list_notes(limit=10000, vault_ids=vault or None)
+                notes = await api.list_notes(
+                    limit=10000, vault_ids=vault if vault else config.read_vaults
+                )
             except Exception as e:
                 handle_api_error(e)
 

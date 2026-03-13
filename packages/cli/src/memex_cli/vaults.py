@@ -63,8 +63,8 @@ async def list_vaults(
         console.print(table)
 
     # Show active from config
-    console.print(f'\n[bold]Active Vault (Write):[/bold] {config.server.active_vault}')
-    console.print(f'[bold]Attached Vaults (Read):[/bold] {config.server.attached_vaults or "None"}')
+    console.print(f'\n[bold]Active Vault (Write):[/bold] {config.write_vault}')
+    console.print(f'[bold]Read Vaults:[/bold] {config.read_vaults}')
 
 
 @app.command('create')
