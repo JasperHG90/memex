@@ -11,6 +11,7 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel
 
+from memex_common.vault_utils import resolve_vault_list
 from memex_common.schemas import (
     RetrievalRequest,
     ReflectionRequest,
@@ -259,11 +260,9 @@ class RemoteMemexAPI:
     ) -> list[NoteDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         if after is not None:
             params['after'] = after.isoformat()
         if before is not None:
@@ -393,11 +392,9 @@ class RemoteMemexAPI:
     ) -> SystemStatsCountsDTO:
         """Get total counts for notes, entities, and reflection queue."""
         params: dict[str, Any] = {}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         result = await self._get('stats/counts', params=params or None)
         return SystemStatsCountsDTO(**result)
 
@@ -416,11 +413,9 @@ class RemoteMemexAPI:
     ) -> list[NoteDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         if after is not None:
             params['after'] = after.isoformat()
         if before is not None:
@@ -438,11 +433,9 @@ class RemoteMemexAPI:
     ) -> list[EntityDTO]:
         """Search for entities by name."""
         params: dict[str, Any] = {'q': query, 'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         if entity_type:
             params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
@@ -462,11 +455,9 @@ class RemoteMemexAPI:
         params: dict[str, Any] = {'limit': limit}
         if q:
             params['q'] = q
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         if entity_type:
             params['entity_type'] = entity_type
 
@@ -498,11 +489,9 @@ class RemoteMemexAPI:
         """Get mentions for an entity."""
         # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
         params: dict[str, Any] = {'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         result = await self._get(f'entities/{entity_id}/mentions', params=params)
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
@@ -526,11 +515,9 @@ class RemoteMemexAPI:
         """Get co-occurrences for a set of entity IDs."""
         ids_str = ','.join(str(i) for i in ids)
         params: dict[str, Any] = {'ids': ids_str}
-        vid_list = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in vid_list:
-            vid_list.append(vault_id)
-        if vid_list:
-            params['vault_id'] = [str(v) for v in vid_list]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         return await self._get('cooccurrences', params=params)
 
     async def get_entity_cooccurrences(
@@ -542,11 +529,9 @@ class RemoteMemexAPI:
     ) -> list[dict[str, Any]]:
         """Get co-occurrence edges for an entity."""
         params: dict[str, Any] = {'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         return await self._get(f'entities/{entity_id}/cooccurrences', params=params)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
@@ -616,11 +601,9 @@ class RemoteMemexAPI:
     ) -> list[EntityDTO]:
         """Get top entities by mention count."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-mentions'}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         if entity_type:
             params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
@@ -700,6 +683,13 @@ class RemoteMemexAPI:
             params['vault_id'] = [str(v) for v in vault_ids]
         result = await self._get('notes/find', params=params)
         return [FindNoteResult(**r) for r in result]
+
+    # --- Embeddings ---
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for the given text via the REST API."""
+        result = await self._post('embed', {'text': text})
+        return result['embedding']
 
     # --- KV store ---
     async def kv_put(
