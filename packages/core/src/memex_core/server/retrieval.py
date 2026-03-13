@@ -1,18 +1,18 @@
 """Retrieval endpoint."""
 
 import logging
-from typing import Annotated, Any
-from uuid import UUID
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import MemoryUnitDTO, RetrievalRequest, StrategyDebugInfo
+from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
     _handle_error,
+    build_memory_unit_dto,
     get_api,
     ndjson_openapi,
     ndjson_response,
@@ -21,54 +21,6 @@ from memex_core.server.common import (
 logger = logging.getLogger('memex.core.server')
 
 router = APIRouter(prefix='/api/v1')
-
-
-def _build_retrieval_dtos(
-    units: list[Any],
-    debug: bool = False,
-) -> list[MemoryUnitDTO]:
-    """Convert memory units to DTOs with resolved source document lineage."""
-    dtos = []
-    for u in units:
-        doc_id = getattr(u, 'note_id', None)
-        source_docs: list[UUID] = [doc_id] if doc_id else []
-
-        # Build debug_info from engine-attached data
-        debug_info: list[StrategyDebugInfo] | None = None
-        if debug:
-            raw_debug = getattr(u, '_debug_info', None)
-            if raw_debug:
-                debug_info = [
-                    StrategyDebugInfo(
-                        strategy_name=c.strategy_name,
-                        rank=c.rank,
-                        rrf_score=c.rrf_score,
-                        raw_score=c.raw_score,
-                        timing_ms=c.timing_ms,
-                    )
-                    for c in raw_debug
-                ]
-
-        dtos.append(
-            MemoryUnitDTO(
-                id=u.id,
-                note_id=doc_id,
-                source_note_ids=source_docs,
-                text=u.text,
-                fact_type=u.fact_type,
-                status=u.status,
-                mentioned_at=u.mentioned_at or u.event_date,
-                occurred_start=u.occurred_start,
-                occurred_end=u.occurred_end,
-                vault_id=u.vault_id,
-                metadata=u.unit_metadata,
-                score=getattr(u, 'score', None),
-                chunk_id=getattr(u, 'chunk_id', None),
-                confidence=getattr(u, 'confidence', 1.0) or 1.0,
-                debug_info=debug_info,
-            )
-        )
-    return dtos
 
 
 @router.post(
@@ -99,6 +51,6 @@ async def search_memories(
         if resonance_task is not None:
             background_tasks.add_task(resonance_task)
 
-        return ndjson_response(_build_retrieval_dtos(units, debug=request.debug))
+        return ndjson_response([build_memory_unit_dto(u, debug=request.debug) for u in units])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Retrieval failed')
