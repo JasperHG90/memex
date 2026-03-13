@@ -5,14 +5,15 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
+from memex_core.server.auth import require_admin_auth
 from memex_core.services.audit import AuditService
 
 logger = logging.getLogger('memex.core.server')
 
-router = APIRouter(prefix='/api/v1/admin')
+router = APIRouter(prefix='/api/v1/admin', dependencies=[Depends(require_admin_auth)])
 
 
 class AuditEntryDTO(BaseModel):
