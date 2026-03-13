@@ -111,11 +111,6 @@ class NoteMetadata(BaseModel):
         description='Name of the author who created the entity.',
         examples=['user', 'claude opus', 'gemini 3'],
     )
-    project: str | None = Field(
-        default=None,
-        description='Optional project name associated with the entity.',
-        examples=['infrastructure migration', 'memex'],
-    )
     etag: str | None = Field(
         default=None,
         description="The MD5 hash of the note's description file (e.g. NOTE.md)",
@@ -125,10 +120,6 @@ class NoteMetadata(BaseModel):
         default=None,
         description='List of tags associated with the note',
         examples=[['assistant', 'helpful', 'task-management']],
-    )
-    embedding: list[float] | None = Field(
-        default=None,
-        description='The embedding vector representing the note for similarity searches',
     )
     type: MemexTypes | None = Field(
         default=None,
@@ -479,6 +470,11 @@ class VaultDTO(BaseModel):
         default=None,
         description='Optional description of the vault.',
         examples=['My personal memories and notes.'],
+    )
+
+    is_active: bool = Field(
+        default=False,
+        description='Whether this vault is the currently active (writer) vault.',
     )
 
 

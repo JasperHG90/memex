@@ -2,6 +2,10 @@
 
 Provides JSON output for production and human-readable console output for development.
 Wraps the stdlib logging module so existing getLogger() calls continue to work.
+
+Policy: new code should use ``structlog.get_logger()`` instead of
+``logging.getLogger()``.  Existing stdlib calls are bridged via
+ProcessorFormatter and will be converted opportunistically.
 """
 
 from __future__ import annotations
