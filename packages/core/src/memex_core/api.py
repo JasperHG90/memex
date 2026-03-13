@@ -87,7 +87,7 @@ class NoteInput:
         self._metadata.update('files', list(self._files.keys()))
         self._metadata.update('tags', tags or [])
         self._metadata.update('etag', self.etag)
-        self._metadata.update('uuid', self.uuid)
+        self._metadata.update('uuid', self.idempotency_key)
 
     @cached_property
     def etag(self) -> str:
@@ -139,13 +139,16 @@ class NoteInput:
         )
 
     @cached_property
-    def uuid(self) -> str:
-        """Backward-compatible alias for note_key."""
+    def idempotency_key(self) -> str:
+        """Stable identity key for idempotent ingestion (delegates to note_key).
+
+        This is an MD5 hex digest, not a UUID despite the metadata field name.
+        """
         return self.note_key
 
     @classmethod
-    def calculate_uuid_from_dto(cls, dto: Any) -> str:
-        """Calculate the UUID (note_key) for a NoteCreateDTO without full instantiation."""
+    def calculate_idempotency_key_from_dto(cls, dto: Any) -> str:
+        """Calculate the idempotency key (note_key) for a NoteCreateDTO."""
         content = dto.content
         files = dto.files
         # DTO might have note_key
@@ -158,7 +161,7 @@ class NoteInput:
             tags=dto.tags,
             note_key=doc_key,
         )
-        return temp_note.uuid
+        return temp_note.idempotency_key
 
     @classmethod
     def calculate_fingerprint_from_dto(cls, dto: Any) -> str:
@@ -181,7 +184,7 @@ class NoteInput:
     def manifest(self) -> bytes:
         if (
             self._metadata.description is None
-            or self.uuid is None
+            or self.idempotency_key is None
             or self.etag is None
             or self._metadata.files is None
             or self._metadata.tags is None
@@ -191,7 +194,7 @@ class NoteInput:
             Manifest(
                 name=self._metadata.name or 'Untitled',
                 description=self._metadata.description,
-                uuid=self.uuid,
+                uuid=self.idempotency_key,
                 etag=self.etag,
                 files=self._metadata.files,
                 tags=self._metadata.tags,
