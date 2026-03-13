@@ -45,11 +45,6 @@ async def test_async_command_wrapper():
     async def dummy_async(x: int):
         return x + 1
 
-    # In this test environment, we just check it returns a value when awaited
-    # Note: async_command actually uses asyncio.run() internally to make it synchronous for Typer
-    # So calling it here might be tricky if we are already in an event loop.
-
-    # Let's test the sync wrapper part
+    # async_command uses asyncio.run() internally to make it synchronous for Typer.
+    # In a test with an already-running loop we can only verify the wrapper is callable.
     assert callable(dummy_async)
-    # result = dummy_async(1) # This would try to run asyncio.run() which fails if loop is running
-    # assert result == 2

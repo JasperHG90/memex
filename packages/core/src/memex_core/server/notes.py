@@ -36,8 +36,8 @@ router = APIRouter(prefix='/api/v1')
 )
 async def list_notes(
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 100,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     sort: Literal['-created_at'] | None = Query(
         None, description='Sort option: -created_at for recency'
     ),
