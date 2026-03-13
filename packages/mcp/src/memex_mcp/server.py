@@ -17,7 +17,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.utilities.logging import configure_logging
 from pydantic import Field
 
-from memex_mcp.lifespan import lifespan, get_api
+from memex_mcp.lifespan import lifespan, get_api, get_config
 from memex_mcp.types import NoteTemplateType
 from memex_common.schemas import (
     BatchJobStatus,
@@ -66,6 +66,14 @@ async def _resolve_vault_id(api: Any, vault_id: str) -> 'UUID':
         raise ToolError(f'Vault not found: {vault_id!r}')
 
 
+def _default_write_vault(ctx: Context) -> str:
+    return get_config(ctx).write_vault
+
+
+def _default_read_vaults(ctx: Context) -> list[str]:
+    return get_config(ctx).read_vaults
+
+
 prompts_dir = plb.Path(__file__).parent / 'prompts'
 
 configure_logging(level='CRITICAL')
@@ -76,6 +84,10 @@ persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
 mcp = FastMCP(
     'memex_mcp',
     instructions="""Memex is a personal knowledge management system.
+
+VAULT DEFAULTS — vault parameters are optional. Writes default to the active vault;
+reads default to search vaults (from .memex.yaml or global config). Only pass
+vault_id/vault_ids to override.
 
 ROUTING — select retrieval strategy by query type:
 
@@ -137,13 +149,14 @@ async def memex_list_assets(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
     vault_id: Annotated[
-        str,
-        Field(description="Vault UUID or name, e.g. 'rituals'."),
-    ],
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
 ) -> str:
     """List assets for a note."""
     try:
         api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
         try:
             uuid_obj = UUID(note_id)
         except ValueError:
@@ -370,13 +383,14 @@ async def memex_get_resources(
     ctx: Context,
     paths: Annotated[list[str], Field(description='Resource path(s).')],
     vault_id: Annotated[
-        str,
-        Field(description="Vault UUID or name, e.g. 'memex'."),
-    ],
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
 ) -> list[Image | Audio | File | str]:
     """Retrieve file resources. Returns a list of Image, Audio, File, or error strings."""
     try:
         api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
         await _resolve_vault_id(api, vault_id)
 
         results: list[Image | Audio | File | str] = []
@@ -476,9 +490,9 @@ async def memex_add_note(
         Field(description='Tags for retrieval.'),
     ],
     vault_id: Annotated[
-        str,
-        Field(description="Target vault UUID or name, e.g. 'rituals'."),
-    ],
+        str | None,
+        Field(description='Target vault UUID or name. Omit to use config defaults.'),
+    ] = None,
     supporting_files: Annotated[
         list[str] | None,
         Field(
@@ -503,6 +517,7 @@ async def memex_add_note(
             raise ToolError('Description exceeds 250 words limit.')
 
         api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
 
         # Load supporting files
         files_content: dict[str, bytes] = {}
@@ -582,11 +597,11 @@ async def memex_memory_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query.')],
     vault_ids: Annotated[
-        list[str],
+        list[str] | None,
         Field(
-            description="Vault UUIDs or names, e.g. ['rituals'].",
+            description='Vault UUIDs or names. Omit to use config defaults.',
         ),
-    ],
+    ] = None,
     limit: Annotated[
         int,
         Field(description='Max results. Ignored when token_budget is set.'),
@@ -626,6 +641,7 @@ async def memex_memory_search(
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
+        vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
@@ -725,11 +741,11 @@ async def memex_note_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query.')],
     vault_ids: Annotated[
-        list[str],
+        list[str] | None,
         Field(
-            description="Vault UUIDs or names, e.g. ['rituals'].",
+            description='Vault UUIDs or names. Omit to use config defaults.',
         ),
-    ],
+    ] = None,
     limit: Annotated[int, Field(description='Max notes to return.')] = 5,
     expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
     strategies: Annotated[
@@ -755,6 +771,7 @@ async def memex_note_search(
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
+        vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
@@ -1190,9 +1207,9 @@ async def memex_list_vaults(ctx: Context) -> str:
 async def memex_list_notes(
     ctx: Context,
     vault_id: Annotated[
-        str,
-        Field(description="Vault UUID or name, e.g. 'rituals'."),
-    ],
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
     after: Annotated[
         str | None,
         Field(
@@ -1214,6 +1231,7 @@ async def memex_list_notes(
 
     try:
         api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
         resolved_vault_id = await _resolve_vault_id(api, vault_id)
 
         parsed_after = None
@@ -1347,9 +1365,9 @@ async def memex_recent_notes(
 async def memex_list_entities(
     ctx: Context,
     vault_id: Annotated[
-        str,
-        Field(description="Vault UUID or name, e.g. 'rituals'."),
-    ],
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
     query: Annotated[
         str | None, Field(default=None, description='Search term to filter by name.')
     ] = None,
@@ -1369,6 +1387,7 @@ async def memex_list_entities(
     """List or search entities."""
     try:
         api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
         if entity_type:
             entity_type = entity_type.title()
         resolved = await _resolve_vault_id(api, vault_id)
