@@ -43,26 +43,38 @@ async def list_vaults(
     - is_default: Optional filter by default status. True for default vaults.
     """
     try:
+        active_vault_name = api.config.server.active_vault
+
         if state == 'active':
-            active_vault_name = api.config.server.active_vault
             vault = await api.get_vault_by_name(active_vault_name)
             if not vault:
                 raise HTTPException(
                     status_code=404, detail=f'Active vault "{active_vault_name}" not found'
                 )
             return ndjson_response(
-                [VaultDTO(id=vault.id, name=vault.name, description=vault.description)]
+                [
+                    VaultDTO(
+                        id=vault.id,
+                        name=vault.name,
+                        description=vault.description,
+                        is_active=True,
+                    )
+                ]
             )
 
         if is_default:
             # Resolve the active vault
-            active_vault_name = api.config.server.active_vault
             active = await api.get_vault_by_name(active_vault_name)
             if not active:
                 raise HTTPException(
                     status_code=404, detail=f'Active vault "{active_vault_name}" not found'
                 )
-            active_dto = VaultDTO(id=active.id, name=active.name, description=active.description)
+            active_dto = VaultDTO(
+                id=active.id,
+                name=active.name,
+                description=active.description,
+                is_active=True,
+            )
 
             # Resolve attached vaults (skip any that fail)
             attached_dtos: list[VaultDTO] = []
@@ -71,7 +83,11 @@ async def list_vaults(
                     vault = await api.get_vault_by_name(vault_name)
                     if vault:
                         attached_dtos.append(
-                            VaultDTO(id=vault.id, name=vault.name, description=vault.description)
+                            VaultDTO(
+                                id=vault.id,
+                                name=vault.name,
+                                description=vault.description,
+                            )
                         )
                     else:
                         logger.warning('Attached vault "%s" not found, skipping', vault_name)
@@ -86,7 +102,15 @@ async def list_vaults(
         # Default: list all vaults
         vaults = await api.list_vaults()
         return ndjson_response(
-            [VaultDTO(id=v.id, name=v.name, description=v.description) for v in vaults]
+            [
+                VaultDTO(
+                    id=v.id,
+                    name=v.name,
+                    description=v.description,
+                    is_active=(v.name == active_vault_name),
+                )
+                for v in vaults
+            ]
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list vaults')
@@ -99,7 +123,12 @@ async def create_vault(
     """Create a new vault."""
     try:
         vault = await api.create_vault(name=request.name, description=request.description)
-        return VaultDTO(id=vault.id, name=vault.name, description=vault.description)
+        return VaultDTO(
+            id=vault.id,
+            name=vault.name,
+            description=vault.description,
+            is_active=False,
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to create vault')
 
