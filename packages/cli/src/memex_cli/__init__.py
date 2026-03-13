@@ -190,9 +190,6 @@ def main(
             logger.debug(f'Configuration valid. Root: {config.server.file_store.root}')
 
     except Exception as e:
-        # DEBUG
-        print(f'DEBUG EXCEPTION: {e}')
-
         # If the subcommand is 'init' or 'help', we can proceed without a valid config
         # But we still need basic logging to report errors if we crash later
         if ctx.invoked_subcommand in ['init', 'report-bug']:

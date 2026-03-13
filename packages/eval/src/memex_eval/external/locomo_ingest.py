@@ -6,10 +6,8 @@ and ingests them into a dedicated vault via the Memex REST API.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
-import time
 
 import httpx
 
@@ -17,6 +15,7 @@ from memex_common.client import RemoteMemexAPI
 from memex_common.schemas import CreateVaultRequest, NoteCreateDTO
 
 from memex_eval.external.locomo_common import VAULT_NAME, load_dataset
+from memex_eval.helpers import wait_for_extraction
 
 logger = logging.getLogger('memex_eval.locomo_ingest')
 
@@ -169,29 +168,13 @@ async def _setup_vault(api: RemoteMemexAPI, name: str, clean: bool = False):
     return vault.id
 
 
-async def _wait_for_extraction(api, vault_id) -> None:
+async def _wait_for_extraction(api: RemoteMemexAPI, vault_id) -> None:
     """Poll stats until extraction stabilizes."""
-    logger.info('  Waiting for extraction to complete...')
-    prev_count = -1
-    stable_ticks = 0
-    start = time.monotonic()
-
-    while time.monotonic() - start < POLL_TIMEOUT:
-        await asyncio.sleep(POLL_INTERVAL)
-        try:
-            stats = await api.get_stats_counts(vault_id=vault_id)
-        except Exception as e:
-            logger.warning('  Poll error: %s', e)
-            continue
-        current = stats.memories
-
-        if current == prev_count and current > 0:
-            stable_ticks += 1
-            if stable_ticks >= 3:
-                logger.info('  Extraction stable at %d memories.', current)
-                return
-        else:
-            stable_ticks = 0
-        prev_count = current
-
-    logger.warning('  Extraction poll timed out after %.0fs.', POLL_TIMEOUT)
+    await wait_for_extraction(
+        api,
+        vault_id,
+        poll_interval=POLL_INTERVAL,
+        poll_timeout=POLL_TIMEOUT,
+        stable_ticks_required=3,
+        max_consecutive_errors=0,  # never raise on errors, just continue
+    )
