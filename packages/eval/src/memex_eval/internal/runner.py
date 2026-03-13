@@ -138,6 +138,7 @@ async def _run_group(
     if group.name == 'reflection':
         reflection_start = time.monotonic()
         await _trigger_reflections(api, vault_id)
+        # await _wait_for_reflection(api, vault_id)
         group_result.reflection_duration_ms = (time.monotonic() - reflection_start) * 1000
 
     # Phase 3: Run checks
