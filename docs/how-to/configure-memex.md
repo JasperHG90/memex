@@ -58,7 +58,7 @@ Set vault env vars in your MCP server config (e.g., `.claude/mcp.json`):
 }
 ```
 
-> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation.
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation. Pydantic-settings automatically JSON-decodes string env vars when the target field is a complex type like `list[str]`, so the string `'["a", "b"]'` becomes the Python list `["a", "b"]`. In a shell: `export MEMEX_VAULT__SEARCH='["my-project", "shared"]'`.
 
 > **Tip:** `memex setup claude-code --vault my-project` generates this configuration automatically.
 
