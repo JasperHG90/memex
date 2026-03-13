@@ -79,6 +79,11 @@ mcp = FastMCP(
 
 ROUTING — select retrieval strategy by query type:
 
+IF you know (part of) the note title:
+  → TITLE SEARCH
+  1. `memex_find_note(query="title fragment")` → note IDs, titles, scores
+  2. Read via `memex_get_page_indices` → `memex_get_nodes` as needed
+
 IF query asks about relationships, connections, "how X fits in", "what relates to X", or landscape:
   → ENTITY EXPLORATION (can combine with SEARCH)
   1. `memex_list_entities(query="X")` → entity IDs, types, mention counts
@@ -95,6 +100,15 @@ IF query asks about specific content, topics, or document lookup:
 
 IF query is broad (e.g. "explain X and how it fits the architecture"):
   → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
+
+IF storing/retrieving structured facts, preferences, or conventions:
+  → KV STORE
+  - `memex_kv_write(value, key, vault_id)` — store a user fact or preference
+  - `memex_kv_get(key)` — exact key lookup
+  - `memex_kv_search(query)` — fuzzy semantic search over stored facts
+  - `memex_kv_list()` — list all stored facts
+  When the user states a preference, convention, or static fact (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
+  Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
 
 RESPONSE FORMAT — MANDATORY for every response:
 - Cite every claim from Memex with numbered references [1], [2], etc. inline.
@@ -1635,6 +1649,260 @@ async def memex_get_memory_units(
     except Exception as e:
         logging.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
+
+
+@mcp.tool(
+    name='memex_find_note',
+    description=(
+        'Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. '
+        'Use when you know (part of) the title. For content search, use memex_note_search.'
+    ),
+)
+async def memex_find_note(
+    ctx: Context,
+    query: Annotated[str, Field(description='Title search query (partial or fuzzy match).')],
+    vault_ids: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description="Vault UUIDs or names to search in, e.g. ['rituals']. None = all vaults.",
+        ),
+    ] = None,
+    limit: Annotated[int, Field(description='Max results.')] = 5,
+) -> str:
+    """Find notes by approximate title match."""
+    try:
+        api = get_api(ctx)
+
+        resolved_vids: list[UUID | str] | None = None
+        if vault_ids:
+            _validate_vault_ids(vault_ids)
+            resolved_vids = await _resolve_vault_ids(api, vault_ids)
+
+        results = await api.find_notes_by_title(
+            query=query,
+            vault_ids=resolved_vids,
+            limit=limit,
+        )
+
+        if not results:
+            return f"No notes matching title '{query}'. Try memex_note_search for content search."
+
+        lines = [f"Found {len(results)} note(s) matching '{query}':\n"]
+        for i, r in enumerate(results, 1):
+            lines.append(f'{i}. **{r.title}**')
+            lines.append(f'   - Note ID: {r.note_id}')
+            lines.append(f'   - Score: {r.score:.3f}')
+            lines.append(f'   - Status: {r.status}')
+            if r.publish_date:
+                lines.append(f'   - Published: {r.publish_date.date()}')
+            lines.append('')
+
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Find note failed: {e}', exc_info=True)
+        raise ToolError(f'Find note failed: {e}')
+
+
+@mcp.tool(
+    name='memex_kv_write',
+    description=(
+        'Write a fact to the key-value store. Generates an embedding for semantic search. '
+        'If no key is provided, one is generated via LLM. '
+        'Use for storing structured preferences, settings, or facts.'
+    ),
+)
+async def memex_kv_write(
+    ctx: Context,
+    value: Annotated[str, Field(description='The fact or preference text to store.')],
+    key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Namespaced key, e.g. "tool:python:pkg_mgr". Generated via LLM if omitted.',
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Vault UUID or name. None = global (available in all vaults).',
+        ),
+    ] = None,
+) -> str:
+    """Write a fact to the KV store with embedding generation."""
+    try:
+        api = get_api(ctx)
+
+        # Validate vault exists before proceeding
+        if vault_id:
+            await _resolve_vault_id(api, vault_id)
+
+        # Generate key via LLM if not provided
+        effective_key = key
+        if not effective_key:
+            from memex_core.llm import run_dspy_operation
+            import dspy
+
+            class ExtractKVKey(dspy.Signature):
+                """Extract a short, namespaced key from user preference text.
+                Keys should use colon-separated namespaces, e.g. 'tool:python:pkg_mgr'.
+                Keep keys lowercase, concise, and descriptive."""
+
+                value: str = dspy.InputField(desc='The fact or preference text.')
+                key: str = dspy.OutputField(desc='Short namespaced key (e.g. tool:python:pkg_mgr).')
+
+            prediction, _ = await run_dspy_operation(
+                module_class=dspy.ChainOfThought,
+                signature=ExtractKVKey,
+                inputs={'value': value},
+            )
+            effective_key = prediction.key.strip().lower()
+
+        # Generate embedding for semantic search
+        from memex_core.memory.models.embedding import get_embedding_model
+
+        embed_model = await get_embedding_model()
+        embedding = embed_model.encode([value])[0].tolist()
+
+        entry = await api.kv_put(
+            value=value,
+            key=effective_key,
+            vault_id=vault_id,
+            embedding=embedding,
+        )
+
+        scope = f'vault {vault_id}' if vault_id else 'global'
+        return f'Stored: **{entry.key}** = {entry.value} ({scope})'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'KV write failed: {e}', exc_info=True)
+        raise ToolError(f'KV write failed: {e}')
+
+
+@mcp.tool(
+    name='memex_kv_get',
+    description='Get a fact by exact key from the KV store.',
+)
+async def memex_kv_get(
+    ctx: Context,
+    key: Annotated[str, Field(description='Exact key to look up.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Vault UUID or name. Checks vault-specific first, then global.',
+        ),
+    ] = None,
+) -> str:
+    """Exact key lookup in the KV store."""
+    try:
+        api = get_api(ctx)
+        if vault_id:
+            await _resolve_vault_id(api, vault_id)
+        entry = await api.kv_get(key=key, vault_id=vault_id)
+
+        if entry is None:
+            return f'Key not found: {key}'
+
+        scope = f'vault {entry.vault_id}' if entry.vault_id else 'global'
+        return f'**{entry.key}** = {entry.value}\nScope: {scope} | Updated: {entry.updated_at}'
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'KV get failed: {e}', exc_info=True)
+        raise ToolError(f'KV get failed: {e}')
+
+
+@mcp.tool(
+    name='memex_kv_search',
+    description=(
+        'Fuzzy search facts in the KV store by semantic similarity. '
+        'Returns the closest matching entries.'
+    ),
+)
+async def memex_kv_search(
+    ctx: Context,
+    query: Annotated[str, Field(description='Search query text.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Vault UUID or name. None = search global entries only.',
+        ),
+    ] = None,
+    limit: Annotated[int, Field(description='Max results.')] = 5,
+) -> str:
+    """Semantic search over KV store entries."""
+    try:
+        api = get_api(ctx)
+        if vault_id:
+            await _resolve_vault_id(api, vault_id)
+        results = await api.kv_search(query=query, vault_id=vault_id, limit=limit)
+
+        if not results:
+            return f"No KV entries matching '{query}'."
+
+        lines = [f"Found {len(results)} fact(s) matching '{query}':\n"]
+        for i, entry in enumerate(results, 1):
+            scope = f'vault {entry.vault_id}' if entry.vault_id else 'global'
+            lines.append(f'{i}. **{entry.key}** = {entry.value}')
+            lines.append(f'   Scope: {scope} | Updated: {entry.updated_at}')
+            lines.append('')
+
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'KV search failed: {e}', exc_info=True)
+        raise ToolError(f'KV search failed: {e}')
+
+
+@mcp.tool(
+    name='memex_kv_list',
+    description='List all facts in the KV store. Without vault_id returns global only.',
+)
+async def memex_kv_list(
+    ctx: Context,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Vault UUID or name. None = global entries only; with vault = both.',
+        ),
+    ] = None,
+) -> str:
+    """List KV store entries."""
+    try:
+        api = get_api(ctx)
+        if vault_id:
+            await _resolve_vault_id(api, vault_id)
+        entries = await api.kv_list(vault_id=vault_id)
+
+        if not entries:
+            return 'No KV entries found.'
+
+        lines = [f'Found {len(entries)} fact(s):\n']
+        for i, entry in enumerate(entries, 1):
+            scope = f'vault {entry.vault_id}' if entry.vault_id else 'global'
+            lines.append(f'{i}. **{entry.key}** = {entry.value}')
+            lines.append(f'   Scope: {scope} | Updated: {entry.updated_at}')
+            lines.append('')
+
+        return '\n'.join(lines)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'KV list failed: {e}', exc_info=True)
+        raise ToolError(f'KV list failed: {e}')
 
 
 def entrypoint():

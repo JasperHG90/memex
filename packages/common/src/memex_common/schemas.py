@@ -913,3 +913,43 @@ class PageIndexDTO(BaseModel):
     metadata: PageMetadataDTO
     toc: list[TOCNodeDTO]
     total_tokens: int | None = None
+
+
+class KVEntryDTO(BaseModel):
+    """DTO for a key-value store entry."""
+
+    id: UUID
+    vault_id: UUID | None
+    key: str
+    value: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class KVPutRequest(BaseModel):
+    """Request to create or update a key-value entry."""
+
+    vault_id: str | UUID | None = None
+    key: str | None = None
+    value: str
+    embedding: list[float] | None = None
+
+
+class KVSearchRequest(BaseModel):
+    """Request to semantically search key-value entries."""
+
+    vault_id: str | UUID | None = None
+    query: str
+    limit: int = 5
+
+
+class FindNoteResult(BaseModel):
+    """Result from a fuzzy title search over notes."""
+
+    note_id: UUID
+    title: str
+    score: float
+    vault_id: UUID
+    created_at: dt.datetime
+    publish_date: dt.datetime | None = None
+    status: str

@@ -20,6 +20,7 @@ from memex_common.schemas import (
     CreateVaultRequest,
     DeadLetterItemDTO,
     DefaultVaultsResponse,
+    FindNoteResult,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -27,6 +28,9 @@ from memex_common.schemas import (
     ReflectionQueueDTO,
     IngestResponse,
     EntityDTO,
+    KVEntryDTO,
+    KVPutRequest,
+    KVSearchRequest,
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
@@ -70,6 +74,11 @@ class RemoteMemexAPI:
 
     async def _delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
         response = await self.client.delete(path, params=params)
+        return await self._handle_response(response)
+
+    async def _put(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+        payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
+        response = await self.client.put(path, json=payload)
         return await self._handle_response(response)
 
     async def _patch(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
@@ -680,3 +689,95 @@ class RemoteMemexAPI:
         }
         result = await self._get(f'notes/{note_id}/lineage', params=params)
         return LineageResponse(**result)
+
+    # --- Notes: title search ---
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID | str] | None = None,
+        limit: int = 5,
+    ) -> list[FindNoteResult]:
+        """Fuzzy-search notes by title using trigram similarity."""
+        params: dict[str, Any] = {'query': query, 'limit': limit}
+        if vault_ids:
+            params['vault_id'] = [str(v) for v in vault_ids]
+        result = await self._get('notes/find', params=params)
+        return [FindNoteResult(**r) for r in result]
+
+    # --- KV store ---
+    async def kv_put(
+        self,
+        value: str,
+        key: str | None = None,
+        vault_id: str | UUID | None = None,
+        embedding: list[float] | None = None,
+    ) -> KVEntryDTO:
+        """Create or update a key-value entry."""
+        request = KVPutRequest(
+            vault_id=vault_id,
+            key=key,
+            value=value,
+            embedding=embedding,
+        )
+        result = await self._put('kv', request)
+        return KVEntryDTO(**result)
+
+    async def kv_get(
+        self,
+        key: str,
+        vault_id: str | UUID | None = None,
+    ) -> KVEntryDTO | None:
+        """Get a KV entry by exact key. Returns None if not found."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        try:
+            result = await self._get(f'kv/{key}', params=params or None)
+            return KVEntryDTO(**result)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def kv_search(
+        self,
+        query: str,
+        vault_id: str | UUID | None = None,
+        limit: int = 5,
+    ) -> list[KVEntryDTO]:
+        """Semantic search over KV entries."""
+        request = KVSearchRequest(
+            query=query,
+            vault_id=vault_id,
+            limit=limit,
+        )
+        result = await self._post('kv/search', request)
+        return [KVEntryDTO(**r) for r in result]
+
+    async def kv_delete(
+        self,
+        key: str,
+        vault_id: str | UUID | None = None,
+    ) -> bool:
+        """Delete a KV entry by key."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        try:
+            await self._delete(f'kv/{key}', params=params or None)
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise
+
+    async def kv_list(
+        self,
+        vault_id: str | UUID | None = None,
+    ) -> list[KVEntryDTO]:
+        """List KV entries. Without vault_id returns global only; with returns both."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('kv', params=params or None)
+        return [KVEntryDTO(**r) for r in result]

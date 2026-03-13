@@ -8,7 +8,13 @@ from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import NoteDTO, NoteSearchRequest, NoteSearchResult, NodeDTO
+from memex_common.schemas import (
+    FindNoteResult,
+    NoteDTO,
+    NoteSearchRequest,
+    NoteSearchResult,
+    NodeDTO,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -116,6 +122,22 @@ async def search_notes(
         return ndjson_response(results)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note search failed')
+
+
+@router.get('/notes/find', response_model=list[FindNoteResult])
+async def find_notes_by_title(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    query: str = Query(..., description='Title search query'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    limit: int = Query(5, description='Maximum results to return'),
+):
+    """Fuzzy-search notes by title using trigram similarity."""
+    try:
+        resolved = await resolve_vault_ids(api, vault_id)
+        results = await api.find_notes_by_title(query=query, vault_ids=resolved, limit=limit)
+        return [FindNoteResult(**r) for r in results]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to find notes by title')
 
 
 @router.get('/notes/{note_id}/page-index')

@@ -1,0 +1,184 @@
+"""
+Key-Value Store Commands.
+"""
+
+import json
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from memex_common.config import MemexConfig
+from memex_cli.utils import get_api_context, async_command, handle_api_error
+
+console = Console()
+
+app = typer.Typer(
+    name='kv',
+    help='Key-value fact store (lightweight structured memory).',
+    no_args_is_help=True,
+)
+
+
+@app.command('write')
+@async_command
+async def kv_write(
+    ctx: typer.Context,
+    value: Annotated[str, typer.Argument(help='The fact/value to store.')],
+    key: Annotated[
+        str,
+        typer.Option('--key', '-k', help='Namespaced key, e.g. "tool:python:pkg_mgr".'),
+    ],
+    vault: Annotated[
+        str | None, typer.Option('--vault', '-v', help='Target vault name or UUID.')
+    ] = None,
+):
+    """
+    Write a fact to the KV store. Key is required (use MCP tool for auto-generation).
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            entry = await api.kv_put(value=value, key=key, vault_id=vault)
+        except Exception as e:
+            handle_api_error(e)
+
+    console.print(f'[green]Stored:[/green] {entry.key} = {entry.value}')
+
+
+@app.command('get')
+@async_command
+async def kv_get(
+    ctx: typer.Context,
+    key: Annotated[str, typer.Argument(help='Key to look up.')],
+    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+):
+    """
+    Get a fact by exact key.
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            entry = await api.kv_get(key=key, vault_id=vault)
+        except Exception as e:
+            handle_api_error(e)
+
+    if entry is None:
+        console.print(f'[yellow]Key not found: {key}[/yellow]')
+        raise typer.Exit(1)
+
+    console.print(f'[bold cyan]{entry.key}[/bold cyan] = {entry.value}')
+    console.print(f'[dim]Updated: {entry.updated_at}[/dim]')
+
+
+@app.command('search')
+@async_command
+async def kv_search(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument(help='Search query.')],
+    limit: Annotated[int, typer.Option('--limit', '-l', help='Max results.')] = 5,
+    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    Fuzzy search facts by semantic similarity.
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            results = await api.kv_search(query=query, vault_id=vault, limit=limit)
+        except Exception as e:
+            handle_api_error(e)
+
+    if not results:
+        console.print('[yellow]No results found.[/yellow]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        return
+
+    table = Table(title=f'KV Search: "{query}"')
+    table.add_column('Key', style='cyan')
+    table.add_column('Value', style='white', ratio=3)
+    table.add_column('Vault', style='dim')
+    table.add_column('Updated', style='dim')
+
+    for entry in results:
+        vault_str = str(entry.vault_id) if entry.vault_id else 'global'
+        table.add_row(entry.key, entry.value, vault_str, str(entry.updated_at))
+
+    console.print(table)
+
+
+@app.command('list')
+@async_command
+async def kv_list(
+    ctx: typer.Context,
+    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    List all facts in the KV store.
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            entries = await api.kv_list(vault_id=vault)
+        except Exception as e:
+            handle_api_error(e)
+
+    if not entries:
+        console.print('[yellow]No KV entries found.[/yellow]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps([e.model_dump() for e in entries], default=str))
+        return
+
+    table = Table(title='KV Entries')
+    table.add_column('Key', style='cyan')
+    table.add_column('Value', style='white', ratio=3)
+    table.add_column('Vault', style='dim')
+    table.add_column('Updated', style='dim')
+
+    for entry in entries:
+        vault_str = str(entry.vault_id) if entry.vault_id else 'global'
+        table.add_row(entry.key, entry.value, vault_str, str(entry.updated_at))
+
+    console.print(table)
+
+
+@app.command('delete')
+@async_command
+async def kv_delete(
+    ctx: typer.Context,
+    key: Annotated[str, typer.Argument(help='Key to delete.')],
+    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
+):
+    """
+    Delete a fact by key.
+    """
+    config: MemexConfig = ctx.obj
+
+    if not force:
+        if not typer.confirm(f'Delete KV entry "{key}"?'):
+            console.print('[yellow]Aborted.[/yellow]')
+            return
+
+    async with get_api_context(config) as api:
+        try:
+            deleted = await api.kv_delete(key=key, vault_id=vault)
+        except Exception as e:
+            handle_api_error(e)
+
+    if deleted:
+        console.print(f'[green]Deleted: {key}[/green]')
+    else:
+        console.print(f'[red]Key not found: {key}[/red]')
