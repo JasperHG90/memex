@@ -46,15 +46,19 @@ EOF
 Place a `.memex.yaml` in your project root to override vault and model settings for that project:
 
 ```yaml
+vault:
+  active: "project-x"
+  search: ["project-x", "global", "reference-material"]
+
 server:
-  active_vault: "project-x"
-  attached_vaults: ["global", "reference-material"]
   memory:
     extraction:
       model:
         model: "openai/gpt-4o"
         api_key: "YOUR_OPENAI_KEY"
 ```
+
+The `vault` section provides client-side overrides. `vault.active` sets the write target (overrides `server.default_active_vault`), and `vault.search` sets the read scope for search queries.
 
 Memex searches the current directory and all parent directories for local config files, so you can place one at the repository root and it applies to all subdirectories.
 
@@ -66,8 +70,11 @@ Use the `MEMEX_` prefix with `__` as the nesting delimiter:
 # Override the server port
 export MEMEX_SERVER__PORT=8081
 
-# Override the active vault
-export MEMEX_SERVER__ACTIVE_VAULT=my-project
+# Override the client write vault
+export MEMEX_VAULT__ACTIVE=my-project
+
+# Override the client read vaults (JSON array)
+export MEMEX_VAULT__SEARCH='["my-project", "shared"]'
 
 # Override the extraction model
 export MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL=ollama_chat/llama3
@@ -182,7 +189,7 @@ This prints the resolved configuration with all sources merged.
 | :--- | :--- |
 | Local dev with Ollama | Set `default_model.model` to `ollama_chat/llama3`, `base_url` to `http://localhost:11434` |
 | CI/CD pipeline | Use `MEMEX_` env vars, disable YAML loading with `MEMEX_LOAD_LOCAL_CONFIG=false` |
-| Multi-project setup | One `.memex.yaml` per project root with different `active_vault` values |
+| Multi-project setup | One `.memex.yaml` per project root with different `vault.active` values |
 | Production API | Enable `auth` and `rate_limit`, use PostgreSQL meta store |
 
 ## See Also

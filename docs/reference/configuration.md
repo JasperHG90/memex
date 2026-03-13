@@ -18,6 +18,7 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 |:----|:-----|:--------|:------------|
 | `server_url` | string | `""` (derived) | URL of the Memex Core server used by clients (CLI, MCP, Dashboard). If empty, derived from `server.host` and `server.port`. |
 | `server` | object | — | Core API server and storage configuration. See [Server Settings](#server-settings). |
+| `vault` | object | — | Client-side vault overrides. See [Vault Settings](#vault-settings-vault). |
 | `dashboard` | object | — | Dashboard UI configuration. See [Dashboard Settings](#dashboard-settings). |
 
 ---
@@ -29,8 +30,8 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 | `host` | string | `127.0.0.1` | Host to bind the API server to. |
 | `port` | int | `8000` | Port to bind the API server to. |
 | `workers` | int | `4` | Number of worker processes (Gunicorn). |
-| `active_vault` | string | `global` | Name of the vault used for writing new memories. |
-| `attached_vaults` | list[string] | `[]` | Additional vault names included as read-only in search and retrieval. |
+| `default_active_vault` | string | `global` | Server default vault for writing new memories. Clients can override via `vault.active`. |
+| `default_reader_vault` | string | `""` | Server default vault for read-only search. Clients can override via `vault.search`. |
 | `default_model` | [ModelConfig](#modelconfig) | `gemini/gemini-3-flash-preview` | System-wide default LLM. Sub-configs with `model: null` inherit this value. |
 
 ### Default Model Propagation
@@ -281,6 +282,24 @@ Reusable model configuration block used by `default_model`, `extraction.model`, 
 
 ---
 
+## Vault Settings (`vault`)
+
+Client-side vault overrides. These take precedence over `server.default_active_vault` and `server.default_reader_vault`.
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `active` | string | `""` | Client write vault name. Overrides `server.default_active_vault`. |
+| `search` | list[string] | `[]` | Client read vault names for search scope. Overrides `server.default_reader_vault`. |
+
+### Convenience Properties on `MemexConfig`
+
+| Property | Resolution Order | Description |
+|:---------|:-----------------|:------------|
+| `config.write_vault` | `vault.active` > `server.default_active_vault` | Resolved write vault name. |
+| `config.read_vaults` | `vault.search` > `[vault.active]` > `[server.default_reader_vault]` | Resolved list of read vault names. |
+
+---
+
 ## Environment Variable Mapping
 
 All configuration keys can be set via environment variables using the `MEMEX_` prefix and double underscores (`__`) for nesting.
@@ -294,7 +313,11 @@ export MEMEX_SERVER_URL=http://localhost:8000
 # Server settings
 export MEMEX_SERVER__HOST=0.0.0.0
 export MEMEX_SERVER__PORT=9000
-export MEMEX_SERVER__ACTIVE_VAULT=project-alpha
+export MEMEX_SERVER__DEFAULT_ACTIVE_VAULT=project-alpha
+
+# Client vault overrides
+export MEMEX_VAULT__ACTIVE=my-project
+export MEMEX_VAULT__SEARCH='["my-project", "shared"]'
 
 # PostgreSQL
 export MEMEX_SERVER__META_STORE__INSTANCE__HOST=db.example.com
@@ -348,6 +371,8 @@ export MEMEX_SERVER__MEMORY__CONTRADICTION__ALPHA=0.1
 | `MEMEX_CONFIG_PATH` | Explicit path to a YAML config file. Overrides local file search. |
 | `MEMEX_LOAD_GLOBAL_CONFIG` | Set to `false` to skip loading `~/.config/memex/config.yaml`. |
 | `MEMEX_LOAD_LOCAL_CONFIG` | Set to `false` to skip searching CWD and parents for config files. |
+| `MEMEX_VAULT__ACTIVE` | Client write vault override. Equivalent to `vault.active` in YAML. |
+| `MEMEX_VAULT__SEARCH` | Client read vaults override (JSON array). Equivalent to `vault.search` in YAML. |
 
 ---
 
@@ -468,6 +493,18 @@ dashboard:
   host: 0.0.0.0
   port: 3001
 ```
+
+### Per-Project (vault override)
+
+Place a `.memex.yaml` in your project root to set the vault context per project:
+
+```yaml
+vault:
+  active: my-project              # client write target
+  search: [my-project, shared]    # client read scope
+```
+
+The `vault.active` setting overrides `server.default_active_vault`. The `vault.search` list overrides the default reader vault and controls which vaults are included in search queries.
 
 ### Local Ollama
 
