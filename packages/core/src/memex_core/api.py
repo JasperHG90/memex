@@ -471,7 +471,7 @@ class MemexAPI:
                 logger.debug('Global Vault already exists (concurrent creation handled).')
 
             # 2. Ensure Active Vault (if different from global)
-            active_identifier = self.config.server.active_vault
+            active_identifier = self.config.server.default_active_vault
             if active_identifier != GLOBAL_VAULT_NAME:
                 try:
                     # Check if it exists
@@ -508,15 +508,16 @@ class MemexAPI:
         # Clear cache after initialization to ensure resolve_vault_identifier sees new vaults
         _VAULT_RESOLUTION_CACHE.clear()
 
-        # 3. Validate attached vaults
-        for av_name in self.config.server.attached_vaults:
+        # 3. Validate default reader vault (if different from active)
+        reader_name = self.config.server.default_reader_vault
+        if reader_name != active_identifier:
             try:
-                av_id = await self.resolve_vault_identifier(av_name)
-                logger.info('Attached vault: "%s" (id: %s)', av_name, av_id)
+                reader_id = await self.resolve_vault_identifier(reader_name)
+                logger.info('Default reader vault: "%s" (id: %s)', reader_name, reader_id)
             except VaultNotFoundError:
                 logger.warning(
-                    'Attached vault "%s" not found. It will be skipped during retrieval.',
-                    av_name,
+                    'Default reader vault "%s" not found. It will be skipped during retrieval.',
+                    reader_name,
                 )
 
         # Reconcile interrupted batch jobs

@@ -488,9 +488,9 @@ class DefaultVaultsResponse(BaseModel):
     active_vault: VaultDTO = Field(
         description='The active (writer) vault.',
     )
-    attached_vaults: list[VaultDTO] = Field(
+    reader_vaults: list[VaultDTO] = Field(
         default_factory=list,
-        description='Additional read-only vaults included in search/retrieval.',
+        description='Default reader vaults for search/retrieval.',
     )
 
 

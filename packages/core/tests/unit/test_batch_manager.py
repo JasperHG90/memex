@@ -13,7 +13,7 @@ def mock_api(mock_metastore):
     api.ingest_batch_internal = MagicMock()
     api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
     api.metastore = mock_metastore
-    api.config.active_vault = 'global'
+    api.config.server.default_active_vault = 'global'
     return api
 
 

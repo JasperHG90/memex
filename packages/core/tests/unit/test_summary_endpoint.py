@@ -12,7 +12,7 @@ from types import SimpleNamespace
 def mock_api():
     """Provides a mocked MemexAPI instance for endpoint tests."""
     api_mock = AsyncMock()
-    api_mock.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
+    api_mock.config = SimpleNamespace(server=SimpleNamespace(default_active_vault='default-vault'))
     api_mock.summarize_search_results.return_value = 'Summary with [0] citation.'
     return api_mock
 

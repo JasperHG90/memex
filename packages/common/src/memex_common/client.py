@@ -98,14 +98,14 @@ class RemoteMemexAPI:
         return VaultDTO(**result[0])
 
     async def get_default_vaults(self) -> DefaultVaultsResponse:
-        """Get the active (writer) vault and attached read-only vaults."""
+        """Get the active (writer) vault and default reader vaults."""
         result = await self._get('vaults', params={'is_default': True})
         if not result:
             raise Exception('No default vaults found')
-        # Parse as DefaultVaultsResponse - first is active, rest are attached
+        # Parse as DefaultVaultsResponse - first is active, rest are readers
         return DefaultVaultsResponse(
             active_vault=VaultDTO(**result[0]),
-            attached_vaults=[VaultDTO(**v) for v in result[1:]],
+            reader_vaults=[VaultDTO(**v) for v in result[1:]],
         )
 
     async def create_vault(self, request: CreateVaultRequest) -> VaultDTO:

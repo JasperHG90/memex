@@ -326,7 +326,7 @@ class TestBuildRetrievalDtosDebug:
 @pytest.fixture
 def mock_api():
     api_mock = AsyncMock()
-    api_mock.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
+    api_mock.config = SimpleNamespace(server=SimpleNamespace(default_active_vault='default-vault'))
     api_mock.resolve_vault_identifier.return_value = UUID('00000000-0000-0000-0000-000000000001')
     return api_mock
 

@@ -87,20 +87,20 @@ async def lifespan(app: FastAPI):
     await api.initialize()
 
     try:
-        active_vault_name = config.server.active_vault
+        active_vault_name = config.server.default_active_vault
         active_vault_id = await api.resolve_vault_identifier(active_vault_name)
-        attached = config.server.attached_vaults
+        reader_vault = config.server.default_reader_vault
         logger.info(
             'Memex server started. Active vault: "%s" (id: %s)',
             active_vault_name,
             active_vault_id,
         )
-        if attached:
-            logger.info('Attached vaults: %s', attached)
+        if reader_vault != active_vault_name:
+            logger.info('Default reader vault: %s', reader_vault)
 
         # Detect if local config overrides the active vault
         local_data = LocalYamlConfigSettingsSource(MemexConfig)()
-        local_vault = (local_data.get('server', {}) or {}).get('active_vault')
+        local_vault = (local_data.get('server', {}) or {}).get('default_active_vault')
         if local_vault and local_vault != GLOBAL_VAULT_NAME:
             logger.info(
                 'Notice: active vault overridden by local config to "%s".',

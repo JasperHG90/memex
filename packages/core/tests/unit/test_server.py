@@ -19,7 +19,7 @@ def mock_api():
     api_mock = AsyncMock()
 
     # Mock Config
-    api_mock.config = SimpleNamespace(server=SimpleNamespace(active_vault='default-vault'))
+    api_mock.config = SimpleNamespace(server=SimpleNamespace(default_active_vault='default-vault'))
     api_mock.resolve_vault_identifier.return_value = MOCK_VAULT_ID
 
     # Setup default return values for common methods
