@@ -24,6 +24,16 @@ for cfg in .memex.yaml memex_core.yaml memex_core.config.yaml; do
     fi
 done
 
+# --- KV preferences/facts ---
+kv_output=$(uv run memex kv list --json 2>/dev/null) || true
+
+if [ -n "$kv_output" ] && [ "$kv_output" != "[]" ]; then
+    echo "## Memex KV Facts (user preferences & conventions)"
+    echo ""
+    echo "$kv_output"
+    echo ""
+fi
+
 # --- Recent notes with IDs ---
 output=$(uv run memex note recent --limit 5 --compact 2>/dev/null) || exit 0
 

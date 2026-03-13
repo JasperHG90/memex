@@ -124,8 +124,8 @@ Session start context is automatic via hook. Do NOT redundantly search at sessio
 
 Route by query type:
 
-IF you know (part of) the note title:
-- `memex_find_note(query="title fragment")` → lightweight fuzzy title match, returns note IDs + scores
+IF you know (or roughly know) a note title:
+- `memex_find_note(query="title fragment")` → note IDs, titles, similarity scores
 - Then read via `memex_get_page_indices` → `memex_get_nodes` as needed
 
 IF query asks about relationships, connections, "how X relates to Y", or landscape:

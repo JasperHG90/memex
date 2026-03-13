@@ -1711,20 +1711,19 @@ async def memex_find_note(
     name='memex_kv_write',
     description=(
         'Write a fact to the key-value store. Generates an embedding for semantic search. '
-        'If no key is provided, one is generated via LLM. '
-        'Use for storing structured preferences, settings, or facts.'
+        'Use for storing structured preferences, settings, or facts. '
+        'Key should be a short, namespaced identifier (e.g. "tool:python:pkg_mgr").'
     ),
 )
 async def memex_kv_write(
     ctx: Context,
     value: Annotated[str, Field(description='The fact or preference text to store.')],
     key: Annotated[
-        str | None,
+        str,
         Field(
-            default=None,
-            description='Namespaced key, e.g. "tool:python:pkg_mgr". Generated via LLM if omitted.',
+            description='Namespaced key, e.g. "tool:python:pkg_mgr".',
         ),
-    ] = None,
+    ],
     vault_id: Annotated[
         str | None,
         Field(
@@ -1738,29 +1737,10 @@ async def memex_kv_write(
         api = get_api(ctx)
 
         # Validate vault exists before proceeding
+        resolved_vault: str | None = vault_id
         if vault_id:
-            await _resolve_vault_id(api, vault_id)
-
-        # Generate key via LLM if not provided
-        effective_key = key
-        if not effective_key:
-            from memex_core.llm import run_dspy_operation
-            import dspy
-
-            class ExtractKVKey(dspy.Signature):
-                """Extract a short, namespaced key from user preference text.
-                Keys should use colon-separated namespaces, e.g. 'tool:python:pkg_mgr'.
-                Keep keys lowercase, concise, and descriptive."""
-
-                value: str = dspy.InputField(desc='The fact or preference text.')
-                key: str = dspy.OutputField(desc='Short namespaced key (e.g. tool:python:pkg_mgr).')
-
-            prediction, _ = await run_dspy_operation(
-                module_class=dspy.ChainOfThought,
-                signature=ExtractKVKey,
-                inputs={'value': value},
-            )
-            effective_key = prediction.key.strip().lower()
+            resolved_uuid = await _resolve_vault_id(api, vault_id)
+            resolved_vault = str(resolved_uuid)
 
         # Generate embedding for semantic search
         from memex_core.memory.models.embedding import get_embedding_model
@@ -1770,8 +1750,8 @@ async def memex_kv_write(
 
         entry = await api.kv_put(
             value=value,
-            key=effective_key,
-            vault_id=vault_id,
+            key=key,
+            vault_id=resolved_vault,
             embedding=embedding,
         )
 
