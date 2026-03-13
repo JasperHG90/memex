@@ -70,7 +70,7 @@ def _mcp_server_entry(vault: str) -> dict:
         'command': 'uv',
         'args': ['run', 'memex', 'mcp', 'run'],
         'env': {
-            'MEMEX_SERVER__ACTIVE_VAULT': vault,
+            'MEMEX_VAULT__ACTIVE': vault,
         },
     }
 
