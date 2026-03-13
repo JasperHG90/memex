@@ -29,10 +29,7 @@ app = typer.Typer(
 
 @app.callback()
 def config_callback():
-    """
-    Manage Memex Configuration.
-    """
-    pass
+    """Manage Memex Configuration."""
 
 
 def mask_secrets(obj: Any) -> Any:
