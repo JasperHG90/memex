@@ -237,7 +237,11 @@ class RetrievalEngine:
             effective_limit = 50
 
         use_reranker = self.reranker is not None and request.rerank
-        candidate_depth = max(effective_limit * 3, 50) if use_reranker else effective_limit
+        # Cap reranker input: cross-encoder cost is O(n) per candidate, so keep
+        # the pool small.  effective_limit * 2 gives enough headroom for diversity
+        # without 200+ ONNX forward passes.
+        rerank_cap = min(effective_limit * 2, 75)
+        candidate_depth = rerank_cap if use_reranker else effective_limit
 
         # 3b. NLP Temporal Extraction (upstream of RRF)
         # Only extract if no explicit date filters were provided and feature is enabled.
@@ -339,12 +343,11 @@ class RetrievalEngine:
             threshold = self.retrieval_config.superseded_threshold
             final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
-        # 7. Rerank
+        # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
-            # Rerank against original query
             final_results = await self._rerank_results(
-                request.query, final_results, min_score=request.min_score
+                request.query, final_results[:rerank_cap], min_score=request.min_score
             )
         t_rerank = _t() - t0
 
