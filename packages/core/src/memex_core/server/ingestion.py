@@ -101,7 +101,9 @@ async def ingest_note(
         # so that they are stored correctly (e.g., as raw images) in the filestore.
 
         if background:
-            job_id = await api.batch_manager.create_job(notes=[request], vault_id=request.vault_id)
+            job_id = await api.batch_manager.create_job(
+                notes=[request], vault_id=request.vault_id, background_tasks=background_tasks
+            )
             return JSONResponse(
                 status_code=202,
                 content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
@@ -422,6 +424,7 @@ async def ingest_webhook(
 async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
 ):
     """
     Asynchronously ingest a batch of notes.
@@ -429,7 +432,10 @@ async def ingest_batch(
     """
     try:
         job_id = await api.batch_manager.create_job(
-            notes=request.notes, vault_id=request.vault_id, batch_size=request.batch_size
+            notes=request.notes,
+            vault_id=request.vault_id,
+            batch_size=request.batch_size,
+            background_tasks=background_tasks,
         )
         return BatchJobStatus(job_id=job_id, status='pending')
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

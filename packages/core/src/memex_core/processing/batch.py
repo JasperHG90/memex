@@ -29,16 +29,35 @@ class JobManager:
         self.api = api
         self._active_tasks: dict[UUID, asyncio.Task] = {}
 
+    def _task_done_callback(self, job_id: UUID, task: asyncio.Task) -> None:
+        """Log unhandled exceptions from background tasks and clean up references."""
+        self._active_tasks.pop(job_id, None)
+        if task.cancelled():
+            logger.warning('Batch job %s task was cancelled.', job_id)
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error('Batch job %s raised unhandled exception: %s', job_id, exc, exc_info=exc)
+
     async def create_job(
-        self, notes: list[Any], vault_id: UUID | str | None = None, batch_size: int = 32
+        self,
+        notes: list[Any],
+        vault_id: UUID | str | None = None,
+        batch_size: int = 32,
+        background_tasks: Any | None = None,
     ) -> UUID:
         """
         Create a new batch job and start it in the background.
+
+        When *background_tasks* (a Starlette ``BackgroundTasks`` instance) is
+        provided, the job is scheduled through it so that the ASGI server manages
+        the task lifecycle.  Otherwise an ``asyncio.Task`` is created directly.
 
         Args:
             notes: List of NoteDTOs to ingest.
             vault_id: Optional target vault identifier.
             batch_size: Processing chunk size.
+            background_tasks: Optional Starlette ``BackgroundTasks`` instance.
 
         Returns:
             UUID: The created Job ID.
@@ -58,11 +77,12 @@ class JobManager:
             session.add(job)
             await session.commit()
 
-        # Start background task
-        task = asyncio.create_task(self._run_job(job_id, notes, target_vault_id, batch_size))
-        self._active_tasks[job_id] = task
-        # Clean up task reference when done
-        task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
+        if background_tasks is not None:
+            background_tasks.add_task(self._run_job, job_id, notes, target_vault_id, batch_size)
+        else:
+            task = asyncio.create_task(self._run_job(job_id, notes, target_vault_id, batch_size))
+            self._active_tasks[job_id] = task
+            task.add_done_callback(lambda t: self._task_done_callback(job_id, t))
 
         return job_id
 
@@ -121,7 +141,7 @@ class JobManager:
         else:
             task = asyncio.create_task(self._run_single_job(job_id, coro_fn, **coro_kwargs))
             self._active_tasks[job_id] = task
-            task.add_done_callback(lambda t: self._active_tasks.pop(job_id, None))
+            task.add_done_callback(lambda t: self._task_done_callback(job_id, t))
 
         return job_id
 
