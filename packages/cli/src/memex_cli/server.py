@@ -144,9 +144,7 @@ def start(
         None, '--config', '-c', envvar='MEMEX_CONFIG_PATH', help='Path to configuration file'
     ),
     reload: bool = typer.Option(False, help='Enable auto-reload for development'),
-    daemon: bool = typer.Option(
-        False, '--daemon', '-d', help='Run the server in the background (gunicorn only)'
-    ),
+    daemon: bool = typer.Option(False, '--daemon', '-d', help='Run the server in the background'),
 ):
     """Start the Memex Core API server."""
     from memex_cli.banner import print_banner
@@ -169,8 +167,6 @@ def start(
         console.print(f'[bold red]Error:[/bold red] Port {port} is already in use.')
         raise typer.Exit(1)
 
-    import uvicorn
-
     if config:
         os.environ['MEMEX_CONFIG_PATH'] = config
 
@@ -187,11 +183,20 @@ def start(
     asyncio.run(_initialize_database(conf))
 
     if reload:
-        # Dev mode: use uvicorn directly
+        # Dev mode: use uvicorn directly (granian reload is less mature)
         if daemon:
             console.print(
                 '[yellow]Warning: --daemon is not supported with --reload. Ignoring daemon flag.[/yellow]'
             )
+
+        try:
+            import uvicorn
+        except ImportError:
+            console.print(
+                '[bold red]Error:[/bold red] uvicorn is required for --reload mode. '
+                'Install it with: [cyan]uv add uvicorn --package memex-core[/cyan]'
+            )
+            raise typer.Exit(1)
 
         console.print(f'Starting Uvicorn development server on {host}:{port}...')
         uvicorn.run(
@@ -201,36 +206,12 @@ def start(
             reload=True,
         )
     else:
-        # Prod mode: use gunicorn
+        # Prod mode: use Granian (Rust-based ASGI server)
         if workers is None:
             workers = 2
 
         # Signal to workers (via env) that schema check is already done
         os.environ['MEMEX_SKIP_SCHEMA_CHECK'] = 'true'
-
-        preload = False  # Preloading can cause issues on mac, but helps on other OS
-        import platform
-
-        if platform.system() == 'Darwin':
-            # macOS networking/SSL libraries are not fork-safe.
-            # This flag tells the OS to relax those checks.
-            os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
-
-            # 2. Prevent the "NSCharacterSet" crash (The Proxy Lookup Fix)
-            # This stops Python from calling into macOS SystemConfiguration to check
-            # for proxies, which is what triggers the NSCharacterSet crash.
-            os.environ['no_proxy'] = '*'
-
-            # 3. Prevent OpenMP Deadlocks
-            os.environ['OMP_NUM_THREADS'] = '1'
-
-            console.print(
-                '[yellow]macOS detected: Fork safety, No-Proxy, & Threading fixes applied.[/yellow]'
-            )
-
-            console.print('[dim]macOS detected: Enabling fork safety workaround.[/dim]')
-        else:
-            preload = True
 
         from platformdirs import user_log_dir
         import pathlib as plb
@@ -254,63 +235,52 @@ def start(
         # can configure application-level loggers (memex.*).
         os.environ['MEMEX_LOG_LEVEL'] = log_level.upper()
 
+        console.print(f'Starting Granian with {workers} workers on {host}:{port}')
         if daemon:
-            console.print(f'Starting Gunicorn with {workers} workers on {host}:{port}')
             console.print(f'Logs will be written to: {log_file}')
-        else:
-            console.print(f'Starting Gunicorn with {workers} workers on {host}:{port}')
-
-        # In daemon mode logs go to the persistent log file.
-        # In foreground mode logs go to stdout/stderr so the operator can see
-        # them directly in the terminal (gunicorn uses '-' to mean stdout).
-        if daemon:
-            access_log = str(log_file)
-            error_log = str(log_file)
-        else:
-            access_log = '-'  # gunicorn: stdout
-            error_log = '-'  # gunicorn: stderr
 
         cmd = [
-            'gunicorn',
-            '-k',
-            'uvicorn.workers.UvicornWorker',
-            '-w',
+            'granian',
+            '--interface',
+            'asgi',
+            '--host',
+            host,
+            '--port',
+            str(port),
+            '--workers',
             str(workers),
-            '-b',
-            f'{host}:{port}',
-            '--access-logfile',
-            access_log,
-            '--error-logfile',
-            error_log,
             '--log-level',
             log_level,
-            '--timeout',
-            '120',
-            '--capture-output',  # Capture stdout/stderr from workers
+            '--respawn-failed-workers',
         ]
-        if preload:
-            cmd.append('--preload')  # Load app in master process to save memory via copy-on-write
 
         if daemon:
-            cmd.append('--daemon')
-            # Gunicorn writes the master PID and cleans it on shutdown
             pf = pid_file_path(SERVICE)
             pf.parent.mkdir(parents=True, exist_ok=True)
-            cmd.extend(['--pid', str(pf)])
+            # Granian doesn't have a built-in daemon mode — use subprocess
             console.print('Server starting in daemon mode...')
+            import subprocess
 
-        cmd.append('memex_core.server:app')
-
-        # Replace current process with gunicorn
-        try:
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os.execvp('gunicorn', cmd)
-        except FileNotFoundError:
-            console.print(
-                "[bold red]Error:[/bold red] 'gunicorn' not found. Ensure it is installed."
+            proc = subprocess.Popen(
+                [*cmd, 'memex_core.server:app'],
+                stdout=open(log_file, 'a'),
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
-            sys.exit(1)
+            pf.write_text(str(proc.pid))
+            console.print(f'Server started (PID {proc.pid}). Logs: {log_file}')
+        else:
+            cmd.append('memex_core.server:app')
+            # Replace current process with granian
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os.execvp('granian', cmd)
+            except FileNotFoundError:
+                console.print(
+                    "[bold red]Error:[/bold red] 'granian' not found. Ensure it is installed."
+                )
+                sys.exit(1)
 
 
 @app.command()

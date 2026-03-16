@@ -30,8 +30,7 @@ dependencies = [
     "tokenizers>=0.22.2",
     "trafilatura>=2.0.0,<3",
     "fastapi>=0.128.0",
-    "uvicorn>=0.40.0",
-    "gunicorn>=21.2.0",
+    "granian>=2.3.0",
     "pydantic-settings>=2.12.0",
     "markitdown[docx,pdf,pptx,xlsx,outlook]>=0.1.2",
     "cachetools-async>=0.0.5",
@@ -54,6 +53,7 @@ dependencies = [
 s3 = ["s3fs>=2024.6.0"]
 gcs = ["gcsfs>=2024.6.0"]
 cloud = ["s3fs>=2024.6.0", "gcsfs>=2024.6.0"]
+dev-server = ["uvicorn>=0.40.0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import time
 from collections import defaultdict
@@ -8,7 +9,9 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 import math
 
+import numpy as np
 import tiktoken
+from cachetools import TTLCache
 from sqlalchemy import func, literal, union_all
 from sqlalchemy.orm import defer, selectinload
 from sqlmodel import select, col
@@ -126,6 +129,7 @@ class RetrievalEngine:
         reflection_config: ReflectionConfig | None = None,
         retrieval_config: RetrievalConfig | None = None,
         lm: Any | None = None,
+        session_factory: Any | None = None,
     ):
         self.embedder = embedder
         self.reranker = reranker
@@ -133,10 +137,15 @@ class RetrievalEngine:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
+        self._session_factory = session_factory
 
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
         self.candidate_pool_size = self.retrieval_config.candidate_pool_size
+
+        # Query embedding cache: avoids re-encoding recently seen queries
+        self._embedding_cache: TTLCache[str, np.ndarray] = TTLCache(maxsize=256, ttl=300)
+        self._embedding_cache_lock = asyncio.Lock()
 
         from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
@@ -159,6 +168,32 @@ class RetrievalEngine:
             'temporal': (TemporalStrategy(), True),  # True = DESC
         }
         self.mm_strategy = MentalModelStrategy()
+
+    async def _get_embeddings_cached(self, queries: list[str]) -> np.ndarray:
+        """Return embeddings for *queries*, serving cache hits and batch-encoding misses."""
+        results: list[np.ndarray] = []
+        misses: list[tuple[int, str]] = []  # (index, query_text)
+
+        async with self._embedding_cache_lock:
+            for i, q in enumerate(queries):
+                key = hashlib.sha256(q.encode()).hexdigest()
+                cached = self._embedding_cache.get(key)
+                if cached is not None:
+                    results.append(cached)
+                else:
+                    results.append(np.empty(0))  # placeholder
+                    misses.append((i, q))
+
+        if misses:
+            miss_texts = [q for _, q in misses]
+            encoded = await asyncio.to_thread(self.embedder.encode, miss_texts)
+            async with self._embedding_cache_lock:
+                for (idx, q), emb in zip(misses, encoded):
+                    key = hashlib.sha256(q.encode()).hexdigest()
+                    self._embedding_cache[key] = emb
+                    results[idx] = emb
+
+        return np.array(results)
 
     async def retrieve(
         self,
@@ -183,8 +218,8 @@ class RetrievalEngine:
                 queries.append(var)
                 query_weights.append(1.0)
 
-        # 2. Get Embeddings for all queries
-        all_embeddings = await asyncio.to_thread(self.embedder.encode, queries)
+        # 2. Get Embeddings for all queries (with per-query caching)
+        all_embeddings = await self._get_embeddings_cached(queries)
 
         # 3. Determine budget and limit
         token_budget = request.token_budget
@@ -223,6 +258,15 @@ class RetrievalEngine:
 
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
+
+        # Pre-compute NER entities off the event loop so graph strategies don't block
+        if self.ner_model is not None:
+            try:
+                filters['_ner_entities'] = await asyncio.to_thread(
+                    self.ner_model.predict, request.query
+                )
+            except (ValueError, RuntimeError, OSError) as e:
+                logger.warning('NER pre-extraction failed: %s', e)
 
         # Thread temporal filters for strategy-level date filtering
         if request.after:
@@ -284,7 +328,7 @@ class RetrievalEngine:
         # 7. Rerank
         if use_reranker:
             # Rerank against original query
-            final_results = self._rerank_results(
+            final_results = await self._rerank_results(
                 request.query, final_results, min_score=request.min_score
             )
 
@@ -606,20 +650,41 @@ class RetrievalEngine:
             else None
         )
 
-        # Run per-type queries sequentially — AsyncSession is not safe for concurrent use
-        per_type_results: list[Sequence[Any]] = []
-        for ft in fact_types:
-            result = await self._perform_rrf_retrieval(
-                session,
-                query,
-                query_embedding,
-                per_type_budget,
-                {**filters, 'fact_type': ft},
-                strategies=unit_only_strategies,
-                strategy_weights=strategy_weights,
-                debug_ctx=debug_ctx,
-            )
-            per_type_results.append(result)
+        # Parallel path: create a separate session per fact type to avoid
+        # AsyncSession concurrency issues.  Falls back to sequential if no
+        # session factory is available.
+        if self._session_factory is not None:
+            sf = self._session_factory
+
+            async def _run_ft(ft: str) -> Sequence[Any]:
+                async with sf() as ft_session:
+                    return await self._perform_rrf_retrieval(
+                        ft_session,
+                        query,
+                        query_embedding,
+                        per_type_budget,
+                        {**filters, 'fact_type': ft},
+                        strategies=unit_only_strategies,
+                        strategy_weights=strategy_weights,
+                        debug_ctx=debug_ctx,
+                    )
+
+            per_type_results = list(await asyncio.gather(*[_run_ft(ft) for ft in fact_types]))
+        else:
+            # Sequential fallback (no session factory)
+            per_type_results = []
+            for ft in fact_types:
+                result = await self._perform_rrf_retrieval(
+                    session,
+                    query,
+                    query_embedding,
+                    per_type_budget,
+                    {**filters, 'fact_type': ft},
+                    strategies=unit_only_strategies,
+                    strategy_weights=strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
+                per_type_results.append(result)
 
         # Collect mental model results separately (mental models have no fact_type)
         mm_results: Sequence[Any] = []
@@ -834,7 +899,7 @@ class RetrievalEngine:
 
         return final_results
 
-    def _rerank_results(
+    async def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
         """Re-rank results using a cross-encoder with multiplicative boosts.
@@ -865,7 +930,7 @@ class RetrievalEngine:
                     )
                 )
 
-            scores = self.reranker.score(query, formatted_texts)
+            scores = await asyncio.to_thread(self.reranker.score, query, formatted_texts)
 
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]

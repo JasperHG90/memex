@@ -315,7 +315,9 @@ class ExtractionEngine:
         block_size = (
             ts.chunk_size_tokens * CHARS_PER_TOKEN if isinstance(ts, SimpleTextSplitting) else 4000
         )
-        new_blocks = stable_chunk_text(combined_text, block_size=block_size)
+        new_blocks = await asyncio.to_thread(
+            stable_chunk_text, combined_text, block_size=block_size
+        )
 
         # 2-3. Diff new blocks against existing blocks
         block_diff = diff_blocks(new_blocks, existing_blocks)

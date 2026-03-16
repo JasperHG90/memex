@@ -37,8 +37,8 @@ def test_config_show_defaults(tmp_path, runner):
 
         # Check that secrets are masked
         assert "password: '**********'" in result.stdout
-        # Check a default value (max_overflow defaults to 20 in PostgresMetaStoreConfig)
-        assert 'max_overflow: 20' in result.stdout
+        # Check a default value (max_overflow defaults to 30 in PostgresMetaStoreConfig)
+        assert 'max_overflow: 30' in result.stdout
 
 
 def test_config_cascade(tmp_path, runner, monkeypatch):
