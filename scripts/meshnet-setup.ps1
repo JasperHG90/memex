@@ -26,7 +26,9 @@ Write-Host "`n=== Creating Firewall Rules ===" -ForegroundColor Cyan
 # Define allowed ports (MCP + Dashboard only)
 $rules = @(
     @{ Name = "Memex MCP SSE (8081)"; Port = 8081; Desc = "Memex MCP SSE transport for remote Claude Code" },
-    @{ Name = "Memex Dashboard (5173)"; Port = 5173; Desc = "Memex React dashboard" }
+    @{ Name = "Memex Dashboard (5173)"; Port = 5173; Desc = "Memex React dashboard" },
+    @{ Name = "Claude Worker (3100)"; Port = 3100; Desc = "Claude Worker HTTP API for bot-worker bridge" },
+    @{ Name = "n8n Webhooks (5678)"; Port = 5678; Desc = "n8n webhook endpoints and UI" }
 )
 
 foreach ($rule in $rules) {
@@ -72,7 +74,7 @@ foreach ($rule in $blockRules) {
 }
 
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-Write-Host "  Allowed from Meshnet: 8081 (MCP SSE), 5173 (Dashboard)" -ForegroundColor Green
+Write-Host "  Allowed from Meshnet: 8081 (MCP SSE), 5173 (Dashboard), 3100 (Worker), 5678 (n8n)" -ForegroundColor Green
 Write-Host "  Blocked from Meshnet: 8000 (API), 5432 (DB)" -ForegroundColor Red
 Write-Host "  All ports accessible locally (127.0.0.1)" -ForegroundColor Green
 
@@ -81,6 +83,8 @@ if ($meshAdapters) {
     Write-Host "`n=== Remote Access URLs ===" -ForegroundColor Cyan
     Write-Host "  MCP SSE:   http://${ip}:8081/sse" -ForegroundColor Green
     Write-Host "  Dashboard: http://${ip}:5173" -ForegroundColor Green
+    Write-Host "  Worker:    http://${ip}:3100/health" -ForegroundColor Green
+    Write-Host "  n8n:       http://${ip}:5678" -ForegroundColor Green
     Write-Host "`n  Use the Meshnet IP above in .mcp.json on remote devices."
 }
 
