@@ -58,19 +58,25 @@ function layoutGraph(entities: EntityDTO[], cooccurrences: CooccurrenceRecord[])
       count: c.cooccurrence_count,
     }));
 
+  const n = nodes.length;
+  const chargeStrength = n > 50 ? -5000 : -1500;
+  const linkDistance = n > 50 ? 400 : 250;
+  const collideRadius = n > 50 ? 120 : 70;
+
   const simulation = forceSimulation(nodes)
     .force(
       'link',
       forceLink<SimNode, SimLink>(links)
         .id((d) => d.id)
-        .distance(120),
+        .distance(linkDistance)
+        .strength(0.3),
     )
-    .force('charge', forceManyBody().strength(-250))
-    .force('center', forceCenter(0, 0))
-    .force('collide', forceCollide(50));
+    .force('charge', forceManyBody().strength(chargeStrength).distanceMax(2000))
+    .force('center', forceCenter(0, 0).strength(0.05))
+    .force('collide', forceCollide(collideRadius).strength(1));
 
   // Run synchronously
-  simulation.tick(300);
+  simulation.alpha(1).alphaDecay(0.01).tick(500);
   simulation.stop();
 
   return { nodes, links };

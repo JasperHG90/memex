@@ -84,8 +84,14 @@ class EntityService(BaseService):
             .group_by(Entity.id)
         ).subquery()
 
+        rank_score = (
+            0.4 * Entity.mention_count
+            + 0.4 * Entity.retrieval_count
+            + 0.2 * centrality_stmt.c.centrality
+        ).label('rank_score')
+
         stmt = (
-            select(Entity, MentalModel)
+            select(Entity, MentalModel, rank_score)
             .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
             .outerjoin(
                 MentalModel,
@@ -103,13 +109,7 @@ class EntityService(BaseService):
         if entity_type:
             stmt = stmt.where(Entity.entity_type == entity_type)
 
-        stmt = stmt.order_by(
-            desc(
-                0.4 * Entity.mention_count
-                + 0.4 * Entity.retrieval_count
-                + 0.2 * centrality_stmt.c.centrality
-            )
-        ).limit(limit)
+        stmt = stmt.order_by(desc(rank_score)).limit(limit)
 
         async with self.metastore.session() as session:
             stream = await session.stream(stmt)

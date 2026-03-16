@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memex — Deep Dive Menu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f1a;
+    --card: #1a1a2e;
+    --accent: #e94560;
+    --accent2: #0f3460;
+    --text: #eaeaea;
+    --muted: #8888aa;
+    --glow: rgba(233, 69, 96, 0.15);
+    --panel-bg: #141425;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background-image:
+      radial-gradient(ellipse at 20% 50%, rgba(15, 52, 96, 0.4) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(233, 69, 96, 0.12) 0%, transparent 50%);
+  }
+
+  .slide {
+    max-width: 1100px;
+    width: 100%;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 3rem;
+  }
+
+  .header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+  }
+
+  .logo {
+    height: 4rem;
+    width: auto;
+    flex-shrink: 0;
+  }
+
+  h1 {
+    font-size: 3.2rem;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #e94560, #ff6b81, #ffd32a);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.4rem;
+  }
+
+  .subtitle {
+    font-size: 1.15rem;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .menu {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem 2rem;
+    counter-reset: item;
+  }
+
+  .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding: 1rem 1.2rem;
+    border-radius: 12px;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.04);
+    transition: all 0.25s ease;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .item::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, var(--glow), transparent 60%);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+
+  .item:hover::before { opacity: 1; }
+  .item:hover {
+    border-color: rgba(233, 69, 96, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+
+  .item.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 20px rgba(233, 69, 96, 0.25);
+  }
+  .item.active::before { opacity: 1; }
+
+  .emoji {
+    font-size: 1.6rem;
+    flex-shrink: 0;
+    width: 2rem;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+  }
+
+  .label {
+    font-weight: 700;
+    font-size: 1rem;
+    line-height: 1.3;
+    margin-bottom: 0.2rem;
+  }
+
+  .desc {
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  footer {
+    text-align: center;
+    margin-top: 2.5rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  footer span { color: var(--accent); font-weight: 600; }
+
+  /* --- Speaker Notes Panel --- */
+  .notes-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    backdrop-filter: blur(6px);
+    background: rgba(15, 15, 26, 0.6);
+    animation: fadeIn 0.2s ease;
+  }
+
+  .notes-overlay.open { display: flex; align-items: center; justify-content: center; }
+
+  .notes-panel {
+    background: var(--panel-bg);
+    border: 1px solid rgba(233, 69, 96, 0.25);
+    border-radius: 16px;
+    max-width: 700px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 2rem 2.5rem;
+    position: relative;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+    animation: slideUp 0.25s ease;
+  }
+
+  .notes-panel-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .notes-panel-emoji {
+    font-size: 2rem;
+    flex-shrink: 0;
+  }
+
+  .notes-panel-title {
+    font-size: 1.4rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #e94560, #ff6b81);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.3;
+  }
+
+  .notes-close {
+    position: absolute;
+    top: 1rem;
+    right: 1.2rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.25rem;
+    border-radius: 6px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .notes-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+  .notes-body {
+    font-size: 0.92rem;
+    line-height: 1.7;
+    color: #ccccdd;
+  }
+
+  .notes-body ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .notes-body li {
+    padding: 0.4rem 0 0.4rem 1.4rem;
+    position: relative;
+  }
+
+  .notes-body li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.85rem;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .notes-body strong {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .notes-body code {
+    background: rgba(233, 69, 96, 0.12);
+    color: #ff8a9e;
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* scrollbar */
+  .notes-panel::-webkit-scrollbar { width: 6px; }
+  .notes-panel::-webkit-scrollbar-track { background: transparent; }
+  .notes-panel::-webkit-scrollbar-thumb { background: rgba(233,69,96,0.3); border-radius: 3px; }
+
+  /* --- Intro Slide --- */
+  .intro-slide {
+    max-width: 900px;
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2rem 0;
+  }
+
+  .intro-slide header {
+    margin-bottom: 3rem;
+  }
+
+  .intro-sections {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 2rem;
+    margin-bottom: 3rem;
+  }
+
+  .intro-section h2 {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 0.8rem;
+    letter-spacing: -0.01em;
+  }
+
+  .intro-section ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .intro-section li {
+    padding: 0.35rem 0 0.35rem 1.2rem;
+    position: relative;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: #bbbbcc;
+  }
+
+  .intro-section li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.75rem;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.6;
+  }
+
+  .intro-cta {
+    text-align: center;
+    margin-top: 2rem;
+  }
+
+  .btn-next {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.8rem 2rem;
+    background: linear-gradient(135deg, var(--accent), #c73a52);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+
+  .btn-next:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(233, 69, 96, 0.35);
+  }
+
+  .btn-next .arrow { font-size: 1.2rem; }
+
+  /* --- Features Slide --- */
+  .features-slide {
+    max-width: 1100px;
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 2rem 0;
+  }
+
+  .features-slide header { margin-bottom: 2.5rem; }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1.2rem;
+    margin-bottom: 2rem;
+  }
+
+  .feature-card {
+    padding: 1.1rem 1.3rem;
+    border-radius: 12px;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .feature-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .feature-card-emoji { font-size: 1.3rem; }
+
+  .feature-card-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    color: var(--text);
+  }
+
+  .feature-card-desc {
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .btn-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.5rem;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+    margin-right: 1rem;
+  }
+
+  .btn-back:hover { color: var(--text); border-color: rgba(255,255,255,0.25); }
+
+  .nav-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 1.5rem;
+  }
+
+  /* page management */
+  .page { display: none; }
+  .page.active { display: flex; align-items: center; justify-content: center; }
+  body { flex-direction: column; }
+
+  @media (max-width: 768px) {
+    .menu { grid-template-columns: 1fr; }
+    .intro-sections { grid-template-columns: 1fr; }
+    h1 { font-size: 2.2rem; }
+    .notes-panel { padding: 1.5rem; }
+    .logo { height: 3rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1: Intro -->
+<div class="page active" id="pageIntro">
+  <div class="intro-slide">
+    <header>
+      <div class="header-inner">
+        <img src="assets/memex-logo-spacy.png" alt="Memex" class="logo">
+        <h1>Memex</h1>
+      </div>
+      <p class="subtitle">Long-term memory for LLMs — persistent, evolving knowledge.</p>
+    </header>
+
+    <div class="intro-sections">
+      <div class="intro-section">
+        <h2>Why I created Memex</h2>
+        <ul>
+          <li>LLMs forget everything between sessions — every conversation starts from zero</li>
+          <li>Existing solutions are either flat vector stores or black-box "memory" features with no transparency</li>
+          <li>I wanted the Obsidian for LLMs — your notes, always readable, never locked in</li>
+          <li>Data-first philosophy: Markdown files + Postgres, not proprietary formats</li>
+          <li>First-class support for file assets — images, diagrams, and attachments stored alongside notes</li>
+        </ul>
+      </div>
+      <div class="intro-section">
+        <h2>What I needed</h2>
+        <ul>
+          <li>Memory that does not update beliefs — it creates and updates <strong>mental models</strong> per entity, synthesizing information. Isolated per vault</li>
+          <li>Multiple retrieval channels: <strong>entities</strong>, <strong>memory search</strong> (synthesized facts), and <strong>direct note search</strong></li>
+          <li>Structured retrieval, not just "nearest 10 vectors" — temporal, entity-aware, graph-connected</li>
+          <li>Full provenance: trace any mental model back to the original source document</li>
+          <li>Multi-vault isolation — keep work and personal knowledge separate</li>
+          <li>Token-efficient: only retrieve what's actually needed (JIT context)</li>
+        </ul>
+      </div>
+      <div class="intro-section">
+        <h2>How I use Memex</h2>
+        <ul>
+          <li>Claude Code + MCP: Memex runs as a tool server — Claude reads memories but does <strong>not</strong> automatically write notes</li>
+          <li>Feed it architecture docs, meeting notes, research — it extracts facts, resolves entities, builds a knowledge graph</li>
+          <li>Memex accurately date-stamps events relative to the publishing date — temporal queries just work</li>
+          <li>Background reflection synthesizes mental models overnight — next morning, Claude knows more than yesterday</li>
+          <li>Contradiction detection keeps knowledge fresh — new facts automatically supersede old ones</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="intro-cta">
+      <button class="btn-next" id="btnIntroNext">Features <span class="arrow">&rarr;</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 2: Features -->
+<div class="page" id="pageFeatures">
+  <div class="features-slide">
+    <header>
+      <div class="header-inner">
+        <img src="assets/memex-logo-spacy.png" alt="Memex" class="logo">
+        <h1>Features</h1>
+      </div>
+      <p class="subtitle">What Memex does under the hood.</p>
+    </header>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f4e5;</div>
+          <div class="feature-card-title">Ingest Anything</div>
+        </div>
+        <div class="feature-card-desc">Markdown, PDF, Word, PowerPoint, Excel, Outlook emails, web pages, or entire directories. Conversion via MarkItDown &amp; PyMuPDF. Background and batch modes.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f9e0;</div>
+          <div class="feature-card-title">Five-Strategy Retrieval (TEMPR)</div>
+        </div>
+        <div class="feature-card-desc">Semantic, Keyword, Graph, Temporal, and Mental Model &mdash; five strategies run in parallel, fused via Reciprocal Rank Fusion. MMR diversity filtering prunes near-duplicates.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f333;</div>
+          <div class="feature-card-title">Hierarchical Page Index</div>
+        </div>
+        <div class="feature-card-desc">Documents are split into a structured TOC with section summaries, token estimates, and node IDs. Read a 50-page PDF section by section instead of dumping everything into context.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f504;</div>
+          <div class="feature-card-title">Incremental Extraction</div>
+        </div>
+        <div class="feature-card-desc">Update a note and Memex diffs the content, only re-extracting changed blocks. Unchanged facts, entities, and embeddings are preserved &mdash; fast for living documents.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x2694;&#xFE0F;</div>
+          <div class="feature-card-title">Contradiction Detection</div>
+        </div>
+        <div class="feature-card-desc">New facts are triaged for corrections. When a newer note contradicts an older one, confidence is adjusted and supersession links are recorded. Retrieval favors current information.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1fa9e;</div>
+          <div class="feature-card-title">Reflection &amp; Mental Models</div>
+        </div>
+        <div class="feature-card-desc">Background reflection synthesizes observations and builds versioned mental models. Memex evolves from raw facts into structured understanding over time.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f3e6;</div>
+          <div class="feature-card-title">Vaults</div>
+        </div>
+        <div class="feature-card-desc">Isolate knowledge by project, team, or topic. Attach multiple vaults as read-only for cross-project search, or keep them strictly separate.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x2601;&#xFE0F;</div>
+          <div class="feature-card-title">Cloud-Native Storage</div>
+        </div>
+        <div class="feature-card-desc">File store uses fsspec &mdash; swap between local disk, S3, and GCS with a config change. PostgreSQL + pgvector for metadata and vector search.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f916;</div>
+          <div class="feature-card-title">AI Agent Integration</div>
+        </div>
+        <div class="feature-card-desc">First-class MCP support for Claude Code, Claude Desktop, and Cursor. 26 MCP tools, lifecycle hooks, /remember + /recall slash commands.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f310;</div>
+          <div class="feature-card-title">REST API &amp; Webhooks</div>
+        </div>
+        <div class="feature-card-desc">FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and webhook subscriptions for event-driven integrations.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f9ec;</div>
+          <div class="feature-card-title">Lineage &amp; Provenance</div>
+        </div>
+        <div class="feature-card-desc">Trace any mental model back through observations to the original source document. Full bidirectional provenance traversal with depth control.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f4ca;</div>
+          <div class="feature-card-title">Dashboard</div>
+        </div>
+        <div class="feature-card-desc">React + Vite web UI &mdash; entity graph, lineage trees, live ingestion activity, memory search with AI summaries, and system stats.</div>
+      </div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn-back" id="btnFeaturesBack"><span class="arrow">&larr;</span> Intro</button>
+      <button class="btn-next" id="btnFeaturesNext">Deep Dive Menu <span class="arrow">&rarr;</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 3: Menu -->
+<div class="page" id="pageMenu">
+<div class="slide">
+  <header>
+    <div class="header-inner">
+      <img src="assets/memex-logo-spacy.png" alt="Memex" class="logo">
+      <h1>Memex — Deep Dive Menu</h1>
+    </div>
+    <p class="subtitle">Long-term memory for LLMs — persistent, evolving knowledge.</p>
+  </header>
+
+  <div class="menu">
+    <div class="item" data-topic="tempr">
+      <div class="emoji">&#x1f9e0;</div>
+      <div class="content">
+        <div class="label">TEMPR: Five Ways to Remember</div>
+        <div class="desc">Temporal, Entity, Mental Model, Probabilistic, Ranking — fused with Reciprocal Rank Fusion</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="contradiction">
+      <div class="emoji">&#x2694;&#xFE0F;</div>
+      <div class="content">
+        <div class="label">Contradiction Detection</div>
+        <div class="desc">When new facts fight old facts — automatic supersession, confidence scoring &amp; lineage</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="chunking">
+      <div class="emoji">&#x1f333;</div>
+      <div class="content">
+        <div class="label">Semantic Tree Chunking</div>
+        <div class="desc">PageIndex turns documents into navigable hierarchies — fast-path for Markdown, LLM-path for everything else</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="reingestion">
+      <div class="emoji">&#x1f504;</div>
+      <div class="content">
+        <div class="label">Incremental Re-ingestion</div>
+        <div class="desc">Hash-based diffing detects retained/added/removed blocks — skips LLM calls on unchanged content</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="mmr">
+      <div class="emoji">&#x1f3af;</div>
+      <div class="content">
+        <div class="label">Hybrid MMR Diversity</div>
+        <div class="desc">60% cosine embedding + 40% entity Jaccard overlap — kills duplicates, keeps variety</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="reflection">
+      <div class="emoji">&#x1fa9e;</div>
+      <div class="content">
+        <div class="label">Reflection Engine</div>
+        <div class="desc">Six-phase cycle: update &rarr; seed &rarr; hunt &rarr; validate &rarr; compare &rarr; finalize. Builds mental models from raw facts</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="entity">
+      <div class="emoji">&#x1f50d;</div>
+      <div class="content">
+        <div class="label">Entity Disambiguation</div>
+        <div class="desc">50% name similarity + 30% co-occurrence + 20% temporal proximity — trigrams, phonetics &amp; TF-IDF in one formula</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="rust">
+      <div class="emoji">&#x1f980;</div>
+      <div class="content">
+        <div class="label">The Rust Migration: 206 Tickets in a Day</div>
+        <div class="desc">Parallel worktree agents, 484 tests, full E2E parity — and what ultimately broke</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="lineage">
+      <div class="emoji">&#x1f9ec;</div>
+      <div class="content">
+        <div class="label">Lineage: Following the Paper Trail</div>
+        <div class="desc">Recursive provenance traversal — trace any mental model back through observations to the original document</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="vault">
+      <div class="emoji">&#x1f3e6;</div>
+      <div class="content">
+        <div class="label">Multi-Vault Knowledge Isolation</div>
+        <div class="desc">Scoped notes, entities &amp; mental models — attach/detach vaults without reprocessing</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="hindsight">
+      <div class="emoji">&#x1f4dc;</div>
+      <div class="content">
+        <div class="label">From Paper to Production: Hindsight 20/20</div>
+        <div class="desc">Adapting an academic memory architecture — what survived, what changed, and what got thrown out</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="expansion">
+      <div class="emoji">&#x1f4d0;</div>
+      <div class="content">
+        <div class="label">Multi-Query Expansion</div>
+        <div class="desc">LLM generates query variants, each runs all 5 strategies, fused via RRF with 2&times; weight on original</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="locomo">
+      <div class="emoji">&#x1f9ea;</div>
+      <div class="content">
+        <div class="label">LoCoMo: Evaluating Memory</div>
+        <div class="desc">0.986 accuracy, $0.20/query — benchmarking recall quality with tool-choice analysis</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="atomic">
+      <div class="emoji">&#x26a1;</div>
+      <div class="content">
+        <div class="label">Atomic Extraction Pipeline</div>
+        <div class="desc">FileStore + MetaStore in one transaction — full rollback on any stage failure, zero partial state</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Raise your hand for what looks interesting — <span>we'll dive in together</span></footer>
+</div>
+</div>
+
+<!-- Speaker Notes Overlay -->
+<div class="notes-overlay" id="notesOverlay">
+  <div class="notes-panel" id="notesPanel">
+    <button class="notes-close" id="notesClose">&times;</button>
+    <div class="notes-panel-header">
+      <div class="notes-panel-emoji" id="notesPanelEmoji"></div>
+      <div class="notes-panel-title" id="notesPanelTitle"></div>
+    </div>
+    <div class="notes-body" id="notesPanelBody"></div>
+  </div>
+</div>
+
+<script>
+const speakerNotes = {
+  tempr: {
+    emoji: '\u{1f9e0}',
+    title: 'TEMPR: Five Ways to Remember',
+    notes: [
+      'TEMPR = <strong>Temporal, Entity, Mental model, Probabilistic (Keyword), Ranking (Semantic)</strong> \u2014 five retrieval strategies that each find memories differently.',
+      'Every query runs all five: <strong>semantic</strong> (pgvector cosine), <strong>keyword</strong> (Postgres tsvector/BM25), <strong>graph</strong> (entity co-occurrence BFS), <strong>temporal</strong> (date-range filtering), and <strong>mental model</strong> (a separate data type \u2014 synthesized observations that compete alongside raw facts in ranking).',
+      'Results are merged via <strong>Reciprocal Rank Fusion (RRF)</strong> in-database using CTEs and window functions \u2014 rank-based fusion that doesn\u2019t need score normalization.',
+      'After RRF, a <strong>custom cross-encoder reranker</strong> (fine-tuned ms-marco-MiniLM, ONNX format) does final re-ordering with recency decay and temporal proximity boosts.',
+      'Key insight: no single strategy wins. Temporal catches \u201clast week\u201d queries. Graph catches related entities. Semantic catches paraphrased concepts. Fusion makes the whole greater than the parts.'
+    ]
+  },
+  contradiction: {
+    emoji: '\u2694\uFE0F',
+    title: 'Contradiction Detection',
+    notes: [
+      'Runs as a <strong>background task</strong> after every ingestion \u2014 compares newly extracted facts against existing memory units.',
+      '<strong>Two-stage LLM pipeline</strong>: (1) <strong>Triage</strong> \u2014 a conservative filter that flags only units with corrective language (updates, revisions, supersessions). Most units pass through untouched. (2) <strong>Classify</strong> \u2014 for each flagged unit, find similar candidates via embedding similarity and classify the relationship.',
+      'Three relationship types: <strong>reinforce</strong> (both get a confidence boost), <strong>weaken</strong> (superseded unit loses confidence), <strong>contradict</strong> (superseded unit loses 2\u00D7 confidence).',
+      '<strong>Authority resolution</strong>: by default the newer unit wins (temporal heuristic), but the LLM can override if content explicitly indicates the older unit is authoritative.',
+      'Every relationship is recorded as a <strong>MemoryLink</strong> with full provenance \u2014 reasoning, which unit was authoritative, and which note it came from. This creates a lineage graph of how facts evolve.',
+      'Low-confidence superseded units are excluded from default retrieval but never deleted \u2014 the full history is preserved.'
+    ]
+  },
+  chunking: {
+    emoji: '\u{1f333}',
+    title: 'Semantic Tree Chunking',
+    notes: [
+      '<strong>PageIndex</strong> turns flat documents into navigable hierarchies \u2014 a tree of sections with token counts at each level.',
+      '<strong>Fast path for Markdown</strong>: detects headers via regex, assesses structure quality. If <code>is_well_structured</code>, builds the tree directly without any LLM calls.',
+      '<strong>LLM path for everything else</strong>: uses an LLM to scan chunks for logical headers, then organizes them into a hierarchical TOC.',
+      'Each node has a token count, enabling <strong>surgical retrieval</strong> \u2014 read just the section you need, not the whole document.',
+      'The retrieval flow: <code>get_page_indices</code> (see the tree) \u2192 <code>get_nodes</code> (read specific sections). This keeps context windows lean.'
+    ]
+  },
+  reingestion: {
+    emoji: '\u{1f504}',
+    title: 'Incremental Re-ingestion',
+    notes: [
+      'When a note is updated, the system doesn\u2019t re-process everything from scratch.',
+      '<strong>Hash-based diffing</strong> compares content hashes of blocks between old and new versions.',
+      'Four categories for PageIndex diffing: <strong>retained</strong> (unchanged \u2014 skip), <strong>boundary_shift</strong> (nodes moved between blocks \u2014 migrate facts), <strong>content_changed</strong> (new/modified \u2014 extract), <strong>removed</strong> (gone \u2014 mark stale).',
+      'Boundary-shift blocks trigger <strong>fact migration</strong> to new block IDs, preserving continuity without re-extraction.',
+      'Skips LLM extraction calls on unchanged content \u2014 huge cost savings on frequently-updated documents.'
+    ]
+  },
+  mmr: {
+    emoji: '\u{1f3af}',
+    title: 'Hybrid MMR Diversity',
+    notes: [
+      'After retrieval and RRF fusion, results can be redundant \u2014 multiple facts saying the same thing differently.',
+      '<strong>Maximal Marginal Relevance (MMR)</strong> re-ranks to balance relevance and diversity.',
+      'Hybrid scoring: <strong>60% cosine embedding similarity</strong> (semantic overlap) + <strong>40% entity Jaccard overlap</strong> (shared named entities). Both weights are configurable.',
+      'The Jaccard component catches cases where embeddings differ but the facts are about the same entities.',
+      'Greedy iterative selection: first picks the top result, then repeatedly selects the candidate with the best MMR score \u2014 high relevance to query, low similarity to already-selected results.'
+    ]
+  },
+  reflection: {
+    emoji: '\u{1fa9e}',
+    title: 'Reflection Engine',
+    notes: [
+      'Background process that synthesizes raw facts into higher-order <strong>mental models</strong> (observations about entities).',
+      '<strong>Six-phase cycle</strong> (Phase 0\u20135): (0) <strong>Update Existing</strong> \u2014 check new evidence against current models. (1) <strong>Seed</strong> \u2014 generate candidate observations from recent memories. (2) <strong>Hunt</strong> \u2014 retrieve supporting/contradicting evidence. (3) <strong>Validate</strong> \u2014 extract quotes, verify against source material. (4) <strong>Compare</strong> \u2014 merge with existing models, update confidence. (5) <strong>Finalize</strong> \u2014 compute trends and persist.',
+      'Each observation gets a <strong>trend label</strong>: New, Strengthening, Stable, Weakening, or Stale \u2014 computed from evidence density over recent vs. older time windows.',
+      'Uses <code>dspy.Predict</code> (not ChainOfThought) to reduce token generation by ~30%.',
+      'Batch reflection processes entities concurrently via <code>asyncio.gather</code> \u2014 5 entities take the same wall-clock time as 1.'
+    ]
+  },
+  entity: {
+    emoji: '\u{1f50d}',
+    title: 'Entity Disambiguation',
+    notes: [
+      'Classic NLP problem: is \u201CAlex\u201D in this document the same \u201CAlex\u201D we saw last week? Solved with a <strong>weighted multi-factor scoring formula</strong>.',
+      '<strong>50% Name Similarity</strong>: PostgreSQL trigram similarity (<code>pg_trgm</code>) with a phonetic floor boost \u2014 if metaphone codes match but trigrams are low, score floors at 0.5.',
+      '<strong>30% Co-occurrence</strong>: TF-IDF-style weighting of neighboring entities. Weight = <code>1.0 / log\u2082(2 + freq)</code> \u2014 rare shared neighbors are exponentially stronger signals than common ones.',
+      '<strong>20% Temporal Proximity</strong>: exponential half-life decay (30-day default). Entities seen recently are more likely to be the same as entities mentioned now.',
+      'Intra-batch deduplication runs first (group identical names within the same document), then candidates are fetched and scored. Threshold at <strong>0.65</strong> to match; below that, a new entity is created.',
+      'On match, the entity gets an <strong>alias</strong> recorded and co-occurrence counts are updated via upsert \u2014 building the graph that future disambiguation will use.'
+    ]
+  },
+  rust: {
+    emoji: '\u{1f980}',
+    title: 'The Rust Migration: 206 Tickets in a Day',
+    notes: [
+      'Attempted a full port of the Python codebase to Rust using <strong>parallel Claude Code worktree agents</strong>.',
+      '<strong>206 tickets</strong> completed (183 parity + 23 sweep), across agents working in isolated git worktrees.',
+      'Achieved full E2E test parity: <strong>448 unit tests</strong>, 28 integration tests, 8 LLM integration tests \u2014 484 total.',
+      '<strong>What broke</strong>: the complexity of maintaining async Python idioms in Rust, especially around the DSPy/LLM integration layer and the dynamic nature of the extraction pipeline.',
+      'Key lesson: worktree-based parallel agents are powerful for mechanical translation but struggle with architectural decisions that require holistic understanding.'
+    ]
+  },
+  lineage: {
+    emoji: '\u{1f9ec}',
+    title: 'Lineage: Following the Paper Trail',
+    notes: [
+      'Full <strong>bidirectional provenance traversal</strong>: trace any entity upstream (Mental Model \u2192 Observation \u2192 Memory Unit \u2192 Document) or downstream (Document \u2192 \u2026 \u2192 Mental Model).',
+      'Uses PostgreSQL <strong>JSONB path queries</strong> to find observations referencing specific memory units \u2014 the evidence chain is embedded in the observation\u2019s JSON structure.',
+      'Recursive depth control with configurable limits per level \u2014 prevents runaway traversals on densely connected graphs.',
+      'Handles <strong>multi-vault mental models</strong>: the same entity can have different perspectives in different vaults, and lineage respects those boundaries.',
+      'Practical for <strong>debugging and auditing</strong>: \u201CWhy does my system believe X?\u201D \u2192 click through the chain from mental model back to the exact paragraph in the original document that prompted it.',
+      'Exposed in the dashboard UI as an interactive lineage pane with breadcrumb history navigation.'
+    ]
+  },
+  vault: {
+    emoji: '\u{1f3e6}',
+    title: 'Multi-Vault Knowledge Isolation',
+    notes: [
+      'Vaults scope notes, entities, and mental models into <strong>isolated namespaces</strong>.',
+      'All retrieval strategies respect vault boundaries via <code>apply_vault_filters()</code> \u2014 queries only see data from attached vaults.',
+      'Vaults can be <strong>attached/detached</strong> without reprocessing \u2014 just changes which vault IDs are in scope for reads.',
+      'Write operations target a single configured write vault; reads can span multiple vaults.',
+      'Use case: separate personal notes from work knowledge, or isolate client data in consulting contexts.'
+    ]
+  },
+  hindsight: {
+    emoji: '\u{1f4dc}',
+    title: 'From Paper to Production: Hindsight 20/20',
+    notes: [
+      '<strong>Hindsight is 20/20</strong> is an academic paper proposing a four-network memory bank: World, Experience, Opinion, and Observation. Memex adapted this into a production system.',
+      '<strong>What survived</strong>: the core TEMPR retrieval architecture (5-way parallel search + RRF fusion), the reflection loop (synthesize observations from raw facts), and the entity-centric memory graph.',
+      '<strong>What changed</strong>: the four networks became three fact types \u2014 <strong>world</strong> (static knowledge, system states), <strong>event</strong> (episodic, narrative occurrences), and <strong>observation</strong> (synthesized mental models). \u201COpinion\u201D was removed entirely.',
+      '<strong>What got thrown out</strong>: personality profiles and disposition parameters (reflection is objective, not persona-driven), the original scalar confidence system (replaced with linear confidence adjustments via contradiction detection), and the CARA reasoning agent loop.',
+      'Replaced the reference implementation\u2019s synchronous Python with modern <strong>AsyncIO + Pydantic + SQLModel</strong> on PostgreSQL+pgvector instead of the original\u2019s simpler storage.',
+      'Key lesson: academic architectures give you the \u201Cwhat,\u201D but production forces you to answer \u201Chow fast?\u201D and \u201Cat what cost?\u201D \u2014 every LLM call had to justify its token budget.'
+    ]
+  },
+  expansion: {
+    emoji: '\u{1f4d0}',
+    title: 'Multi-Query Expansion',
+    notes: [
+      'For complex queries, a single search often misses relevant results due to vocabulary mismatch.',
+      '<strong>LLM generates up to 2 query variants</strong> \u2014 rephrased versions of the original query.',
+      'Each variant runs all 5 TEMPR strategies independently.',
+      'Results are fused via RRF with <strong>2\u00D7 weight on the original query</strong> \u2014 expansions supplement but don\u2019t override user intent.',
+      'Controlled by <code>expand_query=True</code> on search calls. Trades latency for recall on hard queries.'
+    ]
+  },
+  locomo: {
+    emoji: '\u{1f9ea}',
+    title: 'LoCoMo: Evaluating Memory',
+    notes: [
+      '<strong>LoCoMo</strong> is a benchmark for long-conversation memory \u2014 tests single-hop, multi-hop, temporal, open-domain, and adversarial questions.',
+      'Memex scored <strong>0.986 accuracy</strong> on non-adversarial questions (35/36 perfect).',
+      'Total cost: <strong>$9.96 for 50 questions</strong> (~$0.20/query). Retrieval tokens are only 4.5% of total.',
+      'The agent autonomously selects retrieval paths: simple two-stage (38%), deep verification (30%), entity exploration (12%).',
+      'Adversarial failures are by design \u2014 the benchmark swaps subjects, which a search tool correctly ignores (finds facts for the person actually asked about).'
+    ]
+  },
+  atomic: {
+    emoji: '\u26A1',
+    title: 'Atomic Extraction Pipeline',
+    notes: [
+      'Ingestion is a multi-stage pipeline: parse \u2192 chunk \u2192 extract facts \u2192 extract entities \u2192 embed \u2192 store.',
+      '<strong>FileStore + MetaStore writes happen in one transaction</strong> \u2014 if any stage fails, everything rolls back.',
+      'Uses <strong>MD5 hashing</strong> for idempotency (re-ingesting identical content is a no-op) and <strong>SHA-256</strong> for block-level content hashing used in incremental diffing.',
+      'Two-phase commit for filesystem: files staged with a <code>.stage</code> suffix, DB commits, then files renamed to final paths.',
+      'Zero partial state: you never end up with facts in the DB pointing to a note that doesn\u2019t exist on disk, or vice versa.'
+    ]
+  }
+};
+
+// DOM refs
+const overlay = document.getElementById('notesOverlay');
+const panelEmoji = document.getElementById('notesPanelEmoji');
+const panelTitle = document.getElementById('notesPanelTitle');
+const panelBody = document.getElementById('notesPanelBody');
+const closeBtn = document.getElementById('notesClose');
+
+function openNotes(topic) {
+  const data = speakerNotes[topic];
+  if (!data) return;
+
+  // Mark active card
+  document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-topic="${topic}"]`)?.classList.add('active');
+
+  panelEmoji.textContent = data.emoji;
+  panelTitle.textContent = data.title;
+  panelBody.innerHTML = '<ul>' + data.notes.map(n => `<li>${n}</li>`).join('') + '</ul>';
+  overlay.classList.add('open');
+}
+
+function closeNotes() {
+  overlay.classList.remove('open');
+  document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
+}
+
+// Card clicks
+document.querySelectorAll('.item[data-topic]').forEach(card => {
+  card.addEventListener('click', () => openNotes(card.dataset.topic));
+});
+
+// Close
+closeBtn.addEventListener('click', closeNotes);
+overlay.addEventListener('click', (e) => {
+  if (e.target === overlay) closeNotes();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeNotes();
+});
+
+// Page navigation
+const pages = ['pageIntro', 'pageFeatures', 'pageMenu'];
+
+function showPage(id) {
+  pages.forEach(p => document.getElementById(p).classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+document.getElementById('btnIntroNext').addEventListener('click', () => showPage('pageFeatures'));
+document.getElementById('btnFeaturesBack').addEventListener('click', () => showPage('pageIntro'));
+document.getElementById('btnFeaturesNext').addEventListener('click', () => showPage('pageMenu'));
+</script>
+</body>
+</html>

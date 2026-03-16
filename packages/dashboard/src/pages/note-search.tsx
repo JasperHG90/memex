@@ -450,9 +450,11 @@ function NoteDetailDialog({
 
   if (!noteId) return null;
 
-  const pageIndexNodes = pageIndexData?.page_index
-    ? flattenPageIndex(pageIndexData.page_index)
+  const rawPageIndex = pageIndexData?.page_index;
+  const tocTree = rawPageIndex
+    ? (Array.isArray(rawPageIndex) ? rawPageIndex : (rawPageIndex as Record<string, unknown>).toc ?? [])
     : [];
+  const pageIndexNodes = flattenPageIndex(tocTree);
 
   const noteTitle = note?.title ?? note?.name ?? 'Note Details';
   const metadata = note?.doc_metadata ?? {};
