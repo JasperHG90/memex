@@ -366,6 +366,9 @@ ingested_at: {now}
                 reflect_after=False,
                 agent_name='user',
             )
+            contradiction_task = result.pop('contradiction_task', None)
+            if contradiction_task is not None:
+                await contradiction_task
 
             result['note_id'] = note_uuid
             result['status'] = 'success'
@@ -494,13 +497,16 @@ ingested_at: {now}
                             vault_id=target_vault_id,
                         )
 
-                        await self.memory.retain(
+                        retain_result = await self.memory.retain(
                             session=txn.db_session,
                             contents=[retain_content],
                             note_id=str(note_uuid),
                             reflect_after=False,
                             agent_name='user',
                         )
+                        contradiction_task = retain_result.pop('contradiction_task', None)
+                        if contradiction_task is not None:
+                            await contradiction_task
                         chunk_doc_ids.append(note_uuid)
 
                     results['processed_count'] += len(chunk)
