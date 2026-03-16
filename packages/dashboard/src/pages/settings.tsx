@@ -189,24 +189,12 @@ function useSetWriterVault() {
   });
 }
 
-function useToggleAttachedVault() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ vaultId, attach }: { vaultId: string; attach: boolean }) =>
-      api.post<void>(`/vaults/${vaultId}/toggle-attached?attach=${attach}`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['vaults'] });
-    },
-  });
-}
-
 function VaultActions({ vault }: { vault: VaultDTO }) {
   const writerVaultId = useVaultStore((s) => s.writerVaultId);
   const attachedVaults = useVaultStore((s) => s.attachedVaults);
   const setWriterVault = useVaultStore((s) => s.setWriterVault);
   const toggleAttachedVault = useVaultStore((s) => s.toggleAttachedVault);
   const setWriterMutation = useSetWriterVault();
-  const toggleMutation = useToggleAttachedVault();
 
   const isWriter = vault.id === writerVaultId;
   const isAttached = attachedVaults.some((v) => v.id === vault.id);
@@ -218,7 +206,6 @@ function VaultActions({ vault }: { vault: VaultDTO }) {
         disabled={isWriter}
         onCheckedChange={(checked) => {
           toggleAttachedVault(vault.id, vault.name, Boolean(checked));
-          toggleMutation.mutate({ vaultId: vault.id, attach: Boolean(checked) });
         }}
         aria-label={isWriter ? 'Writer vault is always included' : 'Include in search'}
       />

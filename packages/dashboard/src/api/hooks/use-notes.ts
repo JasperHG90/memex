@@ -54,7 +54,7 @@ export function useNotePageIndex(noteId: string | undefined) {
   return useQuery({
     queryKey: ['notes', noteId, 'page-index'],
     queryFn: () =>
-      api.get<{ note_id: string; page_index: unknown[] }>(`/notes/${noteId}/page-index`),
+      api.get<{ note_id: string; page_index: { metadata?: Record<string, unknown>; toc?: unknown[] } | unknown[] | null }>(`/notes/${noteId}/page-index`),
     enabled: !!noteId,
   });
 }

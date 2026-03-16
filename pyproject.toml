@@ -93,7 +93,6 @@ dev = [
     "ruff>=0.14.14",
     "pytest-cov>=7.0.0",
     "metaphone>=0.6",
-    "pyright>=1.1.408",
     "hypothesis>=6.151.9",
     "pytest-benchmark>=5.2.3",
     "s3fs>=2024.6.0",
