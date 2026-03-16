@@ -17,6 +17,7 @@ from memex_common.schemas import (
     ReflectionRequest,
     IngestURLRequest,
     IngestFileRequest,
+    BatchIngestRequest,
     BatchJobStatus,
     CreateVaultRequest,
     DeadLetterItemDTO,
@@ -159,6 +160,15 @@ class RemoteMemexAPI:
         if response.status_code == 202:
             return BatchJobStatus(**response.json())
         return IngestResponse(**response.json())
+
+    async def ingest_batch(
+        self, notes: list[NoteCreateDTO], vault_id: str | UUID | None = None, batch_size: int = 32
+    ) -> BatchJobStatus:
+        """Ingest a batch of notes. Returns 202 with a job_id for status tracking."""
+        request = BatchIngestRequest(notes=notes, vault_id=vault_id, batch_size=batch_size)
+        response = await self.client.post('ingestions/batch', json=request.model_dump(mode='json'))
+        response.raise_for_status()
+        return BatchJobStatus(**response.json())
 
     async def ingest_url(
         self, request: IngestURLRequest, background: bool = False
