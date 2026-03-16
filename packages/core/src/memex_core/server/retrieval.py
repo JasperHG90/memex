@@ -1,6 +1,7 @@
 """Retrieval endpoint."""
 
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends
@@ -34,6 +35,7 @@ async def search_memories(
     background_tasks: BackgroundTasks,
 ):
     try:
+        t0 = time.monotonic()
         units, resonance_task = await api.search(
             query=request.query,
             limit=request.limit,
@@ -47,10 +49,23 @@ async def search_memories(
             before=request.before,
             tags=request.tags,
         )
+        t_search = time.monotonic() - t0
 
         if resonance_task is not None:
             background_tasks.add_task(resonance_task)
 
-        return ndjson_response([build_memory_unit_dto(u, debug=request.debug) for u in units])
+        t0 = time.monotonic()
+        dtos = [build_memory_unit_dto(u, debug=request.debug) for u in units]
+        t_serialize = time.monotonic() - t0
+
+        logger.warning(
+            'PROFILE endpoint | search=%.0fms serialize=%.0fms total=%.0fms | results=%d',
+            t_search * 1000,
+            t_serialize * 1000,
+            (t_search + t_serialize) * 1000,
+            len(units),
+        )
+
+        return ndjson_response(dtos)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Retrieval failed')

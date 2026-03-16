@@ -204,7 +204,10 @@ class RetrievalEngine:
         Retrieve memories and synthesized observations using In-DB RRF.
         If a reranker is available, fetches a larger pool and re-ranks them.
         """
+        _t = time.monotonic
+
         # 1. Query Expansion (Multi-Query)
+        t0 = _t()
         queries = [request.query]
         query_weights = [2.0]  # Original query is weighted higher
 
@@ -217,9 +220,12 @@ class RetrievalEngine:
             for var in variations:
                 queries.append(var)
                 query_weights.append(1.0)
+        t_expand = _t() - t0
 
         # 2. Get Embeddings for all queries (with per-query caching)
+        t0 = _t()
         all_embeddings = await self._get_embeddings_cached(queries)
+        t_embed = _t() - t0
 
         # 3. Determine budget and limit
         token_budget = request.token_budget
@@ -235,6 +241,7 @@ class RetrievalEngine:
 
         # 3b. NLP Temporal Extraction (upstream of RRF)
         # Only extract if no explicit date filters were provided and feature is enabled.
+        t0 = _t()
         filters = dict(request.filters) if request.filters else {}
         if (
             self.retrieval_config.temporal_extraction_enabled
@@ -251,6 +258,7 @@ class RetrievalEngine:
                     temporal_range[0],
                     temporal_range[1],
                 )
+        t_temporal = _t() - t0
 
         # 4. Perform Retrieval (Fused across all queries)
         if request.vault_ids:
@@ -260,6 +268,7 @@ class RetrievalEngine:
         filters['include_stale'] = request.include_stale
 
         # Pre-compute NER entities off the event loop so graph strategies don't block
+        t0 = _t()
         if self.ner_model is not None:
             try:
                 filters['_ner_entities'] = await asyncio.to_thread(
@@ -267,6 +276,7 @@ class RetrievalEngine:
                 )
             except (ValueError, RuntimeError, OSError) as e:
                 logger.warning('NER pre-extraction failed: %s', e)
+        t_ner = _t() - t0
 
         # Thread temporal filters for strategy-level date filtering
         if request.after:
@@ -278,6 +288,7 @@ class RetrievalEngine:
 
         use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
 
+        t0 = _t()
         all_ranked_items = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
             if use_partitioned:
@@ -304,6 +315,7 @@ class RetrievalEngine:
                 )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
+        t_rrf = _t() - t0
 
         # Free embedding arrays — can be ~100KB+ and no longer needed
         del all_embeddings
@@ -318,7 +330,9 @@ class RetrievalEngine:
             return ([], None)
 
         # 6. Hydrate Objects
+        t0 = _t()
         final_results = await self._hydrate_results(session, fused_items)
+        t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
         if not request.include_superseded:
@@ -326,11 +340,13 @@ class RetrievalEngine:
             final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
         # 7. Rerank
+        t0 = _t()
         if use_reranker:
             # Rerank against original query
             final_results = await self._rerank_results(
                 request.query, final_results, min_score=request.min_score
             )
+        t_rerank = _t() - t0
 
         # 8. Position-Aware Blending
         if request.fusion_strategy == 'position_aware' and use_reranker:
@@ -340,6 +356,7 @@ class RetrievalEngine:
         final_results = self._attach_citations(final_results)
 
         # 9b. MMR diversity filtering
+        t0 = _t()
         mmr_lambda = request.mmr_lambda
         if mmr_lambda is None and self.retrieval_config:
             mmr_lambda = self.retrieval_config.mmr_lambda
@@ -373,8 +390,10 @@ class RetrievalEngine:
             for orig_pos, vunit in virtual_positions:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
+        t_mmr = _t() - t0
 
         # 10. Collect resonance update info (deferred to background)
+        t0 = _t()
         resonance_context: dict[str, Any] | None = None
         if final_results and self.queue_service:
             try:
@@ -391,6 +410,36 @@ class RetrievalEngine:
                     }
             except (ValueError, RuntimeError, OSError) as e:
                 logger.error(f'Failed to collect resonance data: {e}')
+        t_resonance = _t() - t0
+
+        logger.warning(
+            'PROFILE retrieve | expand=%.0fms embed=%.0fms temporal=%.0fms ner=%.0fms '
+            'rrf=%.0fms hydrate=%.0fms rerank=%.0fms mmr=%.0fms resonance=%.0fms '
+            'total=%.0fms | queries=%d results=%d',
+            t_expand * 1000,
+            t_embed * 1000,
+            t_temporal * 1000,
+            t_ner * 1000,
+            t_rrf * 1000,
+            t_hydrate * 1000,
+            t_rerank * 1000,
+            t_mmr * 1000,
+            t_resonance * 1000,
+            (
+                t_expand
+                + t_embed
+                + t_temporal
+                + t_ner
+                + t_rrf
+                + t_hydrate
+                + t_rerank
+                + t_mmr
+                + t_resonance
+            )
+            * 1000,
+            len(queries),
+            len(final_results),
+        )
 
         # 10b. Attach debug info to results
         if debug_ctx is not None:
