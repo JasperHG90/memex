@@ -1041,6 +1041,7 @@ class RetrievalEngine:
                 SELECT id, embedding
                 FROM memory_units
                 WHERE id = ANY(:unit_ids)
+                  AND embedding IS NOT NULL
             )
             SELECT a.id AS id_a, b.id AS id_b,
                    1 - (a.embedding <=> b.embedding) AS similarity
