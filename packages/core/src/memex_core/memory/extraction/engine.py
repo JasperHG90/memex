@@ -1093,9 +1093,13 @@ class ExtractionEngine:
         # When skip_block_hashes is given, only embed+store non-retained blocks.
         effective_skip = skip_block_hashes or set()
         block_chunk_metadata: list[ChunkMetadata] = []
+        seen_block_ids: dict[str, int] = {}  # block.id -> first block.seq
         for block in page_index_output.blocks:
             if block.id in effective_skip:
                 continue
+            if block.id in seen_block_ids:
+                continue  # duplicate content — will reuse the first block's chunk
+            seen_block_ids[block.id] = block.seq
             block_chunk_metadata.append(
                 ChunkMetadata(
                     chunk_text=block.content,
@@ -1123,7 +1127,10 @@ class ExtractionEngine:
         #   node.id -> block_hash (node_to_block_map)
         #   block_hash -> block.seq (from blocks list)
         #   block.seq -> chunk UUID (block_chunk_map)
-        block_hash_to_seq = {b.id: b.seq for b in page_index_output.blocks}
+        block_hash_to_seq: dict[str, int] = {}
+        for b in page_index_output.blocks:
+            if b.id not in block_hash_to_seq:
+                block_hash_to_seq[b.id] = b.seq
         node_hash_to_block_id: dict[str, UUID] = {}
 
         for node_id, block_hash in page_index_output.node_to_block_map.items():
