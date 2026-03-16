@@ -236,7 +236,7 @@ class MemoryEngine:
 
         # 3. Contradiction Detection — return as pending background work
         #    The caller (server route) should schedule this via FastAPI BackgroundTasks
-        #    rather than asyncio.create_task, which is unreliable under gunicorn.
+        #    rather than asyncio.create_task, which is unreliable under multi-worker servers.
         contradiction_task = None
         if self.contradiction and self._session_factory and unit_ids:
             contradiction_task = self.contradiction.detect_contradictions(

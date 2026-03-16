@@ -221,12 +221,12 @@ class PostgresMetaStoreConfig(BaseModel):
     )
 
     pool_size: int = Field(
-        default=10,
-        description='The size of the connection pool. Defaults to 10.',
+        default=20,
+        description='The size of the connection pool. Defaults to 20.',
     )
     max_overflow: int = Field(
-        default=20,
-        description='The maximum overflow size of the connection pool. Defaults to 20.',
+        default=30,
+        description='The maximum overflow size of the connection pool. Defaults to 30.',
     )
     statement_timeout_ms: int = Field(
         default=30000,

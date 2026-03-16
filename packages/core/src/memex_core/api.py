@@ -348,6 +348,7 @@ class MemexAPI:
             ner_model=self.ner_model,
             lm=self.lm,
             retrieval_config=self.config.server.memory.retrieval,
+            session_factory=self.metastore.session_maker(),
         )
 
         self._doc_search = NoteSearchEngine(
