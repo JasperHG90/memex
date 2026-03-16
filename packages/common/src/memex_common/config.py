@@ -379,8 +379,8 @@ class PageIndexTextSplitting(BaseModel):
 
     strategy: Literal['page_index'] = 'page_index'
     scan_chunk_size_tokens: int = Field(
-        default=6000,
-        description='Chunk size in tokens for LLM scanning path.',
+        default=20_000,
+        description='Max tokens per LLM scan call. Documents under this limit are scanned in one call.',
     )
     block_token_target: int = Field(
         default=2000,

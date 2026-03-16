@@ -574,7 +574,7 @@ class ExtractionEngine:
         page_index_output, pi_usage = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
-            scan_chunk_size=ts.scan_chunk_size_tokens * CHARS_PER_TOKEN,
+            max_scan_tokens=ts.scan_chunk_size_tokens,
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
@@ -855,7 +855,7 @@ class ExtractionEngine:
         page_index_output, pi_usage = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
-            scan_chunk_size=ts.scan_chunk_size_tokens * CHARS_PER_TOKEN,
+            max_scan_tokens=ts.scan_chunk_size_tokens,
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,

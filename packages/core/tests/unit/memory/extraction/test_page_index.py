@@ -1,6 +1,6 @@
 """Tests for PageIndex models, utils, and short-doc bypass."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,7 +24,7 @@ from memex_core.memory.extraction.utils import (
     hydrate_tree,
     strip_header_from_content,
 )
-from memex_core.memory.extraction.core import index_document
+from memex_core.memory.extraction.core import AsyncMarkdownPageIndex, index_document
 
 
 # ---------------------------------------------------------------------------
@@ -691,3 +691,69 @@ class TestBuildPageIndexWithMetadataTotalTokens:
 
         result = build_page_index_with_metadata([node], {'title': 'Test'})
         assert result['metadata']['total_tokens'] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestScanDocumentParallel — token-based chunking logic
+# ---------------------------------------------------------------------------
+
+
+class TestScanDocumentParallel:
+    """Tests for _scan_document_parallel token-based chunking."""
+
+    def _make_indexer(self) -> AsyncMarkdownPageIndex:
+        mock_lm = MagicMock()
+        return AsyncMarkdownPageIndex(lm=mock_lm)
+
+    @pytest.mark.asyncio
+    async def test_small_doc_sends_single_call(self) -> None:
+        """A short document should be scanned in a single LLM call."""
+        indexer = self._make_indexer()
+        short_text = 'Hello world. ' * 50  # ~100 tokens
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            result = await indexer._scan_document_parallel(short_text, max_scan_tokens=20_000)
+
+        assert result == []
+        mock_chunk.assert_called_once_with(short_text, '', 0)
+
+    @pytest.mark.asyncio
+    async def test_large_doc_chunks_by_tokens(self) -> None:
+        """A large document should be split into multiple chunks."""
+        indexer = self._make_indexer()
+        large_text = 'word ' * 50_000  # ~50K tokens
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            await indexer._scan_document_parallel(large_text, max_scan_tokens=20_000)
+
+        assert mock_chunk.call_count >= 3
+        # First chunk starts at offset 0
+        first_call_offset = mock_chunk.call_args_list[0][0][2]
+        assert first_call_offset == 0
+        # Last chunk should reach near the end of the document
+        last_call_args = mock_chunk.call_args_list[-1][0]
+        last_offset = last_call_args[2]
+        last_chunk = last_call_args[0]
+        assert last_offset + len(last_chunk) >= len(large_text) - 200
+
+    @pytest.mark.asyncio
+    async def test_boundary_doc_exactly_at_limit(self) -> None:
+        """A document exactly at the token limit should be sent as a single call."""
+        indexer = self._make_indexer()
+        # Build text that is exactly at the limit
+        # estimate_token_count uses tiktoken; we pick a size and measure
+        boundary_text = 'word ' * 20_000  # should be ~20K tokens
+
+        token_count = estimate_token_count(boundary_text)
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            await indexer._scan_document_parallel(boundary_text, max_scan_tokens=token_count)
+
+        # Boundary is <= so exactly at limit should be a single call
+        mock_chunk.assert_called_once_with(boundary_text, '', 0)

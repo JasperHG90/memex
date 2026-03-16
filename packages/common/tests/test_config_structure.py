@@ -87,7 +87,7 @@ def test_default_model_sub_override_preserved():
 def test_token_fields_on_page_index_text_splitting():
     """PageIndexTextSplitting has token-based fields with reasonable defaults."""
     ts = PageIndexTextSplitting()
-    assert ts.scan_chunk_size_tokens == 6000
+    assert ts.scan_chunk_size_tokens == 20_000
     assert ts.short_doc_threshold_tokens == 500
     assert ts.max_node_length_tokens == 1250
     assert ts.block_token_target == 2000
