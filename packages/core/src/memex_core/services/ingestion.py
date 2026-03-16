@@ -184,9 +184,12 @@ publish_date: {extracted.metadata.get('date')}
         path = plb.Path(file_path)
 
         if path.is_dir() or path.suffix.lower() == '.md':
+            target_vault_id = await self._vaults.resolve_vault_identifier(
+                vault_id or self.config.server.default_active_vault
+            )
             logger.info(f'Ingesting {path} as a native NoteInput.')
             note = await NoteInput.from_file(path)
-            return await self.ingest(note)
+            return await self.ingest(note, vault_id=target_vault_id)
 
         try:
             extracted = await self._file_processor.extract(path)

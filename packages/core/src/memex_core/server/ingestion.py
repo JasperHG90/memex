@@ -260,7 +260,9 @@ async def ingest_upload(
                 )
 
             try:
-                result = await api.ingest_from_file(tmp_path)
+                result = await api.ingest_from_file(
+                    tmp_path, vault_id=parsed_metadata.get('vault_id')
+                )
                 _schedule_contradiction(background_tasks, result)
                 return IngestResponse(**result)
             finally:
