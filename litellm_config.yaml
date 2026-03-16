@@ -8,7 +8,7 @@ model_list:
     litellm_params:
       model: "ollama_chat/gemma3:12b"
       api_base: "http://100.90.52.188:11434"
-      num_ctx: 8192
+      num_ctx: 6144
     model_info:
       description: "Tier 1: Mac Ollama via Meshnet"
 
@@ -16,7 +16,7 @@ model_list:
     litellm_params:
       model: "ollama_chat/gemma3:12b"
       api_base: "http://host.docker.internal:11434"
-      num_ctx: 8192
+      num_ctx: 6144
     model_info:
       description: "Tier 2: Windows Ollama (local)"
 
