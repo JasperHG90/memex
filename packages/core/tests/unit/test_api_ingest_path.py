@@ -19,7 +19,8 @@ async def test_ingest_from_file_markdown(api, tmp_path):
             api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
         ) as mock_resolve,
     ):
-        mock_resolve.return_value = uuid4()
+        resolved_vault = uuid4()
+        mock_resolve.return_value = resolved_vault
         mock_note = MagicMock(spec=NoteInput)
         mock_from_file.return_value = mock_note
         mock_ingest.return_value = {'status': 'success'}
@@ -28,7 +29,7 @@ async def test_ingest_from_file_markdown(api, tmp_path):
 
         assert result['status'] == 'success'
         mock_from_file.assert_called_once_with(md_file)
-        mock_ingest.assert_called_once_with(mock_note)
+        mock_ingest.assert_called_once_with(mock_note, vault_id=resolved_vault)
 
 
 @pytest.mark.asyncio
@@ -41,7 +42,12 @@ async def test_ingest_from_file_directory(api, tmp_path):
     with (
         patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest,
         patch.object(NoteInput, 'from_file', new_callable=AsyncMock) as mock_from_file,
+        patch.object(
+            api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
+        ) as mock_resolve,
     ):
+        resolved_vault = uuid4()
+        mock_resolve.return_value = resolved_vault
         mock_note = MagicMock(spec=NoteInput)
         mock_from_file.return_value = mock_note
         mock_ingest.return_value = {'status': 'success'}
@@ -50,7 +56,7 @@ async def test_ingest_from_file_directory(api, tmp_path):
 
         assert result['status'] == 'success'
         mock_from_file.assert_called_once_with(note_dir)
-        mock_ingest.assert_called_once_with(mock_note)
+        mock_ingest.assert_called_once_with(mock_note, vault_id=resolved_vault)
 
 
 @pytest.mark.asyncio
