@@ -198,3 +198,90 @@ async def test_persist_page_index_nodes_deduplicates_identical_content(extractor
     assert captured[0]['title'] == 'Section A'  # first occurrence kept
     assert captured[0]['seq'] == 0
     assert captured[0]['node_hash'] == content_hash_md5(duplicate_content)
+
+
+@pytest.mark.asyncio
+async def test_persist_page_index_skips_duplicate_blocks(extractor, mock_session):
+    """Blocks with duplicate id (content hash) should be deduped — only first stored."""
+    from memex_core.memory.extraction.models import (
+        TOCNode,
+        PageIndexOutput,
+        PageIndexBlock,
+        content_hash_md5,
+    )
+
+    content = 'Repeated section content across parts.'
+    block_hash = content_hash_md5(content)
+
+    node_a = TOCNode(
+        reasoning='r',
+        original_header_id=1,
+        title='Part I',
+        level=1,
+        content=content,
+        token_estimate=20,
+    )
+
+    block_0 = PageIndexBlock(
+        seq=0,
+        content=content,
+        id=block_hash,
+        token_count=20,
+        start_index=0,
+        end_index=0,
+        titles_included=['Part I'],
+    )
+    block_1 = PageIndexBlock(
+        seq=1,
+        content=content,
+        id=block_hash,
+        token_count=20,
+        start_index=0,
+        end_index=0,
+        titles_included=['Part I'],
+    )  # duplicate
+
+    pio = PageIndexOutput(
+        toc=[node_a],
+        blocks=[block_0, block_1],
+        node_to_block_map={},
+    )
+
+    captured_chunks: list[list[ChunkMetadata]] = []
+
+    async def fake_store_chunks(session, note_id, chunks, vault_id=None):
+        captured_chunks.append(chunks)
+        return {c.chunk_index: str(uuid4()) for c in chunks}
+
+    with (
+        patch(
+            'memex_core.memory.extraction.engine.storage.insert_nodes_batch',
+            new_callable=AsyncMock,
+            return_value=[str(uuid4())],
+        ),
+        patch(
+            'memex_core.memory.extraction.engine.storage.store_chunks_batch',
+            side_effect=fake_store_chunks,
+        ),
+        patch(
+            'memex_core.memory.extraction.engine.embedding_processor.generate_embeddings_batch',
+            new_callable=AsyncMock,
+            return_value=[[0.1] * 384],
+        ),
+        patch(
+            'memex_core.memory.extraction.engine.storage.backfill_node_block_ids',
+            new_callable=AsyncMock,
+        ),
+    ):
+        await extractor._persist_page_index_nodes_and_blocks(
+            session=mock_session,
+            page_index_output=pio,
+            note_id=str(uuid4()),
+            vault_id=uuid4(),
+        )
+
+    assert len(captured_chunks) == 1
+    chunks = captured_chunks[0]
+    assert len(chunks) == 1  # only first block stored
+    assert chunks[0].chunk_index == 0
+    assert chunks[0].content_hash == block_hash

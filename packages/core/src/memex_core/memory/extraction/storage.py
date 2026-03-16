@@ -223,6 +223,14 @@ async def store_chunks_batch(
         }
         insert_data.append(row)
 
+    # Deduplicate by content_hash — keep first occurrence to avoid
+    # "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    seen_hashes: dict[str, int] = {}
+    for idx, row in enumerate(insert_data):
+        if row['content_hash'] not in seen_hashes:
+            seen_hashes[row['content_hash']] = idx
+    insert_data = [insert_data[i] for i in sorted(seen_hashes.values())]
+
     stmt = (
         pg_insert(Chunk)
         .values(insert_data)

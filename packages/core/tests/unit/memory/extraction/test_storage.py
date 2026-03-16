@@ -216,3 +216,47 @@ async def test_store_chunks_batch(mock_session):
 
         assert inserted_rows[1]['text'] == 'Chunk 2'
         assert inserted_rows[1]['chunk_index'] == 1
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_batch_deduplicates_content_hash(mock_session):
+    """Duplicate content_hash in a single batch should be deduped (first occurrence wins)."""
+    doc_id = str(uuid4())
+    chunks = [
+        ChunkMetadata(
+            chunk_text='Chunk A', chunk_index=0, fact_count=0, content_index=0, content_hash='aaa'
+        ),
+        ChunkMetadata(
+            chunk_text='Chunk B', chunk_index=1, fact_count=0, content_index=0, content_hash='bbb'
+        ),
+        ChunkMetadata(
+            chunk_text='Chunk A dup',
+            chunk_index=2,
+            fact_count=0,
+            content_index=0,
+            content_hash='aaa',
+        ),
+    ]
+
+    id1 = uuid4()
+    id2 = uuid4()
+
+    with patch('memex_core.memory.extraction.storage.pg_insert') as mock_insert:
+        mock_stmt = MagicMock()
+        mock_insert.return_value.values.return_value.returning.return_value = mock_stmt
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [(id1, 0), (id2, 1)]
+        mock_session.exec.return_value = mock_result
+
+        result_map = await storage.store_chunks_batch(mock_session, doc_id, chunks)
+
+        assert len(result_map) == 2
+
+        # Verify only 2 rows passed to INSERT (deduped by content_hash)
+        inserted_rows = mock_insert.return_value.values.call_args[0][0]
+        assert len(inserted_rows) == 2
+        assert inserted_rows[0]['chunk_index'] == 0  # first occurrence of 'aaa'
+        assert inserted_rows[0]['content_hash'] == 'aaa'
+        assert inserted_rows[1]['chunk_index'] == 1
+        assert inserted_rows[1]['content_hash'] == 'bbb'

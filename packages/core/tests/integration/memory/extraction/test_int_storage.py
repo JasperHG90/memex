@@ -305,3 +305,57 @@ async def test_int_chunk_index_update_on_reingest(session):
     assert db_chunk_b.chunk_index == 0  # B moved to index 0
     assert db_chunk_a.status == ContentStatus.ACTIVE
     assert db_chunk_b.status == ContentStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_int_store_chunks_batch_deduplicates_same_content(session):
+    """Batch with duplicate content_hash should succeed and store only unique chunks."""
+    from memex_core.memory.extraction.core import content_hash
+    from sqlmodel import select
+
+    # Arrange
+    doc_id = uuid4()
+    doc = Note(id=doc_id, original_text='Dedup Test Doc')
+    session.add(doc)
+    await session.commit()
+
+    shared_text = f'Identical content {uuid4()}'
+    shared_hash = content_hash(shared_text)
+
+    chunks = [
+        ChunkMetadata(
+            chunk_text=shared_text,
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash=shared_hash,
+        ),
+        ChunkMetadata(
+            chunk_text=f'Unique content {uuid4()}',
+            chunk_index=1,
+            fact_count=0,
+            content_index=0,
+            content_hash=content_hash(f'unique-{uuid4()}'),
+        ),
+        ChunkMetadata(
+            chunk_text=shared_text,
+            chunk_index=2,
+            fact_count=0,
+            content_index=0,
+            content_hash=shared_hash,  # duplicate of chunk 0
+        ),
+    ]
+
+    # Act — should not raise CardinalityViolationError
+    chunk_map = await storage.store_chunks_batch(session, str(doc_id), chunks)
+
+    # Assert: only 2 unique chunks stored
+    assert len(chunk_map) == 2
+    assert 0 in chunk_map
+    assert 1 in chunk_map
+
+    # Verify DB
+    session.expire_all()
+    result = await session.exec(select(Chunk).where(Chunk.note_id == doc_id))
+    db_chunks = result.all()
+    assert len(db_chunks) == 2
