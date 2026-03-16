@@ -11,10 +11,11 @@ COPY packages/common/pyproject.toml packages/common/pyproject.toml
 COPY packages/core/pyproject.toml   packages/core/pyproject.toml
 COPY packages/cli/pyproject.toml    packages/cli/pyproject.toml
 COPY packages/mcp/pyproject.toml    packages/mcp/pyproject.toml
+COPY packages/eval/pyproject.toml   packages/eval/pyproject.toml
 # dummy READMEs so hatchling doesn't fail
-RUN mkdir -p packages/common packages/core packages/cli packages/mcp \
+RUN mkdir -p packages/common packages/core packages/cli packages/mcp packages/eval \
     && touch packages/common/README.md packages/core/README.md \
-             packages/cli/README.md packages/mcp/README.md
+             packages/cli/README.md packages/mcp/README.md packages/eval/README.md
 
 # 1b — install third-party deps only (cached until lock changes)
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -25,6 +26,7 @@ COPY packages/common/src packages/common/src
 COPY packages/core/src   packages/core/src
 COPY packages/cli/src    packages/cli/src
 COPY packages/mcp/src    packages/mcp/src
+COPY packages/eval/src   packages/eval/src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
