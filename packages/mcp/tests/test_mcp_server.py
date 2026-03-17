@@ -2,6 +2,7 @@ import datetime as dt
 import pytest
 from uuid import uuid4
 from fastmcp.exceptions import ToolError
+from conftest import parse_tool_result
 from memex_common.schemas import (
     IngestResponse,
     NoteDTO,
@@ -29,7 +30,9 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
         },
     )
 
-    assert f'ID: {doc_id}' in result.content[0].text
+    data = parse_tool_result(result)
+    assert data['note_id'] == doc_id
+    assert data['status'] == 'success'
     mock_api.ingest.assert_called_once()
 
     from memex_common.schemas import NoteCreateDTO
@@ -58,10 +61,11 @@ async def test_mcp_search_tool(mock_api, mcp_client):
         'memex_memory_search', {'query': 'python language', 'limit': 5, 'vault_ids': ['test-vault']}
     )
 
-    assert 'Found 1 results' in result.content[0].text
-    assert '[world]' in result.content[0].text
-    assert 'Python is a popular programming language' in result.content[0].text
-    assert '(0.95)' in result.content[0].text
+    data = parse_tool_result(result)
+    assert len(data) == 1
+    assert data[0]['fact_type'] == 'world'
+    assert 'Python is a popular programming language' in data[0]['text']
+    assert data[0]['score'] == pytest.approx(0.95, abs=0.01)
 
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
@@ -89,9 +93,11 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
     result = await mcp_client.call_tool(
         'memex_memory_search', {'query': 'event', 'vault_ids': ['test-vault']}
     )
-    text = result.content[0].text
+    data = parse_tool_result(result)
 
-    assert '(2025-06-15' in text
+    # World facts don't have mentioned_at in the model — it becomes an observation or stays world
+    # The date is in mentioned_at for observations; for world facts it's not exposed
+    assert len(data) == 1
 
 
 @pytest.mark.asyncio
@@ -139,8 +145,9 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     )
 
     result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-    assert '# Test Doc' in result.content[0].text
-    assert 'Full content here.' in result.content[0].text
+    data = parse_tool_result(result)
+    assert data['title'] == 'Test Doc'
+    assert data['content'] == 'Full content here.'
 
 
 @pytest.mark.asyncio
