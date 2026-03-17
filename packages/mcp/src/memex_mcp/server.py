@@ -16,7 +16,9 @@ from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.utilities.types import Image, Audio, File
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.logging import configure_logging
-from pydantic import Field
+import json
+
+from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_config
 from memex_mcp.models import (
@@ -55,8 +57,48 @@ from memex_common.schemas import (
 )
 
 
+def _coerce_list(v: Any) -> Any:
+    """Coerce a stringified JSON array back to a list."""
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return v
+
+
+def _coerce_bool(v: Any) -> Any:
+    """Coerce a stringified bool back to a bool."""
+    if isinstance(v, str):
+        low = v.lower()
+        if low in ('true', '1'):
+            return True
+        if low in ('false', '0'):
+            return False
+    return v
+
+
+def _coerce_int(v: Any) -> Any:
+    """Coerce a stringified int back to an int."""
+    if isinstance(v, str):
+        try:
+            return int(v)
+        except ValueError:
+            pass
+    return v
+
+
 def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     """Validate vault_ids is a real list, not a stringified JSON array."""
+    if isinstance(vault_ids, str):
+        try:
+            parsed = json.loads(vault_ids)
+            if isinstance(parsed, list):
+                vault_ids = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
     if not isinstance(vault_ids, list):
         raise ToolError(
             f'vault_ids must be a list of strings, got {type(vault_ids).__name__}. '
@@ -234,6 +276,7 @@ async def memex_read_note(
     note_id: Annotated[str, Field(description='Note UUID.')],
     force: Annotated[
         bool,
+        BeforeValidator(_coerce_bool),
         Field(
             description='Override the 500-token limit and read the full note regardless of size.'
         ),
@@ -400,7 +443,9 @@ async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | 
 )
 async def memex_get_resources(
     ctx: Context,
-    paths: Annotated[list[str], Field(description='Resource path(s).')],
+    paths: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='Resource path(s).')
+    ],
     vault_id: Annotated[
         str | None,
         Field(description='Vault UUID or name. Omit to use config defaults.'),
@@ -531,6 +576,7 @@ async def memex_add_note(
     ],
     tags: Annotated[
         list[str],
+        BeforeValidator(_coerce_list),
         Field(description='Tags for retrieval.'),
     ],
     vault_id: Annotated[
@@ -539,6 +585,7 @@ async def memex_add_note(
     ] = None,
     supporting_files: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             default=None,
             description='Absolute paths to supporting files.',
@@ -553,6 +600,7 @@ async def memex_add_note(
     ] = None,
     background: Annotated[
         bool,
+        BeforeValidator(_coerce_bool),
         Field(default=False, description='Queue ingestion in background.'),
     ] = False,
 ) -> McpAddNoteResult:
@@ -712,22 +760,26 @@ async def memex_memory_search(
     query: Annotated[str, Field(description='Search query.')],
     vault_ids: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             description='Vault UUIDs or names. Omit to use config defaults.',
         ),
     ] = None,
     limit: Annotated[
         int,
+        BeforeValidator(_coerce_int),
         Field(description='Max results. Ignored when token_budget is set.'),
     ] = 10,
     token_budget: Annotated[
         int | None,
+        BeforeValidator(_coerce_int),
         Field(
             description='Token budget. When set, overrides limit — packs results greedily to budget.',
         ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             default=None,
             description='Strategies: semantic, keyword, graph, temporal, mental_model. Default: all.',
@@ -735,6 +787,7 @@ async def memex_memory_search(
     ] = None,
     include_superseded: Annotated[
         bool,
+        BeforeValidator(_coerce_bool),
         Field(default=False, description='Include superseded (low-confidence) memory units.'),
     ] = False,
     after: Annotated[
@@ -749,6 +802,7 @@ async def memex_memory_search(
     ] = None,
     tags: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(default=None, description='Only results from notes with ALL of these tags.'),
     ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
@@ -817,14 +871,20 @@ async def memex_note_search(
     query: Annotated[str, Field(description='Search query.')],
     vault_ids: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             description='Vault UUIDs or names. Omit to use config defaults.',
         ),
     ] = None,
-    limit: Annotated[int, Field(description='Max notes to return.')] = 5,
-    expand_query: Annotated[bool, Field(description='LLM-based multi-query expansion.')] = False,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max notes to return.')
+    ] = 5,
+    expand_query: Annotated[
+        bool, BeforeValidator(_coerce_bool), Field(description='LLM-based multi-query expansion.')
+    ] = False,
     strategies: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             default=None,
             description='Retrieval strategies to use: semantic, keyword, graph, temporal. If None, all are used.',
@@ -840,6 +900,7 @@ async def memex_note_search(
     ] = None,
     tags: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(default=None, description='Only notes with ALL of these tags.'),
     ] = None,
 ) -> list[McpNoteSearchResult]:
@@ -1003,9 +1064,12 @@ async def _get_single_page_index(
 )
 async def memex_get_page_indices(
     ctx: Context,
-    note_ids: Annotated[list[str], Field(description='List of Note UUIDs.')],
+    note_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of Note UUIDs.')
+    ],
     depth: Annotated[
         int | None,
+        BeforeValidator(_coerce_int),
         Field(
             default=None,
             description='Detail level: 0=top-level overview (H1+H2), 1+=full tree.',
@@ -1065,7 +1129,9 @@ async def memex_get_page_indices(
 )
 async def memex_get_notes_metadata(
     ctx: Context,
-    note_ids: Annotated[list[str], Field(description='List of Note UUIDs.')],
+    note_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of Note UUIDs.')
+    ],
 ) -> list[McpNoteMetadata]:
     """Get metadata for one or more notes."""
     try:
@@ -1134,7 +1200,9 @@ async def memex_get_notes_metadata(
 )
 async def memex_get_nodes(
     ctx: Context,
-    node_ids: Annotated[list[str], Field(description='List of Node UUIDs.')],
+    node_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of Node UUIDs.')
+    ],
 ) -> list[McpNode]:
     """Retrieve the full text content of one or more note nodes."""
     try:
@@ -1243,7 +1311,9 @@ async def memex_list_notes(
             description='Only notes on/before this date (ISO 8601, e.g. 2026-12-31).',
         ),
     ] = None,
-    limit: Annotated[int, Field(description='Max notes to return.')] = 50,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max notes to return.')
+    ] = 50,
 ) -> list[McpNote]:
     """List notes with optional date filters."""
     from datetime import datetime as _dt
@@ -1301,9 +1371,12 @@ async def memex_list_notes(
 )
 async def memex_recent_notes(
     ctx: Context,
-    limit: Annotated[int, Field(description='Max notes to return.')] = 20,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max notes to return.')
+    ] = 20,
     vault_ids: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             description='Vault UUIDs or names. Omit for all vaults.',
         ),
@@ -1395,7 +1468,9 @@ async def memex_list_entities(
     query: Annotated[
         str | None, Field(default=None, description='Search term to filter by name.')
     ] = None,
-    limit: Annotated[int, Field(description='Max entities to return.')] = 20,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max entities to return.')
+    ] = 20,
     entity_type: Annotated[
         str | None,
         Field(
@@ -1457,7 +1532,9 @@ async def memex_list_entities(
 )
 async def memex_get_entities(
     ctx: Context,
-    entity_ids: Annotated[list[str], Field(description='List of Entity UUIDs.')],
+    entity_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of Entity UUIDs.')
+    ],
 ) -> list[McpEntity]:
     """Get details for one or more entities."""
     try:
@@ -1526,7 +1603,9 @@ async def memex_get_entities(
 async def memex_get_entity_mentions(
     ctx: Context,
     entity_id: Annotated[str, Field(description='Entity UUID.')],
-    limit: Annotated[int, Field(description='Max mentions to return.')] = 10,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max mentions to return.')
+    ] = 10,
 ) -> list[McpEntityMention]:
     """Get memory units mentioning an entity."""
     try:
@@ -1578,7 +1657,9 @@ async def memex_get_entity_mentions(
 async def memex_get_entity_cooccurrences(
     ctx: Context,
     entity_id: Annotated[str, Field(description='Entity UUID.')],
-    limit: Annotated[int, Field(description='Max co-occurring entities to return.')] = 10,
+    limit: Annotated[
+        int, BeforeValidator(_coerce_int), Field(description='Max co-occurring entities to return.')
+    ] = 10,
 ) -> list[McpCooccurrence]:
     """Get co-occurring entities."""
     try:
@@ -1630,7 +1711,9 @@ async def memex_get_entity_cooccurrences(
 )
 async def memex_get_memory_units(
     ctx: Context,
-    unit_ids: Annotated[list[str], Field(description='List of memory unit UUIDs.')],
+    unit_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of memory unit UUIDs.')
+    ],
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Retrieve multiple memory units with their contradiction context."""
     try:
@@ -1673,12 +1756,13 @@ async def memex_find_note(
     query: Annotated[str, Field(description='Title search query (partial or fuzzy match).')],
     vault_ids: Annotated[
         list[str] | None,
+        BeforeValidator(_coerce_list),
         Field(
             default=None,
             description="Vault UUIDs or names to search in, e.g. ['rituals']. None = all vaults.",
         ),
     ] = None,
-    limit: Annotated[int, Field(description='Max results.')] = 5,
+    limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
 ) -> list[McpFindResult]:
     """Find notes by approximate title match."""
     try:
@@ -1831,7 +1915,7 @@ async def memex_kv_search(
             description='Vault UUID or name. None = search global entries only.',
         ),
     ] = None,
-    limit: Annotated[int, Field(description='Max results.')] = 5,
+    limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
 ) -> list[McpKVEntry]:
     """Semantic search over KV store entries."""
     try:
