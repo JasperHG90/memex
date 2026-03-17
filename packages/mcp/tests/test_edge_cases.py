@@ -4,6 +4,7 @@ and malformed input that happy-path tests miss."""
 import datetime as dt
 
 import pytest
+from conftest import parse_tool_result
 from fastmcp.exceptions import ToolError
 from uuid import uuid4, UUID
 
@@ -26,12 +27,13 @@ class TestGetNodesEdgeCases:
     """Edge cases for the batch node retrieval tool."""
 
     @pytest.mark.asyncio
-    async def test_empty_list_returns_no_nodes_message(self, mock_api, mcp_client):
-        """Empty node_ids should return a no-result message, not crash."""
+    async def test_empty_list_returns_empty(self, mock_api, mcp_client):
+        """Empty node_ids should return an empty list, not crash."""
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': []})
-        assert 'No nodes found' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_duplicate_ids_returned_twice(self, mock_api, mcp_client):
@@ -51,12 +53,12 @@ class TestGetNodesEdgeCases:
         mock_api.get_nodes.return_value = [node]
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid), str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # Node is found, no error for the duplicate
-        assert 'Dup Section' in text
-        # The duplicate ID should NOT produce a not-found error since it matched
-        assert 'not found' not in text
+        # Node is found, returned in the list
+        assert any(n['title'] == 'Dup Section' for n in parsed)
+        # No errors — duplicates are passed through
+        assert len(parsed) == 1
 
     @pytest.mark.asyncio
     async def test_api_exception_falls_back_to_individual(self, mock_api, mcp_client):
@@ -77,26 +79,26 @@ class TestGetNodesEdgeCases:
         mock_api.get_node.return_value = node
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Fallback Node' in text
+        assert any(n['title'] == 'Fallback Node' for n in parsed)
         mock_api.get_node.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_both_batch_and_individual_fail(self, mock_api, mcp_client):
-        """If both batch and individual lookups fail, report errors."""
+        """If both batch and individual lookups fail, return empty list (errors silently dropped)."""
         nid = uuid4()
         mock_api.get_nodes.side_effect = RuntimeError('batch down')
         mock_api.get_node.side_effect = RuntimeError('also down')
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'also down' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_mixed_valid_and_invalid_uuids(self, mock_api, mcp_client):
-        """Mix of valid and invalid UUIDs: valid ones should be fetched, invalid reported."""
+        """Mix of valid and invalid UUIDs: valid ones fetched, invalid silently dropped."""
         nid = uuid4()
         node = NodeDTO(
             id=nid,
@@ -114,29 +116,27 @@ class TestGetNodesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_nodes', {'node_ids': [str(nid), 'garbage-id']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Found' in text
-        assert 'Invalid UUID: garbage-id' in text
+        assert any(n['title'] == 'Found' for n in parsed)
+        # Invalid UUID is silently dropped — only valid nodes returned
+        assert len(parsed) == 1
 
     @pytest.mark.asyncio
     async def test_all_ids_not_found(self, mock_api, mcp_client):
-        """When all valid UUIDs are not found, output should show errors for all."""
+        """When all valid UUIDs are not found, return empty list (silently dropped)."""
         nid1 = uuid4()
         nid2 = uuid4()
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid1), str(nid2)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert str(nid1) in text
-        assert str(nid2) in text
-        assert 'not found' in text
-        assert 'child node IDs' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
-    async def test_partial_success_shows_hint_for_missing(self, mock_api, mcp_client):
-        """When some nodes found and some not, show content + helpful hint."""
+    async def test_partial_success_returns_only_found(self, mock_api, mcp_client):
+        """When some nodes found and some not, return only found nodes."""
         found_id = uuid4()
         missing_id = uuid4()
         mock_api.get_nodes.return_value = [
@@ -157,15 +157,14 @@ class TestGetNodesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_nodes', {'node_ids': [str(found_id), str(missing_id)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # Should include the found node's content
-        assert 'Found Section' in text
-        assert 'Content here.' in text
-        # Should include helpful hint about missing, not a harsh error
-        assert str(missing_id) in text
-        assert 'parent sections' in text
-        assert 'Errors' not in text  # not in the old error block format
+        # Should include the found node
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Found Section'
+        assert parsed[0]['text'] == 'Content here.'
+        # Missing node is silently dropped — no error hints
+        assert str(missing_id) not in str(parsed)
 
     @pytest.mark.asyncio
     async def test_hash_matched_node_not_reported_missing(self, mock_api, mcp_client):
@@ -197,13 +196,11 @@ class TestGetNodesEdgeCases:
         ]
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [hash_hex]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Hash-Matched Section' in text
-        assert 'Found via hash.' in text
-        # Must NOT report the hash ID as "not found"
-        assert 'not found' not in text
-        assert 'parent sections' not in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Hash-Matched Section'
+        assert parsed[0]['text'] == 'Found via hash.'
 
     @pytest.mark.asyncio
     async def test_hash_id_mixed_with_uuid_id(self, mock_api, mcp_client):
@@ -241,17 +238,16 @@ class TestGetNodesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_nodes', {'node_ids': [hash_hex, str(uuid_node_id)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Via Hash' in text
-        assert 'Via UUID' in text
-        assert 'not found' not in text
+        assert len(parsed) == 2
+        titles = {n['title'] for n in parsed}
+        assert 'Via Hash' in titles
+        assert 'Via UUID' in titles
 
     @pytest.mark.asyncio
-    async def test_hash_matched_plus_missing_shows_hint_only_for_missing(
-        self, mock_api, mcp_client
-    ):
-        """Hash-matched node OK, truly missing node gets the hint."""
+    async def test_hash_matched_plus_missing_returns_only_found(self, mock_api, mcp_client):
+        """Hash-matched node returned, truly missing node silently dropped."""
         hash_hex = 'abcdef0123456789abcdef0123456789'
         missing_id = uuid4()
 
@@ -273,52 +269,39 @@ class TestGetNodesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_nodes', {'node_ids': [hash_hex, str(missing_id)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Found By Hash' in text
-        # Only the truly missing ID should appear in the hint
-        assert str(missing_id) in text
-        assert (
-            hash_hex not in text.split('not found')[0].split('**Note:**')[-1]
-            if '**Note:**' in text
-            else True
-        )
-        assert 'parent sections' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Found By Hash'
+        # Missing node silently dropped — no hint or error
+        assert str(missing_id) not in str(parsed)
 
     @pytest.mark.asyncio
-    async def test_more_than_five_missing_truncated(self, mock_api, mcp_client):
-        """When >5 IDs are not found, output truncates with '...'."""
+    async def test_many_missing_returns_empty(self, mock_api, mcp_client):
+        """When many IDs are not found, return empty list (silently dropped)."""
         missing_ids = [uuid4() for _ in range(7)]
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool(
             'memex_get_nodes', {'node_ids': [str(m) for m in missing_ids]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '7 node ID(s) not found' in text
-        assert '...' in text
-        # Only first 5 IDs should be listed
-        for mid in missing_ids[:5]:
-            assert str(mid) in text
-        for mid in missing_ids[5:]:
-            assert str(mid) not in text
+        assert parsed == []
 
     @pytest.mark.asyncio
-    async def test_not_found_hint_not_in_errors_block(self, mock_api, mcp_client):
-        """Not-found hint should be a **Note:** block, not an ### Errors block."""
+    async def test_not_found_returns_empty_list(self, mock_api, mcp_client):
+        """Not-found nodes are silently dropped — empty list, no error blocks."""
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(uuid4())]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '**Note:**' in text
-        assert 'memex_get_page_indices' in text
-        assert '### Errors' not in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_node_with_empty_text(self, mock_api, mcp_client):
-        """Node with text=None or text='' should show placeholder."""
+        """Node with text='' should be returned with empty text field."""
         nid = uuid4()
         node = NodeDTO(
             id=nid,
@@ -334,9 +317,11 @@ class TestGetNodesEdgeCases:
         mock_api.get_nodes.return_value = [node]
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'No text content' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Empty Section'
+        assert parsed[0]['text'] == ''
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -349,13 +334,14 @@ class TestGetNotesMetadataEdgeCases:
 
     @pytest.mark.asyncio
     async def test_empty_list(self, mock_api, mcp_client):
-        """Empty note_ids list should return a graceful message."""
+        """Empty note_ids list should return an empty list."""
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': []})
-        assert 'No metadata found' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_all_lookups_fail(self, mock_api, mcp_client):
-        """When both batch and individual lookups fail, output should report all errors."""
+        """When both batch and individual lookups fail, return empty list (errors silently dropped)."""
         nid1 = uuid4()
         nid2 = uuid4()
         mock_api.get_notes_metadata.side_effect = RuntimeError('batch down')
@@ -364,27 +350,25 @@ class TestGetNotesMetadataEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_notes_metadata', {'note_ids': [str(nid1), str(nid2)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Errors' in text
-        assert str(nid1) in text
-        assert str(nid2) in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_metadata_returns_none(self, mock_api, mcp_client):
-        """When batch returns empty for a note, report it."""
+        """When batch returns empty for a note, return empty list."""
         nid = uuid4()
         # Batch returns empty — note not found in batch results
         mock_api.get_notes_metadata.return_value = []
 
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'no metadata available' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_mixed_valid_and_invalid_uuids(self, mock_api, mcp_client):
-        """Valid UUIDs proceed; invalid ones are reported in errors."""
+        """Valid UUIDs proceed; invalid ones are silently dropped."""
         nid = uuid4()
         mock_api.get_notes_metadata.return_value = [
             {'note_id': str(nid), 'title': 'OK Note', 'total_tokens': 100, 'tags': []},
@@ -393,10 +377,10 @@ class TestGetNotesMetadataEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_notes_metadata', {'note_ids': [str(nid), 'not-a-uuid']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'OK Note' in text
-        assert 'Invalid UUID: not-a-uuid' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'OK Note'
 
     @pytest.mark.asyncio
     async def test_metadata_missing_title_field(self, mock_api, mcp_client):
@@ -407,10 +391,11 @@ class TestGetNotesMetadataEdgeCases:
         ]
 
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Untitled' in text
-        assert '300' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Untitled'
+        assert parsed[0]['total_tokens'] == 300
 
     @pytest.mark.asyncio
     async def test_duplicate_ids_fetched_individually(self, mock_api, mcp_client):
@@ -423,10 +408,11 @@ class TestGetNotesMetadataEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_notes_metadata', {'note_ids': [str(nid), str(nid)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # Batch returns one result, the duplicate ID matches so no "not found"
-        assert 'Same Note' in text
+        # Batch returns one result, the duplicate ID matches so no error
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Same Note'
 
     @pytest.mark.asyncio
     async def test_batch_fails_falls_back_to_individual(self, mock_api, mcp_client):
@@ -440,9 +426,10 @@ class TestGetNotesMetadataEdgeCases:
         }
 
         result = await mcp_client.call_tool('memex_get_notes_metadata', {'note_ids': [str(nid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Fallback Note' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Fallback Note'
         mock_api.get_note_metadata.assert_called_once()
 
 
@@ -456,11 +443,12 @@ class TestGetEntitiesEdgeCases:
 
     @pytest.mark.asyncio
     async def test_empty_list(self, mock_api, mcp_client):
-        """Empty entity_ids should return no-entities message."""
+        """Empty entity_ids should return empty list."""
         mock_api.get_entities.return_value = []
 
         result = await mcp_client.call_tool('memex_get_entities', {'entity_ids': []})
-        assert 'No entities found' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_batch_fails_fallback_to_individual(self, mock_api, mcp_client):
@@ -472,14 +460,15 @@ class TestGetEntitiesEdgeCases:
         )
 
         result = await mcp_client.call_tool('memex_get_entities', {'entity_ids': [str(eid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Fallback Entity' in text
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'Fallback Entity'
         mock_api.get_entity.assert_called_once_with(eid)
 
     @pytest.mark.asyncio
     async def test_batch_fails_fallback_also_fails(self, mock_api, mcp_client):
-        """When both batch and individual lookups fail, report all errors."""
+        """When both batch and individual lookups fail, return empty list (errors silently dropped)."""
         eid1 = uuid4()
         eid2 = uuid4()
         mock_api.get_entities.side_effect = RuntimeError('batch error')
@@ -488,15 +477,13 @@ class TestGetEntitiesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_entities', {'entity_ids': [str(eid1), str(eid2)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Errors' in text
-        assert str(eid1) in text
-        assert str(eid2) in text
+        assert parsed == []
 
     @pytest.mark.asyncio
-    async def test_no_double_reporting_of_not_found(self, mock_api, mcp_client):
-        """Entity not found in batch should NOT be double-reported."""
+    async def test_not_found_silently_dropped(self, mock_api, mcp_client):
+        """Entity not found in batch should be silently dropped — only found ones returned."""
         eid1 = uuid4()
         eid2 = uuid4()
         e1 = EntityDTO(id=eid1, name='Found', mention_count=10)
@@ -506,49 +493,50 @@ class TestGetEntitiesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_entities', {'entity_ids': [str(eid1), str(eid2)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # eid2 should appear in errors exactly once
-        assert text.count(f'{eid2}: entity not found') == 1
+        # Only the found entity is returned
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'Found'
 
     @pytest.mark.asyncio
-    async def test_fallback_not_found_no_double_report(self, mock_api, mcp_client):
-        """When fallback path reports not-found, the post-loop check should not duplicate."""
+    async def test_fallback_not_found_returns_empty(self, mock_api, mcp_client):
+        """When fallback path finds nothing, return empty list."""
         eid = uuid4()
         mock_api.get_entities.side_effect = RuntimeError('batch error')
         mock_api.get_entity.return_value = None  # not found
 
         result = await mcp_client.call_tool('memex_get_entities', {'entity_ids': [str(eid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # "entity not found" for this eid should appear exactly once
-        assert text.count('entity not found') == 1
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_mixed_valid_and_invalid_uuids(self, mock_api, mcp_client):
+        """Valid UUIDs proceed; invalid ones silently dropped."""
         eid = uuid4()
         mock_api.get_entities.return_value = [EntityDTO(id=eid, name='Good', mention_count=1)]
 
         result = await mcp_client.call_tool('memex_get_entities', {'entity_ids': [str(eid), 'xyz']})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Good' in text
-        assert 'Invalid UUID: xyz' in text
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'Good'
 
     @pytest.mark.asyncio
     async def test_entity_without_type_or_vault(self, mock_api, mcp_client):
-        """Entities without type or vault should render cleanly."""
+        """Entities without type should have type=None in the model."""
         eid = uuid4()
         mock_api.get_entities.return_value = [
             EntityDTO(id=eid, name='TypelessEntity', mention_count=3)
         ]
 
         result = await mcp_client.call_tool('memex_get_entities', {'entity_ids': [str(eid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'TypelessEntity' in text
-        assert '**Type:**' not in text
-        assert '**Vault:**' not in text
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'TypelessEntity'
+        assert parsed[0]['type'] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -562,11 +550,12 @@ class TestGetMemoryUnitsEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_list(self, mock_api, mcp_client):
         result = await mcp_client.call_tool('memex_get_memory_units', {'unit_ids': []})
-        assert 'No units found' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_all_lookups_fail(self, mock_api, mcp_client):
-        """All units fail — should report errors for all, not crash."""
+        """All units fail — errors silently dropped, return empty list."""
         uid1 = uuid4()
         uid2 = uuid4()
         mock_api.get_memory_unit.side_effect = RuntimeError('storage offline')
@@ -574,14 +563,13 @@ class TestGetMemoryUnitsEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_memory_units', {'unit_ids': [str(uid1), str(uid2)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Error' in text
-        assert 'storage offline' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_all_units_not_found(self, mock_api, mcp_client):
-        """All unit IDs valid but not found — should report each."""
+        """All unit IDs valid but not found — return empty list (silently dropped)."""
         uid1 = uuid4()
         uid2 = uuid4()
         mock_api.get_memory_unit.return_value = None
@@ -589,20 +577,17 @@ class TestGetMemoryUnitsEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_memory_units', {'unit_ids': [str(uid1), str(uid2)]}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'not found' in text
-        assert str(uid1) in text
-        assert str(uid2) in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_all_invalid_uuids(self, mock_api, mcp_client):
-        """All UUIDs malformed — should list all as invalid."""
+        """All UUIDs malformed — silently skipped, return empty list."""
         result = await mcp_client.call_tool('memex_get_memory_units', {'unit_ids': ['aaa', 'bbb']})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Invalid UUID: aaa' in text
-        assert 'Invalid UUID: bbb' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_unit_with_supersession_metadata(self, mock_api, mcp_client):
@@ -628,11 +613,16 @@ class TestGetMemoryUnitsEdgeCases:
         mock_api.get_memory_unit.return_value = unit
 
         result = await mcp_client.call_tool('memex_get_memory_units', {'unit_ids': [str(uid)]})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'correction' in text
-        assert 'Updated fact' in text
-        assert 'Corrections Doc' in text
+        assert len(parsed) == 1
+        unit = parsed[0]
+        assert unit['status'] == 'superseded'
+        assert len(unit['superseded_by']) == 1
+        sup = unit['superseded_by'][0]
+        assert sup['relation'] == 'correction'
+        assert 'Updated fact' in sup['unit_text']
+        assert sup['note_title'] == 'Corrections Doc'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -662,15 +652,16 @@ class TestMemorySearchEdgeCases:
         result = await mcp_client.call_tool(
             'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
         # Results should still appear, just without enriched title
-        assert 'Some fact.' in text
-        assert str(uid) in text
+        assert len(parsed) == 1
+        assert parsed[0]['text'] == 'Some fact.'
+        assert parsed[0]['id'] == str(uid)
 
     @pytest.mark.asyncio
     async def test_result_with_none_note_id(self, mock_api, mcp_client):
-        """Results with note_id=None should not render 'Note: None'."""
+        """Results with note_id=None should have null note_id and note_title."""
         uid = uuid4()
         mock_api.search.return_value = [
             MemoryUnitDTO(
@@ -686,10 +677,11 @@ class TestMemorySearchEdgeCases:
         result = await mcp_client.call_tool(
             'memex_memory_search', {'query': 'orphan', 'vault_ids': ['test-vault']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Note: None' not in text
-        assert 'Note: unknown' in text
+        assert len(parsed) == 1
+        assert parsed[0]['note_id'] is None
+        assert parsed[0]['text'] == 'Orphan fact.'
 
     @pytest.mark.asyncio
     async def test_malformed_date_raises_tool_error(self, mock_api, mcp_client):
@@ -731,14 +723,17 @@ class TestMemorySearchEdgeCases:
         result = await mcp_client.call_tool(
             'memex_memory_search', {'query': 'facts', 'vault_ids': ['test-vault']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Titled Note' in text
-        assert f'Note: {nid2}' in text  # nid2 falls back to plain ID
+        assert len(parsed) == 2
+        titles = {u['note_title'] for u in parsed}
+        assert 'Titled Note' in titles
+        # nid2 has no title — should be None
+        assert None in titles
 
     @pytest.mark.asyncio
-    async def test_very_long_text_truncated(self, mock_api, mcp_client):
-        """Search results with long text should be truncated to 300 chars."""
+    async def test_very_long_text_preserved(self, mock_api, mcp_client):
+        """Search results return full text in the structured model (no truncation)."""
         long_text = 'x' * 500
         mock_api.search.return_value = [
             MemoryUnitDTO(
@@ -755,11 +750,10 @@ class TestMemorySearchEdgeCases:
         result = await mcp_client.call_tool(
             'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        # The snippet should be 300 chars + "..."
-        assert '...' in text
-        assert 'x' * 301 not in text
+        assert len(parsed) == 1
+        assert parsed[0]['text'] == long_text
 
     @pytest.mark.asyncio
     async def test_empty_results(self, mock_api, mcp_client):
@@ -768,7 +762,8 @@ class TestMemorySearchEdgeCases:
         result = await mcp_client.call_tool(
             'memex_memory_search', {'query': 'nothing', 'vault_ids': ['test-vault']}
         )
-        assert 'No results' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -781,29 +776,28 @@ class TestGetEntityMentionsEdgeCases:
 
     @pytest.mark.asyncio
     async def test_mention_with_none_unit(self, mock_api, mcp_client):
-        """Mention dict with unit=None should not crash."""
+        """Mention dict with unit=None is silently skipped."""
         eid = uuid4()
         nid = uuid4()
         doc = type('Doc', (), {'id': str(nid), 'title': 'SomeNote', 'name': None})()
         mock_api.get_entity_mentions.return_value = [{'unit': None, 'note': doc}]
 
         result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Found 1 mention(s)' in text
-        assert 'N/A' in text  # unit_id should be N/A
+        # unit=None is skipped
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_mention_with_none_note_and_none_unit(self, mock_api, mcp_client):
-        """Completely empty mention dict should render gracefully."""
+        """Completely empty mention dict is silently skipped."""
         eid = uuid4()
         mock_api.get_entity_mentions.return_value = [{'unit': None}]
 
         result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Found 1 mention(s)' in text
-        assert 'N/A' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_mention_note_has_name_but_not_title(self, mock_api, mcp_client):
@@ -832,9 +826,10 @@ class TestGetEntityMentionsEdgeCases:
         mock_api.get_entity_mentions.return_value = [{'unit': unit, 'note': doc}]
 
         result = await mcp_client.call_tool('memex_get_entity_mentions', {'entity_id': str(eid)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Name-Based Title' in text
+        assert len(parsed) == 1
+        assert parsed[0]['note_title'] == 'Name-Based Title'
 
     @pytest.mark.asyncio
     async def test_api_error_becomes_tool_error(self, mock_api, mcp_client):
@@ -865,8 +860,8 @@ class TestGetEntityCooccurrencesEdgeCases:
         mock_api.get_entity_cooccurrences.assert_called_once_with(UUID(str(eid)), limit=1)
 
     @pytest.mark.asyncio
-    async def test_singular_co_occurrence_label(self, mock_api, mcp_client):
-        """Count=1 should say 'co-occurrence' (singular), not 'co-occurrences'."""
+    async def test_count_one_cooccurrence(self, mock_api, mcp_client):
+        """Count=1 should be returned as count: 1 in the structured model."""
         eid = uuid4()
         other_id = uuid4()
         mock_api.get_entity_cooccurrences.return_value = [
@@ -883,14 +878,15 @@ class TestGetEntityCooccurrencesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_entity_cooccurrences', {'entity_id': str(eid)}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '1 co-occurrence' in text
-        assert '1 co-occurrences' not in text
+        assert len(parsed) == 1
+        assert parsed[0]['count'] == 1
+        assert parsed[0]['entity_name'] == 'B'
 
     @pytest.mark.asyncio
     async def test_name_present_but_type_empty(self, mock_api, mcp_client):
-        """When name exists but type is empty, output should NOT have '(, ID: ...)'."""
+        """When name exists but type is empty, entity_type should be None."""
         eid = uuid4()
         other_id = uuid4()
         mock_api.get_entity_cooccurrences.return_value = [
@@ -907,12 +903,13 @@ class TestGetEntityCooccurrencesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_entity_cooccurrences', {'entity_id': str(eid)}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '**Target**' in text
-        # Must not have "(, ID:" — the comma before ID without a type
-        assert '(, ID:' not in text
-        assert f'(ID: {other_id})' in text
+        assert len(parsed) == 1
+        assert parsed[0]['entity_name'] == 'Target'
+        assert parsed[0]['entity_type'] is None
+        assert parsed[0]['entity_id'] == str(other_id)
+        assert parsed[0]['count'] == 3
 
     @pytest.mark.asyncio
     async def test_api_error_becomes_tool_error(self, mock_api, mcp_client):
@@ -943,10 +940,11 @@ class TestGetEntityCooccurrencesEdgeCases:
         result = await mcp_client.call_tool(
             'memex_get_entity_cooccurrences', {'entity_id': str(eid)}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
         # Falls to else branch — shows entity_1 info
-        assert 'Alpha' in text
+        assert len(parsed) == 1
+        assert parsed[0]['entity_name'] == 'Alpha'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -977,9 +975,10 @@ class TestRecentNotesEdgeCases:
         mock_api.get_recent_notes.return_value = [n]
 
         result = await mcp_client.call_tool('memex_recent_notes', {})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '**Untitled**' in text
+        assert len(parsed) == 1
+        assert parsed[0]['title'] == 'Untitled'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1004,7 +1003,8 @@ class TestReadNoteBoundary:
         )
 
         result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-        assert 'Content.' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed['content'] == 'Content.'
 
     @pytest.mark.asyncio
     async def test_exactly_500_tokens_blocked(self, mock_api, mcp_client):
@@ -1029,7 +1029,8 @@ class TestReadNoteBoundary:
         )
 
         result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-        assert 'Should work.' in result.content[0].text
+        parsed = parse_tool_result(result)
+        assert parsed['content'] == 'Should work.'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1064,9 +1065,10 @@ class TestListEntitiesEdgeCases:
         mock_api.list_entities_ranked = _gen
 
         result = await mcp_client.call_tool('memex_list_entities', {'vault_id': 'test-vault'})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'C++ & "Rust" <lang>' in text
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'C++ & "Rust" <lang>'
 
     @pytest.mark.asyncio
     async def test_entity_type_case_insensitive(self, mock_api, mcp_client):
@@ -1078,9 +1080,10 @@ class TestListEntitiesEdgeCases:
             'memex_list_entities',
             {'query': 'alice', 'entity_type': 'person', 'vault_id': 'test-vault'},
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Alice' in text
+        assert len(parsed) == 1
+        assert parsed[0]['name'] == 'Alice'
         mock_api.search_entities.assert_called_once()
         call_kwargs = mock_api.search_entities.call_args
         assert call_kwargs[0][0] == 'alice'
@@ -1103,9 +1106,9 @@ class TestUUIDFormats:
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(nid).upper()]})
-        text = result.content[0].text
-        # Should not say "Invalid UUID"
-        assert 'Invalid UUID' not in text
+        parsed = parse_tool_result(result)
+        # Should not raise — returns empty list for no matches
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_uuid_without_dashes_accepted(self, mock_api, mcp_client):
@@ -1115,8 +1118,8 @@ class TestUUIDFormats:
         mock_api.get_nodes.return_value = []
 
         result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [hex_str]})
-        text = result.content[0].text
-        assert 'Invalid UUID' not in text
+        parsed = parse_tool_result(result)
+        assert parsed == []
 
     @pytest.mark.asyncio
     async def test_empty_string_uuid_rejected(self, mock_api, mcp_client):
@@ -1196,8 +1199,8 @@ class TestNoteTitleFallback:
     """note.title should take precedence over doc_metadata for display name."""
 
     @pytest.mark.asyncio
-    async def test_list_assets_uses_note_title(self, mock_api, mcp_client):
-        """memex_list_assets should prefer note.title over doc_metadata."""
+    async def test_list_assets_returns_asset_list(self, mock_api, mcp_client):
+        """memex_list_assets should return structured asset list."""
         doc_id = uuid4()
         mock_api.get_note.return_value = NoteDTO(
             id=doc_id,
@@ -1211,20 +1214,21 @@ class TestNoteTitleFallback:
         result = await mcp_client.call_tool(
             'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Extracted Title' in text
-        assert 'Original Filename.md' not in text
+        assert len(parsed) == 1
+        assert parsed[0]['filename'] == 'photo.png'
+        assert parsed[0]['path'] == 'images/photo.png'
 
     @pytest.mark.asyncio
-    async def test_list_assets_falls_back_to_doc_metadata(self, mock_api, mcp_client):
-        """When note.title is None, use doc_metadata name."""
+    async def test_list_assets_no_assets(self, mock_api, mcp_client):
+        """When note has no assets, return empty list."""
         doc_id = uuid4()
         mock_api.get_note.return_value = NoteDTO(
             id=doc_id,
             title=None,
             doc_metadata={'name': 'From Metadata'},
-            assets=['images/photo.png'],
+            assets=[],
             vault_id=uuid4(),
             created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
         )
@@ -1232,19 +1236,19 @@ class TestNoteTitleFallback:
         result = await mcp_client.call_tool(
             'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'From Metadata' in text
+        assert parsed == []
 
     @pytest.mark.asyncio
-    async def test_list_assets_untitled_when_all_empty(self, mock_api, mcp_client):
-        """When both note.title and doc_metadata are empty, show 'Untitled'."""
+    async def test_list_assets_multiple_assets(self, mock_api, mcp_client):
+        """Multiple assets should return all in the list."""
         doc_id = uuid4()
         mock_api.get_note.return_value = NoteDTO(
             id=doc_id,
             title=None,
             doc_metadata={},
-            assets=['images/photo.png'],
+            assets=['images/photo.png', 'docs/readme.pdf'],
             vault_id=uuid4(),
             created_at=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
         )
@@ -1252,9 +1256,12 @@ class TestNoteTitleFallback:
         result = await mcp_client.call_tool(
             'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
         )
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert 'Untitled' in text
+        assert len(parsed) == 2
+        filenames = {a['filename'] for a in parsed}
+        assert 'photo.png' in filenames
+        assert 'readme.pdf' in filenames
 
     @pytest.mark.asyncio
     async def test_read_note_uses_note_title(self, mock_api, mcp_client):
@@ -1271,10 +1278,10 @@ class TestNoteTitleFallback:
         )
 
         result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '# Page Index Title' in text
-        assert 'raw-file.md' not in text
+        assert parsed['title'] == 'Page Index Title'
+        assert parsed['content'] == 'Body text.'
 
     @pytest.mark.asyncio
     async def test_read_note_falls_back_to_doc_metadata_title(self, mock_api, mcp_client):
@@ -1291,9 +1298,9 @@ class TestNoteTitleFallback:
         )
 
         result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '# Fallback Title' in text
+        assert parsed['title'] == 'Fallback Title'
 
     @pytest.mark.asyncio
     async def test_read_note_empty_string_title_falls_through(self, mock_api, mcp_client):
@@ -1310,7 +1317,6 @@ class TestNoteTitleFallback:
         )
 
         result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-        text = result.content[0].text
+        parsed = parse_tool_result(result)
 
-        assert '# Actual Name' in text
-        assert '# Untitled' not in text
+        assert parsed['title'] == 'Actual Name'

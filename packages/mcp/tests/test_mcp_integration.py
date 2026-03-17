@@ -5,6 +5,7 @@ from uuid import uuid4, UUID
 
 from fastmcp import Client
 from memex_mcp.server import mcp
+from conftest import parse_tool_result
 from memex_common.schemas import MemoryUnitDTO, FactTypes, NoteDTO
 
 TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
@@ -61,18 +62,16 @@ async def test_integration_search_assets_resource(mock_api):
         search_result = await client.call_tool(
             'memex_memory_search', {'query': 'architecture', 'vault_ids': ['test-vault']}
         )
-        search_text = search_result.content[0].text
-
-        assert str(doc_id) in search_text
+        data = parse_tool_result(search_result)
+        assert any(str(doc_id) == u['note_id'] for u in data)
 
         # Step 2: List Assets using Document ID from search
         assets_result = await client.call_tool(
             'memex_list_assets', {'note_id': str(doc_id), 'vault_id': 'test-vault'}
         )
-        assets_text = assets_result.content[0].text
-
-        assert 'arch.png' in assets_text
-        assert 'assets/arch.png' in assets_text
+        assets_data = parse_tool_result(assets_result)
+        assert any(a['filename'] == 'arch.png' for a in assets_data)
+        assert any(a['path'] == 'assets/arch.png' for a in assets_data)
 
         # Step 3: Get Resource (batch)
         await client.call_tool(
@@ -101,10 +100,11 @@ async def test_list_notes_includes_publish_date(mock_api):
 
     async with Client(mcp) as client:
         result = await client.call_tool('memex_list_notes', {'vault_id': 'test-vault'})
-        text = result.content[0].text
+        data = parse_tool_result(result)
 
-        assert '2025-03-15' in text
-        assert 'Published Note' in text
+        assert len(data) == 1
+        assert data[0]['title'] == 'Published Note'
+        assert '2025-03-15' in data[0]['publish_date']
 
 
 @pytest.mark.asyncio
@@ -125,7 +125,8 @@ async def test_recent_notes_includes_publish_date(mock_api):
 
     async with Client(mcp) as client:
         result = await client.call_tool('memex_recent_notes', {})
-        text = result.content[0].text
+        data = parse_tool_result(result)
 
-        assert '2025-03-15' in text
-        assert 'Recent Published' in text
+        assert len(data) == 1
+        assert data[0]['title'] == 'Recent Published'
+        assert '2025-03-15' in data[0]['publish_date']

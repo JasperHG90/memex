@@ -1,5 +1,6 @@
 import pytest
 from uuid import uuid4
+from conftest import parse_tool_result
 from memex_common.schemas import IngestResponse, NoteCreateDTO
 
 
@@ -24,7 +25,8 @@ async def test_mcp_add_note_with_key(mock_api, mcp_client):
         },
     )
 
-    assert f'ID: {doc_id}' in str(result)
+    data = parse_tool_result(result)
+    assert data['note_id'] == doc_id
     mock_api.ingest.assert_called_once()
 
     args, _ = mock_api.ingest.call_args
