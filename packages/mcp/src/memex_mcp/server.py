@@ -160,7 +160,7 @@ RULES:
 - Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
 - Never use `memex_recent_notes` for discovery.
 
-`memex_memory_search` strategies: `["temporal"]` chronological, `["graph"]` entity-centric, `["mental_model"]` synthesized. Default (all) is best for general queries.
+`memex_memory_search` strategies: `["semantic"]` vector similarity, `["keyword"]` BM25 full-text, `["graph"]` entity-centric, `["temporal"]` chronological, `["mental_model"]` synthesized. Default (all) is best for general queries.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
