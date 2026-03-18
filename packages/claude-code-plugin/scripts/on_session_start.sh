@@ -20,7 +20,7 @@ EOF
 
 # --- Health check: verify Memex server is reachable ---
 RESOLVED_URL="${MEMEX_SERVER_URL:-http://127.0.0.1:8000}"
-if ! "${MEMEX[@]}" server status >/dev/null 2>&1; then
+if ! curl -sf --max-time 5 "${RESOLVED_URL}/api/v1/health" >/dev/null 2>&1; then
     cat <<EOF
 {"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  uvx --from \"memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli\" memex server start -d\n\nIf the server is running on a different host, configure the URL via:\n  1. ~/.config/memex/config.yaml (set server_url)\n  2. Export MEMEX_SERVER_URL in your shell profile\n\nMemex MCP tools will not work until the server is running."}
 EOF
