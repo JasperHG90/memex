@@ -1304,7 +1304,7 @@ class KVEntry(SQLModel, table=True):  # type: ignore
     Function: Provides simple, named storage for configuration, preferences,
     and structured data that doesn't fit the note/memory model.
     Key Features:
-        - Keys must start with a namespace prefix: global:, user:, or project:.
+        - Keys must start with a namespace prefix: global:, user:, project:, or app:.
         - Unique constraint on key.
         - btree index with text_pattern_ops for efficient prefix queries.
         - Optional embedding for semantic search over values.
@@ -1319,7 +1319,7 @@ class KVEntry(SQLModel, table=True):  # type: ignore
 
     key: str = Field(
         sa_column=Column(Text, nullable=False),
-        description='The key for this entry. Must start with global:, user:, or project:.',
+        description='The key for this entry. Must start with global:, user:, project:, or app:.',
     )
 
     value: str = Field(

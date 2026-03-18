@@ -38,6 +38,11 @@ def test_validate_namespace_project():
     _validate_namespace('project:github.com/user/repo:vault')
 
 
+def test_validate_namespace_app():
+    """app: prefix should be accepted."""
+    _validate_namespace('app:claude-code:theme')
+
+
 def test_validate_namespace_rejects_bare_key():
     """Keys without a valid namespace prefix should be rejected."""
     with pytest.raises(ValueError, match='namespace prefix'):
