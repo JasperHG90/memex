@@ -4,7 +4,7 @@ This guide shows you how to manage PostgreSQL schema migrations using the `memex
 
 ## Prerequisites
 
-* Memex installed (`uv tool install memex-cli`)
+* Memex installed (`uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 * A running PostgreSQL database with pgvector
 * Database connection configured (via `memex config init` or `MEMEX_META_STORE__DSN` environment variable)
 
@@ -92,7 +92,7 @@ The database URL is resolved from your Memex configuration (`meta_store.dsn`) or
 
 | Symptom | Fix |
 | :--- | :--- |
-| `alembic.ini not found` | Ensure `memex-core` is installed: `uv tool install git+https://github.com/JasperHG90/memex.git` |
+| `alembic.ini not found` | Ensure `memex-core` is installed: `uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"` |
 | `Connection refused` | Check PostgreSQL is running and `MEMEX_META_STORE__DSN` is correct |
 | `Relation already exists` | Database was created with `create_all` — run `memex db stamp head` |
 | Concurrent migration conflict | Advisory locking handles this automatically; retry if it fails |

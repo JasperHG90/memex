@@ -102,7 +102,7 @@ function ReflectionBadge() {
 function HelpButton({ collapsed }: { collapsed: boolean }) {
   const link = (
     <a
-      href="https://github.com/memextech/memex"
+      href="https://github.com/JasperHG90/memex"
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Help"

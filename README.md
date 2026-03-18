@@ -19,7 +19,7 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 
 Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
 
-### 1. Install
+### 2. Install
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (>= 0.10.0).
 
 ```bash
@@ -30,14 +30,14 @@ It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --fr
 
 > The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
 
-### 2. Initialize
+### 3. Initialize
 Sets up your local storage and configuration.
 
 ```bash
 memex config init
 ```
 
-### 3. Start the Server
+### 4. Start the Server
 Memex requires a running API server for all operations.
 
 ```bash
@@ -45,7 +45,7 @@ Memex requires a running API server for all operations.
 memex server start -d
 ```
 
-### 4. Ingest
+### 5. Ingest
 Feed it knowledge.
 
 ```bash
@@ -64,7 +64,7 @@ memex note add --url "https://docs.python.org/3/tutorial/"
 memex note add --file /path/to/file.md --vault notes
 ```
 
-### 5. Search
+### 6. Search
 Ask questions.
 
 ```bash

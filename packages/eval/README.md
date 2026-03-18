@@ -6,7 +6,7 @@ Quality benchmarks for the Memex memory system. Measures extraction, retrieval, 
 
 The package is a workspace member — install via `uv sync` from the repo root.
 
-Requires a running Memex server (default: `http://localhost:8001/api/v1/`).
+Requires a running Memex server (default: `http://localhost:8000/api/v1/`).
 
 For LLM-judged checks, set `GOOGLE_API_KEY` in your environment (uses Gemini via dspy).
 

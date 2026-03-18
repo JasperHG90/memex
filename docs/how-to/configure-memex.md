@@ -4,7 +4,7 @@ This guide shows you how to set up and customize Memex configuration using YAML 
 
 ## Prerequisites
 
-* Memex installed (`uv tool install git+https://github.com/JasperHG90/memex.git`)
+* Memex installed (`uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 
 ## Configuration Sources and Precedence
 

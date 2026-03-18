@@ -14,7 +14,7 @@ The `memex` CLI allows you to:
 ## Installation
 
 ```bash
-uv tool install memex-cli
+uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
 ## Quick Start

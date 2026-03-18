@@ -2,7 +2,7 @@
 
 ![](./assets/memex-openclaw-logo.png)
 
-A memory plugin for [OpenClaw](https://openclaw.ai) that gives your agent long-term memory powered by [Memex](https://github.com/memextech/memex). Memories are automatically recalled before each agent turn and conversations are captured after each turn — all via the Memex REST API.
+A memory plugin for [OpenClaw](https://openclaw.ai) that gives your agent long-term memory powered by [Memex](https://github.com/JasperHG90/memex). Memories are automatically recalled before each agent turn and conversations are captured after each turn — all via the Memex REST API.
 
 ## How It Works
 
