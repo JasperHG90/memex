@@ -139,6 +139,12 @@ async def kv_list(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     vault_id: str | None = Query(None, description='Vault ID or name'),
+    exclude_prefix: str | None = Query(
+        None, description='Exclude entries whose key starts with this prefix'
+    ),
+    key_prefix: str | None = Query(
+        None, description='Only include entries whose key starts with this prefix'
+    ),
 ):
     """List key-value entries. Without vault_id returns global only; with vault_id returns both."""
     try:
@@ -146,7 +152,12 @@ async def kv_list(
         if vault_id is not None:
             resolved_vault_id = await api.resolve_vault_identifier(vault_id)
 
-        entries = await api.kv_list(vault_id=resolved_vault_id, limit=limit)
+        entries = await api.kv_list(
+            vault_id=resolved_vault_id,
+            limit=limit,
+            exclude_prefix=exclude_prefix,
+            key_prefix=key_prefix,
+        )
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list KV entries')
