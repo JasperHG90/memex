@@ -878,7 +878,7 @@ async def memex_note_search(
     ] = None,
     limit: Annotated[
         int, BeforeValidator(_coerce_int), Field(description='Max notes to return.')
-    ] = 5,
+    ] = 10,
     expand_query: Annotated[
         bool, BeforeValidator(_coerce_bool), Field(description='LLM-based multi-query expansion.')
     ] = False,
