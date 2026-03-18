@@ -20,6 +20,8 @@ EOF
 fi
 
 # --- Derive portable project identifier ---
+# Git-based: stripped remote URL (e.g. github.com/user/repo)
+# Non-git:   path relative to $HOME (e.g. projects/myapp)
 project_id=""
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     remote_url=$(git remote get-url origin 2>/dev/null) || true
@@ -28,7 +30,11 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
     fi
 fi
 if [ -z "$project_id" ]; then
-    project_id=$(basename "$PWD")
+    # Use path relative to $HOME for a stable, collision-resistant identifier
+    case "$PWD" in
+        "$HOME"/*) project_id="${PWD#"$HOME"/}" ;;
+        *)         project_id="$PWD" ;;
+    esac
 fi
 
 # --- Fetch vaults, recent notes, and namespace-filtered KV (parallel) ---
@@ -37,7 +43,12 @@ tmp_notes=$(mktemp)
 tmp_kv=$(mktemp)
 trap 'rm -f "$tmp_vaults" "$tmp_notes" "$tmp_kv"' EXIT
 
-encoded_ns=$(jq -rn --arg ns "global,user,project:${project_id}" '$ns | @uri')
+# Only include project: namespace when we have a project identifier
+if [ -n "$project_id" ]; then
+    encoded_ns=$(jq -rn --arg ns "global,user,project:${project_id}" '$ns | @uri')
+else
+    encoded_ns=$(jq -rn --arg ns "global,user" '$ns | @uri')
+fi
 
 curl -sf --max-time 5 "${API}/vaults" > "$tmp_vaults" 2>/dev/null &
 curl -sf --max-time 5 "${API}/notes?sort=-created_at&limit=10" > "$tmp_notes" 2>/dev/null &
