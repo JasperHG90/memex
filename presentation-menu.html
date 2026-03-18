@@ -459,10 +459,10 @@
         <h2>Why I created Memex</h2>
         <ul>
           <li>LLMs forget everything between sessions — every conversation starts from zero</li>
-          <li>Existing solutions are either flat vector stores or black-box "memory" features with no transparency</li>
-          <li>I wanted the Obsidian for LLMs — your notes, always readable, never locked in</li>
-          <li>Data-first philosophy: Markdown files + Postgres, not proprietary formats</li>
-          <li>First-class support for file assets — images, diagrams, and attachments stored alongside notes</li>
+          <li>I use many places to talk to models (architecture, code, research) — I need <strong>shared memory</strong> across Claude, Gemini, OpenCode, Craft Agents, and any future model</li>
+          <li>I want model functionality to be swappable — some or all components should work with <strong>open-source / local models</strong>, not locked to one provider</li>
+          <li>Need a system that stores memories and synthesized knowledge, but can always <strong>trace back to the source</strong> and its assets (diagrams, architecture docs) via lineage</li>
+          <li>Data-first philosophy: Markdown files + Postgres, not proprietary formats — your notes, always readable, never locked in</li>
         </ul>
       </div>
       <div class="intro-section">
@@ -735,6 +735,10 @@
     </div>
   </div>
 
+  <div class="nav-row">
+    <button class="btn-back" id="btnMenuBack"><span class="arrow">&larr;</span> Features</button>
+  </div>
+
   <footer>Raise your hand for what looks interesting — <span>we'll dive in together</span></footer>
 </div>
 </div>
@@ -965,6 +969,7 @@ function showPage(id) {
 document.getElementById('btnIntroNext').addEventListener('click', () => showPage('pageFeatures'));
 document.getElementById('btnFeaturesBack').addEventListener('click', () => showPage('pageIntro'));
 document.getElementById('btnFeaturesNext').addEventListener('click', () => showPage('pageMenu'));
+document.getElementById('btnMenuBack').addEventListener('click', () => showPage('pageFeatures'));
 </script>
 </body>
 </html>
