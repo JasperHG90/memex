@@ -31,7 +31,7 @@ async def kv_write(
         typer.Option(
             '--key',
             '-k',
-            help='Namespaced key (must start with global:, user:, or project:).',
+            help='Namespaced key (must start with global:, user:, project:, or app:).',
         ),
     ],
 ):

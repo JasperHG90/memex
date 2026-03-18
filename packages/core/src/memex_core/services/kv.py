@@ -15,7 +15,7 @@ logger = logging.getLogger('memex.core.services.kv')
 
 _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
-VALID_NAMESPACES = ('global', 'user', 'project')
+VALID_NAMESPACES = ('global', 'user', 'project', 'app')
 
 
 def _normalize_key(key: str) -> str:

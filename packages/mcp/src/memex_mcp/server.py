@@ -1839,10 +1839,11 @@ async def memex_find_note(
         'Write a fact to the key-value store. Generates an embedding for semantic search. '
         'Use for storing structured preferences, settings, or facts. '
         'Key MUST start with a namespace prefix: '
-        '"global:" (always loaded), "user:" (personal prefs), or '
-        '"project:<project-id>:" (project-scoped). '
+        '"global:" (always loaded), "user:" (personal prefs), '
+        '"project:<project-id>:" (project-scoped), or '
+        '"app:<app-id>:" (application-scoped). '
         'Examples: "global:tool:python:pkg_mgr", "user:work:employer", '
-        '"project:github.com/user/repo:vault".'
+        '"project:github.com/user/repo:vault", "app:claude-code:theme".'
     ),
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
@@ -1854,9 +1855,9 @@ async def memex_kv_write(
         str,
         Field(
             description=(
-                'Namespaced key. Must start with global:, user:, or project:. '
+                'Namespaced key. Must start with global:, user:, project:, or app:. '
                 'Examples: "global:lang:python:version", '
-                '"project:github.com/user/repo:vault".'
+                '"project:github.com/user/repo:vault", "app:claude-code:theme".'
             ),
         ),
     ],

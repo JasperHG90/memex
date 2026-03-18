@@ -43,7 +43,7 @@ IF storing/retrieving structured facts, preferences, or conventions:
 - `memex_kv_get(key)` — exact key lookup
 - `memex_kv_search(query)` — fuzzy semantic search over stored facts
 - `memex_kv_list()` — list all stored facts
-- Keys MUST start with a namespace prefix: `global:` (always loaded), `user:` (personal prefs), or `project:<project-id>:` (project-scoped).
+- Keys MUST start with a namespace prefix: `global:` (always loaded), `user:` (personal prefs), `project:<project-id>:` (project-scoped), or `app:<app-id>:` (application-scoped).
 - When the user states a preference, convention, or static fact, proactively store it via `memex_kv_write`.
 - Deletion is user-only (CLI `memex kv delete`). Do NOT attempt to delete KV entries.
 
