@@ -1837,7 +1837,9 @@ async def memex_find_note(
     description=(
         'Write a fact to the key-value store. Generates an embedding for semantic search. '
         'Use for storing structured preferences, settings, or facts. '
-        'Key should be a short, namespaced identifier (e.g. "tool:python:pkg_mgr").'
+        'Key should be a short, namespaced identifier (e.g. "tool:python:pkg_mgr"). '
+        'For per-project agent settings, use the "agents:<project_id>:<setting>" convention '
+        '(e.g. "agents:https://github.com/user/repo:vault").'
     ),
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
@@ -1848,7 +1850,10 @@ async def memex_kv_write(
     key: Annotated[
         str,
         Field(
-            description='Namespaced key, e.g. "tool:python:pkg_mgr".',
+            description=(
+                'Namespaced key, e.g. "tool:python:pkg_mgr". '
+                'For per-project settings: "agents:<project_id>:<setting>".'
+            ),
         ),
     ],
     vault_id: Annotated[

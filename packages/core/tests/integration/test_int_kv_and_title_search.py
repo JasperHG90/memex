@@ -98,6 +98,64 @@ async def test_kv_list_global(kv):
 
 
 # ---------------------------------------------------------------------------
+# KV list filtering: exclude_prefix and key_prefix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_exclude_prefix(kv):
+    """list_entries with exclude_prefix filters out matching keys."""
+    unique = str(uuid4())[:8]
+    await kv.put(vault_id=None, key=f'agents:proj:{unique}', value='project-setting')
+    await kv.put(vault_id=None, key=f'lang:python:{unique}', value='user-pref')
+
+    entries = await kv.list_entries(exclude_prefix='agents:')
+    keys = [e.key for e in entries]
+    assert f'lang:python:{unique}' in keys
+    assert f'agents:proj:{unique}' not in keys
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_key_prefix(kv):
+    """list_entries with key_prefix returns only matching keys."""
+    unique = str(uuid4())[:8]
+    await kv.put(vault_id=None, key=f'agents:myproj:{unique}:vault', value='myvault')
+    await kv.put(vault_id=None, key=f'agents:other:{unique}:vault', value='othervault')
+    await kv.put(vault_id=None, key=f'lang:go:{unique}', value='gopref')
+
+    entries = await kv.list_entries(key_prefix=f'agents:myproj:{unique}:')
+    keys = [e.key for e in entries]
+    assert f'agents:myproj:{unique}:vault' in keys
+    assert f'agents:other:{unique}:vault' not in keys
+    assert f'lang:go:{unique}' not in keys
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_prefix_combined_with_vault(kv, session):
+    """exclude_prefix and key_prefix work alongside vault_id."""
+    unique = str(uuid4())[:8]
+
+    vault_id = uuid4()
+    vault = Vault(id=vault_id, name=f'test-vault-prefix-{unique}', description='Test')
+    session.add(vault)
+    await session.commit()
+
+    await kv.put(vault_id=None, key=f'agents:proj:{unique}', value='agent-setting')
+    await kv.put(vault_id=None, key=f'user:pref:{unique}', value='user-pref')
+    await kv.put(vault_id=vault_id, key=f'domain:config:{unique}', value='domain-val')
+
+    # With vault_id, exclude agents: prefix — should get global + vault-scoped, minus agents:
+    entries = await kv.list_entries(vault_id=vault_id, exclude_prefix='agents:')
+    keys = [e.key for e in entries]
+    assert f'user:pref:{unique}' in keys
+    assert f'domain:config:{unique}' in keys
+    assert f'agents:proj:{unique}' not in keys
+
+
+# ---------------------------------------------------------------------------
 # KV vault scoping: global vs vault-specific, fallback
 # ---------------------------------------------------------------------------
 

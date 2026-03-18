@@ -37,8 +37,10 @@ def test_config_env_vars():
 
 
 def test_config_server_url_default():
-    config = MemexConfig()
-    assert config.server_url == 'http://127.0.0.1:8000'
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop('MEMEX_SERVER_URL', None)
+        config = MemexConfig()
+        assert config.server_url == 'http://127.0.0.1:8000'
 
 
 def test_config_server_url_override():
@@ -47,8 +49,10 @@ def test_config_server_url_override():
 
 
 def test_config_server_url_derived_from_custom_host_port():
-    config = MemexConfig(server={'host': '10.0.0.1', 'port': 9000})
-    assert config.server_url == 'http://10.0.0.1:9000'
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop('MEMEX_SERVER_URL', None)
+        config = MemexConfig(server={'host': '10.0.0.1', 'port': 9000})
+        assert config.server_url == 'http://10.0.0.1:9000'
 
 
 def test_default_model_propagation():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +13,13 @@ from sqlmodel import col, or_, select
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.kv')
+
+_PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
+
+
+def _normalize_key(key: str) -> str:
+    """Strip well-known protocol prefixes (https://, http://, etc.) from a KV key."""
+    return _PROTOCOL_RE.sub('', key)
 
 
 class KVService(BaseService):
@@ -28,6 +36,8 @@ class KVService(BaseService):
         from sqlalchemy.dialects.postgresql import insert
 
         from memex_core.memory.sql_models import KVEntry
+
+        key = _normalize_key(key)
 
         async with self.metastore.session() as session:
             stmt = insert(KVEntry).values(
@@ -69,6 +79,8 @@ class KVService(BaseService):
     async def get(self, key: str, vault_id: UUID | None = None) -> Any | None:
         """Exact key lookup. If vault_id given, check vault-specific first, fallback to global."""
         from memex_core.memory.sql_models import KVEntry
+
+        key = _normalize_key(key)
 
         async with self.metastore.session() as session:
             if vault_id is not None:
@@ -128,6 +140,8 @@ class KVService(BaseService):
         """Delete a KV entry by key and optional vault scope."""
         from memex_core.memory.sql_models import KVEntry
 
+        key = _normalize_key(key)
+
         async with self.metastore.session() as session:
             if vault_id is not None:
                 stmt = select(KVEntry).where(
@@ -147,8 +161,19 @@ class KVService(BaseService):
             await session.commit()
             return True
 
-    async def list_entries(self, vault_id: UUID | None = None, limit: int = 100) -> list[Any]:
-        """List KV entries. No vault_id = global only; with vault_id = both vault-scoped + global."""
+    async def list_entries(
+        self,
+        vault_id: UUID | None = None,
+        limit: int = 100,
+        exclude_prefix: str | None = None,
+        key_prefix: str | None = None,
+    ) -> list[Any]:
+        """List KV entries. No vault_id = global only; with vault_id = both vault-scoped + global.
+
+        Args:
+            exclude_prefix: Exclude entries whose key starts with this prefix.
+            key_prefix: Only include entries whose key starts with this prefix.
+        """
         from memex_core.memory.sql_models import KVEntry
 
         async with self.metastore.session() as session:
@@ -162,6 +187,14 @@ class KVService(BaseService):
             else:
                 stmt = select(KVEntry).where(
                     col(KVEntry.vault_id).is_(None)  # type: ignore[union-attr]
+                )
+            if exclude_prefix is not None:
+                stmt = stmt.where(
+                    ~col(KVEntry.key).startswith(exclude_prefix)  # type: ignore[union-attr]
+                )
+            if key_prefix is not None:
+                stmt = stmt.where(
+                    col(KVEntry.key).startswith(key_prefix)  # type: ignore[union-attr]
                 )
             stmt = stmt.order_by(col(KVEntry.key)).limit(limit)
             result = await session.exec(stmt)

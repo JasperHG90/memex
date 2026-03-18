@@ -6,6 +6,7 @@ Used by the CLI to interact with a running Memex server.
 import datetime as dt
 import logging
 from typing import Any, AsyncGenerator
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
@@ -741,7 +742,7 @@ class RemoteMemexAPI:
         if vault_id is not None:
             params['vault_id'] = str(vault_id)
         try:
-            result = await self._get(f'kv/{key}', params=params or None)
+            result = await self._get(f'kv/{quote(key, safe="")}', params=params or None)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -773,7 +774,7 @@ class RemoteMemexAPI:
         if vault_id is not None:
             params['vault_id'] = str(vault_id)
         try:
-            await self._delete(f'kv/{key}', params=params or None)
+            await self._delete(f'kv/{quote(key, safe="")}', params=params or None)
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

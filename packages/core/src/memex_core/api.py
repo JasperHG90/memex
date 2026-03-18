@@ -989,6 +989,17 @@ class MemexAPI:
         """Delete a KV entry. Delegates to KVService."""
         return await self._kv.delete(key=key, vault_id=vault_id)
 
-    async def kv_list(self, vault_id: UUID | None = None, limit: int = 100) -> list[Any]:
+    async def kv_list(
+        self,
+        vault_id: UUID | None = None,
+        limit: int = 100,
+        exclude_prefix: str | None = None,
+        key_prefix: str | None = None,
+    ) -> list[Any]:
         """List KV entries. Delegates to KVService."""
-        return await self._kv.list_entries(vault_id=vault_id, limit=limit)
+        return await self._kv.list_entries(
+            vault_id=vault_id,
+            limit=limit,
+            exclude_prefix=exclude_prefix,
+            key_prefix=key_prefix,
+        )
