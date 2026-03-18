@@ -1,12 +1,13 @@
-# LiteLLM proxy config — Gemini Flash primary, Ollama fallback
-# Tier 1: Gemini Flash (fast, cheap, no VRAM pressure)
-# Tier 2: Windows Ollama (local fallback if Gemini is down)
-# Tier 3: Mac Ollama (meshnet fallback)
+# LiteLLM proxy config — Gemini Flash ONLY
 #
-# Decision: Ollama demoted from primary because gemma3:12b saturates
-# 16GB VRAM on Windows, blocking all other GPU workloads and causing
-# system-wide sluggishness. Gemini 2.5 Flash is fast and cheap enough
-# for Memex extraction/reflection workloads. — 2026-03-18
+# Decision (2026-03-18): Ollama removed entirely because simple-shuffle
+# routing doesn't respect tier ordering — it randomly picks among all
+# entries, causing gemma3:12b to load and saturate 16GB VRAM even when
+# Gemini Flash is available. Gemini 2.5 Flash is fast and cheap enough
+# for all Memex extraction/reflection workloads.
+#
+# To re-add Ollama as fallback, use "usage-based-routing-v2" strategy
+# (NOT simple-shuffle) and add Ollama entries with higher rpm limits.
 
 model_list:
   - model_name: "memex-default"
@@ -14,30 +15,11 @@ model_list:
       model: "gemini/gemini-2.5-flash"
       api_key: "os.environ/GEMINI_API_KEY"
     model_info:
-      description: "Tier 1: Gemini Flash (primary — fast, no VRAM)"
-
-  - model_name: "memex-default"
-    litellm_params:
-      model: "ollama_chat/gemma3:12b"
-      api_base: "http://host.docker.internal:11434"
-      num_ctx: 6144
-    model_info:
-      description: "Tier 2: Windows Ollama (local fallback)"
-
-  - model_name: "memex-default"
-    litellm_params:
-      model: "ollama_chat/gemma3:12b"
-      api_base: "http://100.90.52.188:11434"
-      num_ctx: 6144
-    model_info:
-      description: "Tier 3: Mac Ollama via Meshnet (fallback)"
+      description: "Gemini Flash — sole provider (no VRAM pressure)"
 
 router_settings:
-  routing_strategy: "simple-shuffle"
   num_retries: 3
   timeout: 300
-  allowed_fails: 3
-  cooldown_time: 10
 
 general_settings:
   master_key: null
