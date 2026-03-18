@@ -262,6 +262,17 @@ def build_thin_tree(
     return _collect(toc)
 
 
+def _inject_subtree_tokens(nodes: list[dict[str, Any]]) -> int:
+    """Inject ``subtree_tokens`` on each node and return the subtree total."""
+    total = 0
+    for node in nodes:
+        own = node.get('token_estimate', 0) or 0
+        children_sum = _inject_subtree_tokens(node.get('children', []))
+        node['subtree_tokens'] = own + children_sum
+        total += node['subtree_tokens']
+    return total
+
+
 def build_page_index_with_metadata(
     toc: list[TOCNode],
     metadata: dict[str, Any],
@@ -282,15 +293,8 @@ def build_page_index_with_metadata(
     """
     thin_tree = build_thin_tree(toc, min_node_tokens)
 
-    def _sum_tokens(nodes: list[dict[str, Any]]) -> int:
-        total = 0
-        for node in nodes:
-            total += node.get('token_estimate', 0) or 0
-            total += _sum_tokens(node.get('children', []))
-        return total
-
     metadata = dict(metadata)  # don't mutate caller's dict
-    metadata['total_tokens'] = _sum_tokens(thin_tree)
+    metadata['total_tokens'] = _inject_subtree_tokens(thin_tree)
 
     return {'metadata': metadata, 'toc': thin_tree}
 

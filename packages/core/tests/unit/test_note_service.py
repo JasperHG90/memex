@@ -263,6 +263,40 @@ class TestFilterToc:
         assert len(result[0]['children']) == 1
         assert result[0]['children'][0]['id'] == 'grandchild-1-1-1'
 
+    def test_subtree_tokens_preserved_through_depth_0(self):
+        """subtree_tokens should survive depth=0 filtering."""
+        toc = [
+            {
+                'id': 'root',
+                'title': 'Root',
+                'level': 1,
+                'token_estimate': 10,
+                'subtree_tokens': 85,
+                'children': [
+                    {
+                        'id': 'child',
+                        'title': 'Child',
+                        'level': 2,
+                        'token_estimate': 30,
+                        'subtree_tokens': 75,
+                        'children': [
+                            {
+                                'id': 'gc',
+                                'title': 'GC',
+                                'level': 3,
+                                'token_estimate': 45,
+                                'subtree_tokens': 45,
+                                'children': [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = NoteService._filter_toc(toc, depth=0)
+        assert result[0]['subtree_tokens'] == 85
+        assert result[0]['children'][0]['subtree_tokens'] == 75
+
 
 @pytest.fixture
 def note_service():
