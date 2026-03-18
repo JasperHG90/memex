@@ -1,6 +1,7 @@
 """Tests for the memex_get_page_indices and memex_get_nodes MCP tools."""
 
 import datetime as dt
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -723,3 +724,53 @@ async def test_memex_get_page_indices_depth_high_value_returns_full(mock_api, mc
     # Full tree preserved
     grandchild = data[0]['toc'][0]['children'][0]['children'][0]
     assert grandchild['title'] == 'Grandchild 1.1.1'
+
+
+# ---------------------------------------------------------------------------
+# _backfill_subtree_tokens
+# ---------------------------------------------------------------------------
+
+from memex_mcp.server import _backfill_subtree_tokens
+
+
+class TestBackfillSubtreeTokens:
+    def test_backfills_missing_field(self) -> None:
+        child_a: dict[str, Any] = {'token_estimate': 20, 'children': []}
+        child_b: dict[str, Any] = {'token_estimate': 30, 'children': []}
+        nodes: list[dict[str, Any]] = [
+            {'token_estimate': 10, 'children': [child_a, child_b]},
+        ]
+        total = _backfill_subtree_tokens(nodes)
+        assert nodes[0]['subtree_tokens'] == 60
+        assert child_a['subtree_tokens'] == 20
+        assert child_b['subtree_tokens'] == 30
+        assert total == 60
+
+    def test_no_mutation_when_already_present(self) -> None:
+        nodes: list[dict[str, Any]] = [
+            {
+                'token_estimate': 10,
+                'subtree_tokens': 999,
+                'children': [
+                    {'token_estimate': 20, 'subtree_tokens': 20, 'children': []},
+                ],
+            },
+        ]
+        total = _backfill_subtree_tokens(nodes)
+        assert nodes[0]['subtree_tokens'] == 999
+        assert total == 999
+
+    def test_mixed_present_and_missing(self) -> None:
+        child_b: dict[str, Any] = {'token_estimate': 15, 'children': []}
+        nodes: list[dict[str, Any]] = [
+            {
+                'token_estimate': 5,
+                'children': [
+                    {'token_estimate': 10, 'subtree_tokens': 10, 'children': []},
+                    child_b,
+                ],
+            },
+        ]
+        _backfill_subtree_tokens(nodes)
+        assert child_b['subtree_tokens'] == 15
+        assert nodes[0]['subtree_tokens'] == 30

@@ -1,5 +1,6 @@
 """Tests for PageIndex models, utils, and short-doc bypass."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +14,10 @@ from memex_core.memory.extraction.models import (
     content_hash_md5,
     estimate_token_count,
 )
-from memex_core.memory.extraction.pipeline.diffing import build_page_index_with_metadata
+from memex_core.memory.extraction.pipeline.diffing import (
+    _inject_subtree_tokens,
+    build_page_index_with_metadata,
+)
 from memex_core.memory.extraction.utils import (
     assess_structure_quality,
     build_tree_from_regex_headers,
@@ -691,6 +695,80 @@ class TestBuildPageIndexWithMetadataTotalTokens:
 
         result = build_page_index_with_metadata([node], {'title': 'Test'})
         assert result['metadata']['total_tokens'] == 0
+
+
+# ---------------------------------------------------------------------------
+# _inject_subtree_tokens
+# ---------------------------------------------------------------------------
+
+
+class TestInjectSubtreeTokens:
+    def test_single_node(self) -> None:
+        nodes = [{'token_estimate': 50, 'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 50
+        assert nodes[0]['subtree_tokens'] == 50
+
+    def test_parent_with_children(self) -> None:
+        child_a: dict[str, Any] = {'token_estimate': 20, 'children': []}
+        child_b: dict[str, Any] = {'token_estimate': 30, 'children': []}
+        nodes: list[dict[str, Any]] = [
+            {'token_estimate': 10, 'children': [child_a, child_b]},
+        ]
+        total = _inject_subtree_tokens(nodes)
+        assert nodes[0]['subtree_tokens'] == 60
+        assert child_a['subtree_tokens'] == 20
+        assert child_b['subtree_tokens'] == 30
+        assert total == 60
+
+    def test_deeply_nested(self) -> None:
+        leaf: dict[str, Any] = {'token_estimate': 15, 'children': []}
+        mid: dict[str, Any] = {'token_estimate': 10, 'children': [leaf]}
+        nodes: list[dict[str, Any]] = [
+            {'token_estimate': 5, 'children': [mid]},
+        ]
+        total = _inject_subtree_tokens(nodes)
+        assert leaf['subtree_tokens'] == 15
+        assert mid['subtree_tokens'] == 25
+        assert nodes[0]['subtree_tokens'] == 30
+        assert total == 30
+
+    def test_none_token_estimate(self) -> None:
+        nodes: list[dict[str, Any]] = [{'token_estimate': None, 'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 0
+        assert nodes[0]['subtree_tokens'] == 0
+
+    def test_missing_token_estimate(self) -> None:
+        nodes: list[dict[str, Any]] = [{'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 0
+        assert nodes[0]['subtree_tokens'] == 0
+
+
+class TestBuildPageIndexSubtreeTokens:
+    def test_subtree_tokens_on_all_nodes(self) -> None:
+        """build_page_index_with_metadata should inject subtree_tokens on every node."""
+        headers = detect_markdown_headers_regex(STRUCTURED_DOC)
+        tree = build_tree_from_regex_headers(headers)
+        hydrate_tree(tree, headers, STRUCTURED_DOC)
+        for node in tree:
+            node._assign_content_hash_ids()
+
+        result = build_page_index_with_metadata(tree, {'title': 'Test'})
+
+        def _check(nodes: list[dict]) -> int:
+            total = 0
+            for n in nodes:
+                assert 'subtree_tokens' in n, f'Node {n["id"]} missing subtree_tokens'
+                children_sum = _check(n.get('children', []))
+                own = n.get('token_estimate', 0) or 0
+                assert n['subtree_tokens'] == own + children_sum
+                total += n['subtree_tokens']
+            return total
+
+        root_total = _check(result['toc'])
+        assert result['metadata']['total_tokens'] == root_total
 
 
 # ---------------------------------------------------------------------------
