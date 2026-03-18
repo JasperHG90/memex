@@ -128,3 +128,8 @@ jobs:
             artifacts/python-dist/*
             artifacts/dashboard-dist/dashboard-dist.tar.gz
             artifacts/openclaw-dist/openclaw-dist.tar.gz
+
+      - name: Update latest tag
+        run: |
+          git tag -f latest
+          git push origin latest --force

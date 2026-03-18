@@ -11,16 +11,25 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 
 ## 🚀 Quick Start
 
+### 1. Set up postgres
+
+Download e.g. the postgres app, or use docker (see `docker-compose.yaml` in this repository).
+
+### 2. Install and initialize
+
 ### 1. Install
 Requires Python 3.12+ and `uv`.
 
 ```bash
-uv tool install "git+https://github.com/JasperHG90/memex.git#subdirectory=packages/cli[mcp,server]"
+uv tool install --refresh "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
 
 > The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
+
+> [!WARNING]
+> The dashboard is currently under construction and does not work with the latest version.
 
 ### 2. Initialize
 Sets up your local storage and configuration.
@@ -68,8 +77,21 @@ memex memory search "How does Python handle memory management?"
 > [!NOTE]
 > Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
 
-### Claude Code Integration
-Give Claude Code persistent memory across sessions.
+### Claude Code Plugin
+
+Give Claude Code persistent memory across all projects — no per-project setup needed.
+
+```bash
+# Add the Memex marketplace
+claude plugin marketplace add JasperHG90/memex
+
+# Install the plugin
+claude plugin install memex@memex
+```
+
+Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
+
+The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
 
 ![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
 
@@ -188,7 +210,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. The `memex setup claude-code` command generates MCP config, lifecycle hooks, and `/remember` + `/recall` slash commands in one step. 26 MCP tools cover the full API surface.
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 26 MCP tools cover the full API surface.
 
 ### REST API and webhooks
 
@@ -208,7 +230,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [AI Agent Memory](./docs/tutorials/ai-agent-memory.md): Build a Python agent with persistent memory.
 
 ### How-To Guides
-- [Set Up Claude Code](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory with one command.
+- [Set Up Claude Code](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory via the plugin or setup command.
 - [Configure Memex](./docs/how-to/configure-memex.md): YAML config, environment variables, model providers.
 - [Using MCP](./docs/how-to/using-mcp.md): Connect to Claude Desktop, Cursor, and other MCP clients.
 - [Organize with Vaults](./docs/how-to/organize-with-vaults.md): Isolate project knowledge.
@@ -305,6 +327,7 @@ Memex is built as a monorepo:
 - **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
 - **`packages/dashboard`**: The view. React + Vite web UI for exploring your knowledge graph.
+- **`packages/claude-code-plugin`**: The plugin. Claude Code plugin for cross-project memory integration.
 - **`packages/openclaw`**: The plugin. Memex memory integration for OpenClaw agents.
 
 ## Acknowledgements
