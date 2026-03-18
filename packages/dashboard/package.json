@@ -1,7 +1,7 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.0.8a",
+  "version": "0.0.16a",
   "type": "module",
   "scripts": {
     "dev": "vite",
