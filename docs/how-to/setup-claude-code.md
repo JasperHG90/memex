@@ -22,7 +22,7 @@ If you prefer per-project configuration (e.g. to customize vaults or hooks per p
 
 ### Prerequisites
 
-* Memex installed (`uv tool install memex-cli[mcp]`)
+* Memex installed (`uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 * A running Memex server (`memex server start -d`)
 * Claude Code installed
 

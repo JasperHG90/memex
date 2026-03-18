@@ -4,7 +4,7 @@ This guide shows you how to connect Memex to AI assistants via the Model Context
 
 ## Prerequisites
 
-* Memex installed with the MCP extra (`uv tool install git+https://github.com/JasperHG90/memex.git[mcp]`)
+* Memex installed with the MCP extra (`uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 * A running Memex server (`memex server start`)
 * An MCP-compatible AI client
 
@@ -152,7 +152,7 @@ Then configure your client to connect via SSE instead of spawning a subprocess:
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
-| "memex_mcp is not installed" | Missing MCP extra | Run `uv tool install git+https://github.com/JasperHG90/memex.git[mcp]` |
+| "memex_mcp is not installed" | Missing MCP extra | Run `uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"` |
 | Tools not appearing in client | Config file in wrong location | Check the path for your OS (see above) |
 | "Connection refused" errors | Memex server not running | Start with `memex server start` |
 | Wrong vault in results | `MEMEX_VAULT__ACTIVE` not set | Add the env var to your MCP config |

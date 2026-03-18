@@ -72,15 +72,11 @@ Each package in the monorepo has its own README with package-specific details.
 
 | Package | Description |
 |:--------|:------------|
----
-
-> **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.
-
----
-
 | [packages/core](../packages/core/README.md) | Storage engines, memory system, services, and FastAPI server. |
 | [packages/cli](../packages/cli/README.md) | Typer CLI (`memex` command). |
 | [packages/mcp](../packages/mcp/README.md) | FastMCP server for LLM integration. |
 | [packages/common](../packages/common/README.md) | Shared Pydantic models, configuration, and exceptions. |
 | [packages/dashboard](../packages/dashboard/README.md) | React + Vite web UI. |
 | [packages/openclaw](../packages/openclaw/README.md) | Memex memory plugin for OpenClaw agents. |
+
+> **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.
