@@ -79,7 +79,8 @@ def _results_text(
         parts.extend(r.text for r in memory_results)
     if note_results:
         for nr in note_results:
-            parts.extend(s.text for s in nr.snippets)
+            if nr.summary:
+                parts.extend(str(v) for v in nr.summary.model_dump().values() if v)
             if nr.metadata:
                 parts.append(str(nr.metadata))
     return '\n'.join(parts)

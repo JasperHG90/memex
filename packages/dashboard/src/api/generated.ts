@@ -108,23 +108,19 @@ export const NodeDTO = z.object({
 });
 export type NodeDTO = z.infer<typeof NodeDTO>;
 
-export const NoteSnippet = z.object({
-  text: z.string(),
-  score: z.number().optional().default(0),
-  chunk_index: z.union([z.number(), z.null()]).optional(),
-  id: z.union([z.string(), z.null()]).optional(),
-  fact_type: z.union([z.string(), z.null()]).optional(),
-  event_date: z.union([z.string(), z.null()]).optional(),
-  node_id: z.union([z.string(), z.null()]).optional(),
-  node_title: z.union([z.string(), z.null()]).optional(),
-  node_level: z.union([z.number(), z.null()]).optional(),
+export const SectionSummaryDTO = z.object({
+  who: z.union([z.string(), z.null()]).optional(),
+  what: z.union([z.string(), z.null()]).optional(),
+  how: z.union([z.string(), z.null()]).optional(),
+  when: z.union([z.string(), z.null()]).optional(),
+  where: z.union([z.string(), z.null()]).optional(),
 });
-export type NoteSnippet = z.infer<typeof NoteSnippet>;
+export type SectionSummaryDTO = z.infer<typeof SectionSummaryDTO>;
 
 export const NoteSearchResult = z.object({
   note_id: z.string().uuid(),
   metadata: z.record(z.string(), z.unknown()),
-  snippets: z.array(NoteSnippet),
+  summary: z.union([SectionSummaryDTO, z.null()]).optional(),
   score: z.number().optional().default(0),
   vault_id: z.union([z.string(), z.null()]).optional(),
   vault_name: z.union([z.string(), z.null()]).optional(),

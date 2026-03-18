@@ -171,18 +171,10 @@ export interface NoteSearchRequest {
   vault_ids?: string[] | null;
 }
 
-export interface NoteSearchSnippet {
-  text: string;
-  score?: number;
-  node_id?: string | null;
-  node_title?: string | null;
-  node_level?: number | null;
-}
-
 export interface NoteSearchResult {
   note_id: string;
   metadata: Record<string, unknown>;
-  snippets: NoteSearchSnippet[];
+  summary?: SectionSummaryDTO | null;
   score: number;
   vault_id?: string | null;
   vault_name?: string | null;

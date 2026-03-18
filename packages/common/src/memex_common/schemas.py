@@ -775,28 +775,12 @@ class NoteDTO(BaseModel):
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class NoteSnippet(BaseModel):
-    """Snippet of text from a note."""
-
-    text: str
-    score: float = 0.0
-    chunk_index: int | None = None
-    # Legacy fields (optional)
-    id: UUID | None = None
-    fact_type: FactTypes | str | None = None
-    event_date: str | None = None
-    # Node-level info (populated when PageIndex strategy was used)
-    node_id: UUID | None = None
-    node_title: str | None = None
-    node_level: int | None = None
-
-
 class NoteSearchResult(BaseModel):
     """Result of a note search."""
 
     note_id: UUID
     metadata: dict[str, Any]
-    snippets: list[NoteSnippet]
+    summary: 'SectionSummaryDTO | None' = None
     score: float = 0.0
     vault_id: UUID | None = None
     vault_name: str | None = None

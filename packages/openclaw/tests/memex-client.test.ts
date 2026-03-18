@@ -449,7 +449,7 @@ describe('MemexClient', () => {
     });
 
     it('returns parsed NDJSON stream', async () => {
-      const results = [{ note_id: 'n1', snippets: [], score: 0.9 }];
+      const results = [{ note_id: 'n1', score: 0.9 }];
       const client = new MemexClient(makeConfig());
       fetchSpy.mockResolvedValueOnce(ndjsonResponse(results));
 

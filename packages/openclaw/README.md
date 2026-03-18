@@ -23,7 +23,7 @@ Both hooks are guarded by a **circuit breaker** (3 consecutive failures open the
 |------|-------------|
 | `memex_memory_search` | Search Memex memories by natural-language query. Accepts optional `limit` parameter. Returns ranked memory units (facts, observations, experiences). |
 | `memex_store` | Store a note in Memex. Accepts `text`, optional `name`, and optional `tags`. Ingestion runs in the background — the tool returns immediately. |
-| `memex_note_search` | Search source notes with optional synthesis. Accepts `query`, `limit`, `summarize`, `reason`, and `expand_query`. Returns ranked notes with snippets. |
+| `memex_note_search` | Search source notes with optional synthesis. Accepts `query`, `limit`, `summarize`, `reason`, and `expand_query`. Returns ranked notes with 5W summaries. |
 | `memex_read_note` | Retrieve the full content and metadata of a note by its UUID. |
 | `memex_get_page_index` | Get the hierarchical table of contents for a note. Returns section titles, summaries, and node IDs for drilling into specific sections. |
 | `memex_get_node` | Retrieve the full text content of a specific note section by its node ID. Use after `memex_get_page_index` to read individual sections. |

@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from uuid import uuid4
 from memex_cli.notes import app
 from memex_common.config import MemexConfig
-from memex_common.schemas import NoteSearchResult, NoteSnippet
+from memex_common.schemas import NoteSearchResult, SectionSummaryDTO
 
 runner = CliRunner()
 
@@ -29,16 +29,14 @@ def test_cli_note_search_success(mock_api, mock_config):
 
     # Create mock results using Pydantic models
     doc_id = uuid4()
-    snippet_id = uuid4()
 
     result = NoteSearchResult(
         note_id=doc_id,
         metadata={'title': 'Test Note', 'filename': 'test.md'},
-        snippets=[
-            NoteSnippet(
-                id=snippet_id, text='This is a test snippet.', event_date='2023-01-01T12:00:00'
-            )
-        ],
+        summary=SectionSummaryDTO(
+            what='A test document about testing',
+            who='Test author',
+        ),
         score=0.95,
     )
 
@@ -53,8 +51,6 @@ def test_cli_note_search_success(mock_api, mock_config):
         assert result.exit_code == 0
         assert 'Test Note' in result.stdout
         assert str(doc_id) in result.stdout
-        assert 'This is a test' in result.stdout
-        assert 'snippet.' in result.stdout
 
 
 def test_cli_note_search_empty(mock_api, mock_config):

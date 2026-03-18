@@ -23,7 +23,7 @@ from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_common.config import RetrievalConfig
 from memex_core.memory.retrieval.strategies import get_note_graph_strategy
 from memex_core.memory.sql_models import Chunk, Note, Node
-from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
+from memex_common.schemas import NoteSearchRequest, NoteSearchResult, SectionSummaryDTO
 
 
 class RelevantSection(BaseModel):
@@ -240,21 +240,12 @@ class NoteSearchEngine:
         if not node_rows:
             return results, ReasoningOutput()
 
-        # Step 3: Build refined snippets and reasoning grouped by document.
+        # Step 3: Build reasoning grouped by document.
         # Map node_hash → (db_node_uuid, document_id) for enriching reasoning.
         hash_to_info: dict[str, tuple[UUID, UUID]] = {}
-        doc_snippets: dict[UUID, list[NoteSnippet]] = {}
         section_texts: list[str] = []
-        for node_id, doc_id, title, node_text, level, node_hash in node_rows:
+        for node_id, doc_id, title, node_text, _level, node_hash in node_rows:
             hash_to_info[node_hash] = (node_id, doc_id)
-            snippet = NoteSnippet(
-                text=node_text or '',
-                score=1.0,
-                node_id=node_id,
-                node_title=title,
-                node_level=level,
-            )
-            doc_snippets.setdefault(doc_id, []).append(snippet)
             section_texts.append(f'## {title}\n{node_text}')
 
         # Build per-document reasoning enriched with the real node UUID.
@@ -266,10 +257,6 @@ class NoteSearchEngine:
                 node_uuid, doc_id = info
                 data['node_uuid'] = str(node_uuid)
                 reasoning_by_doc.setdefault(doc_id, []).append(data)
-
-        for result in results:
-            if result.note_id in doc_snippets:
-                result.snippets = doc_snippets[result.note_id]
 
         return results, ReasoningOutput(
             reasoning_by_doc=reasoning_by_doc, section_texts=section_texts
@@ -576,21 +563,6 @@ class NoteSearchEngine:
             best_chunk = max(chunks_with_scores, key=lambda x: x[1])[0]
             doc_representative_chunk_ids[doc_id] = best_chunk.id
 
-            snippets = sorted(
-                [
-                    NoteSnippet(
-                        text=c.text
-                        if c.text and c.text.strip()
-                        else node_texts_by_block.get(c.id, ''),
-                        score=s,
-                        chunk_index=c.chunk_index,
-                    )
-                    for c, s in chunks_with_scores
-                ],
-                key=lambda x: x.score,
-                reverse=True,
-            )
-
             metadata = dict(doc.doc_metadata)
             retain_params = metadata.get('retain_params', {})
             if isinstance(retain_params, dict):
@@ -599,18 +571,22 @@ class NoteSearchEngine:
                     metadata['name'] = note_name
                     metadata['title'] = note_name
 
-            # Enrich with page_index metadata and asset info
+            # Enrich with page_index metadata, asset info, and 5W summary
+            summary: SectionSummaryDTO | None = None
             if isinstance(doc.page_index, dict):
                 pi_meta = doc.page_index.get('metadata') or {}
                 for key in ('description', 'tags', 'publish_date', 'source_uri'):
                     if key in pi_meta and pi_meta[key]:
                         metadata.setdefault(key, pi_meta[key])
+                toc = doc.page_index.get('toc', [])
+                if toc and isinstance(toc[0].get('summary'), dict):
+                    summary = SectionSummaryDTO(**toc[0]['summary'])
             metadata.setdefault('has_assets', bool(doc.assets))
             metadata['vault_id'] = str(doc.vault_id)
 
             final_results.append(
                 NoteSearchResult(
-                    note_id=doc.id, metadata=metadata, snippets=snippets, score=best_score
+                    note_id=doc.id, metadata=metadata, summary=summary, score=best_score
                 )
             )
 

@@ -43,7 +43,7 @@ from memex_mcp.models import (
     McpOverlap,
     McpPageIndex,
     McpPageMetadata,
-    McpSnippet,
+    McpSectionSummary,
     McpSupersession,
     McpVault,
 )
@@ -861,7 +861,7 @@ async def memex_memory_search(
     name='memex_note_search',
     description=(
         'Search source notes by hybrid retrieval (note search). '
-        'Returns ranked notes with snippets. Best for targeted document lookup. '
+        'Returns ranked notes with 5W summaries. Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
     annotations={'readOnlyHint': True},
@@ -942,14 +942,9 @@ async def memex_note_search(
                 or metadata.get('filename')
                 or 'Untitled'
             )
-            snippets = [
-                McpSnippet(
-                    text=s.text.strip(),
-                    node_id=s.node_id,
-                    node_title=s.node_title,
-                )
-                for s in (doc.snippets or [])
-            ]
+            summary: McpSectionSummary | None = None
+            if doc.summary is not None:
+                summary = McpSectionSummary(**doc.summary.model_dump())
             output.append(
                 McpNoteSearchResult(
                     note_id=doc.note_id,
@@ -961,7 +956,7 @@ async def memex_note_search(
                     tags=metadata.get('tags', []),
                     source_uri=metadata.get('source_uri'),
                     has_assets=metadata.get('has_assets', False),
-                    snippets=snippets,
+                    summary=summary,
                 )
             )
 

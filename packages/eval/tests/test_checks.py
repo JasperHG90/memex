@@ -22,7 +22,7 @@ class TestResultsText:
         assert 'Beta fact' in text
 
     def test_note_only(self, make_note_result):
-        notes = [make_note_result(['snippet one', 'snippet two'])]
+        notes = [make_note_result(['snippet one snippet two'])]
         text = _results_text(None, notes)
         assert 'snippet one' in text
         assert 'snippet two' in text

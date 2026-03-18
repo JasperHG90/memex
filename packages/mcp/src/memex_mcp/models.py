@@ -167,18 +167,12 @@ class McpCooccurrence(BaseModel):
 # ── Note search & find ──
 
 
-class McpSnippet(BaseModel):
-    text: str
-    node_id: UUID | None = None
-    node_title: str | None = None
-
-    @field_validator('text', mode='before')
-    @classmethod
-    def _truncate_text(cls, v: str) -> str:
-        limit = 500
-        if isinstance(v, str) and len(v) > limit:
-            return v[:limit] + '… [truncated]'
-        return v
+class McpSectionSummary(BaseModel):
+    who: str | None = None
+    what: str | None = None
+    how: str | None = None
+    when: str | None = None
+    where: str | None = None
 
 
 class McpNoteSearchResult(BaseModel):
@@ -191,7 +185,7 @@ class McpNoteSearchResult(BaseModel):
     tags: list[str] = []
     source_uri: str | None = None
     has_assets: bool = False
-    snippets: list[McpSnippet] = []
+    summary: McpSectionSummary | None = None
 
     @field_validator('tags', mode='before')
     @classmethod
