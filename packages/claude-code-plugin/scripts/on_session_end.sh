@@ -3,12 +3,11 @@
 # Records a lightweight session marker note in Memex.
 set -euo pipefail
 
-# Memex CLI invocation — pinned to the GitHub repository
-MEMEX_FROM="memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
-MEMEX=(uvx --from "$MEMEX_FROM" memex)
+RESOLVED_URL="${MEMEX_SERVER_URL:-http://127.0.0.1:8000}"
+API="${RESOLVED_URL}/api/v1"
 
-# Guard: uvx must be on PATH
-command -v uvx >/dev/null 2>&1 || exit 0
+# Quick health check — skip if server is down
+curl -sf --max-time 2 "${API}/health" >/dev/null 2>&1 || exit 0
 
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 COMPACT_FILE="$STATE_DIR/compact_pending.json"
@@ -20,7 +19,10 @@ if [ -f "$COMPACT_FILE" ]; then
     rm -f "$COMPACT_FILE"
 fi
 
-"${MEMEX[@]}" note add \
-    "Session ended${compact_note}." \
-    --tags "session-marker" \
-    2>/dev/null || exit 0
+# Add session marker note via API
+curl -sf --max-time 3 -X POST "${API}/notes" \
+    -H "Content-Type: application/json" \
+    -d "{\"content\":\"Session ended${compact_note}.\",\"tags\":[\"session-marker\"],\"author\":\"claude-code\"}" \
+    >/dev/null 2>&1 || true
+
+exit 0
