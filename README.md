@@ -12,6 +12,9 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 
 ## 🚀 Quick Start
 
+> [!NOTE]
+> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
+
 ### 1. Set up postgres
 
 Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
@@ -70,9 +73,6 @@ memex memory search "How does Python handle memory management?"
 
 ## See it in action
 
-> [!NOTE]
-> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
-
 ### Claude Code Plugin
 
 Give Claude Code persistent memory across all projects — no per-project setup needed.
@@ -88,6 +88,23 @@ claude plugin install memex@memex
 Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
 
 The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+
+#### Updating the claude code plugin
+
+To update the claude code plugin, first execute `claude plugin marketplace update`, then `claude plugin update memex@memex` to update the claude code plugin.
+
+#### Overriding defaults
+
+- By default, the claude code plugin uses the MCP server from tag `latest`. To override this, you can specify a project-level memex MCP server in your project's `.mcp.json`.
+- To override individual memex settings (e.g. MEMEX_BASE_URL), add these to './claude/settings.json', e.g.
+
+```json
+{
+  "env": {
+    "MEMEX_SERVER_URL": "http://host.docker.internal:8000"
+  }
+}
+```
 
 ![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
 
