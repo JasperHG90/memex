@@ -43,11 +43,11 @@ tmp_notes=$(mktemp)
 tmp_kv=$(mktemp)
 trap 'rm -f "$tmp_vaults" "$tmp_notes" "$tmp_kv"' EXIT
 
-# Only include project: namespace when we have a project identifier
+# Build namespace filter: always global + user + app:claude-code, plus project if available
 if [ -n "$project_id" ]; then
-    encoded_ns=$(jq -rn --arg ns "global,user,project:${project_id}" '$ns | @uri')
+    encoded_ns=$(jq -rn --arg ns "global,user,app:claude-code,project:${project_id}" '$ns | @uri')
 else
-    encoded_ns=$(jq -rn --arg ns "global,user" '$ns | @uri')
+    encoded_ns=$(jq -rn --arg ns "global,user,app:claude-code" '$ns | @uri')
 fi
 
 curl -sf --max-time 5 "${API}/vaults" > "$tmp_vaults" 2>/dev/null &
