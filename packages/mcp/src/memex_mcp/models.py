@@ -311,6 +311,24 @@ class McpKVWriteResult(BaseModel):
     scope: str
 
 
+def _scope_from_key(key: str) -> str:
+    """Derive scope from the namespace prefix of a key.
+
+    Examples:
+        'global:foo' -> 'global'
+        'user:work:employer' -> 'user'
+        'project:github.com/user/repo:vault' -> 'project:github.com/user/repo'
+    """
+    if key.startswith('project:'):
+        # project:<project-id>:<setting> -> scope is project:<project-id>
+        rest = key[len('project:') :]
+        colon_idx = rest.rfind(':')
+        if colon_idx > 0:
+            return f'project:{rest[:colon_idx]}'
+        return 'project'
+    return key.split(':', 1)[0] if ':' in key else 'unknown'
+
+
 # ── Add note ──
 
 

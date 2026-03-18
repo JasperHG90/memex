@@ -28,20 +28,21 @@ async def kv_write(
     value: Annotated[str, typer.Argument(help='The fact/value to store.')],
     key: Annotated[
         str,
-        typer.Option('--key', '-k', help='Namespaced key, e.g. "tool:python:pkg_mgr".'),
+        typer.Option(
+            '--key',
+            '-k',
+            help='Namespaced key (must start with global:, user:, or project:).',
+        ),
     ],
-    vault: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Target vault name or UUID.')
-    ] = None,
 ):
     """
-    Write a fact to the KV store. Key is required (use MCP tool for auto-generation).
+    Write a fact to the KV store. Key must be namespace-prefixed.
     """
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:
         try:
-            entry = await api.kv_put(value=value, key=key, vault_id=vault)
+            entry = await api.kv_put(value=value, key=key)
         except Exception as e:
             handle_api_error(e)
 
@@ -53,7 +54,6 @@ async def kv_write(
 async def kv_get(
     ctx: typer.Context,
     key: Annotated[str, typer.Argument(help='Key to look up.')],
-    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
     value_only: Annotated[
         bool, typer.Option('--value-only', help='Print only the raw value (no formatting).')
     ] = False,
@@ -65,7 +65,7 @@ async def kv_get(
 
     async with get_api_context(config) as api:
         try:
-            entry = await api.kv_get(key=key, vault_id=vault)
+            entry = await api.kv_get(key=key)
         except Exception as e:
             handle_api_error(e)
 
@@ -88,7 +88,10 @@ async def kv_search(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Search query.')],
     limit: Annotated[int, typer.Option('--limit', '-l', help='Max results.')] = 5,
-    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    namespace: Annotated[
+        list[str] | None,
+        typer.Option('--namespace', '-n', help='Filter by namespace prefix (repeatable).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -98,7 +101,7 @@ async def kv_search(
 
     async with get_api_context(config) as api:
         try:
-            results = await api.kv_search(query=query, vault_id=vault, limit=limit)
+            results = await api.kv_search(query=query, namespaces=namespace, limit=limit)
         except Exception as e:
             handle_api_error(e)
 
@@ -113,12 +116,12 @@ async def kv_search(
     table = Table(title=f'KV Search: "{query}"')
     table.add_column('Key', style='cyan')
     table.add_column('Value', style='white', ratio=3)
-    table.add_column('Vault', style='dim')
+    table.add_column('Namespace', style='dim')
     table.add_column('Updated', style='dim')
 
     for entry in results:
-        vault_str = str(entry.vault_id) if entry.vault_id else 'global'
-        table.add_row(entry.key, entry.value, vault_str, str(entry.updated_at))
+        ns = entry.key.split(':', 1)[0] if ':' in entry.key else '?'
+        table.add_row(entry.key, entry.value, ns, str(entry.updated_at))
 
     console.print(table)
 
@@ -127,7 +130,10 @@ async def kv_search(
 @async_command
 async def kv_list(
     ctx: typer.Context,
-    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    namespace: Annotated[
+        list[str] | None,
+        typer.Option('--namespace', '-n', help='Filter by namespace prefix (repeatable).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -137,7 +143,7 @@ async def kv_list(
 
     async with get_api_context(config) as api:
         try:
-            entries = await api.kv_list(vault_id=vault)
+            entries = await api.kv_list(namespaces=namespace)
         except Exception as e:
             handle_api_error(e)
 
@@ -152,12 +158,12 @@ async def kv_list(
     table = Table(title='KV Entries')
     table.add_column('Key', style='cyan')
     table.add_column('Value', style='white', ratio=3)
-    table.add_column('Vault', style='dim')
+    table.add_column('Namespace', style='dim')
     table.add_column('Updated', style='dim')
 
     for entry in entries:
-        vault_str = str(entry.vault_id) if entry.vault_id else 'global'
-        table.add_row(entry.key, entry.value, vault_str, str(entry.updated_at))
+        ns = entry.key.split(':', 1)[0] if ':' in entry.key else '?'
+        table.add_row(entry.key, entry.value, ns, str(entry.updated_at))
 
     console.print(table)
 
@@ -167,7 +173,6 @@ async def kv_list(
 async def kv_delete(
     ctx: typer.Context,
     key: Annotated[str, typer.Argument(help='Key to delete.')],
-    vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
@@ -182,7 +187,7 @@ async def kv_delete(
 
     async with get_api_context(config) as api:
         try:
-            deleted = await api.kv_delete(key=key, vault_id=vault)
+            deleted = await api.kv_delete(key=key)
         except Exception as e:
             handle_api_error(e)
 

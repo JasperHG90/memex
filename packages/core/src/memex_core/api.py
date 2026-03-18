@@ -962,43 +962,42 @@ class MemexAPI:
 
     async def kv_put(
         self,
-        vault_id: UUID | None,
         key: str,
         value: str,
         embedding: list[float] | None = None,
     ) -> Any:
         """Upsert a KV entry. Delegates to KVService."""
-        return await self._kv.put(vault_id=vault_id, key=key, value=value, embedding=embedding)
+        return await self._kv.put(key=key, value=value, embedding=embedding)
 
-    async def kv_get(self, key: str, vault_id: UUID | None = None) -> Any | None:
+    async def kv_get(self, key: str) -> Any | None:
         """Get a KV entry by key. Delegates to KVService."""
-        return await self._kv.get(key=key, vault_id=vault_id)
+        return await self._kv.get(key=key)
 
     async def kv_search(
         self,
         query_embedding: list[float],
-        vault_id: UUID | None = None,
+        namespaces: list[str] | None = None,
         limit: int = 5,
     ) -> list[Any]:
         """Semantic search over KV entries. Delegates to KVService."""
         return await self._kv.search(
-            query_embedding=query_embedding, vault_id=vault_id, limit=limit
+            query_embedding=query_embedding, namespaces=namespaces, limit=limit
         )
 
-    async def kv_delete(self, key: str, vault_id: UUID | None = None) -> bool:
+    async def kv_delete(self, key: str) -> bool:
         """Delete a KV entry. Delegates to KVService."""
-        return await self._kv.delete(key=key, vault_id=vault_id)
+        return await self._kv.delete(key=key)
 
     async def kv_list(
         self,
-        vault_id: UUID | None = None,
+        namespaces: list[str] | None = None,
         limit: int = 100,
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
     ) -> list[Any]:
         """List KV entries. Delegates to KVService."""
         return await self._kv.list_entries(
-            vault_id=vault_id,
+            namespaces=namespaces,
             limit=limit,
             exclude_prefix=exclude_prefix,
             key_prefix=key_prefix,

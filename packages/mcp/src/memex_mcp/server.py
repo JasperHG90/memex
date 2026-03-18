@@ -33,6 +33,7 @@ from memex_mcp.models import (
     McpFindResult,
     McpKVEntry,
     McpKVWriteResult,
+    _scope_from_key,
     McpNode,
     McpNote,
     McpNoteContent,
@@ -184,7 +185,7 @@ IF query is broad (e.g. "explain X and how it fits the architecture"):
 
 IF storing/retrieving structured facts, preferences, or conventions:
   → KV STORE
-  - `memex_kv_write(value, key, vault_id)` — store a user fact or preference
+  - `memex_kv_write(value, key)` — store a user fact or preference
   - `memex_kv_get(key)` — exact key lookup
   - `memex_kv_search(query)` — fuzzy semantic search over stored facts
   - `memex_kv_list()` — list all stored facts
@@ -1837,9 +1838,11 @@ async def memex_find_note(
     description=(
         'Write a fact to the key-value store. Generates an embedding for semantic search. '
         'Use for storing structured preferences, settings, or facts. '
-        'Key should be a short, namespaced identifier (e.g. "tool:python:pkg_mgr"). '
-        'For per-project agent settings, use the "agents:<project_id>:<setting>" convention '
-        '(e.g. "agents:https://github.com/user/repo:vault").'
+        'Key MUST start with a namespace prefix: '
+        '"global:" (always loaded), "user:" (personal prefs), or '
+        '"project:<project-id>:" (project-scoped). '
+        'Examples: "global:tool:python:pkg_mgr", "user:work:employer", '
+        '"project:github.com/user/repo:vault".'
     ),
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
@@ -1851,28 +1854,16 @@ async def memex_kv_write(
         str,
         Field(
             description=(
-                'Namespaced key, e.g. "tool:python:pkg_mgr". '
-                'For per-project settings: "agents:<project_id>:<setting>".'
+                'Namespaced key. Must start with global:, user:, or project:. '
+                'Examples: "global:lang:python:version", '
+                '"project:github.com/user/repo:vault".'
             ),
         ),
     ],
-    vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description='Vault UUID or name. None = global (available in all vaults).',
-        ),
-    ] = None,
 ) -> McpKVWriteResult:
     """Write a fact to the KV store with embedding generation."""
     try:
         api = get_api(ctx)
-
-        # Validate vault exists before proceeding
-        resolved_vault: str | None = vault_id
-        if vault_id:
-            resolved_uuid = await _resolve_vault_id(api, vault_id)
-            resolved_vault = str(resolved_uuid)
 
         # Generate embedding for semantic search via the API layer
         embedding = await api.embed_text(value)
@@ -1880,11 +1871,10 @@ async def memex_kv_write(
         entry = await api.kv_put(
             value=value,
             key=key,
-            vault_id=resolved_vault,
             embedding=embedding,
         )
 
-        scope = f'vault {vault_id}' if vault_id else 'global'
+        scope = _scope_from_key(entry.key)
         return McpKVWriteResult(key=entry.key, value=entry.value, scope=scope)
 
     except ToolError:
@@ -1903,29 +1893,19 @@ async def memex_kv_write(
 async def memex_kv_get(
     ctx: Context,
     key: Annotated[str, Field(description='Exact key to look up.')],
-    vault_id: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description='Vault UUID or name. Checks vault-specific first, then global.',
-        ),
-    ] = None,
 ) -> McpKVEntry | None:
     """Exact key lookup in the KV store."""
     try:
         api = get_api(ctx)
-        if vault_id:
-            await _resolve_vault_id(api, vault_id)
-        entry = await api.kv_get(key=key, vault_id=vault_id)
+        entry = await api.kv_get(key=key)
 
         if entry is None:
             return None
 
-        scope = f'vault {entry.vault_id}' if entry.vault_id else 'global'
         return McpKVEntry(
             key=entry.key,
             value=entry.value,
-            scope=scope,
+            scope=_scope_from_key(entry.key),
             updated_at=entry.updated_at,
         )
 
@@ -1940,7 +1920,8 @@ async def memex_kv_get(
     name='memex_kv_search',
     description=(
         'Fuzzy search facts in the KV store by semantic similarity. '
-        'Returns the closest matching entries.'
+        'Returns the closest matching entries. '
+        'Optionally filter by namespace prefixes (global, user, project).'
     ),
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -1948,11 +1929,11 @@ async def memex_kv_get(
 async def memex_kv_search(
     ctx: Context,
     query: Annotated[str, Field(description='Search query text.')],
-    vault_id: Annotated[
-        str | None,
+    namespaces: Annotated[
+        list[str] | None,
         Field(
             default=None,
-            description='Vault UUID or name. None = search global entries only.',
+            description='Namespace prefixes to filter by (e.g. ["global", "user"]).',
         ),
     ] = None,
     limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
@@ -1960,15 +1941,13 @@ async def memex_kv_search(
     """Semantic search over KV store entries."""
     try:
         api = get_api(ctx)
-        if vault_id:
-            await _resolve_vault_id(api, vault_id)
-        results = await api.kv_search(query=query, vault_id=vault_id, limit=limit)
+        results = await api.kv_search(query=query, namespaces=namespaces, limit=limit)
 
         return [
             McpKVEntry(
                 key=entry.key,
                 value=entry.value,
-                scope=f'vault {entry.vault_id}' if entry.vault_id else 'global',
+                scope=_scope_from_key(entry.key),
                 updated_at=entry.updated_at,
             )
             for entry in results
@@ -1983,32 +1962,33 @@ async def memex_kv_search(
 
 @mcp.tool(
     name='memex_kv_list',
-    description='List all facts in the KV store. Without vault_id returns global only.',
+    description=(
+        'List all facts in the KV store. '
+        'Optionally filter by namespace prefixes (global, user, project).'
+    ),
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
 async def memex_kv_list(
     ctx: Context,
-    vault_id: Annotated[
-        str | None,
+    namespaces: Annotated[
+        list[str] | None,
         Field(
             default=None,
-            description='Vault UUID or name. None = global entries only; with vault = both.',
+            description='Namespace prefixes to filter by (e.g. ["global", "user"]).',
         ),
     ] = None,
 ) -> list[McpKVEntry]:
     """List KV store entries."""
     try:
         api = get_api(ctx)
-        if vault_id:
-            await _resolve_vault_id(api, vault_id)
-        entries = await api.kv_list(vault_id=vault_id)
+        entries = await api.kv_list(namespaces=namespaces)
 
         return [
             McpKVEntry(
                 key=entry.key,
                 value=entry.value,
-                scope=f'vault {entry.vault_id}' if entry.vault_id else 'global',
+                scope=_scope_from_key(entry.key),
                 updated_at=entry.updated_at,
             )
             for entry in entries
