@@ -1294,6 +1294,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
                     description=row['vault'].description,
                     is_active=(row['vault'].id == active_vault_id),
                     note_count=row['note_count'],
+                    last_note_added_at=row.get('last_note_added_at'),
                 )
                 for row in rows
             ]
@@ -1306,6 +1307,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
                     name=v.name,
                     description=v.description,
                     is_active=v.is_active,
+                    last_note_added_at=v.last_note_added_at,
                 )
                 for v in vaults
             ]

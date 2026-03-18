@@ -482,6 +482,11 @@ class VaultDTO(BaseModel):
         description='Number of notes in this vault.',
     )
 
+    last_note_added_at: dt.datetime | None = Field(
+        default=None,
+        description='Timestamp of the most recently added note in this vault.',
+    )
+
 
 class DefaultVaultsResponse(BaseModel):
     """Response model for the default vaults endpoint."""

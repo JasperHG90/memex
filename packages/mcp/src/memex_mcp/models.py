@@ -283,6 +283,7 @@ class McpVault(BaseModel):
     description: str | None = None
     is_active: bool = False
     note_count: int = 0
+    last_note_added_at: datetime | None = None
 
 
 # ── Assets ──

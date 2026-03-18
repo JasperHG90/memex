@@ -102,6 +102,7 @@ async def list_vaults(
                     description=row['vault'].description,
                     is_active=(row['vault'].id == active_vault_id),
                     note_count=row['note_count'],
+                    last_note_added_at=row['last_note_added_at'],
                 )
                 for row in rows
             ]

@@ -47,15 +47,17 @@ async def list_vaults(
                 handle_api_error(e)
 
             lines = [
-                '| Name | Notes | Active | Description |',
-                '|------|-------|--------|-------------|',
+                '| Name | Notes | Last Modified | Active | Description |',
+                '|------|-------|---------------|--------|-------------|',
             ]
             for row in rows:
                 v = row['vault']
                 count = row['note_count']
+                last_mod_dt = row.get('last_note_added_at')
+                last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
                 desc = v.description or ''
-                lines.append(f'| {v.name} | {count} | {active} | {desc} |')
+                lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
             print('\n'.join(lines))
             return
 
