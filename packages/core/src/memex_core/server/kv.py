@@ -65,10 +65,10 @@ async def kv_put(
         raise _handle_error(e, 'Failed to put KV entry')
 
 
-@router.get('/kv/{key}', response_model=KVEntryDTO)
+@router.get('/kv/get', response_model=KVEntryDTO)
 async def kv_get(
-    key: str,
     api: Annotated[MemexAPI, Depends(get_api)],
+    key: str = Query(description='Key to look up'),
     vault_id: str | None = Query(None, description='Vault ID or name'),
 ):
     """Get a key-value entry by key. Checks vault-specific first, then global."""
@@ -112,10 +112,10 @@ async def kv_search(
         raise _handle_error(e, 'KV search failed')
 
 
-@router.delete('/kv/{key}')
+@router.delete('/kv/delete')
 async def kv_delete(
-    key: str,
     api: Annotated[MemexAPI, Depends(get_api)],
+    key: str = Query(description='Key to delete'),
     vault_id: str | None = Query(None, description='Vault ID or name'),
 ):
     """Delete a key-value entry."""
