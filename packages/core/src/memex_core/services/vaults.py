@@ -111,6 +111,27 @@ class VaultService(BaseService):
             stmt = select(Vault)
             return list((await session.exec(stmt)).all())
 
+    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
+        """List all vaults with note counts via LEFT JOIN + GROUP BY."""
+        from sqlalchemy import func
+        from sqlmodel import select
+        from memex_core.memory.sql_models import Vault, Note
+
+        async with self.metastore.session() as session:
+            stmt = (
+                select(Vault, func.count(Note.id).label('note_count'))
+                .outerjoin(Note, Note.vault_id == Vault.id)
+                .group_by(Vault.id)
+            )
+            results = (await session.exec(stmt)).all()
+            return [
+                {
+                    'vault': row[0],
+                    'note_count': row[1],
+                }
+                for row in results
+            ]
+
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a single vault by exact name match."""
         from memex_core.memory.sql_models import Vault

@@ -29,6 +29,10 @@ async def list_vaults(
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one vault name per line.')
     ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option('--compact', help='Output as a plain markdown table with note counts.'),
+    ] = False,
 ):
     """
     List all available vaults.
@@ -36,6 +40,25 @@ async def list_vaults(
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:
+        if compact:
+            try:
+                rows = await api.list_vaults_with_counts()
+            except Exception as e:
+                handle_api_error(e)
+
+            lines = [
+                '| Name | Notes | Active | Description |',
+                '|------|-------|--------|-------------|',
+            ]
+            for row in rows:
+                v = row['vault']
+                count = row['note_count']
+                active = 'yes' if v.is_active else ''
+                desc = v.description or ''
+                lines.append(f'| {v.name} | {count} | {active} | {desc} |')
+            print('\n'.join(lines))
+            return
+
         try:
             vaults = await api.list_vaults()
         except Exception as e:

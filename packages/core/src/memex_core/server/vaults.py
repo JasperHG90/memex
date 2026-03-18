@@ -91,18 +91,19 @@ async def list_vaults(
 
             return ndjson_response(dtos)
 
-        # Default: list all vaults
-        vaults = await api.list_vaults()
+        # Default: list all vaults with note counts
+        rows = await api.list_vaults_with_counts()
         active_vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         return ndjson_response(
             [
                 VaultDTO(
-                    id=v.id,
-                    name=v.name,
-                    description=v.description,
-                    is_active=(v.id == active_vault_id),
+                    id=row['vault'].id,
+                    name=row['vault'].name,
+                    description=row['vault'].description,
+                    is_active=(row['vault'].id == active_vault_id),
+                    note_count=row['note_count'],
                 )
-                for v in vaults
+                for row in rows
             ]
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

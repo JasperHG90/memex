@@ -94,6 +94,17 @@ class RemoteMemexAPI:
         result = await self._get('vaults')
         return [VaultDTO(**v) for v in result]
 
+    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
+        """List all vaults with note counts. Wraps list_vaults for API compat."""
+        vaults = await self.list_vaults()
+        return [
+            {
+                'vault': v,
+                'note_count': v.note_count,
+            }
+            for v in vaults
+        ]
+
     async def get_active_vault(self) -> VaultDTO:
         """Get the currently active vault."""
         result = await self._get('vaults', params={'state': 'active'})
