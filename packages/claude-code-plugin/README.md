@@ -121,6 +121,22 @@ By default, the Memex CLI and hooks connect to `http://127.0.0.1:8000`. If your 
 
 3. **Plugin MCP env override** — set `MEMEX_SERVER_URL` in the project's `.mcp.json` env block. **Note:** this only affects the MCP server process, not hooks. Use option 1 or 2 if hooks also need the custom URL.
 
+## Updating
+
+When a new version is released, update the marketplace first, then the plugin:
+
+```bash
+claude plugin marketplace update JasperHG90/memex
+claude plugin update memex@memex
+```
+
+Or from inside Claude Code:
+
+```
+/plugin marketplace update JasperHG90/memex
+/plugin update memex@memex
+```
+
 ## Migrating from `memex setup claude-code`
 
 This plugin replaces the per-project setup command. Remove the scaffolded files:
