@@ -19,8 +19,18 @@ EOF
 }
 
 # --- Health check: verify Memex server is reachable ---
+# Retry up to 3 times with 2-second delays to handle intermittent first-request
+# slowness (DNS resolution, cold connections to host.docker.internal, etc.)
 RESOLVED_URL="${MEMEX_SERVER_URL:-http://127.0.0.1:8000}"
-if ! curl -sf --max-time 5 "${RESOLVED_URL}/api/v1/health" >/dev/null 2>&1; then
+health_ok=false
+for _attempt in 1 2 3; do
+    if curl -sf --max-time 5 "${RESOLVED_URL}/api/v1/health" >/dev/null 2>&1; then
+        health_ok=true
+        break
+    fi
+    sleep 2
+done
+if [ "$health_ok" = false ]; then
     cat <<EOF
 {"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  uvx --from \"memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli\" memex server start -d\n\nIf the server is running on a different host, configure the URL via:\n  1. ~/.config/memex/config.yaml (set server_url)\n  2. Export MEMEX_SERVER_URL in your shell profile\n\nMemex MCP tools will not work until the server is running."}
 EOF
