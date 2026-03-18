@@ -717,13 +717,11 @@ class RemoteMemexAPI:
     async def kv_put(
         self,
         value: str,
-        key: str | None = None,
-        vault_id: str | UUID | None = None,
+        key: str,
         embedding: list[float] | None = None,
     ) -> KVEntryDTO:
         """Create or update a key-value entry."""
         request = KVPutRequest(
-            vault_id=vault_id,
             key=key,
             value=value,
             embedding=embedding,
@@ -734,12 +732,9 @@ class RemoteMemexAPI:
     async def kv_get(
         self,
         key: str,
-        vault_id: str | UUID | None = None,
     ) -> KVEntryDTO | None:
         """Get a KV entry by exact key. Returns None if not found."""
         params: dict[str, Any] = {'key': key}
-        if vault_id is not None:
-            params['vault_id'] = str(vault_id)
         try:
             result = await self._get('kv/get', params=params)
             return KVEntryDTO(**result)
@@ -751,13 +746,13 @@ class RemoteMemexAPI:
     async def kv_search(
         self,
         query: str,
-        vault_id: str | UUID | None = None,
+        namespaces: list[str] | None = None,
         limit: int = 5,
     ) -> list[KVEntryDTO]:
         """Semantic search over KV entries."""
         request = KVSearchRequest(
             query=query,
-            vault_id=vault_id,
+            namespaces=namespaces,
             limit=limit,
         )
         result = await self._post('kv/search', request)
@@ -766,12 +761,9 @@ class RemoteMemexAPI:
     async def kv_delete(
         self,
         key: str,
-        vault_id: str | UUID | None = None,
     ) -> bool:
         """Delete a KV entry by key."""
         params: dict[str, Any] = {'key': key}
-        if vault_id is not None:
-            params['vault_id'] = str(vault_id)
         try:
             await self._delete('kv/delete', params=params)
             return True
@@ -782,11 +774,11 @@ class RemoteMemexAPI:
 
     async def kv_list(
         self,
-        vault_id: str | UUID | None = None,
+        namespaces: list[str] | None = None,
     ) -> list[KVEntryDTO]:
-        """List KV entries. Without vault_id returns global only; with returns both."""
+        """List KV entries, optionally filtered by namespace prefixes."""
         params: dict[str, Any] = {}
-        if vault_id is not None:
-            params['vault_id'] = str(vault_id)
+        if namespaces is not None:
+            params['namespaces'] = ','.join(namespaces)
         result = await self._get('kv', params=params or None)
         return [KVEntryDTO(**r) for r in result]

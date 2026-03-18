@@ -39,14 +39,13 @@ IF query asks about specific content or document lookup:
 IF query is broad: run entity exploration AND search in parallel.
 
 IF storing/retrieving structured facts, preferences, or conventions:
-- `memex_kv_write(value, key, vault_id)` — store a user fact or preference
+- `memex_kv_write(value, key)` — store a user fact or preference
 - `memex_kv_get(key)` — exact key lookup
 - `memex_kv_search(query)` — fuzzy semantic search over stored facts
 - `memex_kv_list()` — list all stored facts
+- Keys MUST start with a namespace prefix: `global:` (always loaded), `user:` (personal prefs), or `project:<project-id>:` (project-scoped).
 - When the user states a preference, convention, or static fact, proactively store it via `memex_kv_write`.
 - Deletion is user-only (CLI `memex kv delete`). Do NOT attempt to delete KV entries.
-
-All vault parameters on MCP tools are **optional** — they default to resolved config values.
 
 PROHIBITED:
 - `memex_recent_notes` for discovery.

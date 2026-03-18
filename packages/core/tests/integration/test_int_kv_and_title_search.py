@@ -26,16 +26,15 @@ def kv(metastore, filestore, memex_config):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_kv_put_and_get_global(kv):
-    """Put a global KV entry, then retrieve it by key."""
+async def test_kv_put_and_get(kv):
+    """Put a KV entry, then retrieve it by key."""
     unique = str(uuid4())[:8]
-    key = f'test:kv:{unique}'
+    key = f'global:test:kv:{unique}'
 
-    entry = await kv.put(vault_id=None, key=key, value='test-value')
+    entry = await kv.put(key=key, value='test-value')
     assert entry is not None
     assert entry.key == key
     assert entry.value == 'test-value'
-    assert entry.vault_id is None
 
     retrieved = await kv.get(key=key)
     assert retrieved is not None
@@ -47,10 +46,10 @@ async def test_kv_put_and_get_global(kv):
 async def test_kv_put_upsert_updates_value(kv):
     """Putting the same key twice should update the value."""
     unique = str(uuid4())[:8]
-    key = f'test:upsert:{unique}'
+    key = f'global:test:upsert:{unique}'
 
-    await kv.put(vault_id=None, key=key, value='original')
-    entry = await kv.put(vault_id=None, key=key, value='updated')
+    await kv.put(key=key, value='original')
+    entry = await kv.put(key=key, value='updated')
 
     assert entry.value == 'updated'
 
@@ -61,12 +60,20 @@ async def test_kv_put_upsert_updates_value(kv):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_kv_put_rejects_unnamespaced_key(kv):
+    """Put should reject keys without a valid namespace prefix."""
+    with pytest.raises(ValueError, match='namespace prefix'):
+        await kv.put(key='bare:key', value='nope')
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_kv_delete_existing(kv):
     """Delete an existing KV entry."""
     unique = str(uuid4())[:8]
-    key = f'test:delete:{unique}'
+    key = f'global:test:delete:{unique}'
 
-    await kv.put(vault_id=None, key=key, value='to-delete')
+    await kv.put(key=key, value='to-delete')
     deleted = await kv.delete(key=key)
     assert deleted is True
 
@@ -79,27 +86,74 @@ async def test_kv_delete_existing(kv):
 @pytest.mark.asyncio
 async def test_kv_delete_nonexistent(kv):
     """Delete returns False for non-existent key."""
-    deleted = await kv.delete(key=f'nonexistent-{uuid4()}')
+    deleted = await kv.delete(key=f'global:nonexistent-{uuid4()}')
     assert deleted is False
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_kv_list_global(kv):
-    """list_entries without vault_id returns global entries."""
+async def test_kv_list_all(kv):
+    """list_entries without namespaces returns all entries."""
     unique = str(uuid4())[:8]
-    await kv.put(vault_id=None, key=f'test:list:a:{unique}', value='a')
-    await kv.put(vault_id=None, key=f'test:list:b:{unique}', value='b')
+    await kv.put(key=f'global:test:list:a:{unique}', value='a')
+    await kv.put(key=f'user:test:list:b:{unique}', value='b')
 
     entries = await kv.list_entries()
     keys = [e.key for e in entries]
-    assert f'test:list:a:{unique}' in keys
-    assert f'test:list:b:{unique}' in keys
+    assert f'global:test:list:a:{unique}' in keys
+    assert f'user:test:list:b:{unique}' in keys
 
 
 # ---------------------------------------------------------------------------
-# KV list filtering: exclude_prefix and key_prefix
+# KV namespace filtering
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_namespace_filter(kv):
+    """list_entries with namespaces filters to matching prefixes."""
+    unique = str(uuid4())[:8]
+    await kv.put(key=f'global:test:ns:{unique}', value='global-val')
+    await kv.put(key=f'user:test:ns:{unique}', value='user-val')
+    await kv.put(key=f'project:myproj:ns:{unique}', value='proj-val')
+
+    # Filter to global only
+    entries = await kv.list_entries(namespaces=['global'])
+    keys = [e.key for e in entries]
+    assert f'global:test:ns:{unique}' in keys
+    assert f'user:test:ns:{unique}' not in keys
+    assert f'project:myproj:ns:{unique}' not in keys
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_multiple_namespaces(kv):
+    """list_entries with multiple namespaces returns entries from all specified."""
+    unique = str(uuid4())[:8]
+    await kv.put(key=f'global:test:multi:{unique}', value='g')
+    await kv.put(key=f'user:test:multi:{unique}', value='u')
+    await kv.put(key=f'project:proj:multi:{unique}', value='p')
+
+    entries = await kv.list_entries(namespaces=['global', 'user'])
+    keys = [e.key for e in entries]
+    assert f'global:test:multi:{unique}' in keys
+    assert f'user:test:multi:{unique}' in keys
+    assert f'project:proj:multi:{unique}' not in keys
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_project_namespace_with_id(kv):
+    """list_entries with project:<id> namespace filters correctly."""
+    unique = str(uuid4())[:8]
+    await kv.put(key=f'project:github.com/user/repo:setting:{unique}', value='val1')
+    await kv.put(key=f'project:github.com/other/repo:setting:{unique}', value='val2')
+
+    entries = await kv.list_entries(namespaces=['project:github.com/user/repo'])
+    keys = [e.key for e in entries]
+    assert f'project:github.com/user/repo:setting:{unique}' in keys
+    assert f'project:github.com/other/repo:setting:{unique}' not in keys
 
 
 @pytest.mark.integration
@@ -107,13 +161,13 @@ async def test_kv_list_global(kv):
 async def test_kv_list_exclude_prefix(kv):
     """list_entries with exclude_prefix filters out matching keys."""
     unique = str(uuid4())[:8]
-    await kv.put(vault_id=None, key=f'agents:proj:{unique}', value='project-setting')
-    await kv.put(vault_id=None, key=f'lang:python:{unique}', value='user-pref')
+    await kv.put(key=f'global:test:excl:{unique}', value='keep')
+    await kv.put(key=f'project:proj:excl:{unique}', value='exclude')
 
-    entries = await kv.list_entries(exclude_prefix='agents:')
+    entries = await kv.list_entries(exclude_prefix='project:')
     keys = [e.key for e in entries]
-    assert f'lang:python:{unique}' in keys
-    assert f'agents:proj:{unique}' not in keys
+    assert f'global:test:excl:{unique}' in keys
+    assert f'project:proj:excl:{unique}' not in keys
 
 
 @pytest.mark.integration
@@ -121,114 +175,15 @@ async def test_kv_list_exclude_prefix(kv):
 async def test_kv_list_key_prefix(kv):
     """list_entries with key_prefix returns only matching keys."""
     unique = str(uuid4())[:8]
-    await kv.put(vault_id=None, key=f'agents:myproj:{unique}:vault', value='myvault')
-    await kv.put(vault_id=None, key=f'agents:other:{unique}:vault', value='othervault')
-    await kv.put(vault_id=None, key=f'lang:go:{unique}', value='gopref')
+    await kv.put(key=f'project:myproj:{unique}:vault', value='myvault')
+    await kv.put(key=f'project:other:{unique}:vault', value='othervault')
+    await kv.put(key=f'global:lang:go:{unique}', value='gopref')
 
-    entries = await kv.list_entries(key_prefix=f'agents:myproj:{unique}:')
+    entries = await kv.list_entries(key_prefix=f'project:myproj:{unique}:')
     keys = [e.key for e in entries]
-    assert f'agents:myproj:{unique}:vault' in keys
-    assert f'agents:other:{unique}:vault' not in keys
-    assert f'lang:go:{unique}' not in keys
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_kv_list_prefix_combined_with_vault(kv, session):
-    """exclude_prefix and key_prefix work alongside vault_id."""
-    unique = str(uuid4())[:8]
-
-    vault_id = uuid4()
-    vault = Vault(id=vault_id, name=f'test-vault-prefix-{unique}', description='Test')
-    session.add(vault)
-    await session.commit()
-
-    await kv.put(vault_id=None, key=f'agents:proj:{unique}', value='agent-setting')
-    await kv.put(vault_id=None, key=f'user:pref:{unique}', value='user-pref')
-    await kv.put(vault_id=vault_id, key=f'domain:config:{unique}', value='domain-val')
-
-    # With vault_id, exclude agents: prefix — should get global + vault-scoped, minus agents:
-    entries = await kv.list_entries(vault_id=vault_id, exclude_prefix='agents:')
-    keys = [e.key for e in entries]
-    assert f'user:pref:{unique}' in keys
-    assert f'domain:config:{unique}' in keys
-    assert f'agents:proj:{unique}' not in keys
-
-
-# ---------------------------------------------------------------------------
-# KV vault scoping: global vs vault-specific, fallback
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_kv_vault_scoping(kv, session):
-    """Vault-scoped entries are separate from global entries with the same key."""
-    unique = str(uuid4())[:8]
-    key = f'test:scope:{unique}'
-
-    # Create a test vault
-    vault_id = uuid4()
-    vault = Vault(id=vault_id, name=f'test-vault-{unique}', description='Test')
-    session.add(vault)
-    await session.commit()
-
-    # Put global
-    await kv.put(vault_id=None, key=key, value='global-value')
-    # Put vault-specific
-    await kv.put(vault_id=vault_id, key=key, value='vault-value')
-
-    # Get vault-specific should return vault value
-    result = await kv.get(key=key, vault_id=vault_id)
-    assert result is not None
-    assert result.value == 'vault-value'
-
-    # Get global should return global value
-    result_global = await kv.get(key=key)
-    assert result_global is not None
-    assert result_global.value == 'global-value'
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_kv_vault_fallback_to_global(kv, session):
-    """When vault_id is given but no vault-specific entry exists, fall back to global."""
-    unique = str(uuid4())[:8]
-    key = f'test:fallback:{unique}'
-
-    vault_id = uuid4()
-    vault = Vault(id=vault_id, name=f'test-vault-fb-{unique}', description='Test')
-    session.add(vault)
-    await session.commit()
-
-    # Only put global
-    await kv.put(vault_id=None, key=key, value='global-only')
-
-    # Get with vault_id should fall back to global
-    result = await kv.get(key=key, vault_id=vault_id)
-    assert result is not None
-    assert result.value == 'global-only'
-    assert result.vault_id is None
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_kv_list_with_vault_includes_global(kv, session):
-    """list_entries with vault_id should include both vault-scoped and global."""
-    unique = str(uuid4())[:8]
-
-    vault_id = uuid4()
-    vault = Vault(id=vault_id, name=f'test-vault-list-{unique}', description='Test')
-    session.add(vault)
-    await session.commit()
-
-    await kv.put(vault_id=None, key=f'test:global:{unique}', value='g')
-    await kv.put(vault_id=vault_id, key=f'test:vault:{unique}', value='v')
-
-    entries = await kv.list_entries(vault_id=vault_id)
-    keys = [e.key for e in entries]
-    assert f'test:global:{unique}' in keys
-    assert f'test:vault:{unique}' in keys
+    assert f'project:myproj:{unique}:vault' in keys
+    assert f'project:other:{unique}:vault' not in keys
+    assert f'global:lang:go:{unique}' not in keys
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +201,30 @@ async def test_kv_put_with_embedding_and_search(kv):
     emb1 = [0.1] * 384
     emb2 = [0.9] * 384
 
-    await kv.put(vault_id=None, key=f'emb:a:{unique}', value='close', embedding=emb1)
-    await kv.put(vault_id=None, key=f'emb:b:{unique}', value='far', embedding=emb2)
+    await kv.put(key=f'global:emb:a:{unique}', value='close', embedding=emb1)
+    await kv.put(key=f'global:emb:b:{unique}', value='far', embedding=emb2)
 
     # Search with query embedding close to emb1
     results = await kv.search(query_embedding=[0.1] * 384, limit=5)
     assert len(results) >= 1
     # First result should be the closer entry
     assert results[0].value == 'close'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_search_with_namespace_filter(kv):
+    """Search with namespace filter restricts results."""
+    unique = str(uuid4())[:8]
+
+    emb = [0.5] * 384
+    await kv.put(key=f'global:emb:ns:{unique}', value='global-emb', embedding=emb)
+    await kv.put(key=f'user:emb:ns:{unique}', value='user-emb', embedding=emb)
+
+    results = await kv.search(query_embedding=emb, namespaces=['global'], limit=10)
+    keys = [r.key for r in results]
+    assert f'global:emb:ns:{unique}' in keys
+    assert f'user:emb:ns:{unique}' not in keys
 
 
 # ---------------------------------------------------------------------------

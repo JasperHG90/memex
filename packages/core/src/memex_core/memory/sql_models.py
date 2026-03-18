@@ -1300,13 +1300,13 @@ class AuditLog(SQLModel, table=True):  # type: ignore
 
 class KVEntry(SQLModel, table=True):  # type: ignore
     """
-    What it is: A key-value store entry scoped to a vault.
+    What it is: A key-value store entry scoped by namespace prefix.
     Function: Provides simple, named storage for configuration, preferences,
     and structured data that doesn't fit the note/memory model.
     Key Features:
-        - vault_id: NULL means global (cross-vault), otherwise scoped to a vault.
-        - Unique constraint on (vault_id, key) for scoped entries.
-        - Partial unique index on key WHERE vault_id IS NULL for global entries.
+        - Keys must start with a namespace prefix: global:, user:, or project:.
+        - Unique constraint on key.
+        - btree index with text_pattern_ops for efficient prefix queries.
         - Optional embedding for semantic search over values.
     """
 
@@ -1317,15 +1317,9 @@ class KVEntry(SQLModel, table=True):  # type: ignore
         description='Unique identifier for the KV entry.',
     )
 
-    vault_id: UUID | None = Field(
-        default=None,
-        sa_column=Column(SA_UUID(), ForeignKey('vaults.id', ondelete='CASCADE'), index=True),
-        description='The vault this entry belongs to. NULL means global.',
-    )
-
     key: str = Field(
         sa_column=Column(Text, nullable=False),
-        description='The key for this entry.',
+        description='The key for this entry. Must start with global:, user:, or project:.',
     )
 
     value: str = Field(
@@ -1343,11 +1337,11 @@ class KVEntry(SQLModel, table=True):  # type: ignore
     updated_at: datetime = updated_at_field()
 
     __table_args__ = (
-        UniqueConstraint('vault_id', 'key', name='uq_kv_vault_key'),
+        UniqueConstraint('key', name='uq_kv_key'),
         Index(
-            'idx_kv_global_key',
+            'idx_kv_key_prefix',
             'key',
-            unique=True,
-            postgresql_where=sql_text('vault_id IS NULL'),
+            postgresql_using='btree',
+            postgresql_ops={'key': 'text_pattern_ops'},
         ),
     )

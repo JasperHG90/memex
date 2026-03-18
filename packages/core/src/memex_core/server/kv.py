@@ -1,7 +1,6 @@
 """Key-value store and embedding endpoints."""
 
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -47,15 +46,7 @@ async def kv_put(
 ):
     """Create or update a key-value entry."""
     try:
-        vault_id: UUID | None = None
-        if request.vault_id is not None:
-            vault_id = await api.resolve_vault_identifier(request.vault_id)
-
-        if request.key is None:
-            raise ValueError('key is required')
-
         entry = await api.kv_put(
-            vault_id=vault_id,
             key=request.key,
             value=request.value,
             embedding=request.embedding,
@@ -69,15 +60,10 @@ async def kv_put(
 async def kv_get(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to look up'),
-    vault_id: str | None = Query(None, description='Vault ID or name'),
 ):
-    """Get a key-value entry by key. Checks vault-specific first, then global."""
+    """Get a key-value entry by key."""
     try:
-        resolved_vault_id: UUID | None = None
-        if vault_id is not None:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
-
-        entry = await api.kv_get(key=key, vault_id=resolved_vault_id)
+        entry = await api.kv_get(key=key)
         if entry is None:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
         return KVEntryDTO.model_validate(entry, from_attributes=True)
@@ -94,17 +80,13 @@ async def kv_search(
 ):
     """Semantic search over key-value entries by embedding similarity."""
     try:
-        vault_id: UUID | None = None
-        if request.vault_id is not None:
-            vault_id = await api.resolve_vault_identifier(request.vault_id)
-
         # Embed the query text
         embeddings = api.embedding_model.encode([request.query])
         query_embedding = embeddings[0].tolist()
 
         entries = await api.kv_search(
             query_embedding=query_embedding,
-            vault_id=vault_id,
+            namespaces=request.namespaces,
             limit=request.limit,
         )
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
@@ -116,15 +98,10 @@ async def kv_search(
 async def kv_delete(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to delete'),
-    vault_id: str | None = Query(None, description='Vault ID or name'),
 ):
     """Delete a key-value entry."""
     try:
-        resolved_vault_id: UUID | None = None
-        if vault_id is not None:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
-
-        deleted = await api.kv_delete(key=key, vault_id=resolved_vault_id)
+        deleted = await api.kv_delete(key=key)
         if not deleted:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
         return {'status': 'success'}
@@ -138,7 +115,9 @@ async def kv_delete(
 async def kv_list(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    vault_id: str | None = Query(None, description='Vault ID or name'),
+    namespaces: str | None = Query(
+        None, description='Comma-separated namespace prefixes to filter by (e.g. global,user)'
+    ),
     exclude_prefix: str | None = Query(
         None, description='Exclude entries whose key starts with this prefix'
     ),
@@ -146,14 +125,14 @@ async def kv_list(
         None, description='Only include entries whose key starts with this prefix'
     ),
 ):
-    """List key-value entries. Without vault_id returns global only; with vault_id returns both."""
+    """List key-value entries, optionally filtered by namespace prefixes."""
     try:
-        resolved_vault_id: UUID | None = None
-        if vault_id is not None:
-            resolved_vault_id = await api.resolve_vault_identifier(vault_id)
+        ns_list: list[str] | None = None
+        if namespaces is not None:
+            ns_list = [ns.strip() for ns in namespaces.split(',') if ns.strip()]
 
         entries = await api.kv_list(
-            vault_id=resolved_vault_id,
+            namespaces=ns_list,
             limit=limit,
             exclude_prefix=exclude_prefix,
             key_prefix=key_prefix,
