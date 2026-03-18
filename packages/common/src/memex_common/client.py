@@ -101,6 +101,7 @@ class RemoteMemexAPI:
             {
                 'vault': v,
                 'note_count': v.note_count,
+                'last_note_added_at': v.last_note_added_at,
             }
             for v in vaults
         ]

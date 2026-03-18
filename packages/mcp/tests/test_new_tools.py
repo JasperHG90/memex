@@ -22,10 +22,14 @@ from memex_common.schemas import (
 
 
 @pytest.mark.asyncio
-async def test_list_vaults_returns_formatted_list(mock_api, mcp_client):
+async def test_list_vaults_returns_formatted_list(mock_api, mock_config, mcp_client):
     v1 = VaultDTO(id=uuid4(), name='Personal', description='My vault')
     v2 = VaultDTO(id=uuid4(), name='Work', description=None)
-    mock_api.list_vaults.return_value = [v1, v2]
+    now = dt.datetime.now(dt.timezone.utc)
+    mock_api.list_vaults_with_counts.return_value = [
+        {'vault': v1, 'note_count': 5, 'last_note_added_at': now},
+        {'vault': v2, 'note_count': 0, 'last_note_added_at': None},
+    ]
 
     result = await mcp_client.call_tool('memex_list_vaults', {})
     data = parse_tool_result(result)
@@ -36,11 +40,13 @@ async def test_list_vaults_returns_formatted_list(mock_api, mcp_client):
     assert 'Work' in names
     assert any(v['id'] == str(v1.id) for v in data)
     assert any(v['description'] == 'My vault' for v in data)
+    assert any(v['note_count'] == 5 for v in data)
+    assert any(v.get('last_note_added_at') is not None for v in data)
 
 
 @pytest.mark.asyncio
-async def test_list_vaults_empty(mock_api, mcp_client):
-    mock_api.list_vaults.return_value = []
+async def test_list_vaults_empty(mock_api, mock_config, mcp_client):
+    mock_api.list_vaults_with_counts.return_value = []
 
     result = await mcp_client.call_tool('memex_list_vaults', {})
     data = parse_tool_result(result)
@@ -49,7 +55,7 @@ async def test_list_vaults_empty(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_list_vaults_error_raises_tool_error(mock_api, mcp_client):
-    mock_api.list_vaults.side_effect = RuntimeError('connection refused')
+    mock_api.list_vaults_with_counts.side_effect = RuntimeError('connection refused')
 
     with pytest.raises(ToolError, match='connection refused'):
         await mcp_client.call_tool('memex_list_vaults', {})

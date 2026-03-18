@@ -112,22 +112,31 @@ class VaultService(BaseService):
             return list((await session.exec(stmt)).all())
 
     async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
-        """List all vaults with note counts via LEFT JOIN + GROUP BY."""
+        """List all vaults with note counts and last-modified timestamp."""
         from sqlalchemy import func
         from sqlmodel import select
         from memex_core.memory.sql_models import Vault, Note
 
         async with self.metastore.session() as session:
             stmt = (
-                select(Vault, func.count(Note.id).label('note_count'))
+                select(
+                    Vault,
+                    func.count(Note.id).label('note_count'),
+                    func.max(Note.created_at).label('last_note_added_at'),
+                )
                 .outerjoin(Note, Note.vault_id == Vault.id)
                 .group_by(Vault.id)
+                .order_by(
+                    func.max(Note.created_at).desc().nulls_last(),
+                    func.count(Note.id).desc(),
+                )
             )
             results = (await session.exec(stmt)).all()
             return [
                 {
                     'vault': row[0],
                     'note_count': row[1],
+                    'last_note_added_at': row[2],
                 }
                 for row in results
             ]
