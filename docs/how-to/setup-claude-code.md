@@ -2,13 +2,29 @@
 
 This guide shows you how to configure Claude Code to use Memex as its long-term memory backend.
 
-## Prerequisites
+## Recommended: Use the Claude Code Plugin
+
+The easiest way to integrate Memex with Claude Code is via the marketplace plugin. It works across all projects automatically — no per-project setup needed.
+
+```bash
+# Add the marketplace (one-time)
+claude plugin marketplace add JasperHG90/memex
+
+# Install the plugin
+claude plugin install memex@memex
+```
+
+See [packages/claude-code-plugin](../../packages/claude-code-plugin/) for details.
+
+## Alternative: Per-Project Setup
+
+If you prefer per-project configuration (e.g. to customize vaults or hooks per project), use the setup command below.
+
+### Prerequisites
 
 * Memex installed (`uv tool install memex-cli[mcp]`)
 * A running Memex server (`memex server start -d`)
 * Claude Code installed
-
-## Instructions
 
 ### 1. Run the Setup Command
 
@@ -96,5 +112,5 @@ memex setup claude-code --with-session-tracking
 ## See Also
 
 * [Using MCP](using-mcp.md) — manual MCP configuration for Claude Desktop, Cursor, and SSE transport
-* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all 26 MCP tools
+* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all MCP tools
 * [CLI Commands — setup claude-code](../reference/cli-commands.md#setup-claude-code) — all flags and options
