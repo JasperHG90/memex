@@ -282,6 +282,7 @@ class McpVault(BaseModel):
     name: str
     description: str | None = None
     is_active: bool = False
+    note_count: int = 0
 
 
 # ── Assets ──

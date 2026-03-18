@@ -477,6 +477,11 @@ class VaultDTO(BaseModel):
         description='Whether this vault is the currently active (writer) vault.',
     )
 
+    note_count: int = Field(
+        default=0,
+        description='Number of notes in this vault.',
+    )
+
 
 class DefaultVaultsResponse(BaseModel):
     """Response model for the default vaults endpoint."""
@@ -900,6 +905,7 @@ class TOCNodeDTO(BaseModel):
     level: int
     summary: SectionSummaryDTO | None = None
     token_estimate: int | None = None
+    subtree_tokens: int | None = None
     children: list['TOCNodeDTO'] = Field(default_factory=list)
 
 

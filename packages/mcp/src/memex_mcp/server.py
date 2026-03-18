@@ -1001,6 +1001,20 @@ def _estimate_toc_tokens(nodes: list[TOCNodeDTO]) -> int:
     return total
 
 
+def _backfill_subtree_tokens(nodes: list[dict[str, Any]]) -> int:
+    """Backfill ``subtree_tokens`` on old page-index data missing the field."""
+    total = 0
+    for node in nodes:
+        if node.get('subtree_tokens') is not None:
+            total += node['subtree_tokens']
+            continue
+        own = node.get('token_estimate', 0) or 0
+        children_sum = _backfill_subtree_tokens(node.get('children', []))
+        node['subtree_tokens'] = own + children_sum
+        total += node['subtree_tokens']
+    return total
+
+
 async def _get_single_page_index(
     api: Any,
     note_id_str: str,
@@ -1021,6 +1035,7 @@ async def _get_single_page_index(
         )
 
     raw_toc = page_index.get('toc', [])
+    _backfill_subtree_tokens(raw_toc)
 
     if depth is not None or parent_node_id is not None:
         raw_toc = filter_toc(raw_toc, depth=depth, parent_node_id=parent_node_id)
@@ -1053,7 +1068,8 @@ async def _get_single_page_index(
 @mcp.tool(
     name='memex_get_page_indices',
     description=(
-        'Get note TOC: section titles, summaries, and node IDs for 1+ notes. '
+        'Get note TOC: section titles, summaries, node IDs, and subtree_tokens for 1+ notes. '
+        'Each node includes subtree_tokens (own + all descendant tokens) for read budgeting. '
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
@@ -1258,24 +1274,41 @@ async def memex_get_nodes(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all vaults. Each vault includes an is_active flag indicating the writer vault.',
+    description='List all vaults with note counts. Each vault includes is_active and note_count.',
     annotations={'readOnlyHint': True},
 )
 async def memex_list_vaults(ctx: Context) -> list[McpVault]:
-    """List all available vaults with active status."""
+    """List all available vaults with active status and note counts."""
     try:
         api = get_api(ctx)
-        vaults = await api.list_vaults()
+        config = get_config(ctx)
 
-        return [
-            McpVault(
-                id=v.id,
-                name=v.name,
-                description=v.description,
-                is_active=v.is_active,
-            )
-            for v in vaults
-        ]
+        # Use list_vaults_with_counts for local API, fall back for remote
+        try:
+            rows = await api.list_vaults_with_counts()
+            active_vault_id = await api.resolve_vault_identifier(config.server.default_active_vault)
+            return [
+                McpVault(
+                    id=row['vault'].id,
+                    name=row['vault'].name,
+                    description=row['vault'].description,
+                    is_active=(row['vault'].id == active_vault_id),
+                    note_count=row['note_count'],
+                )
+                for row in rows
+            ]
+        except AttributeError:
+            # Remote API — fall back to list_vaults (VaultDTO with is_active)
+            vaults = await api.list_vaults()
+            return [
+                McpVault(
+                    id=v.id,
+                    name=v.name,
+                    description=v.description,
+                    is_active=v.is_active,
+                )
+                for v in vaults
+            ]
 
     except Exception as e:
         logging.error(f'List vaults failed: {e}', exc_info=True)

@@ -850,6 +850,10 @@ class MemexAPI:
         """List all vaults. Delegates to VaultService."""
         return await self._vaults.list_vaults()
 
+    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
+        """List all vaults with note counts. Delegates to VaultService."""
+        return await self._vaults.list_vaults_with_counts()
+
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""
         return await self._vaults.get_vault_by_name(name)
