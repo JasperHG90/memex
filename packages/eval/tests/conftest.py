@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from memex_common.schemas import EntityDTO, MemoryUnitDTO, NoteSearchResult, NoteSnippet
+from memex_common.schemas import EntityDTO, MemoryUnitDTO, NoteSearchResult
 
 from memex_eval.internal.scenarios import GroundTruthCheck
 
@@ -25,11 +25,15 @@ def _make_unit(text: str, fact_type: str = 'world') -> MemoryUnitDTO:
     )
 
 
-def _make_note_result(snippets: list[str], score: float = 0.9) -> NoteSearchResult:
+def _make_note_result(texts: list[str], score: float = 0.9) -> NoteSearchResult:
+    """Create a NoteSearchResult. For backward compat, texts are joined into the 'what' summary."""
+    from memex_common.schemas import SectionSummaryDTO
+
+    summary = SectionSummaryDTO(what=' '.join(texts)) if texts else None
     return NoteSearchResult(
         note_id=uuid4(),
         metadata={},
-        snippets=[NoteSnippet(text=s) for s in snippets],
+        summary=summary,
         score=score,
     )
 

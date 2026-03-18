@@ -7,7 +7,7 @@ TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
 
 import pytest
 from fastmcp.exceptions import ToolError
-from memex_common.schemas import NoteSearchResult, NoteSnippet
+from memex_common.schemas import NoteSearchResult, SectionSummaryDTO
 
 from conftest import parse_tool_result
 
@@ -16,8 +16,9 @@ def _make_result(
     title: str | None = 'Test Document',
     score: float = 0.85,
     source_uri: str | None = None,
-    snippets: list[NoteSnippet] | None = None,
     answer: str | None = None,
+    note_id: UUID | None = None,
+    summary: SectionSummaryDTO | None = None,
 ) -> NoteSearchResult:
     metadata: dict = {}
     if title:
@@ -27,9 +28,9 @@ def _make_result(
         metadata['source_uri'] = source_uri
 
     return NoteSearchResult(
-        note_id=uuid4(),
+        note_id=note_id or uuid4(),
         metadata=metadata,
-        snippets=snippets or [],
+        summary=summary,
         score=score,
         answer=answer,
     )
@@ -98,46 +99,44 @@ async def test_memex_note_search_includes_source_uri(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_includes_snippets(mock_api, mcp_client):
-    """All snippets should appear in the output (no truncation)."""
-    snippets = [
-        NoteSnippet(text='First relevant passage.', score=0.9),
-        NoteSnippet(text='Second relevant passage.', score=0.8),
-        NoteSnippet(text='Third passage should be included.', score=0.7),
-        NoteSnippet(text='Fourth passage should be included.', score=0.6),
-    ]
-    doc = _make_result(title='Rich Document', snippets=snippets)
+async def test_memex_note_search_includes_summary(mock_api, mcp_client):
+    """5W summary from core search result should appear in the output."""
+    summary = SectionSummaryDTO(
+        who='The research team',
+        what='Quarterly results analysis',
+        how='Statistical methods',
+        when='Q3 2025',
+        where='Internal report',
+    )
+    doc = _make_result(title='Rich Document', summary=summary)
     mock_api.search_notes.return_value = [doc]
 
     result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'passages', 'vault_ids': ['test-vault']}
+        'memex_note_search', {'query': 'quarterly', 'vault_ids': ['test-vault']}
     )
     data = parse_tool_result(result)
 
-    result_snippets = data[0]['snippets']
-    snippet_texts = [s['text'] for s in result_snippets]
-    assert 'First relevant passage.' in snippet_texts
-    assert 'Second relevant passage.' in snippet_texts
-    assert 'Third passage should be included.' in snippet_texts
-    assert 'Fourth passage should be included.' in snippet_texts
-    assert len(result_snippets) == 4
+    result_summary = data[0]['summary']
+    assert result_summary is not None
+    assert result_summary['who'] == 'The research team'
+    assert result_summary['what'] == 'Quarterly results analysis'
+    assert result_summary['how'] == 'Statistical methods'
+    assert result_summary['when'] == 'Q3 2025'
+    assert result_summary['where'] == 'Internal report'
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_snippet_node_title_prefix(mock_api, mcp_client):
-    """Snippets with a node_title should include it in the structured output."""
-    snippets = [NoteSnippet(text='Section content.', score=0.9, node_title='Introduction')]
-    doc = _make_result(title='Structured Doc', snippets=snippets)
+async def test_memex_note_search_no_page_index_gives_null_summary(mock_api, mcp_client):
+    """When no page index exists, summary should be null."""
+    doc = _make_result(title='No Index Doc')
     mock_api.search_notes.return_value = [doc]
 
     result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'section', 'vault_ids': ['test-vault']}
+        'memex_note_search', {'query': 'anything', 'vault_ids': ['test-vault']}
     )
     data = parse_tool_result(result)
 
-    snippet = data[0]['snippets'][0]
-    assert snippet['node_title'] == 'Introduction'
-    assert snippet['text'] == 'Section content.'
+    assert data[0]['summary'] is None
 
 
 @pytest.mark.asyncio
@@ -146,7 +145,6 @@ async def test_memex_note_search_falls_back_to_name_key(mock_api, mcp_client):
     doc = NoteSearchResult(
         note_id=uuid4(),
         metadata={'name': 'Named Document'},
-        snippets=[],
         score=0.75,
     )
     mock_api.search_notes.return_value = [doc]

@@ -853,9 +853,12 @@ async def search_notes(
             metadata.get('name') or metadata.get('title') or metadata.get('filename') or 'Untitled'
         )
 
-        # Aggregate snippets into a single preview string
-        preview_texts = [s.text.strip() for s in doc.snippets]
-        preview = ' ... '.join(preview_texts) if preview_texts else '[No preview available]'
+        # Build preview from 5W summary
+        if doc.summary:
+            parts = [f'{k}: {v}' for k, v in doc.summary.model_dump().items() if v]
+            preview = ' | '.join(parts) if parts else '[No preview available]'
+        else:
+            preview = '[No preview available]'
 
         # Truncate preview if it's excessively long (though Rich wraps, this keeps it cleaner)
         if len(preview) > 300:

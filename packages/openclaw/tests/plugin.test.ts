@@ -422,14 +422,14 @@ describe('memex_store tool', () => {
 // ---------------------------------------------------------------------------
 
 describe('memex_note_search tool', () => {
-  it('returns formatted results with snippets', async () => {
+  it('returns formatted results with summary', async () => {
     const api = registerPlugin();
     fetchSpy.mockResolvedValueOnce(
       ndjsonResponse([
         {
           note_id: 'note-1',
           metadata: {},
-          snippets: [{ text: 'snippet text', node_title: 'Section', node_id: 'n1' }],
+          summary: { who: 'Research team', what: 'Quarterly analysis' },
           score: 0.95,
           answer: null,
         },
@@ -444,7 +444,7 @@ describe('memex_note_search tool', () => {
 
     expect(result.details.count).toBe(1);
     expect(result.content[0]!.text).toContain('note-1');
-    expect(result.content[0]!.text).toContain('snippet text');
+    expect(result.content[0]!.text).toContain('Quarterly analysis');
   });
 
   it('returns empty message when no notes found', async () => {

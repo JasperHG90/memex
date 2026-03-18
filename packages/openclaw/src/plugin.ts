@@ -330,7 +330,7 @@ const memexPlugin = {
         name: 'memex_note_search',
         label: 'Memex Note Search',
         description:
-          'Search source notes. Returns ranked notes with inline metadata and snippets — no extra metadata calls needed.',
+          'Search source notes. Returns ranked notes with inline metadata and 5W summaries.',
         parameters: Type.Object({
           query: Type.String({ description: 'Search query' }),
           limit: Type.Optional(Type.Number({ description: 'Max results (default: 5)' })),
@@ -400,15 +400,17 @@ const memexPlugin = {
             }
 
             const lines = results.map((r, i) => {
-              const snippetText = r.snippets
-                .map((s) => `  - [${s.node_title ?? 'section'}] ${s.text.slice(0, 200)}`)
-                .join('\n');
+              let summaryText = '';
+              if (r.summary) {
+                const parts = [r.summary.what, r.summary.who, r.summary.how, r.summary.when, r.summary.where].filter(Boolean);
+                summaryText = parts.length > 0 ? `\n  Summary: ${parts.join(' | ')}` : '';
+              }
               const answer = r.answer ? `\n  Answer: ${r.answer}` : '';
               const status = r.note_status ? ` [${r.note_status}]` : '';
               const reasoning = r.reasoning && r.reasoning.length > 0
                 ? `\n  Reasoning: ${r.reasoning.map((rr) => rr.reasoning ?? rr.text ?? '').join('; ')}`
                 : '';
-              return `${i + 1}. Note ${r.note_id} (score: ${r.score ?? 'n/a'})${status}${answer}${reasoning}\n${snippetText}`;
+              return `${i + 1}. Note ${r.note_id} (score: ${r.score ?? 'n/a'})${status}${answer}${reasoning}${summaryText}`;
             });
 
             return {

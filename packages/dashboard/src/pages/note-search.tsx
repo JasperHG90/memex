@@ -29,7 +29,7 @@ import { useNote, useNotePageIndex } from '@/api/hooks/use-notes';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
 import { usePreferencesStore } from '@/stores/preferences-store';
-import type { NoteSearchResult, NoteSnippet } from '@/api/generated';
+import type { NoteSearchResult, SectionSummaryDTO } from '@/api/generated';
 
 const DOC_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal'];
 
@@ -207,7 +207,8 @@ export default function NoteSearch() {
     if (showSummary && results.length > 0 && !summaryMutation.data && !summaryMutation.isPending) {
       const texts = results
         .slice(0, 20)
-        .flatMap((r) => r.snippets.slice(0, 2).map((s) => s.text));
+        .map((r) => summaryToText(r.summary))
+        .filter((t) => t.length > 0);
       summaryMutation.mutate({ query, texts });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,7 +234,8 @@ export default function NoteSearch() {
       if (checked && results.length > 0 && !summaryMutation.data) {
         const texts = results
           .slice(0, 20)
-          .flatMap((r) => r.snippets.slice(0, 2).map((s) => s.text));
+          .map((r) => summaryToText(r.summary))
+          .filter((t) => t.length > 0);
         summaryMutation.mutate({ query, texts });
       }
     },
@@ -388,12 +390,10 @@ function NoteResultCard({
           )}
         </div>
 
-        {/* Snippets */}
-        {result.snippets.length > 0 && (
-          <div className="mb-3 space-y-2">
-            {result.snippets.slice(0, 2).map((snippet, i) => (
-              <SnippetPreview key={i} snippet={snippet} />
-            ))}
+        {/* Summary */}
+        {result.summary && (
+          <div className="mb-3">
+            <SummaryPreview summary={result.summary} />
           </div>
         )}
 
@@ -416,18 +416,24 @@ function NoteResultCard({
   );
 }
 
-function SnippetPreview({ snippet }: { snippet: NoteSnippet }) {
-  const truncatedText =
-    snippet.text.length > 300 ? snippet.text.slice(0, 300) + '...' : snippet.text;
+function summaryToText(summary: SectionSummaryDTO | null | undefined): string {
+  if (!summary) return '';
+  return [summary.what, summary.who, summary.how, summary.when, summary.where]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function SummaryPreview({ summary }: { summary: SectionSummaryDTO }) {
+  const entries = Object.entries(summary).filter(([, v]) => v);
+  if (entries.length === 0) return null;
 
   return (
-    <div className="rounded-md bg-muted/30 border border-border p-2">
-      {snippet.node_title && (
-        <p className="text-[10px] font-bold text-primary mb-1">{snippet.node_title}</p>
-      )}
-      <div className="prose prose-invert prose-xs max-w-none line-clamp-2 text-xs text-muted-foreground [&>*]:m-0 [&>*]:text-muted-foreground">
-        <ReactMarkdown>{truncatedText}</ReactMarkdown>
-      </div>
+    <div className="rounded-md bg-muted/30 border border-border p-2 space-y-0.5">
+      {entries.map(([key, value]) => (
+        <p key={key} className="text-xs text-muted-foreground">
+          <span className="font-medium text-primary capitalize">{key}:</span> {value}
+        </p>
+      ))}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-from memex_common.schemas import NoteSearchRequest, NoteSearchResult, NoteSnippet
+from memex_common.schemas import NoteSearchRequest, NoteSearchResult
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
 
 
@@ -101,7 +101,6 @@ class TestMMR:
         return NoteSearchResult(
             note_id=uuid4(),
             metadata={},
-            snippets=[NoteSnippet(text='test', score=score)],
             score=score,
         )
 
@@ -130,9 +129,9 @@ class TestMMR:
         """λ=0.0 selects maximally different documents (pure diversity)."""
         id_a, id_b, id_c = uuid4(), uuid4(), uuid4()
         results = [
-            NoteSearchResult(note_id=id_a, metadata={}, snippets=[], score=1.0),
-            NoteSearchResult(note_id=id_b, metadata={}, snippets=[], score=0.9),
-            NoteSearchResult(note_id=id_c, metadata={}, snippets=[], score=0.8),
+            NoteSearchResult(note_id=id_a, metadata={}, score=1.0),
+            NoteSearchResult(note_id=id_b, metadata={}, score=0.9),
+            NoteSearchResult(note_id=id_c, metadata={}, score=0.8),
         ]
         # A and B are very similar, C is different from both
         sim_matrix = {
@@ -153,9 +152,9 @@ class TestMMR:
         """λ=0.7 promotes diverse results while keeping relevant ones near top."""
         id_a, id_b, id_c = uuid4(), uuid4(), uuid4()
         results = [
-            NoteSearchResult(note_id=id_a, metadata={}, snippets=[], score=1.0),
-            NoteSearchResult(note_id=id_b, metadata={}, snippets=[], score=0.95),
-            NoteSearchResult(note_id=id_c, metadata={}, snippets=[], score=0.7),
+            NoteSearchResult(note_id=id_a, metadata={}, score=1.0),
+            NoteSearchResult(note_id=id_b, metadata={}, score=0.95),
+            NoteSearchResult(note_id=id_c, metadata={}, score=0.7),
         ]
         # A and B are very similar, C is different
         sim_matrix = {
@@ -184,7 +183,7 @@ class TestMMR:
 
     def test_mmr_single_result(self) -> None:
         """Edge case with 1 result returns unchanged."""
-        result = NoteSearchResult(note_id=uuid4(), metadata={}, snippets=[], score=0.5)
+        result = NoteSearchResult(note_id=uuid4(), metadata={}, score=0.5)
 
         reranked = NoteSearchEngine._apply_mmr([result], lam=0.7, limit=5, similarity_matrix={})
 
