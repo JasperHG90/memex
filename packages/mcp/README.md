@@ -1,6 +1,6 @@
 # Memex MCP Server (`memex-mcp`)
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes 20 Memex tools to AI assistants like Claude Desktop, Claude Code, and other MCP-compatible clients. Built with [FastMCP](https://github.com/jlowin/fastmcp).
+A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes 26 Memex tools to AI assistants like Claude Desktop, Claude Code, and other MCP-compatible clients. Built with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Features
 
@@ -15,14 +15,16 @@ Enables your AI assistant to:
 
 | Category | Tools | Count |
 |:---------|:------|------:|
-| Search | `memex_memory_search`, `memex_note_search` | 2 |
+| Search | `memex_memory_search`, `memex_note_search`, `memex_find_note` | 3 |
 | Note Reading | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | 4 |
 | Note Management | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_get_template` | 4 |
+| Note Browsing | `memex_list_notes`, `memex_recent_notes` | 2 |
 | Assets & Resources | `memex_list_assets`, `memex_get_resources` | 2 |
 | Entities | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | 4 |
 | Memory Units | `memex_get_memory_units` | 1 |
-| Vaults | `memex_active_vault`, `memex_list_vaults`, `memex_recent_notes` | 3 |
-| **Total** | | **20** |
+| KV Store | `memex_kv_write`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list` | 4 |
+| Vaults | `memex_active_vault`, `memex_list_vaults` | 2 |
+| **Total** | | **26** |
 
 ## Usage
 

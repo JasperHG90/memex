@@ -673,6 +673,106 @@ Returns a `NodeDTO`:
 
 ---
 
+### `GET /api/v1/notes/{note_id}/metadata`
+
+Get metadata for a single note (title, tags, token count, has_assets, publish_date).
+
+#### Response (200)
+
+Returns a `NoteMetadataDTO`.
+
+---
+
+### `POST /api/v1/notes/metadata/batch`
+
+Get metadata for multiple notes at once.
+
+#### Request Body
+
+```json
+{
+  "note_ids": ["uuid1", "uuid2"]
+}
+```
+
+#### Response (200)
+
+Returns `NoteMetadataDTO[]`.
+
+---
+
+### `POST /api/v1/nodes/batch`
+
+Get multiple page-index nodes by ID in a single request.
+
+#### Request Body
+
+```json
+{
+  "node_ids": ["uuid1", "uuid2"]
+}
+```
+
+#### Response (200)
+
+Returns `NodeDTO[]`.
+
+---
+
+### `PATCH /api/v1/notes/{note_id}/date`
+
+Update the publish date of a note.
+
+#### Request Body
+
+```json
+{
+  "publish_date": "2025-06-15T00:00:00Z"
+}
+```
+
+#### Response (200)
+
+Returns `{"status": "success"}`.
+
+---
+
+### `PATCH /api/v1/notes/{note_id}/title`
+
+Rename a note. Updates the title in metadata, page index, and doc_metadata.
+
+#### Request Body
+
+```json
+{
+  "title": "New Note Title"
+}
+```
+
+#### Response (200)
+
+Returns `{"status": "success"}`.
+
+---
+
+### `POST /api/v1/notes/{note_id}/migrate`
+
+Migrate a note to a different vault. Moves all associated data (memory units, entities, assets).
+
+#### Request Body
+
+```json
+{
+  "target_vault_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### Response (200)
+
+Returns `{"status": "success"}`.
+
+---
+
 ### `DELETE /api/v1/notes/{note_id}`
 
 Delete a note and all associated data (memory units, chunks, links, assets).
@@ -750,6 +850,24 @@ curl "http://localhost:8000/api/v1/entities?q=PostgreSQL"
 # Top entities by mention count
 curl "http://localhost:8000/api/v1/entities?sort=-mentions&limit=10"
 ```
+
+---
+
+### `POST /api/v1/entities/batch`
+
+Get multiple entities by ID in a single request.
+
+#### Request Body
+
+```json
+{
+  "entity_ids": ["uuid1", "uuid2"]
+}
+```
+
+#### Response (200)
+
+Returns `EntityDTO[]`.
 
 ---
 

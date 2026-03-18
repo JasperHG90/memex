@@ -6,30 +6,26 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 
 ## Requirements
 
-1. UV
-2. Postgres with pgvector
+1. Python 3.12+ (3.13 tested in CI)
+2. [uv](https://docs.astral.sh/uv/) >= 0.10.0
+3. PostgreSQL with pgvector
 
 ## 🚀 Quick Start
 
 ### 1. Set up postgres
 
-Download e.g. the postgres app, or use docker (see `docker-compose.yaml` in this repository).
-
-### 2. Install and initialize
+Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
 
 ### 1. Install
-Requires Python 3.12+ and `uv`.
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (>= 0.10.0).
 
 ```bash
-uv tool install --refresh "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
+uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
 
 > The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
-
-> [!WARNING]
-> The dashboard is currently under construction and does not work with the latest version.
 
 ### 2. Initialize
 Sets up your local storage and configuration.
@@ -244,6 +240,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [CLI Commands](./docs/reference/cli-commands.md)
 - [REST API](./docs/reference/rest-api.md)
 - [MCP Tools](./docs/reference/mcp-tools.md)
+- [MemexAPI](./docs/reference/memexapi-reference.md): Python API class — 60+ public methods.
 - [Configuration](./docs/reference/configuration.md)
 - [Evaluation Report](./docs/reference/evaluation-report.md): LoCoMo benchmark results, retrieval efficiency, and per-question analysis.
 
@@ -288,34 +285,30 @@ The `release.yaml` GitHub Action automatically builds all artifacts (Python, das
 
 ## Evaluation
 
-Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 60 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
+Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 47 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
 
 ### LoCoMo results
 
 | Category | Count | Mean Score |
 |---|---|---|
-| Single-Hop | 10 | 0.900 |
-| Multi-Hop | 14 | 1.000 |
+| Single-Hop | 9 | 0.944 |
+| Multi-Hop | 9 | 1.000 |
 | Open Domain | 3 | 1.000 |
-| Temporal | 18 | 1.000 |
-| **Non-adversarial** | **45** | **0.978** |
-| Adversarial (unweighted) | 12 | 0.667 |
+| Temporal | 15 | 1.000 |
+| **Non-adversarial** | **36** | **0.986** |
+| Adversarial (unweighted) | 11 | 0.773 |
 
 Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
 
 ### Retrieval efficiency
 
-Memex retrieval adds minimal overhead to agent workflows. Across the 60-question benchmark:
+Memex retrieval adds minimal overhead to agent workflows. Across the 47-question benchmark:
 
 | Metric | Value |
 |---|---|
-| Retrieval tokens per question (median) | **3,440** |
-| Retrieval tokens per question (mean) | 5,495 |
-| Retrieval as % of total tokens | **4.6%** |
-| Median response time | 27.8s |
-| Median turns per question | 4 |
-| Memex tool calls per question (median) | 2 |
-| Cost per question (median) | ~$0.08 |
+| Retrieval tokens per question (median) | **4,609** |
+| Retrieval tokens per question (mean) | 7,592 |
+| Retrieval as % of total tokens | **4.5%** |
 
 95% of token usage is agent overhead (system prompt, tool definitions, conversation history). The Memex MCP tools themselves return compact results — a typical question needs just one `memory_search` call (~2.4K tokens) or a two-stage `memory_search` + `note_search` (~3.4K tokens). Complex multi-hop questions that drill into specific note sections via the page index cost ~6K retrieval tokens.
 

@@ -8,7 +8,7 @@ These options apply to all commands and must be specified before the subcommand.
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--config PATH` | `-c` | Path to the configuration file. Defaults to `~/.config/memex/config.yaml`, then looks for a local `memex.yaml`. Can also be set via `MEMEX_CONFIG_PATH` env var. |
+| `--config PATH` | `-c` | Path to the configuration file. Defaults to `~/.config/memex/config.yaml`, then searches CWD for `memex_core.yaml`, `.memex.yaml`, or `memex_core.config.yaml`. Can also be set via `MEMEX_CONFIG_PATH` env var. |
 | `--set KEY=VALUE` | `-s` | Override config values using dot notation. Repeatable. Example: `--set server.meta_store.instance.host=localhost`. |
 | `--vault NAME` | `-v` | Override the active vault for this command. |
 | `--debug` | `-d` | Enable debug logging (to console and log file). |
@@ -16,16 +16,19 @@ These options apply to all commands and must be specified before the subcommand.
 
 ### Configuration Resolution Order
 
-1. Global config (`~/.config/memex/config.yaml`)
-2. Local config (`./memex.yaml` in the current directory)
-3. CLI `--set` overrides
-4. Environment variables (`MEMEX_*`)
+1. CLI `--set` overrides (highest priority)
+2. Environment variables (`MEMEX_*`, nested with `__`)
+3. Local config (`memex_core.yaml`, `.memex.yaml`, or `memex_core.config.yaml` in CWD or parents)
+4. Global config (`~/.config/memex/config.yaml`)
+5. Defaults
 
 ---
 
 ## `memory`
 
 Ingest and search memories.
+
+> **Note:** `memory add` is a legacy alias for `note add`. Both commands accept the same options and produce identical results. Prefer `note add` for new workflows.
 
 ### `memory add`
 

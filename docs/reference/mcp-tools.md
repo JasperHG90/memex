@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 25 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 26 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -347,6 +347,23 @@ List all facts in the KV store. Without `vault_id`, returns global entries only.
 | `vault_id` | string | No | - | Vault UUID or name. `null` = global entries only; with vault = both global and vault-scoped. |
 
 Returns all KV entries with keys, values, scopes, and timestamps.
+
+---
+
+## Note Browsing Tools
+
+### `memex_list_notes`
+
+List notes with optional date filters. Use `after`/`before` for temporal queries like "documents from 2026".
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | No | from config | Vault UUID or name. Omit to use config defaults. |
+| `after` | string | No | - | Only notes on/after this date (ISO 8601, e.g. `2026-01-01`). |
+| `before` | string | No | - | Only notes on/before this date (ISO 8601, e.g. `2026-12-31`). |
+| `limit` | int | No | `50` | Max notes to return. |
+
+Returns note titles, IDs, creation dates, publish dates, and vault IDs.
 
 ---
 
