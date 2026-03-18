@@ -91,6 +91,8 @@ If no per-project vault is set, writes go to the default vault from your Memex c
 
 ## Configuration
 
+### Default vault
+
 The plugin uses your existing Memex configuration. Set the global default vault via:
 
 ```bash
@@ -98,6 +100,26 @@ export MEMEX_VAULT__ACTIVE=my-vault
 ```
 
 Or configure it in your `~/.memex.yaml`.
+
+### Server URL
+
+By default, the Memex CLI and hooks connect to `http://127.0.0.1:8000`. If your server runs elsewhere (e.g., in a devcontainer where the host is `host.docker.internal`), configure the URL using one of these methods, listed in priority order:
+
+1. **`~/.config/memex/config.yaml`** (recommended) — covers both hooks and the MCP server:
+
+   ```yaml
+   server_url: http://host.docker.internal:8000
+   ```
+
+2. **Environment variable** — export in your shell profile (`.bashrc` / `.zshrc`):
+
+   ```bash
+   export MEMEX_SERVER_URL=http://host.docker.internal:8000
+   ```
+
+   This also covers both hooks and the MCP server.
+
+3. **Plugin MCP env override** — set `MEMEX_SERVER_URL` in the project's `.mcp.json` env block. **Note:** this only affects the MCP server process, not hooks. Use option 1 or 2 if hooks also need the custom URL.
 
 ## Migrating from `memex setup claude-code`
 
