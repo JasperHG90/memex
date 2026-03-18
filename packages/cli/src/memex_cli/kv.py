@@ -54,6 +54,9 @@ async def kv_get(
     ctx: typer.Context,
     key: Annotated[str, typer.Argument(help='Key to look up.')],
     vault: Annotated[str | None, typer.Option('--vault', '-v', help='Vault name or UUID.')] = None,
+    value_only: Annotated[
+        bool, typer.Option('--value-only', help='Print only the raw value (no formatting).')
+    ] = False,
 ):
     """
     Get a fact by exact key.
@@ -67,8 +70,13 @@ async def kv_get(
             handle_api_error(e)
 
     if entry is None:
-        console.print(f'[yellow]Key not found: {key}[/yellow]')
+        if not value_only:
+            console.print(f'[yellow]Key not found: {key}[/yellow]')
         raise typer.Exit(1)
+
+    if value_only:
+        print(entry.value)
+        return
 
     console.print(f'[bold cyan]{entry.key}[/bold cyan] = {entry.value}')
     console.print(f'[dim]Updated: {entry.updated_at}[/dim]')
