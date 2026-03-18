@@ -98,11 +98,12 @@ notes_md=""
 if [ -s "$tmp_notes" ]; then
     notes_md=$(jq -rs '
         if length == 0 then "" else
-        "## Recent Memex Notes\n\n| Title | Vault | Created |\n|-------|-------|---------|\n"
+        "## Recent Memex Notes\n\n| Title | Vault | Created | Note ID |\n|-------|-------|---------|----------|\n"
         + (map(
             "| " + (.title // .name // "(untitled)") + " | "
             + ((.vault_id // "") | .[:8]) + " | "
-            + ((.created_at // "") | .[:10]) + " |"
+            + ((.created_at // "") | .[:10]) + " | "
+            + (.id // "") + " |"
         ) | join("\n"))
         end
     ' "$tmp_notes" 2>/dev/null) || true
