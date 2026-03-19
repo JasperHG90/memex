@@ -1107,6 +1107,8 @@ class ExtractionEngine:
                     content_index=0,
                     chunk_index=block.seq,
                     content_hash=block.id,
+                    summary=block.summary.model_dump() if block.summary else None,
+                    summary_formatted=block.summary.formatted if block.summary else None,
                 )
             )
 

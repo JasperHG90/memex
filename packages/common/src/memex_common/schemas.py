@@ -775,12 +775,19 @@ class NoteDTO(BaseModel):
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class BlockSummaryDTO(BaseModel):
+    """Block-level summary from extraction."""
+
+    topic: str
+    key_points: list[str] = Field(default_factory=list)
+
+
 class NoteSearchResult(BaseModel):
     """Result of a note search."""
 
     note_id: UUID
     metadata: dict[str, Any]
-    summary: 'SectionSummaryDTO | None' = None
+    summaries: list[BlockSummaryDTO] = Field(default_factory=list)
     score: float = 0.0
     vault_id: UUID | None = None
     vault_name: str | None = None

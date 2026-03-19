@@ -7,7 +7,7 @@ TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
 
 import pytest
 from fastmcp.exceptions import ToolError
-from memex_common.schemas import NoteSearchResult, SectionSummaryDTO
+from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
 
 from conftest import parse_tool_result
 
@@ -18,7 +18,7 @@ def _make_result(
     source_uri: str | None = None,
     answer: str | None = None,
     note_id: UUID | None = None,
-    summary: SectionSummaryDTO | None = None,
+    summaries: list[BlockSummaryDTO] | None = None,
 ) -> NoteSearchResult:
     metadata: dict = {}
     if title:
@@ -30,7 +30,7 @@ def _make_result(
     return NoteSearchResult(
         note_id=note_id or uuid4(),
         metadata=metadata,
-        summary=summary,
+        summaries=summaries or [],
         score=score,
         answer=answer,
     )
@@ -99,16 +99,15 @@ async def test_memex_note_search_includes_source_uri(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_includes_summary(mock_api, mcp_client):
-    """5W summary from core search result should appear in the output."""
-    summary = SectionSummaryDTO(
-        who='The research team',
-        what='Quarterly results analysis',
-        how='Statistical methods',
-        when='Q3 2025',
-        where='Internal report',
-    )
-    doc = _make_result(title='Rich Document', summary=summary)
+async def test_memex_note_search_includes_summaries(mock_api, mcp_client):
+    """Block summaries from core search result should appear in the output."""
+    summaries = [
+        BlockSummaryDTO(
+            topic='Quarterly results analysis',
+            key_points=['Statistical methods used', 'Q3 2025 data'],
+        ),
+    ]
+    doc = _make_result(title='Rich Document', summaries=summaries)
     mock_api.search_notes.return_value = [doc]
 
     result = await mcp_client.call_tool(
@@ -116,18 +115,15 @@ async def test_memex_note_search_includes_summary(mock_api, mcp_client):
     )
     data = parse_tool_result(result)
 
-    result_summary = data[0]['summary']
-    assert result_summary is not None
-    assert result_summary['who'] == 'The research team'
-    assert result_summary['what'] == 'Quarterly results analysis'
-    assert result_summary['how'] == 'Statistical methods'
-    assert result_summary['when'] == 'Q3 2025'
-    assert result_summary['where'] == 'Internal report'
+    result_summaries = data[0]['summaries']
+    assert len(result_summaries) == 1
+    assert result_summaries[0]['topic'] == 'Quarterly results analysis'
+    assert 'Statistical methods used' in result_summaries[0]['key_points']
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_no_page_index_gives_null_summary(mock_api, mcp_client):
-    """When no page index exists, summary should be null."""
+async def test_memex_note_search_no_summaries_gives_empty_list(mock_api, mcp_client):
+    """When no block summaries exist, summaries should be an empty list."""
     doc = _make_result(title='No Index Doc')
     mock_api.search_notes.return_value = [doc]
 
@@ -136,7 +132,7 @@ async def test_memex_note_search_no_page_index_gives_null_summary(mock_api, mcp_
     )
     data = parse_tool_result(result)
 
-    assert data[0]['summary'] is None
+    assert data[0]['summaries'] == []
 
 
 @pytest.mark.asyncio

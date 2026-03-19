@@ -220,6 +220,8 @@ async def store_chunks_batch(
             'embedding': chunk.embedding,
             'content_hash': chunk.content_hash,
             'status': ContentStatus.ACTIVE,
+            'summary': chunk.summary,
+            'summary_formatted': chunk.summary_formatted,
         }
         insert_data.append(row)
 
@@ -240,6 +242,8 @@ async def store_chunks_batch(
                 'chunk_index': pg_insert(Chunk).excluded.chunk_index,
                 'status': ContentStatus.ACTIVE,
                 'embedding': pg_insert(Chunk).excluded.embedding,
+                'summary': pg_insert(Chunk).excluded.summary,
+                'summary_formatted': pg_insert(Chunk).excluded.summary_formatted,
             },
         )
         .returning(Chunk.id, Chunk.chunk_index)

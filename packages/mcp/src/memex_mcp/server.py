@@ -43,7 +43,7 @@ from memex_mcp.models import (
     McpOverlap,
     McpPageIndex,
     McpPageMetadata,
-    McpSectionSummary,
+    McpBlockSummary,
     McpSupersession,
     McpVault,
 )
@@ -942,9 +942,7 @@ async def memex_note_search(
                 or metadata.get('filename')
                 or 'Untitled'
             )
-            summary: McpSectionSummary | None = None
-            if doc.summary is not None:
-                summary = McpSectionSummary(**doc.summary.model_dump())
+            summaries = [McpBlockSummary(**s.model_dump()) for s in doc.summaries]
             output.append(
                 McpNoteSearchResult(
                     note_id=doc.note_id,
@@ -956,7 +954,7 @@ async def memex_note_search(
                     tags=metadata.get('tags', []),
                     source_uri=metadata.get('source_uri'),
                     has_assets=metadata.get('has_assets', False),
-                    summary=summary,
+                    summaries=summaries,
                 )
             )
 

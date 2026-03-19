@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from uuid import uuid4
 from memex_cli.notes import app
 from memex_common.config import MemexConfig
-from memex_common.schemas import NoteSearchResult, SectionSummaryDTO
+from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
 
 runner = CliRunner()
 
@@ -33,10 +33,12 @@ def test_cli_note_search_success(mock_api, mock_config):
     result = NoteSearchResult(
         note_id=doc_id,
         metadata={'title': 'Test Note', 'filename': 'test.md'},
-        summary=SectionSummaryDTO(
-            what='A test document about testing',
-            who='Test author',
-        ),
+        summaries=[
+            BlockSummaryDTO(
+                topic='A test document about testing',
+                key_points=['Written by test author'],
+            )
+        ],
         score=0.95,
     )
 
