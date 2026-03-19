@@ -585,16 +585,20 @@ class ReflectionEngine:
 
             if dead_ids:
                 pruned = False
+                pruned_to_empty: set[UUID] = set()
                 for obs in current_observations:
                     original_len = len(obs.evidence)
                     obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in dead_ids]
                     if len(obs.evidence) < original_len:
                         pruned = True
+                        if not obs.evidence:
+                            pruned_to_empty.add(obs.id)
 
-                original_obs_count = len(current_observations)
-                current_observations = [obs for obs in current_observations if obs.evidence]
-                if len(current_observations) < original_obs_count:
-                    pruned = True
+                # Only drop observations that were pruned to empty, not naturally empty ones
+                if pruned_to_empty:
+                    current_observations = [
+                        obs for obs in current_observations if obs.id not in pruned_to_empty
+                    ]
 
                 if pruned:
                     model.observations = [

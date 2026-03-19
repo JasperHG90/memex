@@ -46,18 +46,19 @@ async def prune_stale_evidence(
 
             observations = [Observation(**obs) for obs in model.observations]
             pruned = False
+            pruned_to_empty: set[UUID] = set()
 
             for obs in observations:
                 original_len = len(obs.evidence)
                 obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in deleted_set]
                 if len(obs.evidence) < original_len:
                     pruned = True
+                    if not obs.evidence:
+                        pruned_to_empty.add(obs.id)
 
-            # Drop observations with zero evidence
-            original_obs_count = len(observations)
-            observations = [obs for obs in observations if obs.evidence]
-            if len(observations) < original_obs_count:
-                pruned = True
+            # Only drop observations that were pruned to empty, not naturally empty ones
+            if pruned_to_empty:
+                observations = [obs for obs in observations if obs.id not in pruned_to_empty]
 
             if not pruned:
                 continue
