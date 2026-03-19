@@ -366,16 +366,17 @@ class NoteService:
             ids.append(vault_id)
 
         async with self.metastore.session() as session:
-            date_col = func.coalesce(Note.publish_date, Note.created_at)
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col >= after)
             if before is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
 
-            stmt = stmt.order_by(date_col.desc()).offset(offset).limit(limit)
+            stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())
             return await self._attach_vault_names(session, notes)
 
@@ -389,7 +390,7 @@ class NoteService:
     ) -> list[Any]:
         """Get the most recent notes."""
         from sqlalchemy import func
-        from sqlmodel import desc, select
+        from sqlmodel import select
 
         from memex_core.memory.sql_models import Note
 
@@ -398,13 +399,14 @@ class NoteService:
             ids.append(vault_id)
 
         async with self.metastore.session() as session:
-            date_col = func.coalesce(Note.publish_date, Note.created_at)
-            stmt = select(Note).order_by(desc(date_col))
+            stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col >= after)
             if before is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
             stmt = stmt.limit(limit)
             notes = list((await session.exec(stmt)).all())
