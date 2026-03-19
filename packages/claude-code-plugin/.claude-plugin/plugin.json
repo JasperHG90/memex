@@ -1,7 +1,7 @@
 {
   "name": "memex",
   "description": "Long-term memory for Claude Code powered by Memex. Provides persistent knowledge capture, retrieval, and memory-augmented workflows across all projects.",
-  "version": "0.0.25a",
+  "version": "0.0.26a",
   "repository": "https://github.com/JasperHG90/memex",
   "license": "Apache-2.0",
   "keywords": [
