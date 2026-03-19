@@ -359,7 +359,7 @@ class NoteService:
         from sqlalchemy import func
         from sqlmodel import select
 
-        from memex_core.memory.sql_models import Note, Vault
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -367,9 +367,7 @@ class NoteService:
 
         async with self.metastore.session() as session:
             date_col = func.coalesce(Note.publish_date, Note.created_at)
-            stmt = select(Note, Vault.name.label('vault_name')).outerjoin(  # type: ignore[attr-defined]
-                Vault, Note.vault_id == Vault.id
-            )
+            stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
@@ -378,10 +376,8 @@ class NoteService:
                 stmt = stmt.where(date_col <= before)
 
             stmt = stmt.order_by(date_col.desc()).offset(offset).limit(limit)
-            results = (await session.exec(stmt)).all()
-            for note, vault_name in results:
-                note.vault_name = vault_name  # type: ignore[attr-defined]
-            return [note for note, _ in results]
+            notes = list((await session.exec(stmt)).all())
+            return await self._attach_vault_names(session, notes)
 
     async def get_recent_notes(
         self,
@@ -395,7 +391,7 @@ class NoteService:
         from sqlalchemy import func
         from sqlmodel import desc, select
 
-        from memex_core.memory.sql_models import Note, Vault
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -403,11 +399,7 @@ class NoteService:
 
         async with self.metastore.session() as session:
             date_col = func.coalesce(Note.publish_date, Note.created_at)
-            stmt = (
-                select(Note, Vault.name.label('vault_name'))  # type: ignore[attr-defined]
-                .outerjoin(Vault, Note.vault_id == Vault.id)
-                .order_by(desc(date_col))
-            )
+            stmt = select(Note).order_by(desc(date_col))
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
@@ -415,10 +407,25 @@ class NoteService:
             if before is not None:
                 stmt = stmt.where(date_col <= before)
             stmt = stmt.limit(limit)
-            results = (await session.exec(stmt)).all()
-            for note, vault_name in results:
-                note.vault_name = vault_name  # type: ignore[attr-defined]
-            return [note for note, _ in results]
+            notes = list((await session.exec(stmt)).all())
+            return await self._attach_vault_names(session, notes)
+
+    @staticmethod
+    async def _attach_vault_names(session: Any, notes: list[Any]) -> list[Any]:
+        """Batch-fetch vault names and attach them to Note objects."""
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Vault
+
+        vault_ids = {n.vault_id for n in notes if n.vault_id is not None}
+        vault_map: dict[UUID, str] = {}
+        if vault_ids:
+            vault_stmt = select(Vault).where(col(Vault.id).in_(list(vault_ids)))
+            vaults = (await session.exec(vault_stmt)).all()
+            vault_map = {v.id: v.name for v in vaults}
+        for note in notes:
+            object.__setattr__(note, 'vault_name', vault_map.get(note.vault_id))
+        return notes
 
     async def find_notes_by_title(
         self,
