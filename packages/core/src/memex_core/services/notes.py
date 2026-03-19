@@ -492,10 +492,14 @@ class NoteService:
             UnitEntity,
         )
 
+        from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
         async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
             doc = await txn.db_session.get(Note, note_id)
             if not doc:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            note_vault_id = doc.vault_id
 
             # Collect entity_ids linked to this note's memory units before deletion.
             unit_ids_stmt = select(MemoryUnit.id).where(col(MemoryUnit.note_id) == note_id)
@@ -523,6 +527,7 @@ class NoteService:
             # Flush so cascades execute, then clean up orphaned entities
             await txn.db_session.flush()
 
+            orphaned_entity_ids: set[UUID] = set()
             if entity_ids_for_cleanup:
                 for eid in entity_ids_for_cleanup:
                     # Check if any other units still reference this entity
@@ -530,6 +535,7 @@ class NoteService:
                         select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
                     )
                     if remaining.first() is None:
+                        orphaned_entity_ids.add(eid)
                         # No remaining links — delete entity and its mental models.
                         # MentalModel has no FK CASCADE, so delete explicitly first.
                         mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
@@ -553,6 +559,13 @@ class NoteService:
                             .where(col(Entity.id) == eid)
                             .values(mention_count=actual_count)
                         )
+
+                # Prune stale evidence from mental models of shared (non-orphaned) entities
+                shared_entity_ids = entity_ids_for_cleanup - orphaned_entity_ids
+                if shared_entity_ids and unit_ids:
+                    await prune_stale_evidence(
+                        txn.db_session, shared_entity_ids, unit_ids, note_vault_id
+                    )
 
         return True
 

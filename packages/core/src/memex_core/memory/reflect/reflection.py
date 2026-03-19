@@ -565,8 +565,43 @@ class ReflectionEngine:
     ) -> list[Observation]:
         """
         Phase 0: Check if existing observations have new supporting/contradicting evidence.
+        Also prunes stale evidence referencing deleted memory units (liveness check).
         """
         current_observations = [Observation(**obs) for obs in model.observations]
+        if not current_observations:
+            return current_observations
+
+        # Liveness check: prune evidence citing deleted memory units
+        all_evidence_ids: set[UUID] = set()
+        for obs in current_observations:
+            for ev in obs.evidence:
+                all_evidence_ids.add(ev.memory_id)
+
+        if all_evidence_ids:
+            live_stmt = select(MemoryUnit.id).where(col(MemoryUnit.id).in_(list(all_evidence_ids)))
+            live_result = await self.session.exec(live_stmt)
+            live_ids = set(live_result.all())
+            dead_ids = all_evidence_ids - live_ids
+
+            if dead_ids:
+                pruned = False
+                for obs in current_observations:
+                    original_len = len(obs.evidence)
+                    obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in dead_ids]
+                    if len(obs.evidence) < original_len:
+                        pruned = True
+
+                original_obs_count = len(current_observations)
+                current_observations = [obs for obs in current_observations if obs.evidence]
+                if len(current_observations) < original_obs_count:
+                    pruned = True
+
+                if pruned:
+                    model.observations = [
+                        obs.model_dump(mode='json') for obs in current_observations
+                    ]
+                    flag_modified(model, 'observations')
+
         if not current_observations or not memories:
             return current_observations
 
