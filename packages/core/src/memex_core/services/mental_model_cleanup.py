@@ -1,0 +1,70 @@
+"""Shared helper for pruning stale evidence from MentalModel observations."""
+
+from __future__ import annotations
+
+import logging
+from uuid import UUID
+
+from sqlalchemy.orm.attributes import flag_modified
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from memex_core.memory.sql_models import MentalModel, Observation
+
+logger = logging.getLogger('memex.core.services.mental_model_cleanup')
+
+
+async def prune_stale_evidence(
+    session: AsyncSession,
+    entity_ids: set[UUID],
+    deleted_unit_ids: list[UUID],
+    vault_id: UUID,
+) -> None:
+    """Remove evidence citing deleted memory units from MentalModel observations.
+
+    For each entity_id, queries MentalModels in the given vault, deserializes
+    observations, removes evidence whose memory_id is in deleted_unit_ids,
+    drops observations with zero evidence, deletes models with zero observations,
+    otherwise updates JSONB + flag_modified + sets embedding = None.
+    """
+    if not entity_ids or not deleted_unit_ids:
+        return
+
+    deleted_set = set(deleted_unit_ids)
+
+    for entity_id in entity_ids:
+        stmt = select(MentalModel).where(
+            col(MentalModel.entity_id) == entity_id,
+            col(MentalModel.vault_id) == vault_id,
+        )
+        result = await session.exec(stmt)
+        models = list(result.all())
+
+        for model in models:
+            if not model.observations:
+                continue
+
+            observations = [Observation(**obs) for obs in model.observations]
+            pruned = False
+
+            for obs in observations:
+                original_len = len(obs.evidence)
+                obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in deleted_set]
+                if len(obs.evidence) < original_len:
+                    pruned = True
+
+            # Drop observations with zero evidence
+            original_obs_count = len(observations)
+            observations = [obs for obs in observations if obs.evidence]
+            if len(observations) < original_obs_count:
+                pruned = True
+
+            if not pruned:
+                continue
+
+            if not observations:
+                await session.delete(model)
+            else:
+                model.observations = [obs.model_dump(mode='json') for obs in observations]
+                model.embedding = None
+                flag_modified(model, 'observations')
