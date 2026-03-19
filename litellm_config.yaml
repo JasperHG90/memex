@@ -21,5 +21,13 @@ router_settings:
   num_retries: 3
   timeout: 300
 
+litellm_settings:
+  # Monthly budget cap — blocks requests when exceeded with BudgetExceededError.
+  # At $5/month: ~16M input tokens or ~2M output tokens on Gemini 2.5 Flash.
+  # Gemini Flash pricing: $0.30/1M input, $2.50/1M output.
+  # Adjust upward if BudgetExceededError appears in logs.
+  max_budget: 5
+  budget_duration: 30d
+
 general_settings:
   master_key: null
