@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastmcp.exceptions import ToolError
 from conftest import parse_tool_result
 from memex_common.schemas import (
+    BatchJobStatus,
     IngestResponse,
     NoteDTO,
     MemoryUnitDTO,
@@ -40,6 +41,35 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
     args, _ = mock_api.ingest.call_args
     assert isinstance(args[0], NoteCreateDTO)
     assert args[0].name == 'Test Note'
+
+
+@pytest.mark.asyncio
+async def test_mcp_add_note_background_uuid_job_id(mock_api, mcp_client):
+    """Regression: background=True returns BatchJobStatus with UUID job_id.
+
+    Previously, the MCP handler called UUID(result.job_id) on an already-UUID
+    value, causing 'UUID object has no attribute replace'.
+    """
+    job_id = uuid4()
+    mock_api.ingest.return_value = BatchJobStatus(job_id=job_id, status='pending')
+
+    result = await mcp_client.call_tool(
+        'memex_add_note',
+        {
+            'title': 'Background Note',
+            'markdown_content': '# Content',
+            'description': 'Short description',
+            'author': 'tester',
+            'tags': ['tag1'],
+            'vault_id': 'test-vault',
+            'background': True,
+        },
+    )
+
+    data = parse_tool_result(result)
+    assert data['status'] == 'queued'
+    assert data['note_id'] == str(job_id)
+    assert data['job_id'] == str(job_id)
 
 
 @pytest.mark.asyncio
