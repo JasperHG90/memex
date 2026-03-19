@@ -55,3 +55,58 @@ def test_note_dto_instantiation():
     assert dto_json.files['file1.png'] == file_b64_bytes
     assert dto_json.content_decoded == content_expected
     assert dto_json.files_decoded['file1.png'] == file_expected
+
+
+# -- BlockSummaryDTO & NoteSearchResult --
+
+
+def test_block_summary_dto_basic():
+    from memex_common.schemas import BlockSummaryDTO
+
+    s = BlockSummaryDTO(topic='Machine Learning', key_points=['Supervised', 'Unsupervised'])
+    assert s.topic == 'Machine Learning'
+    assert s.key_points == ['Supervised', 'Unsupervised']
+
+
+def test_block_summary_dto_defaults():
+    from memex_common.schemas import BlockSummaryDTO
+
+    s = BlockSummaryDTO(topic='Overview')
+    assert s.key_points == []
+
+
+def test_block_summary_dto_serialization():
+    from memex_common.schemas import BlockSummaryDTO
+
+    s = BlockSummaryDTO(topic='Test', key_points=['A', 'B'])
+    d = s.model_dump()
+    assert d == {'topic': 'Test', 'key_points': ['A', 'B']}
+    roundtrip = BlockSummaryDTO(**d)
+    assert roundtrip == s
+
+
+def test_note_search_result_with_summaries():
+    from uuid import uuid4
+    from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
+
+    result = NoteSearchResult(
+        note_id=uuid4(),
+        metadata={'title': 'Test'},
+        summaries=[
+            BlockSummaryDTO(topic='Intro', key_points=['Context']),
+            BlockSummaryDTO(topic='Methods'),
+        ],
+        score=0.85,
+    )
+    assert len(result.summaries) == 2
+    assert result.summaries[0].topic == 'Intro'
+    assert result.summaries[1].key_points == []
+
+
+def test_note_search_result_default_summaries():
+    from uuid import uuid4
+    from memex_common.schemas import NoteSearchResult
+
+    result = NoteSearchResult(note_id=uuid4(), metadata={})
+    assert result.summaries == []
+    assert result.score == 0.0

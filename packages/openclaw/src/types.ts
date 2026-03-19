@@ -30,13 +30,19 @@ export interface StrategyDebugInfo {
   timing_ms?: number | null;
 }
 
-/** 5W summary of a document section. */
+/** 5W summary of a document section (used by TOCNodeDTO). */
 export interface SectionSummaryDTO {
   who?: string | null;
   what?: string | null;
   how?: string | null;
   when?: string | null;
   where?: string | null;
+}
+
+/** Block-level summary from extraction. */
+export interface BlockSummaryDTO {
+  topic: string;
+  key_points: string[];
 }
 
 /** Body for PATCH /api/v1/notes/{id}/date */
@@ -174,7 +180,7 @@ export interface NoteSearchRequest {
 export interface NoteSearchResult {
   note_id: string;
   metadata: Record<string, unknown>;
-  summary?: SectionSummaryDTO | null;
+  summaries: BlockSummaryDTO[];
   score: number;
   vault_id?: string | null;
   vault_name?: string | null;

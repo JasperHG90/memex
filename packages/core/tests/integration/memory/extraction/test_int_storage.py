@@ -359,3 +359,112 @@ async def test_int_store_chunks_batch_deduplicates_same_content(session):
     result = await session.exec(select(Chunk).where(Chunk.note_id == doc_id))
     db_chunks = result.all()
     assert len(db_chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_int_store_chunks_batch_persists_summary(session):
+    """Summary JSONB and summary_formatted should roundtrip through the DB."""
+    from memex_core.memory.extraction.core import content_hash
+
+    doc_id = uuid4()
+    doc = Note(id=doc_id, original_text='Summary Test Doc')
+    session.add(doc)
+    await session.commit()
+
+    summary_dict = {
+        'topic': 'Climate Policy',
+        'key_points': ['Paris Agreement', 'Net zero by 2050'],
+    }
+    chunk_text = f'Climate discussion {uuid4()}'
+
+    chunks = [
+        ChunkMetadata(
+            chunk_text=chunk_text,
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash=content_hash(chunk_text),
+            summary=summary_dict,
+            summary_formatted='Climate Policy — Paris Agreement | Net zero by 2050',
+        ),
+        ChunkMetadata(
+            chunk_text=f'No summary chunk {uuid4()}',
+            chunk_index=1,
+            fact_count=0,
+            content_index=0,
+            content_hash=content_hash(f'no-summary-{uuid4()}'),
+        ),
+    ]
+
+    chunk_map = await storage.store_chunks_batch(session, str(doc_id), chunks)
+    await session.commit()
+
+    session.expire_all()
+    from uuid import UUID as _UUID
+
+    # Chunk with summary
+    db_chunk0 = await session.get(Chunk, _UUID(chunk_map[0]))
+    assert db_chunk0.summary == summary_dict
+    assert db_chunk0.summary_formatted == 'Climate Policy — Paris Agreement | Net zero by 2050'
+
+    # Chunk without summary
+    db_chunk1 = await session.get(Chunk, _UUID(chunk_map[1]))
+    assert db_chunk1.summary is None
+    assert db_chunk1.summary_formatted is None
+
+
+@pytest.mark.asyncio
+async def test_int_store_chunks_summary_updated_on_reingest(session):
+    """Summary should be updated on upsert when re-ingesting the same chunk."""
+    from memex_core.memory.extraction.core import content_hash
+
+    doc_id = uuid4()
+    doc = Note(id=doc_id, original_text='Summary Reingest Doc')
+    session.add(doc)
+    await session.commit()
+
+    chunk_text = f'Stable content {uuid4()}'
+    c_hash = content_hash(chunk_text)
+
+    # V1: no summary
+    chunks_v1 = [
+        ChunkMetadata(
+            chunk_text=chunk_text,
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash=c_hash,
+        ),
+    ]
+    map_v1 = await storage.store_chunks_batch(session, str(doc_id), chunks_v1)
+    await session.commit()
+
+    session.expire_all()
+    from uuid import UUID as _UUID
+
+    db_chunk = await session.get(Chunk, _UUID(map_v1[0]))
+    assert db_chunk.summary is None
+
+    # V2: same content, now with summary
+    new_summary = {'topic': 'Updated Topic', 'key_points': ['New insight']}
+    chunks_v2 = [
+        ChunkMetadata(
+            chunk_text=chunk_text,
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash=c_hash,
+            summary=new_summary,
+            summary_formatted='Updated Topic — New insight',
+        ),
+    ]
+    map_v2 = await storage.store_chunks_batch(session, str(doc_id), chunks_v2)
+    await session.commit()
+
+    # Same chunk ID (upsert)
+    assert map_v2[0] == map_v1[0]
+
+    session.expire_all()
+    db_chunk = await session.get(Chunk, _UUID(map_v2[0]))
+    assert db_chunk.summary == new_summary
+    assert db_chunk.summary_formatted == 'Updated Topic — New insight'

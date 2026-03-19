@@ -29,7 +29,7 @@ import { useNote, useNotePageIndex } from '@/api/hooks/use-notes';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
 import { usePreferencesStore } from '@/stores/preferences-store';
-import type { NoteSearchResult, SectionSummaryDTO } from '@/api/generated';
+import type { NoteSearchResult, BlockSummaryDTO } from '@/api/generated';
 
 const DOC_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal'];
 
@@ -207,7 +207,7 @@ export default function NoteSearch() {
     if (showSummary && results.length > 0 && !summaryMutation.data && !summaryMutation.isPending) {
       const texts = results
         .slice(0, 20)
-        .map((r) => summaryToText(r.summary))
+        .map((r) => summariesToText(r.summaries))
         .filter((t) => t.length > 0);
       summaryMutation.mutate({ query, texts });
     }
@@ -234,7 +234,7 @@ export default function NoteSearch() {
       if (checked && results.length > 0 && !summaryMutation.data) {
         const texts = results
           .slice(0, 20)
-          .map((r) => summaryToText(r.summary))
+          .map((r) => summariesToText(r.summaries))
           .filter((t) => t.length > 0);
         summaryMutation.mutate({ query, texts });
       }
@@ -390,10 +390,10 @@ function NoteResultCard({
           )}
         </div>
 
-        {/* Summary */}
-        {result.summary && (
+        {/* Summaries */}
+        {result.summaries && result.summaries.length > 0 && (
           <div className="mb-3">
-            <SummaryPreview summary={result.summary} />
+            <SummariesPreview summaries={result.summaries} />
           </div>
         )}
 
@@ -416,23 +416,23 @@ function NoteResultCard({
   );
 }
 
-function summaryToText(summary: SectionSummaryDTO | null | undefined): string {
-  if (!summary) return '';
-  return [summary.what, summary.who, summary.how, summary.when, summary.where]
-    .filter(Boolean)
-    .join(' | ');
+function summariesToText(summaries: BlockSummaryDTO[] | undefined): string {
+  if (!summaries || summaries.length === 0) return '';
+  return summaries.map((s) => s.topic).join(' | ');
 }
 
-function SummaryPreview({ summary }: { summary: SectionSummaryDTO }) {
-  const entries = Object.entries(summary).filter(([, v]) => v);
-  if (entries.length === 0) return null;
+function SummariesPreview({ summaries }: { summaries: BlockSummaryDTO[] }) {
+  if (summaries.length === 0) return null;
 
   return (
     <div className="rounded-md bg-muted/30 border border-border p-2 space-y-0.5">
-      {entries.map(([key, value]) => (
-        <p key={key} className="text-xs text-muted-foreground">
-          <span className="font-medium text-primary capitalize">{key}:</span> {value}
-        </p>
+      {summaries.map((s, i) => (
+        <div key={i} className="text-xs text-muted-foreground">
+          <span className="font-medium text-primary">{s.topic}</span>
+          {s.key_points && s.key_points.length > 0 && (
+            <span> — {s.key_points.join(' | ')}</span>
+          )}
+        </div>
       ))}
     </div>
   );

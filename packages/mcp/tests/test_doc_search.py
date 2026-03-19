@@ -136,6 +136,31 @@ async def test_memex_note_search_no_summaries_gives_empty_list(mock_api, mcp_cli
 
 
 @pytest.mark.asyncio
+async def test_memex_note_search_multiple_summaries(mock_api, mcp_client):
+    """Multiple block summaries should all be serialized into the result."""
+    summaries = [
+        BlockSummaryDTO(topic='Introduction', key_points=['Background']),
+        BlockSummaryDTO(topic='Methods', key_points=['Approach A', 'Approach B']),
+        BlockSummaryDTO(topic='Conclusion', key_points=[]),
+    ]
+    doc = _make_result(title='Multi-block Doc', summaries=summaries)
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'multi', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    result_summaries = data[0]['summaries']
+    assert len(result_summaries) == 3
+    assert result_summaries[0]['topic'] == 'Introduction'
+    assert result_summaries[1]['topic'] == 'Methods'
+    assert result_summaries[1]['key_points'] == ['Approach A', 'Approach B']
+    assert result_summaries[2]['topic'] == 'Conclusion'
+    assert result_summaries[2]['key_points'] == []
+
+
+@pytest.mark.asyncio
 async def test_memex_note_search_falls_back_to_name_key(mock_api, mcp_client):
     """When 'title' key is absent, fall back to 'name' key for document title."""
     doc = NoteSearchResult(
