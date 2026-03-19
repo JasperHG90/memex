@@ -48,9 +48,9 @@ The reflection queue uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` for a
 
 Additionally, each entity reflection acquires a PostgreSQL advisory lock (`pg_try_advisory_xact_lock`) to prevent concurrent reflection on the same entity from different workers.
 
-## The Five Phases of Reflection
+## The Phases of Reflection
 
-When an entity is selected for reflection, it passes through five phases:
+When an entity is selected for reflection, it passes through the following phases:
 
 ### Phase 0: Update Existing
 
@@ -103,6 +103,28 @@ The final set of observations is:
 2. Combined into a text representation and embedded for the Mental Model retrieval strategy
 3. The model's version number is incremented and `last_refreshed` is updated
 
+### Phase 6: Enrich (Memory Evolution)
+
+After the mental model is finalized, Phase 6 pushes enriched tags back into the individual memory units that contributed as evidence. This closes a feedback loop: reflection builds understanding that connects old memories to new concepts, and enrichment makes those memories discoverable for queries they previously could not match.
+
+**How it works:**
+
+1. **Collect evidence IDs** — iterate over all observations and gather the IDs of memory units cited as evidence
+2. **Load units** — use units already loaded in the session; fetch any missing evidence units from the database
+3. **Build LLM context** — include existing enriched tags to prevent duplicates
+4. **Generate tags** — the LLM produces enriched tags and keywords for each memory unit based on the mental model's understanding
+5. **Write overlay** — under a database lock, set-union the new tags with existing ones and record `enriched_at` timestamp and `enriched_by_entity`
+
+**Example:** A 3-month-old memory "Project Alpha is rewriting its auth middleware" (original tags: `auth, middleware`) is invisible to "compliance work" queries. After enrichment, that memory gains `enriched_tags: ["compliance", "eu-regulation"]` and becomes findable via the keyword strategy.
+
+**Safety guarantees:**
+
+- **Append-only**: All enrichment keys are prefixed with `enriched_` — original metadata is never modified
+- **Accumulative**: Tags are set-unioned across reflection cycles, never overwritten
+- **Auditable**: Each enrichment records the entity name and timestamp for traceability
+
+Enrichment can be disabled by setting `enrichment_enabled: false` in the reflection configuration.
+
 ## Batch Processing
 
 Reflection processes entities in batches to minimize database round-trips:
@@ -128,6 +150,7 @@ server:
   memory:
     reflection:
       background_reflection_enabled: false
+      enrichment_enabled: true
       background_reflection_interval_seconds: 600
       background_reflection_batch_size: 10
       max_concurrency: 3

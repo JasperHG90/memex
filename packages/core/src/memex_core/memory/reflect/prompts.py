@@ -230,3 +230,60 @@ class ComparePhaseSignature(dspy.Signature):
     result: ComparePhaseOutput = dspy.OutputField(
         desc='Final merged list of observations. MUST be in English.'
     )
+
+
+# =============================================================================
+# PHASE 6: ENRICH (Memory Evolution)
+# =============================================================================
+
+
+class EnrichedTagSet(BaseModel):
+    """Enriched tags and keywords generated for a single memory unit."""
+
+    memory_index: int = Field(
+        description='The zero-based index of the memory in the provided list.'
+    )
+    enriched_tags: list[str] = Field(
+        description=(
+            'New conceptual tags that the memory is now understood to relate to, '
+            'based on the entity summary and observations. Lowercase, 1-3 words each, English only. '
+            'Do NOT duplicate tags already present in the memory text or existing tags.'
+        ),
+    )
+    enriched_keywords: list[str] = Field(
+        description=(
+            'New search keywords derived from the mental model that would help find this memory. '
+            'Lowercase, single words or short phrases, English only.'
+        ),
+    )
+
+
+class EnrichmentSignature(dspy.Signature):
+    """
+    Given a mental model (entity summary + observations) and the memory units that served as
+    evidence, generate enriched tags and keywords for each memory unit.
+
+    The goal is to make memories discoverable for concepts that were NOT apparent at extraction
+    time but are now understood through reflection. For example, a memory about "rewriting auth
+    middleware" should gain tags like "compliance" if the mental model reveals the rewrite is
+    compliance-driven.
+
+    Rules:
+    - Tags MUST be lowercase, 1-3 words, English only.
+    - Do NOT duplicate tags that already appear in the memory text or existing tags shown in brackets.
+    - Only generate tags that are genuinely implied by the mental model's understanding.
+    - It is acceptable to return an empty list for memories that don't need enrichment.
+    """
+
+    entity_name: str = dspy.InputField(desc='The name of the entity whose mental model was built.')
+    entity_summary: str = dspy.InputField(desc='One-sentence summary of the entity.')
+    observations: list[ReflectObservationContext] = dspy.InputField(
+        desc='The observations (mental model insights) synthesized during reflection.'
+    )
+    memories: list[ReflectMemoryContext] = dspy.InputField(
+        desc='The memory units that contributed as evidence. Tags in [brackets] are already assigned.'
+    )
+
+    enrichments: list[EnrichedTagSet] = dspy.OutputField(
+        desc='Enriched tag sets for each memory that warrants new tags. May be shorter than input.'
+    )

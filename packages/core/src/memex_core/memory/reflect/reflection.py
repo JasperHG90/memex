@@ -1,7 +1,7 @@
 """
 The Hindsight "Reflect" Engine.
 
-This module orchestrates the 5-phase reflection loop to update Mental Models
+This module orchestrates the reflection loop (Phases 0-6) to update Mental Models
 based on new evidence and memories.
 """
 
@@ -31,10 +31,12 @@ from memex_core.memory.reflect.prompts import (
     ComparePhaseSignature,
     CandidateObservation,
     UnvalidatedCandidateObservation,
+    ReflectMemoryContext,
     ReflectObservationContext,
     UpdateExistingSignature,
     ReflectEvidenceContext,
     ReflectComparisonObservation,
+    EnrichmentSignature,
 )
 from memex_core.memory.reflect.utils import (
     build_memory_context,
@@ -274,6 +276,17 @@ class ReflectionEngine:
             entity_type=entity_type,
         )
 
+        # Phase 6: Enrich (Memory Evolution)
+        if self.config.server.memory.reflection.enrichment_enabled:
+            await self._phase_6_enrich(
+                entity_name=entity_name,
+                entity_summary=entity_summary,
+                final_obs=final_obs,
+                recent_memories=recent_memories,
+                db_lock=db_lock,
+                vault_id=vault_id,
+            )
+
         return mental_model
 
     async def _phase_5_finalize(
@@ -311,6 +324,125 @@ class ReflectionEngine:
             self.session.add(mental_model)
             flag_modified(mental_model, 'observations')
             flag_modified(mental_model, 'entity_metadata')
+
+    async def _phase_6_enrich(
+        self,
+        entity_name: str,
+        entity_summary: str,
+        final_obs: list[Observation],
+        recent_memories: list[MemoryUnit],
+        db_lock: asyncio.Lock,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """
+        Phase 6: Enrich (Memory Evolution).
+        Pushes enriched tags from the mental model back into contributing memory units,
+        making them discoverable for concepts identified during reflection.
+        """
+        if not final_obs:
+            return
+
+        # 1. Collect evidence unit IDs from all observations (preserve insertion order)
+        evidence_ids: dict[UUID, None] = {}
+        for obs in final_obs:
+            for ev in obs.evidence:
+                if ev.memory_id:
+                    evidence_ids[ev.memory_id] = None
+
+        if not evidence_ids:
+            return
+
+        # 2. Build unit map from recent_memories, load any missing from DB
+        unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
+        missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
+
+        if missing_ids:
+            async with db_lock:
+                stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(list(missing_ids)))
+                result = await self.session.exec(stmt)
+                for unit in result.all():
+                    unit_map[unit.id] = unit
+
+        # 3. Filter to only units we have evidence for
+        target_units = [unit_map[uid] for uid in evidence_ids if uid in unit_map]
+        if not target_units:
+            return
+
+        # 4. Build LLM context
+        obs_context = [
+            ReflectObservationContext(index_id=i, title=o.title, content=o.content)
+            for i, o in enumerate(final_obs)
+        ]
+
+        memory_context = []
+        for i, unit in enumerate(target_units):
+            meta = unit.unit_metadata or {}
+            existing_tags = meta.get('enriched_tags', [])
+            existing_kw = meta.get('enriched_keywords', [])
+            all_existing = existing_tags + existing_kw
+            tag_suffix = f' [tags: {", ".join(all_existing)}]' if all_existing else ''
+            occurred = (unit.event_date or datetime.now(timezone.utc)).isoformat()
+            memory_context.append(
+                ReflectMemoryContext(
+                    index_id=i,
+                    content=unit.text + tag_suffix,
+                    occurred=occurred,
+                )
+            )
+
+        # 5. Call LLM
+        enrich_predictor = dspy.Predict(EnrichmentSignature)
+
+        assert self.lm is not None, 'LM must be initialized for Phase 6'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=enrich_predictor,
+            input_kwargs={
+                'entity_name': entity_name,
+                'entity_summary': entity_summary,
+                'observations': obs_context,
+                'memories': memory_context,
+            },
+            session=self.session,
+            context_metadata={'phase': 'enrich', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if not result or not result.enrichments:
+            logger.info('Phase 6: No enrichments generated.')
+            return
+
+        # 6. Apply enrichments under db_lock
+        now_iso = datetime.now(timezone.utc).isoformat()
+        enriched_count = 0
+
+        async with db_lock:
+            for enrichment in result.enrichments:
+                idx = enrichment.memory_index
+                if idx < 0 or idx >= len(target_units):
+                    logger.warning(f'Phase 6: Invalid memory_index {idx}, skipping.')
+                    continue
+
+                unit = target_units[idx]
+                if unit.unit_metadata is None:
+                    unit.unit_metadata = {}
+
+                # Set-union: accumulate tags across reflection cycles
+                existing_tags = set(unit.unit_metadata.get('enriched_tags', []))
+                existing_kw = set(unit.unit_metadata.get('enriched_keywords', []))
+
+                new_tags = existing_tags | {t.lower().strip() for t in enrichment.enriched_tags}
+                new_kw = existing_kw | {k.lower().strip() for k in enrichment.enriched_keywords}
+
+                unit.unit_metadata['enriched_tags'] = sorted(new_tags)
+                unit.unit_metadata['enriched_keywords'] = sorted(new_kw)
+                unit.unit_metadata['enriched_at'] = now_iso
+                unit.unit_metadata['enriched_by_entity'] = entity_name
+
+                flag_modified(unit, 'unit_metadata')
+                enriched_count += 1
+
+        logger.info(f'Phase 6: Enriched {enriched_count} memory units for entity "{entity_name}".')
 
     async def _batch_get_or_create_models(
         self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID

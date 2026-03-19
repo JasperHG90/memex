@@ -32,6 +32,7 @@ graph TD
         J -->|Periodically| K[Hunt Evidence]
         K -->|Synthesize| L[Update Mental Models]
         L -->|Consolidate| C
+        L -->|Enrich| C
     end
 ```
 
@@ -73,7 +74,7 @@ Each strategy contributes candidates, and RRF combines them into a single ranked
 
 The reflection loop is the most distinctive part of Hindsight. It runs periodically in the background, reviewing entities that have accumulated new evidence and synthesizing higher-level understanding.
 
-The process has five phases:
+The process has seven phases (0–6):
 
 1. **Phase 0 — Update Existing**: Re-evaluate existing observations against new evidence. Compute trend direction (strengthening, weakening, stable, stale, new).
 2. **Phase 1 — Seed**: The LLM reads recent memories and proposes candidate observations — higher-level insights that connect multiple facts.
@@ -81,6 +82,7 @@ The process has five phases:
 4. **Phase 3 — Validate**: The LLM evaluates each candidate against the gathered evidence, citing specific memory units.
 5. **Phase 4 — Compare**: The LLM merges validated observations with existing ones, resolving duplicates and contradictions.
 6. **Phase 5 — Finalize**: Observations are embedded and stored in the mental model, which is versioned and timestamped.
+7. **Phase 6 — Enrich**: Push enriched tags back into contributing memory units, making them discoverable for concepts identified by the mental model.
 
 **Practical example:** After ingesting 10 meeting notes, the reflection loop might synthesize the observation "The team consistently prioritizes performance over feature velocity" — an insight that no single meeting note contains but that emerges from the pattern across all of them.
 
