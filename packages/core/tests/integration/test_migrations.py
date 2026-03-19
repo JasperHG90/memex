@@ -185,7 +185,7 @@ class TestMigration002:
         engine = create_async_engine(postgres_uri, poolclass=NullPool)
         async with engine.connect() as conn:
             result = await conn.execute(text('SELECT version_num FROM alembic_version'))
-            assert result.scalar() == '007_kv_namespace_prefix'
+            assert result.scalar() == '008_chunk_summary'
         await engine.dispose()
 
     @pytest.mark.asyncio

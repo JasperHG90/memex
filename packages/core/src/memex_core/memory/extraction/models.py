@@ -289,6 +289,8 @@ class ChunkMetadata(SQLModel):
         default='',
         description='SHA-256 hash of whitespace-normalized text for incremental diffing.',
     )
+    summary: dict[str, Any] | None = None
+    summary_formatted: str | None = None
 
 
 class RetainContent(SQLModel):

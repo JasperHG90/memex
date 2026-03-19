@@ -167,12 +167,9 @@ class McpCooccurrence(BaseModel):
 # ── Note search & find ──
 
 
-class McpSectionSummary(BaseModel):
-    who: str | None = None
-    what: str | None = None
-    how: str | None = None
-    when: str | None = None
-    where: str | None = None
+class McpBlockSummary(BaseModel):
+    topic: str
+    key_points: list[str] = Field(default_factory=list)
 
 
 class McpNoteSearchResult(BaseModel):
@@ -185,7 +182,7 @@ class McpNoteSearchResult(BaseModel):
     tags: list[str] = []
     source_uri: str | None = None
     has_assets: bool = False
-    summary: McpSectionSummary | None = None
+    summaries: list[McpBlockSummary] = Field(default_factory=list)
 
     @field_validator('tags', mode='before')
     @classmethod

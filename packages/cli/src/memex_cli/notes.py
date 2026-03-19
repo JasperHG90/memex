@@ -853,9 +853,9 @@ async def search_notes(
             metadata.get('name') or metadata.get('title') or metadata.get('filename') or 'Untitled'
         )
 
-        # Build preview from 5W summary
-        if doc.summary:
-            parts = [f'{k}: {v}' for k, v in doc.summary.model_dump().items() if v]
+        # Build preview from block summaries
+        if doc.summaries:
+            parts = [s.topic for s in doc.summaries]
             preview = ' | '.join(parts) if parts else '[No preview available]'
         else:
             preview = '[No preview available]'

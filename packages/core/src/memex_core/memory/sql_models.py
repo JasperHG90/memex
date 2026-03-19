@@ -397,6 +397,16 @@ class Chunk(SQLModel, table=True):  # type: ignore
         sa_column=Column(Integer, nullable=False),
         description='The sequential index of this chunk within the document.',
     )
+    summary: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='Block-level summary blob: {"topic": ..., "key_points": [...]}',
+    )
+    summary_formatted: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Pre-formatted block summary: "topic — point1 | point2 | ..."',
+    )
     created_at: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
         description='Timestamp when the chunk was created.',

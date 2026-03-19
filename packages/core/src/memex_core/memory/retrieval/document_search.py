@@ -23,7 +23,7 @@ from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_common.config import RetrievalConfig
 from memex_core.memory.retrieval.strategies import get_note_graph_strategy
 from memex_core.memory.sql_models import Chunk, Note, Node
-from memex_common.schemas import NoteSearchRequest, NoteSearchResult, SectionSummaryDTO
+from memex_common.schemas import BlockSummaryDTO, NoteSearchRequest, NoteSearchResult
 
 
 class RelevantSection(BaseModel):
@@ -525,6 +525,18 @@ class NoteSearchEngine:
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}
 
+        # Fetch all active chunk summaries for matched docs (batched)
+        all_chunks_stmt = (
+            select(Chunk.note_id, Chunk.summary, Chunk.chunk_index)
+            .where(col(Chunk.note_id).in_(doc_ids), col(Chunk.status) == 'active')
+            .order_by(col(Chunk.note_id), col(Chunk.chunk_index))
+        )
+        all_chunks_result = await session.exec(all_chunks_stmt)
+        doc_summaries: dict[UUID, list[BlockSummaryDTO]] = {}
+        for note_id, summary_blob, _idx in all_chunks_result.all():
+            if summary_blob and isinstance(summary_blob, dict):
+                doc_summaries.setdefault(note_id, []).append(BlockSummaryDTO(**summary_blob))
+
         # For blocks without text (page_index strategy), fetch node texts
         block_ids_needing_text: list[UUID] = []
         for chunks_with_scores in doc_to_chunks.values():
@@ -571,22 +583,26 @@ class NoteSearchEngine:
                     metadata['name'] = note_name
                     metadata['title'] = note_name
 
-            # Enrich with page_index metadata, asset info, and 5W summary
-            summary: SectionSummaryDTO | None = None
+            # Enrich with page_index metadata and asset info
             if isinstance(doc.page_index, dict):
                 pi_meta = doc.page_index.get('metadata') or {}
                 for key in ('description', 'tags', 'publish_date', 'source_uri'):
                     if key in pi_meta and pi_meta[key]:
                         metadata.setdefault(key, pi_meta[key])
-                toc = doc.page_index.get('toc', [])
-                if toc and isinstance(toc[0].get('summary'), dict):
-                    summary = SectionSummaryDTO(**toc[0]['summary'])
             metadata.setdefault('has_assets', bool(doc.assets))
             metadata['vault_id'] = str(doc.vault_id)
 
+            # Block summaries from chunks; fall back to page_index description
+            summaries = doc_summaries.get(doc_id, [])
+            if not summaries and isinstance(doc.page_index, dict):
+                pi_meta = doc.page_index.get('metadata') or {}
+                desc = pi_meta.get('description')
+                if desc:
+                    summaries = [BlockSummaryDTO(topic=desc, key_points=[])]
+
             final_results.append(
                 NoteSearchResult(
-                    note_id=doc.id, metadata=metadata, summary=summary, score=best_score
+                    note_id=doc.id, metadata=metadata, summaries=summaries, score=best_score
                 )
             )
 
