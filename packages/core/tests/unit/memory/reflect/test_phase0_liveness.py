@@ -122,3 +122,52 @@ async def test_phase_0_preserves_live_evidence():
     assert len(result[0].evidence) == 2
     # model.observations should be unchanged (same reference)
     assert model.observations == [original_obs_dict]
+
+
+@pytest.mark.asyncio
+async def test_phase_0_preserves_naturally_empty_evidence_observations():
+    """Observations that legitimately have no evidence should not be dropped by liveness check."""
+    dead_id = uuid4()
+    entity_id = uuid4()
+
+    obs_with_dead = Observation(
+        title='Has dead evidence',
+        content='Will be pruned to empty',
+        evidence=[
+            EvidenceItem(memory_id=dead_id, quote='dead', relevance=1.0),
+        ],
+    )
+    obs_naturally_empty = Observation(
+        title='Naturally empty',
+        content='Never had evidence',
+        evidence=[],
+    )
+
+    model = MentalModel(
+        entity_id=entity_id,
+        name='Test Entity',
+        observations=[
+            obs_with_dead.model_dump(mode='json'),
+            obs_naturally_empty.model_dump(mode='json'),
+        ],
+    )
+
+    engine = _make_engine()
+
+    # Mock: dead_id is not live
+    async def mock_exec(stmt):
+        result = MagicMock()
+        result.all.return_value = []
+        return result
+
+    engine.session.exec = AsyncMock(side_effect=mock_exec)
+
+    with patch(
+        'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
+    ) as mock_run:
+        mock_run.return_value = (None, None)
+        result = await engine._phase_0_update(model, 'Test Entity', [])
+
+    # obs_with_dead should be pruned away, but obs_naturally_empty should survive
+    assert len(result) == 1
+    assert result[0].title == 'Naturally empty'
