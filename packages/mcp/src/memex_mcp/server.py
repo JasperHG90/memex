@@ -661,9 +661,9 @@ async def memex_add_note(
         result = await api.ingest(note, background=background)
         if isinstance(result, BatchJobStatus):
             return McpAddNoteResult(
-                note_id=UUID(result.job_id) if result.job_id else UUID(int=0),
+                note_id=result.job_id if result.job_id else UUID(int=0),
                 status='queued',
-                job_id=result.job_id,
+                job_id=str(result.job_id) if result.job_id else None,
             )
 
         overlaps = [
