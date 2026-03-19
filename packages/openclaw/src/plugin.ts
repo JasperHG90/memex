@@ -24,6 +24,7 @@ import {
   hashTurnKey,
 } from './memex-client';
 import type {
+  BlockSummaryDTO,
   EntityDTO,
   MemoryStrategy,
   NoteStatus,
@@ -401,9 +402,9 @@ const memexPlugin = {
 
             const lines = results.map((r, i) => {
               let summaryText = '';
-              if (r.summary) {
-                const parts = [r.summary.what, r.summary.who, r.summary.how, r.summary.when, r.summary.where].filter(Boolean);
-                summaryText = parts.length > 0 ? `\n  Summary: ${parts.join(' | ')}` : '';
+              if (r.summaries && r.summaries.length > 0) {
+                const parts = r.summaries.map((s: BlockSummaryDTO) => s.topic);
+                summaryText = `\n  Summary: ${parts.join(' | ')}`;
               }
               const answer = r.answer ? `\n  Answer: ${r.answer}` : '';
               const status = r.note_status ? ` [${r.note_status}]` : '';

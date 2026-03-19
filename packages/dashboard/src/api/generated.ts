@@ -117,10 +117,16 @@ export const SectionSummaryDTO = z.object({
 });
 export type SectionSummaryDTO = z.infer<typeof SectionSummaryDTO>;
 
+export const BlockSummaryDTO = z.object({
+  topic: z.string(),
+  key_points: z.array(z.string()).optional().default([]),
+});
+export type BlockSummaryDTO = z.infer<typeof BlockSummaryDTO>;
+
 export const NoteSearchResult = z.object({
   note_id: z.string().uuid(),
   metadata: z.record(z.string(), z.unknown()),
-  summary: z.union([SectionSummaryDTO, z.null()]).optional(),
+  summaries: z.array(BlockSummaryDTO).optional().default([]),
   score: z.number().optional().default(0),
   vault_id: z.union([z.string(), z.null()]).optional(),
   vault_name: z.union([z.string(), z.null()]).optional(),

@@ -81,3 +81,53 @@ def test_cli_note_search_error(mock_api, mock_config):
 
         assert result.exit_code == 1
         assert 'Error: API Error' in result.stdout
+
+
+def test_cli_note_search_preview_shows_topics(mock_api, mock_config):
+    """Preview column should show block summary topics joined by ' | '."""
+    doc_id = uuid4()
+
+    result = NoteSearchResult(
+        note_id=doc_id,
+        metadata={'title': 'Multi-block Note'},
+        summaries=[
+            BlockSummaryDTO(topic='Introduction', key_points=['Background']),
+            BlockSummaryDTO(topic='Methodology', key_points=['Approach A']),
+        ],
+        score=0.88,
+    )
+
+    mock_api.search_notes.return_value = [result]
+
+    with patch('memex_cli.notes.get_api_context') as mock_ctx:
+        mock_ctx.return_value.__aenter__.return_value = mock_api
+
+        cli_result = runner.invoke(app, ['search', 'multi'], obj=mock_config)
+
+        assert cli_result.exit_code == 0
+        assert 'Introduction' in cli_result.stdout
+        assert 'Methodology' in cli_result.stdout
+
+
+def test_cli_note_search_no_summaries_preview(mock_api, mock_config):
+    """When no summaries, preview should show '[No preview available]'."""
+    doc_id = uuid4()
+
+    result = NoteSearchResult(
+        note_id=doc_id,
+        metadata={'title': 'Empty Preview'},
+        summaries=[],
+        score=0.5,
+    )
+
+    mock_api.search_notes.return_value = [result]
+
+    with patch('memex_cli.notes.get_api_context') as mock_ctx:
+        mock_ctx.return_value.__aenter__.return_value = mock_api
+
+        cli_result = runner.invoke(app, ['search', 'empty'], obj=mock_config)
+
+        assert cli_result.exit_code == 0
+        # Rich table may wrap text across lines; check individual words
+        assert 'No preview' in cli_result.stdout
+        assert 'available' in cli_result.stdout

@@ -34,6 +34,48 @@ class TestResultsText:
         assert 'memory text' in text
         assert 'note text' in text
 
+    def test_block_summary_topic_and_key_points_extracted(self):
+        from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
+        from uuid import uuid4
+
+        note = NoteSearchResult(
+            note_id=uuid4(),
+            metadata={},
+            summaries=[
+                BlockSummaryDTO(topic='Climate Policy', key_points=['Paris Agreement', 'Net zero']),
+                BlockSummaryDTO(topic='Energy Transition', key_points=['Solar', 'Wind']),
+            ],
+        )
+        text = _results_text(None, [note])
+        assert 'Climate Policy' in text
+        assert 'Paris Agreement' in text
+        assert 'Net zero' in text
+        assert 'Energy Transition' in text
+        assert 'Solar' in text
+
+    def test_note_with_empty_summaries(self):
+        from memex_common.schemas import NoteSearchResult
+        from uuid import uuid4
+
+        note = NoteSearchResult(
+            note_id=uuid4(),
+            metadata={'description': 'fallback info'},
+            summaries=[],
+        )
+        text = _results_text(None, [note])
+        # metadata is still included
+        assert 'fallback info' in text
+
+    def test_note_with_multiple_summaries(self, make_note_result):
+        """Multiple note results each with summaries should all contribute to text."""
+        notes = [
+            make_note_result(['fact alpha']),
+            make_note_result(['fact beta']),
+        ]
+        text = _results_text(None, notes)
+        assert 'fact alpha' in text
+        assert 'fact beta' in text
+
 
 # ---------------------------------------------------------------------------
 # keyword_in_results

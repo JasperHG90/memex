@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from memex_common.schemas import NoteSearchRequest, NoteSearchResult
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
@@ -220,3 +220,158 @@ class TestSimilarityMatrix:
         # The method checks for empty input at the start
         result: dict[tuple, float] = {}
         assert result == {}
+
+
+class TestGroupByDocumentSummaries:
+    """Tests for block-summary enrichment in _group_by_document."""
+
+    def _make_chunk(
+        self,
+        note_id: UUID,
+        chunk_index: int = 0,
+        text: str = 'chunk text',
+        summary: dict | None = None,
+    ) -> MagicMock:
+        chunk = MagicMock()
+        chunk.id = uuid4()
+        chunk.note_id = note_id
+        chunk.text = text
+        chunk.chunk_index = chunk_index
+        chunk.embedding = [0.1] * 384
+        chunk.summary = summary
+        chunk.status = 'active'
+        return chunk
+
+    def _make_note(self, note_id: UUID, page_index: dict | None = None) -> MagicMock:
+        note = MagicMock()
+        note.id = note_id
+        note.doc_metadata = {}
+        note.page_index = page_index
+        note.assets = []
+        note.vault_id = uuid4()
+        note.status = None
+        return note
+
+    @pytest.mark.asyncio
+    async def test_summaries_from_chunks(self, engine: NoteSearchEngine) -> None:
+        """Block summaries should be collected from all active chunks of a matched doc."""
+        note_id = uuid4()
+        chunk = self._make_chunk(note_id, chunk_index=0)
+        note = self._make_note(note_id)
+
+        summary_data = {'topic': 'ML Pipeline', 'key_points': ['Training', 'Inference']}
+
+        session = AsyncMock()
+        exec_results = []
+
+        # Call 1: select(Note) — doc lookup
+        doc_result = MagicMock()
+        doc_result.all.return_value = [note]
+        exec_results.append(doc_result)
+
+        # Call 2: select(Chunk.note_id, Chunk.summary, ...) — summary query
+        summary_result = MagicMock()
+        summary_result.all.return_value = [(note_id, summary_data, 0)]
+        exec_results.append(summary_result)
+
+        # Call 3+: remaining queries (nodes, confidence, etc.)
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+
+        session.exec.side_effect = [doc_result, summary_result, empty_result, empty_result]
+
+        results = await engine._group_by_document(session, [(chunk, 0.9)], limit=10)
+
+        assert len(results) == 1
+        assert len(results[0].summaries) == 1
+        assert results[0].summaries[0].topic == 'ML Pipeline'
+        assert results[0].summaries[0].key_points == ['Training', 'Inference']
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_description_when_no_chunk_summaries(
+        self, engine: NoteSearchEngine
+    ) -> None:
+        """When chunks have no summary, fall back to page_index metadata description."""
+        note_id = uuid4()
+        chunk = self._make_chunk(note_id)
+        page_index = {'metadata': {'description': 'A note about testing'}, 'toc': []}
+        note = self._make_note(note_id, page_index=page_index)
+
+        session = AsyncMock()
+
+        doc_result = MagicMock()
+        doc_result.all.return_value = [note]
+
+        # No chunk summaries
+        summary_result = MagicMock()
+        summary_result.all.return_value = []
+
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+
+        session.exec.side_effect = [doc_result, summary_result, empty_result, empty_result]
+
+        results = await engine._group_by_document(session, [(chunk, 0.8)], limit=10)
+
+        assert len(results) == 1
+        assert len(results[0].summaries) == 1
+        assert results[0].summaries[0].topic == 'A note about testing'
+        assert results[0].summaries[0].key_points == []
+
+    @pytest.mark.asyncio
+    async def test_empty_summaries_when_no_chunks_and_no_description(
+        self, engine: NoteSearchEngine
+    ) -> None:
+        """When no chunk summaries and no page_index description, summaries should be empty."""
+        note_id = uuid4()
+        chunk = self._make_chunk(note_id)
+        note = self._make_note(note_id, page_index={'metadata': {}, 'toc': []})
+
+        session = AsyncMock()
+
+        doc_result = MagicMock()
+        doc_result.all.return_value = [note]
+
+        summary_result = MagicMock()
+        summary_result.all.return_value = []
+
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+
+        session.exec.side_effect = [doc_result, summary_result, empty_result, empty_result]
+
+        results = await engine._group_by_document(session, [(chunk, 0.7)], limit=10)
+
+        assert len(results) == 1
+        assert results[0].summaries == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_block_summaries_ordered(self, engine: NoteSearchEngine) -> None:
+        """Multiple block summaries per note should be returned in chunk_index order."""
+        note_id = uuid4()
+        chunk = self._make_chunk(note_id)
+        note = self._make_note(note_id)
+
+        session = AsyncMock()
+
+        doc_result = MagicMock()
+        doc_result.all.return_value = [note]
+
+        summary_result = MagicMock()
+        summary_result.all.return_value = [
+            (note_id, {'topic': 'Introduction', 'key_points': ['Overview']}, 0),
+            (note_id, {'topic': 'Methods', 'key_points': ['Approach A']}, 1),
+            (note_id, {'topic': 'Results', 'key_points': ['Finding X']}, 2),
+        ]
+
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+
+        session.exec.side_effect = [doc_result, summary_result, empty_result, empty_result]
+
+        results = await engine._group_by_document(session, [(chunk, 0.9)], limit=10)
+
+        assert len(results[0].summaries) == 3
+        assert results[0].summaries[0].topic == 'Introduction'
+        assert results[0].summaries[1].topic == 'Methods'
+        assert results[0].summaries[2].topic == 'Results'

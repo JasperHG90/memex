@@ -260,3 +260,85 @@ async def test_store_chunks_batch_deduplicates_content_hash(mock_session):
         assert inserted_rows[0]['content_hash'] == 'aaa'
         assert inserted_rows[1]['chunk_index'] == 1
         assert inserted_rows[1]['content_hash'] == 'bbb'
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_batch_includes_summary_fields(mock_session):
+    """Summary and summary_formatted should be passed through to the insert row."""
+    doc_id = str(uuid4())
+    summary_dict = {'topic': 'Test Topic', 'key_points': ['Point A', 'Point B']}
+    chunks = [
+        ChunkMetadata(
+            chunk_text='With summary',
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash='s1',
+            summary=summary_dict,
+            summary_formatted='Test Topic — Point A | Point B',
+        ),
+        ChunkMetadata(
+            chunk_text='No summary',
+            chunk_index=1,
+            fact_count=0,
+            content_index=0,
+            content_hash='s2',
+        ),
+    ]
+
+    with patch('memex_core.memory.extraction.storage.pg_insert') as mock_insert:
+        mock_stmt = MagicMock()
+        mock_insert.return_value.values.return_value.returning.return_value = mock_stmt
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [(uuid4(), 0), (uuid4(), 1)]
+        mock_session.exec.return_value = mock_result
+
+        await storage.store_chunks_batch(mock_session, doc_id, chunks)
+
+        inserted_rows = mock_insert.return_value.values.call_args[0][0]
+        assert len(inserted_rows) == 2
+
+        # Chunk with summary
+        assert inserted_rows[0]['summary'] == summary_dict
+        assert inserted_rows[0]['summary_formatted'] == 'Test Topic — Point A | Point B'
+
+        # Chunk without summary
+        assert inserted_rows[1]['summary'] is None
+        assert inserted_rows[1]['summary_formatted'] is None
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_batch_summary_in_upsert_set(mock_session):
+    """Summary fields must be included in the ON CONFLICT upsert set."""
+    doc_id = str(uuid4())
+    chunks = [
+        ChunkMetadata(
+            chunk_text='Chunk',
+            chunk_index=0,
+            fact_count=0,
+            content_index=0,
+            content_hash='h1',
+            summary={'topic': 'Updated Topic', 'key_points': []},
+            summary_formatted='Updated Topic',
+        ),
+    ]
+
+    with patch('memex_core.memory.extraction.storage.pg_insert') as mock_insert:
+        mock_values = MagicMock()
+        mock_insert.return_value.values.return_value = mock_values
+        mock_conflict = MagicMock()
+        mock_values.on_conflict_do_update.return_value = mock_conflict
+        mock_conflict.returning.return_value = MagicMock()
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [(uuid4(), 0)]
+        mock_session.exec.return_value = mock_result
+
+        await storage.store_chunks_batch(mock_session, doc_id, chunks)
+
+        # Verify on_conflict_do_update was called and set_ includes summary fields
+        mock_values.on_conflict_do_update.assert_called_once()
+        call_kwargs = mock_values.on_conflict_do_update.call_args[1]
+        assert 'summary' in call_kwargs['set_']
+        assert 'summary_formatted' in call_kwargs['set_']
