@@ -292,6 +292,7 @@ async def list_notes(
 
     table = Table(title='Notes')
     table.add_column('Title', style='cyan')
+    table.add_column('Vault', style='yellow')
     table.add_column('Publish Date', style='green')
     table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
@@ -300,7 +301,8 @@ async def list_notes(
         pub_date = ''
         if hasattr(d, 'publish_date') and d.publish_date:
             pub_date = str(d.publish_date.date())
-        table.add_row(d.name or 'Untitled', pub_date, str(d.created_at), str(d.id))
+        vault_name = getattr(d, 'vault_name', '') or ''
+        table.add_row(d.name or 'Untitled', vault_name, pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 
@@ -378,6 +380,7 @@ async def list_recent(
 
     table = Table(title='Recent Notes')
     table.add_column('Title', style='cyan')
+    table.add_column('Vault', style='yellow')
     table.add_column('Publish Date', style='green')
     table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
@@ -386,7 +389,8 @@ async def list_recent(
         pub_date = ''
         if hasattr(d, 'publish_date') and d.publish_date:
             pub_date = str(d.publish_date.date())
-        table.add_row(d.name or 'Untitled', pub_date, str(d.created_at), str(d.id))
+        vault_name = getattr(d, 'vault_name', '') or ''
+        table.add_row(d.name or 'Untitled', vault_name, pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 
@@ -396,13 +400,15 @@ def _print_compact_note(d: Any) -> None:
     title = d.title or d.name or 'Untitled'
     note_id = str(d.id) if d.id else ''
     date = str(d.created_at.date()) if d.created_at else 'unknown'
+    vault_name = getattr(d, 'vault_name', '') or ''
+    vault_tag = f' @{vault_name}' if vault_name else ''
     desc = ''
     if d.doc_metadata:
         desc = d.doc_metadata.get('description', '') or ''
     if len(desc) > 120:
         desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    console.print(f'- **{title}** ({date}) [{note_id}]{suffix}')
+    console.print(f'- **{title}**{vault_tag} ({date}) [{note_id}]{suffix}')
 
 
 @app.command('find')
