@@ -666,7 +666,7 @@
       <div class="emoji">&#x1fa9e;</div>
       <div class="content">
         <div class="label">Reflection Engine</div>
-        <div class="desc">Six-phase cycle: update &rarr; seed &rarr; hunt &rarr; validate &rarr; compare &rarr; finalize. Builds mental models from raw facts</div>
+        <div class="desc">Seven-phase cycle: update &rarr; seed &rarr; hunt &rarr; validate &rarr; compare &rarr; finalize &rarr; <strong>enrich</strong>. Builds mental models from raw facts</div>
       </div>
     </div>
 
@@ -691,6 +691,14 @@
       <div class="content">
         <div class="label">Lineage: Following the Paper Trail</div>
         <div class="desc">Recursive provenance traversal — trace any mental model back through observations to the original document</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="evolution">
+      <div class="emoji">&#x1F9EC;</div>
+      <div class="content">
+        <div class="label">Memory Evolution</div>
+        <div class="desc">Phase 6 enrichment pushes mental model understanding back into memory units — old facts gain new tags, become findable for concepts discovered later</div>
       </div>
     </div>
 
@@ -821,7 +829,8 @@ const speakerNotes = {
       '<strong>Six-phase cycle</strong> (Phase 0\u20135): (0) <strong>Update Existing</strong> \u2014 check new evidence against current models. (1) <strong>Seed</strong> \u2014 generate candidate observations from recent memories. (2) <strong>Hunt</strong> \u2014 retrieve supporting/contradicting evidence. (3) <strong>Validate</strong> \u2014 extract quotes, verify against source material. (4) <strong>Compare</strong> \u2014 merge with existing models, update confidence. (5) <strong>Finalize</strong> \u2014 compute trends and persist.',
       'Each observation gets a <strong>trend label</strong>: New, Strengthening, Stable, Weakening, or Stale \u2014 computed from evidence density over recent vs. older time windows.',
       'Uses <code>dspy.Predict</code> (not ChainOfThought) to reduce token generation by ~30%.',
-      'Batch reflection processes entities concurrently via <code>asyncio.gather</code> \u2014 5 entities take the same wall-clock time as 1.'
+      'Batch reflection processes entities concurrently via <code>asyncio.gather</code> \u2014 5 entities take the same wall-clock time as 1.',
+      '<strong>Phase 6: Enrich (Memory Evolution)</strong> \u2014 inspired by A-MEM (Xu et al., NeurIPS). After reflection builds a mental model, enrichment pushes new tags back into the contributing memory units, closing the feedback loop so old memories become discoverable for newly understood concepts.'
     ]
   },
   entity: {
@@ -880,6 +889,18 @@ const speakerNotes = {
       '<strong>What got thrown out</strong>: personality profiles and disposition parameters (reflection is objective, not persona-driven), the original scalar confidence system (replaced with linear confidence adjustments via contradiction detection), and the CARA reasoning agent loop.',
       'Replaced the reference implementation\u2019s synchronous Python with modern <strong>AsyncIO + Pydantic + SQLModel</strong> on PostgreSQL+pgvector instead of the original\u2019s simpler storage.',
       'Key lesson: academic architectures give you the \u201Cwhat,\u201D but production forces you to answer \u201Chow fast?\u201D and \u201Cat what cost?\u201D \u2014 every LLM call had to justify its token budget.'
+    ]
+  },
+  evolution: {
+    emoji: '\u{1f9ec}',
+    title: 'Memory Evolution',
+    notes: [
+      'Inspired by <strong>A-MEM</strong> (Xu et al., NeurIPS) \u2014 the idea that memories should evolve as understanding deepens.',
+      '<strong>The problem</strong>: after reflection synthesizes a mental model, that understanding stays trapped at the model layer. A 3-month-old memory "auth middleware rewrite" (tags: <code>auth, middleware</code>) is invisible to "compliance work" queries, even though reflection now knows the rewrite is compliance-driven.',
+      '<strong>Phase 6 mechanism</strong>: collect evidence unit IDs from observations \u2192 load contributing memory units \u2192 LLM generates enriched tags based on the mental model \u2192 write <code>enriched_tags</code>, <code>enriched_keywords</code>, <code>enriched_at</code>, <code>enriched_by_entity</code> into <code>unit_metadata</code>.',
+      '<strong>Append-only safety</strong>: all enrichment keys are prefixed with <code>enriched_</code> \u2014 original metadata is never touched. Tags are set-unioned across reflection cycles (accumulative, never overwritten). Timestamps enable auditability.',
+      '<strong>Keyword strategy boost</strong>: the Keyword (R in TEMPR) strategy\u2019s tsvector now includes <code>enriched_tags</code> and <code>enriched_keywords</code> via <code>COALESCE</code> on JSONB metadata. Memories without enrichment are unaffected.',
+      'Controlled by <code>enrichment_enabled: true</code> in reflection config. Can be disabled without affecting existing enriched metadata.'
     ]
   },
   expansion: {

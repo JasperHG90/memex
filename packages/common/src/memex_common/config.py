@@ -323,6 +323,10 @@ class ReflectionConfig(BaseModel):
         default=True,
         description='Whether to run the periodic reflection loop in the background.',
     )
+    enrichment_enabled: bool = Field(
+        default=True,
+        description='Run Phase 6 enrichment after reflection to evolve contributing memory units.',
+    )
     background_reflection_interval_seconds: int = Field(
         default=600,
         ge=10,
