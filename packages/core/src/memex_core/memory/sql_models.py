@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
+    Computed,
     ForeignKey,
     Integer,
     Text,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSVECTOR
 from sqlalchemy.types import Uuid as SA_UUID
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -634,6 +635,21 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Additional metadata associated with the memory unit.',
     )
 
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed(
+                "to_tsvector('english', "
+                "coalesce(text, '') || ' ' || "
+                "coalesce(metadata->>'tags', '') || ' ' || "
+                "coalesce(metadata->>'enriched_tags', '') || ' ' || "
+                "coalesce(metadata->>'enriched_keywords', ''))",
+                persisted=True,
+            ),
+        ),
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -704,6 +720,11 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             postgresql_using='hnsw',
             postgresql_ops={'embedding': 'vector_cosine_ops'},
             postgresql_where=sql_text("status = 'stale'"),
+        ),
+        Index(
+            'idx_memory_units_search_tsvector',
+            'search_tsvector',
+            postgresql_using='gin',
         ),
     )
 

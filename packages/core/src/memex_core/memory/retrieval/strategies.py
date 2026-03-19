@@ -129,16 +129,7 @@ class KeywordStrategy:
         permissive_query_str = func.regexp_replace(cast(ts_query_base, String), '&', '|', 'g')
         ts_query = func.to_tsquery('english', permissive_query_str)
 
-        enriched_text = func.coalesce(
-            func.jsonb_extract_path_text(col(MemoryUnit.unit_metadata), 'enriched_tags'),
-            '',
-        )
-        enriched_kw = func.coalesce(
-            func.jsonb_extract_path_text(col(MemoryUnit.unit_metadata), 'enriched_keywords'),
-            '',
-        )
-        combined_text = func.concat_ws(' ', col(MemoryUnit.text), enriched_text, enriched_kw)
-        ts_vector = func.to_tsvector('english', combined_text)
+        ts_vector = col(MemoryUnit.search_tsvector)
         rank = func.ts_rank_cd(ts_vector, ts_query)
 
         statement = select(MemoryUnit.id).select_from(MemoryUnit)
