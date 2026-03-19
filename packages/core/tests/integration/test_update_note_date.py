@@ -10,9 +10,11 @@ from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.types import FactTypes
 from memex_core.memory.sql_models import (
     Entity,
+    EvidenceItem,
     MemoryUnit,
     MentalModel,
     Note,
+    Observation,
     UnitEntity,
 )
 
@@ -488,3 +490,305 @@ async def test_delete_note_removes_mental_models_for_orphaned_entities(
     async with metastore.session() as verify_session:
         assert await verify_session.get(Entity, entity_id) is None
         assert await verify_session.get(MentalModel, mental_model_id) is None
+
+
+def _make_observation_dict(title: str, unit_ids: list[uuid.UUID]) -> dict:
+    """Helper to build a serialized Observation with evidence citing given unit_ids."""
+    obs = Observation(
+        title=title,
+        content=f'Content for {title}',
+        evidence=[
+            EvidenceItem(
+                memory_id=uid,
+                quote=f'quote from {uid}',
+                relevance=1.0,
+            )
+            for uid in unit_ids
+        ],
+    )
+    return obs.model_dump(mode='json')
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_note_prunes_mental_model_observations(api, metastore, session: AsyncSession):
+    """After deleting note_1 (shared entity): MM survives with only note_2 obs, embedding=None."""
+    note_id_1 = uuid.uuid4()
+    note_id_2 = uuid.uuid4()
+    unit_id_1 = uuid.uuid4()
+    unit_id_2 = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    mm_id = uuid.uuid4()
+
+    for nid in [note_id_1, note_id_2]:
+        session.add(
+            Note(
+                id=nid,
+                vault_id=GLOBAL_VAULT_ID,
+                original_text=f'Note {nid} {uuid.uuid4()}',
+                content_hash=f'hash_{uuid.uuid4()}',
+            )
+        )
+
+    session.add(
+        MemoryUnit(
+            id=unit_id_1,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id_1,
+            text=f'Fact 1 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+    session.add(
+        MemoryUnit(
+            id=unit_id_2,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id_2,
+            text=f'Fact 2 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+
+    entity = Entity(id=entity_id, canonical_name=f'Shared {uuid.uuid4()}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    for uid in [unit_id_1, unit_id_2]:
+        session.add(UnitEntity(unit_id=uid, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID))
+
+    # MM with observations citing both units
+    session.add(
+        MentalModel(
+            id=mm_id,
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=entity_id,
+            name=entity.canonical_name,
+            embedding=[0.2] * 384,
+            observations=[
+                _make_observation_dict('obs from note1', [unit_id_1]),
+                _make_observation_dict('obs from note2', [unit_id_2]),
+            ],
+        )
+    )
+    await session.commit()
+
+    await api.delete_note(note_id_1)
+
+    async with metastore.session() as vs:
+        mm = await vs.get(MentalModel, mm_id)
+        assert mm is not None
+        assert len(mm.observations) == 1
+        obs = Observation(**mm.observations[0])
+        assert obs.title == 'obs from note2'
+        assert obs.evidence[0].memory_id == unit_id_2
+        assert mm.embedding is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_note_removes_empty_mental_model(api, metastore, session: AsyncSession):
+    """If all MM obs cite only the deleted note's units, the MM is deleted; entity survives."""
+    note_id_1 = uuid.uuid4()
+    note_id_2 = uuid.uuid4()
+    unit_id_1 = uuid.uuid4()
+    unit_id_2 = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    mm_id = uuid.uuid4()
+
+    for nid in [note_id_1, note_id_2]:
+        session.add(
+            Note(
+                id=nid,
+                vault_id=GLOBAL_VAULT_ID,
+                original_text=f'Note {nid} {uuid.uuid4()}',
+                content_hash=f'hash_{uuid.uuid4()}',
+            )
+        )
+
+    session.add(
+        MemoryUnit(
+            id=unit_id_1,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id_1,
+            text=f'Fact 1 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+    session.add(
+        MemoryUnit(
+            id=unit_id_2,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id_2,
+            text=f'Fact 2 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+
+    entity = Entity(id=entity_id, canonical_name=f'Shared {uuid.uuid4()}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    for uid in [unit_id_1, unit_id_2]:
+        session.add(UnitEntity(unit_id=uid, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID))
+
+    # MM with observations citing ONLY note_1's unit
+    session.add(
+        MentalModel(
+            id=mm_id,
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=entity_id,
+            name=entity.canonical_name,
+            observations=[_make_observation_dict('obs only from note1', [unit_id_1])],
+        )
+    )
+    await session.commit()
+
+    await api.delete_note(note_id_1)
+
+    async with metastore.session() as vs:
+        # Entity still exists (note_2's unit still references it)
+        e = await vs.get(Entity, entity_id)
+        assert e is not None
+        assert e.mention_count == 1
+        # MM was deleted because all observations lost their evidence
+        mm = await vs.get(MentalModel, mm_id)
+        assert mm is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_memory_unit_prunes_observations(api, metastore, session: AsyncSession):
+    """Deleting one of two units: MM survives with pruned observations."""
+    note_id = uuid.uuid4()
+    unit_id_1 = uuid.uuid4()
+    unit_id_2 = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    mm_id = uuid.uuid4()
+
+    session.add(
+        Note(
+            id=note_id,
+            vault_id=GLOBAL_VAULT_ID,
+            original_text=f'Note {uuid.uuid4()}',
+            content_hash=f'hash_{uuid.uuid4()}',
+        )
+    )
+    session.add(
+        MemoryUnit(
+            id=unit_id_1,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id,
+            text=f'Fact 1 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+    session.add(
+        MemoryUnit(
+            id=unit_id_2,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id,
+            text=f'Fact 2 {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+
+    entity = Entity(id=entity_id, canonical_name=f'Entity {uuid.uuid4()}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    for uid in [unit_id_1, unit_id_2]:
+        session.add(UnitEntity(unit_id=uid, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID))
+
+    session.add(
+        MentalModel(
+            id=mm_id,
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=entity_id,
+            name=entity.canonical_name,
+            embedding=[0.2] * 384,
+            observations=[
+                _make_observation_dict('obs from unit1', [unit_id_1]),
+                _make_observation_dict('obs from unit2', [unit_id_2]),
+            ],
+        )
+    )
+    await session.commit()
+
+    await api.delete_memory_unit(unit_id_1)
+
+    async with metastore.session() as vs:
+        mm = await vs.get(MentalModel, mm_id)
+        assert mm is not None
+        assert len(mm.observations) == 1
+        obs = Observation(**mm.observations[0])
+        assert obs.title == 'obs from unit2'
+        assert mm.embedding is None
+
+        e = await vs.get(Entity, entity_id)
+        assert e is not None
+        assert e.mention_count == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_memory_unit_entity_cleanup(api, metastore, session: AsyncSession):
+    """Deleting the only unit: entity + MM both deleted."""
+    note_id = uuid.uuid4()
+    unit_id = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    mm_id = uuid.uuid4()
+
+    session.add(
+        Note(
+            id=note_id,
+            vault_id=GLOBAL_VAULT_ID,
+            original_text=f'Note {uuid.uuid4()}',
+            content_hash=f'hash_{uuid.uuid4()}',
+        )
+    )
+    session.add(
+        MemoryUnit(
+            id=unit_id,
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note_id,
+            text=f'Fact {uuid.uuid4()}',
+            fact_type=FactTypes.WORLD,
+            embedding=[0.1] * 384,
+            event_date=dt.datetime.now(dt.timezone.utc),
+        )
+    )
+
+    entity = Entity(id=entity_id, canonical_name=f'Entity {uuid.uuid4()}', mention_count=1)
+    session.add(entity)
+    await session.flush()
+
+    session.add(UnitEntity(unit_id=unit_id, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID))
+
+    session.add(
+        MentalModel(
+            id=mm_id,
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=entity_id,
+            name=entity.canonical_name,
+            observations=[_make_observation_dict('obs', [unit_id])],
+        )
+    )
+    await session.commit()
+
+    await api.delete_memory_unit(unit_id)
+
+    async with metastore.session() as vs:
+        assert await vs.get(Entity, entity_id) is None
+        assert await vs.get(MentalModel, mm_id) is None
