@@ -27,24 +27,34 @@ class TestRawFact:
         assert fact.fact_type == FactTypes.WORLD
 
     @pytest.mark.parametrize(
-        ('what', 'when', 'who', 'why', 'expected'),
+        ('what', 'when', 'where_', 'who', 'why', 'expected'),
         [
             (
                 'Fact',
                 'Today',
+                'Office',
                 'User',
                 'Reason',
-                'Fact | When: Today | Involving: User | Reason',
+                'Fact | When: Today | Where: Office | Involving: User | Reason',
             ),
-            ('Fact', 'N/A', 'N/A', 'N/A', 'Fact'),
-            ('Fact', None, None, None, 'Fact'),
-            ('Fact', 'Today', 'N/A', 'Reason', 'Fact | When: Today | Reason'),
+            ('Fact', 'N/A', 'N/A', 'N/A', 'N/A', 'Fact'),
+            ('Fact', None, None, None, None, 'Fact'),
+            ('Fact', 'Today', None, 'N/A', 'Reason', 'Fact | When: Today | Reason'),
+            (
+                'Fact',
+                'Today',
+                'Paris',
+                'N/A',
+                'Reason',
+                'Fact | When: Today | Where: Paris | Reason',
+            ),
         ],
     )
     def test_formatted_text(
         self,
         what: str,
         when: str | None,
+        where_: str | None,
         who: str | None,
         why: str | None,
         expected: str,
@@ -53,6 +63,7 @@ class TestRawFact:
         fact = RawFact(
             what=what,
             when=when,
+            where=where_,
             who=who,
             why=why,
             fact_type=FactTypes.WORLD,
