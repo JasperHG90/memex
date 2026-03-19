@@ -771,6 +771,7 @@ class NoteDTO(BaseModel):
     created_at: dt.datetime
     publish_date: dt.datetime | None = None
     vault_id: UUID
+    vault_name: str | None = None
     assets: list[str] = Field(default_factory=list)
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
 
