@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Save to Memex",
-  "version": "0.1.0",
+  "version": "0.1.0.1",
   "description": "Save articles to your Memex knowledge base",
   "browser_specific_settings": {
     "gecko": {
