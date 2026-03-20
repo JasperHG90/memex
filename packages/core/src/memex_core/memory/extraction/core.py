@@ -996,6 +996,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
             flat_headers = verify_headers(flat_headers, full_text)
 
         flat_headers = [h for h in flat_headers if h.verified]
+        for i, h in enumerate(flat_headers):
+            h.id = i
 
         if not flat_headers:
             return PageIndexOutput(
@@ -1045,7 +1047,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             self._logger.info(
                 f'[LLM Path] Scanning full document ({doc_tokens} tokens) in single call.'
             )
-            return await self._process_single_chunk(text, '', 0)
+            return deduplicate_and_sort([await self._process_single_chunk(text, '', 0)])
 
         chars_per_token = len(text) / doc_tokens if doc_tokens > 0 else 4.0
         chunk_chars = int(max_scan_tokens * chars_per_token)
