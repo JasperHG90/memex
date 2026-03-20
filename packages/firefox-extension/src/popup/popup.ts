@@ -7,6 +7,7 @@ import TurndownService from 'turndown';
 import type { ExtractResult, Settings } from '../types';
 import { fetchVaults, saveNote, uploadFile } from '../lib/memex-api';
 import { buildNoteContent } from '../lib/frontmatter';
+import { extractArticleImages } from '../lib/images';
 
 const titleEl = document.getElementById('title') as HTMLInputElement;
 const descriptionEl = document.getElementById('description') as HTMLTextAreaElement;
@@ -116,21 +117,33 @@ async function extractArticle(): Promise<void> {
       return;
     }
 
-    const turndown = new TurndownService({
-      headingStyle: 'atx',
-      codeBlockStyle: 'fenced',
-    });
-    const markdown = turndown.turndown(article.content);
+    // Extract and download article images (non-fatal — article saves regardless)
+    let images: Record<string, string> = {};
+    let articleMarkdown: string;
+    try {
+      const downloader = async (url: string) => {
+        const resp = await browser.runtime.sendMessage({ action: 'downloadImage', url });
+        return resp as { ok: boolean; base64?: string; contentType?: string };
+      };
+      const result = await extractArticleImages(article.content, tab.url ?? '', downloader);
+      images = result.images;
+      articleMarkdown = result.markdown;
+    } catch {
+      // Image extraction failed — fall back to plain markdown with original URLs
+      const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+      articleMarkdown = turndown.turndown(article.content);
+    }
 
     extractedData = {
       title: article.title || tab.title || '',
-      markdown,
+      markdown: articleMarkdown,
       excerpt: article.excerpt || '',
       byline: article.byline || '',
       siteName: article.siteName || '',
       publishedTime: article.publishedTime || '',
       url: tab.url ?? '',
       hostname: new URL(tab.url ?? '').hostname,
+      images: Object.keys(images).length > 0 ? images : undefined,
     };
 
     titleEl.value = extractedData.title ?? '';
@@ -209,6 +222,7 @@ saveBtn.addEventListener('click', async () => {
         tags,
         vaultId: vaultEl.value || undefined,
         background: true,
+        files: extractedData.images,
       });
     }
 
