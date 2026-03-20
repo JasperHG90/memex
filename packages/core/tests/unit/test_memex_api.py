@@ -90,11 +90,16 @@ async def test_get_resource(api, mock_filestore):
 @pytest.mark.asyncio
 async def test_list_documents(api, mock_session):
     # list_notes delegates to NoteService which runs a single session.exec
+    mock_note1 = MagicMock()
+    mock_note1.vault_id = None
+    mock_note2 = MagicMock()
+    mock_note2.vault_id = None
+
     mock_docs_res = MagicMock()
-    mock_docs_res.all.return_value = ['doc1', 'doc2']
+    mock_docs_res.all.return_value = [mock_note1, mock_note2]
 
     mock_session.exec.side_effect = [mock_docs_res]
 
     result = await api.list_notes()
 
-    assert result == ['doc1', 'doc2']
+    assert result == [mock_note1, mock_note2]
