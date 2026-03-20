@@ -38,3 +38,4 @@ dev = [
 [tool.hatch.version]
 source = "vcs"
 raw-options.root = "../.."
+raw-options.git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*"]
