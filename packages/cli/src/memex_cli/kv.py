@@ -134,6 +134,12 @@ async def kv_list(
         list[str] | None,
         typer.Option('--namespace', '-n', help='Filter by namespace prefix (repeatable).'),
     ] = None,
+    pattern: Annotated[
+        str | None,
+        typer.Option(
+            '--pattern', '-p', help='Filter by key pattern (e.g. "global:preferences:*").'
+        ),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -143,7 +149,7 @@ async def kv_list(
 
     async with get_api_context(config) as api:
         try:
-            entries = await api.kv_list(namespaces=namespace)
+            entries = await api.kv_list(namespaces=namespace, pattern=pattern)
         except Exception as e:
             handle_api_error(e)
 

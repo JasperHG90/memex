@@ -994,6 +994,7 @@ class MemexAPI:
         limit: int = 100,
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
+        pattern: str | None = None,
     ) -> list[Any]:
         """List KV entries. Delegates to KVService."""
         return await self._kv.list_entries(
@@ -1001,4 +1002,5 @@ class MemexAPI:
             limit=limit,
             exclude_prefix=exclude_prefix,
             key_prefix=key_prefix,
+            pattern=pattern,
         )

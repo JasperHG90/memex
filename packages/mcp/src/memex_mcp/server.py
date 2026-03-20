@@ -1972,11 +1972,18 @@ async def memex_kv_list(
             description='Namespace prefixes to filter by (e.g. ["global", "user"]).',
         ),
     ] = None,
+    pattern: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Wildcard filter (e.g. "global:preferences:*"). Only trailing * supported.',
+        ),
+    ] = None,
 ) -> list[McpKVEntry]:
     """List KV store entries."""
     try:
         api = get_api(ctx)
-        entries = await api.kv_list(namespaces=namespaces)
+        entries = await api.kv_list(namespaces=namespaces, pattern=pattern)
 
         return [
             McpKVEntry(

@@ -18,6 +18,15 @@ _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 VALID_NAMESPACES = ('global', 'user', 'project', 'app')
 
 
+def _pattern_to_prefix(pattern: str) -> str | None:
+    """Convert a trailing-wildcard pattern to a key prefix."""
+    if pattern == '*':
+        return None
+    if '*' in pattern and not pattern.endswith('*'):
+        raise ValueError('Only trailing wildcards are supported (e.g. "global:preferences:*")')
+    return pattern.rstrip('*')
+
+
 def _normalize_key(key: str) -> str:
     """Strip well-known protocol prefixes (https://, http://, etc.) from a KV key."""
     return _PROTOCOL_RE.sub('', key)
@@ -139,6 +148,7 @@ class KVService(BaseService):
         limit: int = 100,
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
+        pattern: str | None = None,
     ) -> list[Any]:
         """List KV entries, optionally filtered by namespace prefixes.
 
@@ -146,7 +156,13 @@ class KVService(BaseService):
             namespaces: Only include entries matching these namespace prefixes.
             exclude_prefix: Exclude entries whose key starts with this prefix.
             key_prefix: Only include entries whose key starts with this prefix.
+            pattern: Wildcard filter (e.g. "global:preferences:*"). Only trailing * supported.
         """
+        if pattern is not None:
+            if key_prefix is not None:
+                raise ValueError('Cannot specify both pattern and key_prefix')
+            key_prefix = _pattern_to_prefix(pattern)
+
         from memex_core.memory.sql_models import KVEntry
 
         async with self.metastore.session() as session:

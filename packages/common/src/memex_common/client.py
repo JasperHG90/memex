@@ -775,10 +775,13 @@ class RemoteMemexAPI:
     async def kv_list(
         self,
         namespaces: list[str] | None = None,
+        pattern: str | None = None,
     ) -> list[KVEntryDTO]:
         """List KV entries, optionally filtered by namespace prefixes."""
         params: dict[str, Any] = {}
         if namespaces is not None:
             params['namespaces'] = ','.join(namespaces)
+        if pattern is not None:
+            params['pattern'] = pattern
         result = await self._get('kv', params=params or None)
         return [KVEntryDTO(**r) for r in result]
