@@ -267,6 +267,12 @@ class Note(SQLModel, table=True):  # type: ignore
         description='Resolved human-readable title for the note.',
     )
 
+    description: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Short description synthesized from block summaries or content truncation.',
+    )
+
     original_text: str | None = Field(
         default=None,
         sa_column=Column(Text),

@@ -402,9 +402,7 @@ def _print_compact_note(d: Any) -> None:
     date = str(d.created_at.date()) if d.created_at else 'unknown'
     vault_name = getattr(d, 'vault_name', '') or ''
     vault_tag = f' @{vault_name}' if vault_name else ''
-    desc = ''
-    if d.doc_metadata:
-        desc = d.doc_metadata.get('description', '') or ''
+    desc = getattr(d, 'description', '') or ''
     if len(desc) > 120:
         desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''

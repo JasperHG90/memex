@@ -759,6 +759,23 @@ async def update_note_title(
     await session.exec(stmt)
 
 
+async def update_note_description(
+    session: AsyncSession,
+    note_id: str,
+    description: str | None,
+) -> None:
+    """Update the Note.description column.
+
+    Args:
+        session: Active database session.
+        note_id: Note identifier.
+        description: Short description synthesized from block summaries or content.
+    """
+    doc_uuid = UUID(note_id)
+    stmt = update(Note).where(col(Note.id) == doc_uuid).values(description=description)
+    await session.exec(stmt)
+
+
 async def get_block_text(
     session: AsyncSession,
     block_id: UUID,
