@@ -762,6 +762,58 @@ def _render_toc_nodes(nodes: list[dict[str, Any]], parent: Tree) -> None:
         _render_toc_nodes(node.get('children', []), branch)
 
 
+@app.command('list-assets')
+@async_command
+async def list_assets(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
+    """List file assets attached to a note."""
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    async with get_api_context(config) as api:
+        try:
+            note = await api.get_note(uuid_obj)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    assets = note.assets or []
+
+    if not assets:
+        console.print('[dim]No assets found for this note.[/dim]')
+        return
+
+    if json_output:
+        items = []
+        for asset_path in assets:
+            path_obj = pathlib.PurePosixPath(asset_path)
+            mime_type, _ = mimetypes.guess_type(path_obj.name)
+            items.append(
+                {
+                    'filename': path_obj.name,
+                    'path': asset_path,
+                    'mime_type': mime_type,
+                }
+            )
+        console.print_json(json.dumps(items))
+        return
+
+    table = Table(title=f'Assets ({note_id})')
+    table.add_column('Filename', style='cyan')
+    table.add_column('Path', style='white')
+    table.add_column('MIME Type', style='dim')
+
+    for asset_path in assets:
+        path_obj = pathlib.PurePosixPath(asset_path)
+        mime_type, _ = mimetypes.guess_type(path_obj.name)
+        table.add_row(path_obj.name, asset_path, mime_type or '-')
+
+    console.print(table)
+
+
 @app.command('search')
 @async_command
 async def search_notes(
