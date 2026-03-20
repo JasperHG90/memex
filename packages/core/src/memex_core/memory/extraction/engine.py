@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -107,6 +108,24 @@ async def get_extraction_engine(
         reflection_config=reflection_config,
         page_index_lm=page_index_lm,
     )
+
+
+def _synthesize_description(
+    page_index_output: PageIndexOutput,
+    fallback: str | None,
+) -> str | None:
+    """Build a note description from block summary topics or short-doc content."""
+    topics = [b.summary.topic for b in page_index_output.blocks if b.summary and b.summary.topic]
+    if topics:
+        combined = '; '.join(topics)
+        return combined[:200] if len(combined) > 200 else combined
+    if page_index_output.path_used == 'short_doc_bypass':
+        content = page_index_output.blocks[0].content if page_index_output.blocks else None
+        if content:
+            plain = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+            plain = re.sub(r'\s+', ' ', plain).strip()
+            return plain[:200] if len(plain) > 200 else plain
+    return fallback
 
 
 class ExtractionEngine:
@@ -780,11 +799,14 @@ class ExtractionEngine:
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
 
         retain_params = contents[0].payload if contents else {}
+        synthesized_desc = _synthesize_description(
+            page_index_output, retain_params.get('note_description')
+        )
         page_index = build_page_index_with_metadata(
             page_index_output.toc,
             metadata={
                 'title': retain_params.get('note_name'),
-                'description': retain_params.get('note_description'),
+                'description': synthesized_desc,
                 'tags': retain_params.get('tags', []),
                 'publish_date': str(event_date) if event_date else None,
                 'source_uri': retain_params.get('source_uri'),
@@ -792,6 +814,7 @@ class ExtractionEngine:
             min_node_tokens=min_tokens,
         )
         await storage.update_note_page_index(session, note_id, page_index)
+        await storage.update_note_description(session, note_id, synthesized_desc)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
@@ -886,11 +909,14 @@ class ExtractionEngine:
 
         # 3. Build hash-stable thin tree with metadata for storage
         retain_params = contents[0].payload if contents else {}
+        synthesized_desc = _synthesize_description(
+            page_index_output, retain_params.get('note_description')
+        )
         page_index = build_page_index_with_metadata(
             page_index_output.toc,
             metadata={
                 'title': retain_params.get('note_name'),
-                'description': retain_params.get('note_description'),
+                'description': synthesized_desc,
                 'tags': retain_params.get('tags', []),
                 'publish_date': str(event_date) if event_date else None,
                 'source_uri': retain_params.get('source_uri'),
@@ -898,6 +924,7 @@ class ExtractionEngine:
             min_node_tokens=min_tokens,
         )
         await storage.update_note_page_index(session, effective_doc_id, page_index)
+        await storage.update_note_description(session, effective_doc_id, synthesized_desc)
 
         # Resolve and store the document title from the TOC / block summaries.
         # This supersedes the rough title stored by _track_document above.

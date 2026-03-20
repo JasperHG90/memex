@@ -68,6 +68,20 @@ def _resolve_doc_name(metadata: dict[str, Any]) -> str | None:
     )
 
 
+def _resolve_description(doc: Any) -> str | None:
+    """Extract description from the dedicated column, falling back to retain_params."""
+    if isinstance(doc, dict):
+        desc = doc.get('description')
+        if not desc:
+            desc = (doc.get('doc_metadata') or {}).get('retain_params', {}).get('note_description')
+        return desc
+    desc = getattr(doc, 'description', None)
+    if not desc:
+        metadata = getattr(doc, 'doc_metadata', None) or {}
+        desc = metadata.get('retain_params', {}).get('note_description')
+    return desc
+
+
 def build_note_dto(doc: Any) -> NoteDTO:
     """Build a NoteDTO from an ORM object or a dict."""
     if isinstance(doc, dict):
@@ -82,6 +96,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
             publish_date=doc.get('publish_date'),
             vault_id=doc['vault_id'],
             vault_name=doc.get('vault_name'),
+            description=_resolve_description(doc),
             assets=doc.get('assets', []),
             doc_metadata=metadata,
         )
@@ -97,6 +112,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
         publish_date=getattr(doc, 'publish_date', None),
         vault_id=doc.vault_id,
         vault_name=getattr(doc, 'vault_name', None),
+        description=_resolve_description(doc),
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
     )
