@@ -18,6 +18,7 @@ eggs/
 .eggs/
 lib/
 !packages/dashboard/src/lib/
+!packages/firefox-extension/src/lib/
 lib64/
 parts/
 sdist/

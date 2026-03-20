@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Save to Memex — Settings</h1>
+
+    <div class="field">
+      <label for="server-url">Server URL</label>
+      <input type="text" id="server-url" placeholder="http://localhost:8000">
+    </div>
+
+    <div class="field">
+      <label for="api-key">API Key (optional for localhost)</label>
+      <input type="text" id="api-key" placeholder="Leave empty if not required">
+    </div>
+
+    <div class="button-row">
+      <button id="save-btn">Save Settings</button>
+      <button id="test-btn" class="secondary">Test Connection</button>
+      <span id="connection-status" class="indicator"></span>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

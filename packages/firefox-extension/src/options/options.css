@@ -1,0 +1,123 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: #1a1a2e;
+  background: #fafafa;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+.container {
+  width: 100%;
+  max-width: 420px;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  outline: none;
+}
+
+input:focus {
+  border-color: #e94560;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+button {
+  padding: 10px 20px;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #d63a54;
+}
+
+button.secondary {
+  background: #eee;
+  color: #333;
+}
+
+button.secondary:hover {
+  background: #ddd;
+}
+
+.indicator {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ddd;
+  flex-shrink: 0;
+}
+
+.indicator.testing {
+  background: #ffc107;
+  animation: pulse 0.8s infinite alternate;
+}
+
+.indicator.connected {
+  background: #28a745;
+}
+
+.indicator.failed {
+  background: #dc3545;
+}
+
+@keyframes pulse {
+  from { opacity: 1; }
+  to { opacity: 0.4; }
+}
+
+#status {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+#status.success {
+  color: #155724;
+}
+
+#status.error {
+  color: #721c24;
+}

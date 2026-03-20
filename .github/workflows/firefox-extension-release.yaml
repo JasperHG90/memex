@@ -1,0 +1,91 @@
+name: Firefox Extension Release
+
+on:
+  push:
+    tags:
+      - 'firefox-extension-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/firefox-extension/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/firefox-extension
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: packages/firefox-extension
+
+      - name: Build
+        run: npm run build
+        working-directory: packages/firefox-extension
+
+      - name: Unit tests
+        run: npm test
+        working-directory: packages/firefox-extension
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+        working-directory: packages/firefox-extension
+
+      - name: E2E tests
+        run: npm run test:e2e
+        working-directory: packages/firefox-extension
+
+      - name: Lint (web-ext)
+        run: npm run lint
+        working-directory: packages/firefox-extension
+
+      # Sign the extension via AMO (produces a signed .xpi)
+      # Requires AMO_JWT_ISSUER and AMO_JWT_SECRET secrets
+      - name: Sign extension
+        if: env.AMO_JWT_ISSUER != ''
+        run: >
+          npx web-ext sign
+          --channel unlisted
+          --ignore-files 'src/**' 'tests/**' 'node_modules/**' '*.ts' '*.mjs'
+          --artifacts-dir dist
+        working-directory: packages/firefox-extension
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+
+      # Fallback: create unsigned zip if no AMO credentials
+      - name: Package unsigned zip
+        if: env.AMO_JWT_ISSUER == ''
+        run: npm run package
+        working-directory: packages/firefox-extension
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/firefox-extension-v}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Firefox Extension v${{ steps.version.outputs.version }}"
+          body: |
+            ## Save to Memex — Firefox Extension v${{ steps.version.outputs.version }}
+
+            ### Install
+            1. Download the `.xpi` file below
+            2. In Firefox, go to `about:addons`
+            3. Drag the `.xpi` file onto the page, or use gear → "Install Add-on From File"
+
+            > **Note:** If the file is an unsigned `.zip`, you need Firefox Developer Edition or Nightly
+            > with `xpinstall.signatures.required = false` in `about:config`.
+          files: packages/firefox-extension/dist/*
+          fail_on_unmatched_files: false

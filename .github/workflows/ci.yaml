@@ -24,6 +24,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       dashboard: ${{ steps.filter.outputs.dashboard }}
       openclaw: ${{ steps.filter.outputs.openclaw }}
+      firefox-extension: ${{ steps.filter.outputs.firefox-extension }}
       docker: ${{ steps.filter.outputs.docker }}
       ci-config: ${{ steps.filter.outputs.ci-config }}
     steps:
@@ -45,6 +46,8 @@ jobs:
               - 'packages/dashboard/**'
             openclaw:
               - 'packages/openclaw/**'
+            firefox-extension:
+              - 'packages/firefox-extension/**'
             docker:
               - 'docker/**'
               - 'docker-compose.yaml'
@@ -132,6 +135,39 @@ jobs:
       - name: Test
         run: npx vitest run
         working-directory: packages/openclaw
+
+  firefox-extension-lint-test:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.firefox-extension == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'packages/firefox-extension/package-lock.json'
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/firefox-extension
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: packages/firefox-extension
+      - name: Build
+        run: npm run build
+        working-directory: packages/firefox-extension
+      - name: Lint (web-ext)
+        run: npm run lint
+        working-directory: packages/firefox-extension
+      - name: Unit tests
+        run: npm test
+        working-directory: packages/firefox-extension
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+        working-directory: packages/firefox-extension
+      - name: E2E tests
+        run: npm run test:e2e
+        working-directory: packages/firefox-extension
 
   # LLM tests — requires ANTHROPIC_API_KEY secret
   # Uses @pytest.mark.llm marker

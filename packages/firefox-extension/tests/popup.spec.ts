@@ -1,0 +1,361 @@
+import { test, expect, type Page } from '@playwright/test';
+
+/**
+ * Build a minimal article HTML page that Readability can parse.
+ * Readability needs certain signals to detect an article.
+ */
+function buildArticleHTML(opts: {
+  title?: string;
+  content?: string;
+  byline?: string;
+} = {}) {
+  const title = opts.title ?? 'Why Neural Networks Are Changing Everything';
+  const content = opts.content ?? '<p>A deep dive into modern AI architectures and their impact.</p>'.repeat(5);
+  const byline = opts.byline ?? 'Jane Doe';
+  return `<!DOCTYPE html><html><head><title>${title}</title></head><body>
+    <article>
+      <h1>${title}</h1>
+      <p class="author">${byline}</p>
+      ${content}
+    </article>
+  </body></html>`;
+}
+
+/** Inject browser API mocks into popup HTML via route interception. */
+async function setupPopupMocks(
+  page: Page,
+  overrides: {
+    articleHTML?: string | null;
+    tabTitle?: string;
+    tabUrl?: string;
+    vaultsNDJSON?: string;
+    saveOk?: boolean;
+    saveResponse?: object;
+    storageSettings?: object;
+  } = {},
+) {
+  const tabTitle = overrides.tabTitle ?? 'Why Neural Networks Are Changing Everything';
+  const tabUrl = overrides.tabUrl ?? 'https://medium.com/example-article';
+  const articleHTML = overrides.articleHTML ?? buildArticleHTML();
+
+  const vaultsNDJSON =
+    overrides.vaultsNDJSON ??
+    [
+      '{"id":"aaa-111","name":"memex","description":"Default vault","is_active":true,"note_count":22,"last_note_added_at":null}',
+      '{"id":"bbb-222","name":"AI","description":"AI articles","is_active":false,"note_count":3,"last_note_added_at":null}',
+      '{"id":"ccc-333","name":"rituals","description":"Client notes","is_active":false,"note_count":178,"last_note_added_at":null}',
+    ].join('\n');
+
+  const saveOk = overrides.saveOk ?? true;
+  const saveResponse = overrides.saveResponse ?? { note_id: 'test-note-123' };
+  const storageSettings = overrides.storageSettings ?? {
+    memexServerUrl: 'http://localhost:8000',
+    memexApiKey: '',
+  };
+
+  const mockScript = `
+    <script>
+      window.browser = {
+        tabs: {
+          query: async function() {
+            return [{ id: 1, title: ${JSON.stringify(tabTitle)}, url: ${JSON.stringify(tabUrl)} }];
+          },
+        },
+        scripting: {
+          executeScript: async function(opts) {
+            if (opts.func) {
+              // The popup calls func: () => document.documentElement.outerHTML
+              // We return our mock article HTML instead
+              return [{ result: ${JSON.stringify(articleHTML)} }];
+            }
+            return [{}];
+          },
+        },
+        storage: {
+          local: {
+            get: async function(defaults) {
+              return Object.assign({}, defaults, ${JSON.stringify(storageSettings)});
+            },
+            set: async function() {},
+          },
+        },
+        runtime: { openOptionsPage: function() {} },
+      };
+
+      window.__lastSaveBody = null;
+      var _realFetch = window.fetch;
+      window.fetch = async function(url, opts) {
+        if (typeof url === 'string' && url.indexOf('/api/v1/vaults') !== -1) {
+          return { ok: true, text: async function() { return ${JSON.stringify(vaultsNDJSON)}; } };
+        }
+        if (typeof url === 'string' && url.indexOf('/api/v1/ingestions') !== -1) {
+          if (opts && opts.body) window.__lastSaveBody = JSON.parse(opts.body);
+          ${
+            saveOk
+              ? `return { ok: true, json: async function() { return ${JSON.stringify(saveResponse)}; } };`
+              : `return { ok: false, status: 500, text: async function() { return 'Internal Server Error'; } };`
+          }
+        }
+        return _realFetch(url, opts);
+      };
+
+      window.close = function() {};
+    </script>
+  `;
+
+  await page.route('**/popup/popup.html', async (route) => {
+    const response = await route.fetch();
+    const html = await response.text();
+    const modified = html.replace('</head>', mockScript + '</head>');
+    await route.fulfill({ body: modified, contentType: 'text/html' });
+  });
+}
+
+/** Inject browser mocks into options HTML. */
+async function setupOptionsMocks(
+  page: Page,
+  opts: { settings?: object } = {},
+) {
+  const settings = opts.settings ?? {
+    memexServerUrl: 'http://myserver:9000',
+    memexApiKey: 'test-key-123',
+  };
+
+  const mockScript = `
+    <script>
+      window.__savedSettings = null;
+      window.browser = {
+        storage: {
+          local: {
+            get: async function(defaults) {
+              return Object.assign({}, defaults, ${JSON.stringify(settings)});
+            },
+            set: async function(data) { window.__savedSettings = data; },
+          },
+        },
+      };
+    </script>
+  `;
+
+  await page.route('**/options/options.html', async (route) => {
+    const response = await route.fetch();
+    const html = await response.text();
+    const modified = html.replace('</head>', mockScript + '</head>');
+    await route.fulfill({ body: modified, contentType: 'text/html' });
+  });
+}
+
+// --- Popup rendering tests ---
+
+test.describe('popup rendering', () => {
+  test('renders all form elements', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('heading', { name: 'Save to Memex' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /Description/ })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Vault' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /Tags/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
+  });
+
+  test('displays brain logo', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    const logo = page.locator('img.logo');
+    await expect(logo).toBeVisible();
+    await expect(logo).toHaveAttribute('src', /icon-48\.png/);
+  });
+});
+
+// --- Article extraction tests ---
+
+test.describe('article extraction', () => {
+  test('populates title from extracted article', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue(
+      'Why Neural Networks Are Changing Everything',
+    );
+  });
+
+  test('leaves description empty for server-side generation', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('textbox', { name: /Description/ })).toHaveValue('');
+  });
+
+  test('displays source URL', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.locator('#url-preview')).toHaveText('https://medium.com/example-article');
+  });
+
+  test('enables save button after successful extraction', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  test('falls back to tab title when Readability fails', async ({ page }) => {
+    await setupPopupMocks(page, {
+      articleHTML: '<html><head></head><body><p>x</p></body></html>',
+      tabTitle: 'Simple Page - Firefox',
+    });
+    await page.goto('/popup/popup.html');
+
+    // Should fall back to tab title and still enable save
+    await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Simple Page - Firefox');
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+});
+
+// --- Vault loading tests ---
+
+test.describe('vault loading', () => {
+  test('loads vaults into dropdown', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    const vault = page.getByRole('combobox', { name: 'Vault' });
+    const options = vault.locator('option');
+    await expect(options).toHaveCount(3);
+    await expect(options.nth(0)).toHaveText('memex (active)');
+    await expect(options.nth(1)).toHaveText('AI');
+    await expect(options.nth(2)).toHaveText('rituals');
+  });
+
+  test('pre-selects the active vault', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('combobox', { name: 'Vault' })).toHaveValue('aaa-111');
+  });
+
+  test('shows error when vault fetch fails', async ({ page }) => {
+    await page.route('**/popup/popup.html', async (route) => {
+      const response = await route.fetch();
+      const html = await response.text();
+      const mock = `<script>
+        window.browser = {
+          tabs: {
+            query: async function() { return [{ id: 1, title: 'T', url: 'https://example.com' }]; },
+          },
+          scripting: {
+            executeScript: async function() {
+              return [{ result: ${JSON.stringify(buildArticleHTML({ title: 'T' }))} }];
+            },
+          },
+          storage: { local: { get: async function(d) { return d; }, set: async function() {} } },
+          runtime: { openOptionsPage: function() {} },
+        };
+        window.fetch = async function(url) {
+          if (typeof url === 'string' && url.indexOf('/api/v1/vaults') !== -1) throw new Error('Network error');
+          return { ok: true, json: async function() { return {}; } };
+        };
+        window.close = function() {};
+      </script>`;
+      await route.fulfill({ body: html.replace('</head>', mock + '</head>'), contentType: 'text/html' });
+    });
+    await page.goto('/popup/popup.html');
+
+    await expect(page.locator('#vault option')).toHaveText('Failed to load vaults');
+  });
+});
+
+// --- Save flow tests ---
+
+test.describe('save flow', () => {
+  test('shows success message after saving', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Save' }).click();
+
+    await expect(page.getByRole('button', { name: 'Saved!' })).toBeVisible();
+  });
+
+  test('sends correct data to API', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('button', { name: 'Saved!' })).toBeVisible();
+
+    const body = await page.evaluate(() => (window as any).__lastSaveBody);
+    expect(body.name).toBe('Why Neural Networks Are Changing Everything');
+    expect(body.vault_id).toBe('aaa-111');
+    // Content should be base64-encoded and include frontmatter
+    const decoded = atob(body.content);
+    expect(decoded).toContain('source_url: https://medium.com/example-article');
+  });
+
+  test('allows editing title before saving', async ({ page }) => {
+    await setupPopupMocks(page);
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.getByRole('textbox', { name: 'Title' }).fill('My Custom Title');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('button', { name: 'Saved!' })).toBeVisible();
+
+    const body = await page.evaluate(() => (window as any).__lastSaveBody);
+    expect(body.name).toBe('My Custom Title');
+  });
+
+  test('shows error on save failure and re-enables button', async ({ page }) => {
+    await setupPopupMocks(page, { saveOk: false });
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Save' }).click();
+
+    await expect(page.locator('#status')).toContainText('Save failed');
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+});
+
+// --- Options page tests ---
+
+test.describe('options page', () => {
+  test('renders settings form with saved values', async ({ page }) => {
+    await setupOptionsMocks(page);
+    await page.goto('/options/options.html');
+
+    await expect(page.getByRole('heading', { name: /Settings/ })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /Server URL/ })).toHaveValue('http://myserver:9000');
+    await expect(page.getByRole('textbox', { name: /API Key/ })).toHaveValue('test-key-123');
+  });
+
+  test('saves settings to storage', async ({ page }) => {
+    await setupOptionsMocks(page, { settings: { memexServerUrl: 'http://localhost:8000', memexApiKey: '' } });
+    await page.goto('/options/options.html');
+
+    await page.getByRole('textbox', { name: /Server URL/ }).fill('http://newserver:3000');
+    await page.getByRole('textbox', { name: /API Key/ }).fill('my-new-key');
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+
+    await expect(page.locator('#status')).toHaveText('Settings saved.');
+
+    const saved = await page.evaluate(() => (window as any).__savedSettings);
+    expect(saved.memexServerUrl).toBe('http://newserver:3000');
+    expect(saved.memexApiKey).toBe('my-new-key');
+  });
+
+  test('has test connection button', async ({ page }) => {
+    await setupOptionsMocks(page);
+    await page.goto('/options/options.html');
+
+    await expect(page.getByRole('button', { name: 'Test Connection' })).toBeVisible();
+    await expect(page.locator('.indicator')).toBeVisible();
+  });
+});
