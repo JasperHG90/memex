@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql as pg_dialect
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.extraction import storage
@@ -342,3 +343,27 @@ async def test_store_chunks_batch_summary_in_upsert_set(mock_session):
         call_kwargs = mock_values.on_conflict_do_update.call_args[1]
         assert 'summary' in call_kwargs['set_']
         assert 'summary_formatted' in call_kwargs['set_']
+
+
+@pytest.mark.asyncio
+async def test_update_note_tags_casts_path_as_text_array(mock_session):
+    """Regression: jsonb_set path must be cast to text[] not varchar.
+
+    See: https://github.com/JasperHG90/memex/issues/XXX
+    PostgreSQL's jsonb_set(jsonb, text[], jsonb) rejects varchar for the path arg.
+    """
+    note_id = str(uuid4())
+    tags = ['tag-a', 'tag-b']
+
+    await storage.update_note_tags(mock_session, note_id, tags)
+
+    mock_session.exec.assert_awaited_once()
+    stmt = mock_session.exec.call_args[0][0]
+
+    # Compile the statement to PostgreSQL dialect SQL
+    compiled = stmt.compile(dialect=pg_dialect.dialect())
+    sql_text = str(compiled)
+
+    # The path argument must be cast to TEXT[] (not VARCHAR)
+    assert 'CAST' in sql_text
+    assert 'TEXT[]' in sql_text

@@ -789,7 +789,9 @@ async def update_note_tags(
         tags: List of tags to set.
     """
     import json
-    from sqlalchemy.dialects.postgresql import JSONB
+
+    import sqlalchemy as sa
+    from sqlalchemy.dialects import postgresql
 
     doc_uuid = UUID(note_id)
     stmt = (
@@ -797,9 +799,9 @@ async def update_note_tags(
         .where(col(Note.id) == doc_uuid)
         .values(
             doc_metadata=func.jsonb_set(
-                func.coalesce(col(Note.doc_metadata), func.cast('{}', JSONB)),
-                '{tags}',
-                func.cast(json.dumps(tags), JSONB),
+                func.coalesce(col(Note.doc_metadata), func.cast('{}', postgresql.JSONB)),
+                func.cast('{tags}', postgresql.ARRAY(sa.Text)),
+                func.cast(json.dumps(tags), postgresql.JSONB),
             )
         )
     )
