@@ -11,6 +11,9 @@ permissions:
 jobs:
   build-sign-release:
     runs-on: ubuntu-latest
+    env:
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,16 +61,14 @@ jobs:
           --artifacts-dir dist
         working-directory: packages/firefox-extension
         env:
-          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
-          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          WEB_EXT_API_KEY: ${{ env.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ env.AMO_JWT_SECRET }}
 
       # Fallback: create unsigned zip if no AMO credentials
       - name: Package unsigned zip
         if: env.AMO_JWT_ISSUER == ''
         run: npm run package
         working-directory: packages/firefox-extension
-        env:
-          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
 
       - name: Get version from tag
         id: version
