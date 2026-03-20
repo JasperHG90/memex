@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from memex_core.services.kv import KVService, _validate_namespace
+from memex_core.services.kv import KVService, _pattern_to_prefix, _validate_namespace
 
 
 @pytest.fixture
@@ -247,3 +247,53 @@ async def test_search_empty_results(kv_service, mock_session):
 
     result = await kv_service.search(query_embedding=[0.1] * 384)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _pattern_to_prefix
+# ---------------------------------------------------------------------------
+
+
+def test_pattern_to_prefix_trailing_wildcard():
+    """Trailing wildcard should be stripped to produce a prefix."""
+    assert _pattern_to_prefix('global:*') == 'global:'
+
+
+def test_pattern_to_prefix_star_only():
+    """A bare '*' pattern should return None (match all)."""
+    assert _pattern_to_prefix('*') is None
+
+
+def test_pattern_to_prefix_middle_wildcard():
+    """Wildcards not at the end should raise ValueError."""
+    with pytest.raises(ValueError, match='trailing wildcards'):
+        _pattern_to_prefix('a:*:b')
+
+
+def test_pattern_to_prefix_no_wildcard():
+    """Pattern without wildcard should be returned as-is (exact prefix)."""
+    assert _pattern_to_prefix('no-wildcard') == 'no-wildcard'
+
+
+def test_pattern_to_prefix_deep_path():
+    """Multi-segment pattern should strip only the trailing *."""
+    assert _pattern_to_prefix('global:preferences:*') == 'global:preferences:'
+
+
+# ---------------------------------------------------------------------------
+# list_entries with pattern
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_with_pattern(kv_service, mock_session):
+    """list_entries(pattern=...) should resolve pattern to key_prefix."""
+    from memex_core.memory.sql_models import KVEntry
+
+    entries = [MagicMock(spec=KVEntry)]
+    mock_result = MagicMock()
+    mock_result.all.return_value = entries
+    mock_session.exec.return_value = mock_result
+
+    result = await kv_service.list_entries(pattern='global:*')
+    assert len(result) == 1

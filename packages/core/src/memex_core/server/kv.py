@@ -124,6 +124,10 @@ async def kv_list(
     key_prefix: str | None = Query(
         None, description='Only include entries whose key starts with this prefix'
     ),
+    pattern: str | None = Query(
+        None,
+        description='Wildcard filter (e.g. "global:preferences:*"). Only trailing * supported.',
+    ),
 ):
     """List key-value entries, optionally filtered by namespace prefixes."""
     try:
@@ -136,6 +140,7 @@ async def kv_list(
             limit=limit,
             exclude_prefix=exclude_prefix,
             key_prefix=key_prefix,
+            pattern=pattern,
         )
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
