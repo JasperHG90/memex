@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>
+    <img class="logo" src="../icons/icon-48.png" alt="">
+    Save to Memex
+  </h1>
+
+  <div class="field">
+    <label for="title">Title</label>
+    <input type="text" id="title" placeholder="Extracting...">
+  </div>
+
+  <div class="field">
+    <label for="description">Description (optional, auto-generated if empty)</label>
+    <textarea id="description" rows="2" placeholder="Leave empty to auto-generate"></textarea>
+  </div>
+
+  <div class="field">
+    <label for="vault">Vault</label>
+    <select id="vault">
+      <option value="">Loading vaults...</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="tags">Tags (optional, auto-generated if empty)</label>
+    <input type="text" id="tags" placeholder="Leave empty to auto-generate">
+  </div>
+
+  <div class="preview" id="url-preview"></div>
+
+  <div class="actions">
+    <button class="primary" id="save-btn" disabled>Save</button>
+  </div>
+
+  <div id="status"></div>
+
+  <a href="#" class="settings-link" id="open-settings">Settings</a>
+
+  <script src="popup.js"></script>
+</body>
+</html>

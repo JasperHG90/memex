@@ -1,0 +1,30 @@
+{
+  "name": "save-to-memex",
+  "version": "0.1.0",
+  "description": "Firefox extension to save articles to Memex",
+  "private": true,
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "copy": "cp src/popup/popup.html src/popup/popup.css popup/ && cp src/options/options.html src/options/options.css options/",
+    "build": "npm run compile && npm run copy",
+    "lint": "web-ext lint --ignore-files 'src/**' 'tests/**' 'node_modules/**' '*.ts' '*.mjs'",
+    "dev": "npm run build && web-ext run --ignore-files 'src/**' 'tests/**' 'node_modules/**' '*.ts' '*.mjs'",
+    "package": "npm run build && web-ext build --ignore-files 'src/**' 'tests/**' 'node_modules/**' '*.ts' '*.mjs' --artifacts-dir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "npx playwright test",
+    "test:all": "vitest run --config vitest.config.ts && npx playwright test",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "@playwright/test": "^1.58.2",
+    "@types/turndown": "^5.0.6",
+    "@types/webextension-polyfill": "^0.12.0",
+    "esbuild": "^0.24.0",
+    "turndown": "^7.2.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0",
+    "web-ext": "^8.0.0"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Save to Memex",
+  "version": "0.1.0",
+  "description": "Save articles to your Memex knowledge base",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "save-to-memex@memex.local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "options_ui": {
+    "page": "options/options.html"
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  }
+}
