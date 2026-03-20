@@ -230,11 +230,13 @@ async def ingest_upload(
                 tmp_path = tmp.name
 
             if background:
+                upload_note_key = parsed_metadata.get('note_key')
 
                 async def _ingest_file_and_cleanup(
                     file_path: str | plb.Path,
                     vault_id: UUID | str | None = None,
                     reflect_after: bool = True,
+                    note_key: str | None = None,
                 ) -> dict:
                     """Wrap ingest_from_file with temp-file cleanup."""
                     try:
@@ -242,6 +244,7 @@ async def ingest_upload(
                             file_path,
                             vault_id=vault_id,
                             reflect_after=reflect_after,
+                            note_key=note_key,
                         )
                     finally:
                         if os.path.exists(str(file_path)):
@@ -252,6 +255,7 @@ async def ingest_upload(
                     vault_id=parsed_metadata.get('vault_id'),
                     background_tasks=background_tasks,
                     file_path=tmp_path,
+                    note_key=upload_note_key,
                 )
                 return JSONResponse(
                     status_code=202,
@@ -263,7 +267,9 @@ async def ingest_upload(
 
             try:
                 result = await api.ingest_from_file(
-                    tmp_path, vault_id=parsed_metadata.get('vault_id')
+                    tmp_path,
+                    vault_id=parsed_metadata.get('vault_id'),
+                    note_key=parsed_metadata.get('note_key'),
                 )
                 _schedule_contradiction(background_tasks, result)
                 return IngestResponse(**result)

@@ -5,7 +5,7 @@
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import type { ExtractResult, Settings } from '../types';
-import { fetchVaults, saveNote, uploadFile } from '../lib/memex-api';
+import { fetchVaults, saveNote, uploadFile, canonicalizeUrl } from '../lib/memex-api';
 import { buildNoteContent } from '../lib/frontmatter';
 import { extractArticleImages } from '../lib/images';
 import { extractMetadata } from '../lib/metadata';
@@ -214,6 +214,7 @@ saveBtn.addEventListener('click', async () => {
         filename: pdfMode.filename,
         contentType: 'application/pdf',
         vaultId: vaultEl.value || undefined,
+        noteKey: canonicalizeUrl(pdfMode.url),
       });
     } else {
       const fullContent = extractedData.markdown
@@ -235,7 +236,7 @@ saveBtn.addEventListener('click', async () => {
         vaultId: vaultEl.value || undefined,
         background: true,
         files: extractedData.images,
-        noteKey: extractedData.url || undefined,
+        noteKey: extractedData.url ? canonicalizeUrl(extractedData.url) : undefined,
       });
     }
 

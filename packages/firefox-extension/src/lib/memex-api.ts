@@ -1,5 +1,45 @@
 import type { VaultDTO, IngestResponse } from '../types';
 
+/** Known tracking query parameters to strip for URL canonicalization. */
+const TRACKING_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'utm_id',
+  'fbclid',
+  'gclid',
+  'gad_source',
+  'mc_cid',
+  'mc_eid',
+  'ref',
+  'ref_src',
+  'ref_url',
+]);
+
+/**
+ * Canonicalize a URL for use as a stable note_key.
+ * Strips fragments, known tracking params, and trailing slashes from the path.
+ */
+export function canonicalizeUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.hash = '';
+    for (const param of TRACKING_PARAMS) {
+      url.searchParams.delete(param);
+    }
+    url.searchParams.sort();
+    // Strip trailing slash from path (but keep "/" for root)
+    if (url.pathname.length > 1 && url.pathname.endsWith('/')) {
+      url.pathname = url.pathname.slice(0, -1);
+    }
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 /** Encode a UTF-8 string to base64 (handles non-ASCII). */
 function utf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
@@ -86,12 +126,16 @@ export async function uploadFile(
     filename: string;
     contentType: string;
     vaultId: string | undefined;
+    noteKey?: string;
   },
 ): Promise<IngestResponse> {
   const formData = new FormData();
   formData.append('files', new Blob([file.bytes], { type: file.contentType }), file.filename);
-  if (file.vaultId) {
-    formData.append('metadata', JSON.stringify({ vault_id: file.vaultId }));
+  const meta: Record<string, string> = {};
+  if (file.vaultId) meta.vault_id = file.vaultId;
+  if (file.noteKey) meta.note_key = file.noteKey;
+  if (Object.keys(meta).length > 0) {
+    formData.append('metadata', JSON.stringify(meta));
   }
 
   const resp = await fetch(`${serverUrl}/api/v1/ingestions/upload?background=true`, {

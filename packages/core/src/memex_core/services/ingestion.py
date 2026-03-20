@@ -173,6 +173,7 @@ publish_date: {extracted.metadata.get('date')}
         file_path: str | plb.Path,
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
+        note_key: str | None = None,
     ) -> dict[str, Any]:
         """
         Ingest content from a path.
@@ -239,6 +240,7 @@ ingested_at: {now}
             source_uri=str(path.absolute()),
             original_content_hash=original_hash,
             files=extracted.images,
+            note_key=note_key,
         )
 
         # Resolve document date priority:
