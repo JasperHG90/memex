@@ -49,6 +49,8 @@ class WebContentProcessor:
     @staticmethod
     def _sync_process(url: str) -> dict[str, Any]:
         """Synchronous fetch and extract logic."""
+        if not url.startswith(('http://', 'https://')):
+            url = f'https://{url}'
         scraper = cloudscraper.create_scraper()
         try:
             response = scraper.get(url)
