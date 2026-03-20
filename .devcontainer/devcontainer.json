@@ -46,6 +46,11 @@
       "ghcr.io/devcontainers/features/docker-in-docker:2": {}
     },
     "containerUser": "vscode",
+    // Prevent VS Code from auto-forwarding port 8000 — it intercepts traffic
+    // to the Memex server running on the host (host.docker.internal:8000)
+    "portsAttributes": {
+      "8000": { "onAutoForward": "ignore" }
+    },
     "mounts": [
       "type=bind,source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,consistency=delegated",
       "type=bind,source=${localEnv:HOME}/.config/qmd,target=/home/vscode/.config/qmd,consistency=delegated",

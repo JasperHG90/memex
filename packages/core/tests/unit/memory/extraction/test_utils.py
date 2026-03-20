@@ -2,7 +2,7 @@ import datetime as dt
 
 
 from memex_core.memory.sql_models import TokenUsage
-from memex_core.memory.extraction.utils import parse_datetime, sanitize_text
+from memex_core.memory.extraction.utils import parse_iso_datetime, sanitize_text
 
 
 class TestSanitizeText:
@@ -32,17 +32,17 @@ class TestSanitizeText:
 
 
 class TestParseDatetime:
-    """Tests for parse_datetime utility."""
+    """Tests for parse_iso_datetime utility."""
 
     def test_valid_iso(self) -> None:
         """Test parsing valid ISO strings."""
-        dt_obj = parse_datetime('2023-01-01T12:00:00Z')
+        dt_obj = parse_iso_datetime('2023-01-01T12:00:00Z')
         assert isinstance(dt_obj, dt.datetime)
         assert dt_obj.year == 2023
 
     def test_invalid_string(self) -> None:
         """Test parsing invalid strings returns None."""
-        assert parse_datetime('not a date') is None
+        assert parse_iso_datetime('not a date') is None
 
 
 class TestNormalizeTimestamp:

@@ -21,7 +21,11 @@ from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.processing.dates import extract_document_date
 from memex_core.processing.files import FileContentProcessor
-from memex_core.processing.titles import resolve_document_title
+from memex_core.processing.titles import (
+    _is_meaningful_name,
+    extract_title_via_llm,
+    resolve_document_title,
+)
 from memex_core.processing.web import WebContentProcessor
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -118,7 +122,7 @@ class IngestionService:
             raise
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         title = extracted.metadata.get('title') or None
@@ -180,9 +184,12 @@ publish_date: {extracted.metadata.get('date')}
         path = plb.Path(file_path)
 
         if path.is_dir() or path.suffix.lower() == '.md':
+            target_vault_id = await self._vaults.resolve_vault_identifier(
+                vault_id or self.config.server.default_active_vault
+            )
             logger.info(f'Ingesting {path} as a native NoteInput.')
             note = await NoteInput.from_file(path)
-            return await self.ingest(note)
+            return await self.ingest(note, vault_id=target_vault_id)
 
         try:
             extracted = await self._file_processor.extract(path)
@@ -191,7 +198,7 @@ publish_date: {extracted.metadata.get('date')}
             raise
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         now = datetime.now().isoformat()
@@ -214,6 +221,16 @@ ingested_at: {now}
 
         name = extracted.metadata.get('title') or path.stem
 
+        # For file imports, prefer LLM title extraction over H1 regex
+        # when PDF metadata title is missing (path.stem is often meaningless).
+        if not _is_meaningful_name(name):
+            llm_title = await extract_title_via_llm(
+                extracted.content[:1500],
+                self.lm,
+            )
+            if llm_title:
+                name = llm_title
+
         note = NoteInput(
             name=name,
             description=f'Content from {path.name}',
@@ -224,21 +241,23 @@ ingested_at: {now}
             files=extracted.images,
         )
 
-        # Resolve document date: LLM content extraction -> PDF metadata -> file mtime -> now()
-        # 1. LLM content date (highest priority)
+        # Resolve document date priority:
+        # 1. LLM content extraction (always attempted)
+        # 2. PDF metadata creation date
+        # 3. File processor's document_date (mtime)
+        # 4. Final fallback to now()
         event_date = None
-        if extracted.document_date is None:
-            async with self.metastore.session() as date_session:
-                event_date = await extract_document_date(
-                    extracted.content, self.lm, date_session, target_vault_id
-                )
-                await date_session.commit()
+        async with self.metastore.session() as date_session:
+            event_date = await extract_document_date(
+                extracted.content, self.lm, date_session, target_vault_id
+            )
+            await date_session.commit()
 
         # 2. PDF metadata creation date
         if event_date is None:
             event_date = extracted.metadata.get('creation_date')
 
-        # 3. File processor's document_date (mtime — will be None for PDFs now)
+        # 3. File processor's document_date (mtime)
         if event_date is None:
             event_date = extracted.document_date
 
@@ -258,19 +277,19 @@ ingested_at: {now}
         Transactional ingestion of a note into Memex.
 
         Workflow:
-        1. Calculate ID (NoteInput.uuid).
+        1. Calculate ID (NoteInput.idempotency_key).
         2. Idempotency Check: Skip if exists in MetaStore.
         3. Transaction: Open AsyncTransaction.
         4. Stage Files: Save to FileStore.
         5. Extract Facts: Run MemoryEngine.retain in DB session.
         6. Commit: 2PC via AsyncTransaction.
         """
-        note_uuid = note.uuid
+        note_uuid = note.idempotency_key
         logger.info(f'Ingesting note: {note._metadata.name} (UUID: {note_uuid})')
 
         # Determine Target Vault
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         # 2. Two-Gate Idempotency Check
@@ -347,6 +366,9 @@ ingested_at: {now}
                 reflect_after=False,
                 agent_name='user',
             )
+            contradiction_task = result.pop('contradiction_task', None)
+            if contradiction_task is not None:
+                await contradiction_task
 
             result['note_id'] = note_uuid
             result['status'] = 'success'
@@ -376,7 +398,7 @@ ingested_at: {now}
         from sqlmodel import select
 
         target_vault_id = await self._vaults.resolve_vault_identifier(
-            vault_id or self.config.server.active_vault
+            vault_id or self.config.server.default_active_vault
         )
 
         # 1. Resolve Vault Name for path organization
@@ -385,7 +407,7 @@ ingested_at: {now}
             vault_name = vault.name if vault else str(target_vault_id)
 
         # 2. Two-Gate Idempotency Check
-        note_uuids = [UUID(NoteInput.calculate_uuid_from_dto(n)) for n in notes]
+        note_uuids = [UUID(NoteInput.calculate_idempotency_key_from_dto(n)) for n in notes]
         note_fingerprints = [NoteInput.calculate_fingerprint_from_dto(n) for n in notes]
         async with self.metastore.session() as session:
             stmt = select(Note.id, Note.content_hash).where(col(Note.id).in_(note_uuids))
@@ -475,13 +497,16 @@ ingested_at: {now}
                             vault_id=target_vault_id,
                         )
 
-                        await self.memory.retain(
+                        retain_result = await self.memory.retain(
                             session=txn.db_session,
                             contents=[retain_content],
                             note_id=str(note_uuid),
                             reflect_after=False,
                             agent_name='user',
                         )
+                        contradiction_task = retain_result.pop('contradiction_task', None)
+                        if contradiction_task is not None:
+                            await contradiction_task
                         chunk_doc_ids.append(note_uuid)
 
                     results['processed_count'] += len(chunk)

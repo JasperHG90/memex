@@ -39,6 +39,18 @@ def decode_base64(v: Any) -> bytes:
 Base64Bytes = Annotated[bytes, BeforeValidator(decode_base64)]
 
 
+class EntityType(str, Enum):
+    """Semantic type of an entity in the knowledge graph."""
+
+    PERSON = 'Person'
+    ORGANIZATION = 'Organization'
+    LOCATION = 'Location'
+    CONCEPT = 'Concept'
+    TECHNOLOGY = 'Technology'
+    FILE = 'File'
+    MISC = 'Misc'
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 
@@ -99,11 +111,6 @@ class NoteMetadata(BaseModel):
         description='Name of the author who created the entity.',
         examples=['user', 'claude opus', 'gemini 3'],
     )
-    project: str | None = Field(
-        default=None,
-        description='Optional project name associated with the entity.',
-        examples=['infrastructure migration', 'memex'],
-    )
     etag: str | None = Field(
         default=None,
         description="The MD5 hash of the note's description file (e.g. NOTE.md)",
@@ -113,10 +120,6 @@ class NoteMetadata(BaseModel):
         default=None,
         description='List of tags associated with the note',
         examples=[['assistant', 'helpful', 'task-management']],
-    )
-    embedding: list[float] | None = Field(
-        default=None,
-        description='The embedding vector representing the note for similarity searches',
     )
     type: MemexTypes | None = Field(
         default=None,
@@ -444,6 +447,11 @@ class EntityDTO(BaseModel):
         examples=['Person', 'Technology'],
     )
 
+    metadata: dict[str, Any] = Field(
+        default={},
+        description='Vault-scoped metadata derived from reflection (description, category).',
+    )
+
 
 class VaultDTO(BaseModel):
     """DTO for a Vault."""
@@ -464,6 +472,21 @@ class VaultDTO(BaseModel):
         examples=['My personal memories and notes.'],
     )
 
+    is_active: bool = Field(
+        default=False,
+        description='Whether this vault is the currently active (writer) vault.',
+    )
+
+    note_count: int = Field(
+        default=0,
+        description='Number of notes in this vault.',
+    )
+
+    last_note_added_at: dt.datetime | None = Field(
+        default=None,
+        description='Timestamp of the most recently added note in this vault.',
+    )
+
 
 class DefaultVaultsResponse(BaseModel):
     """Response model for the default vaults endpoint."""
@@ -471,9 +494,9 @@ class DefaultVaultsResponse(BaseModel):
     active_vault: VaultDTO = Field(
         description='The active (writer) vault.',
     )
-    attached_vaults: list[VaultDTO] = Field(
+    reader_vaults: list[VaultDTO] = Field(
         default_factory=list,
-        description='Additional read-only vaults included in search/retrieval.',
+        description='Default reader vaults for search/retrieval.',
     )
 
 
@@ -746,25 +769,18 @@ class NoteDTO(BaseModel):
     name: str | None = None
     original_text: str | None = None
     created_at: dt.datetime
+    publish_date: dt.datetime | None = None
     vault_id: UUID
+    vault_name: str | None = None
     assets: list[str] = Field(default_factory=list)
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class NoteSnippet(BaseModel):
-    """Snippet of text from a note."""
+class BlockSummaryDTO(BaseModel):
+    """Block-level summary from extraction."""
 
-    text: str
-    score: float = 0.0
-    chunk_index: int | None = None
-    # Legacy fields (optional)
-    id: UUID | None = None
-    fact_type: FactTypes | str | None = None
-    event_date: str | None = None
-    # Node-level info (populated when PageIndex strategy was used)
-    node_id: UUID | None = None
-    node_title: str | None = None
-    node_level: int | None = None
+    topic: str
+    key_points: list[str] = Field(default_factory=list)
 
 
 class NoteSearchResult(BaseModel):
@@ -772,7 +788,7 @@ class NoteSearchResult(BaseModel):
 
     note_id: UUID
     metadata: dict[str, Any]
-    snippets: list[NoteSnippet]
+    summaries: list[BlockSummaryDTO] = Field(default_factory=list)
     score: float = 0.0
     vault_id: UUID | None = None
     vault_name: str | None = None
@@ -886,6 +902,7 @@ class TOCNodeDTO(BaseModel):
     level: int
     summary: SectionSummaryDTO | None = None
     token_estimate: int | None = None
+    subtree_tokens: int | None = None
     children: list['TOCNodeDTO'] = Field(default_factory=list)
 
 
@@ -895,3 +912,98 @@ class PageIndexDTO(BaseModel):
     metadata: PageMetadataDTO
     toc: list[TOCNodeDTO]
     total_tokens: int | None = None
+
+
+class KVEntryDTO(BaseModel):
+    """DTO for a key-value store entry."""
+
+    id: UUID
+    key: str
+    value: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class KVPutRequest(BaseModel):
+    """Request to create or update a key-value entry."""
+
+    key: str
+    value: str
+    embedding: list[float] | None = None
+
+
+class KVSearchRequest(BaseModel):
+    """Request to semantically search key-value entries."""
+
+    query: str
+    namespaces: list[str] | None = None
+    limit: int = Field(5, ge=1, le=500)
+
+
+class FindNoteResult(BaseModel):
+    """Result from a fuzzy title search over notes."""
+
+    note_id: UUID
+    title: str
+    score: float
+    vault_id: UUID
+    created_at: dt.datetime
+    publish_date: dt.datetime | None = None
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# TOC filtering utility
+# ---------------------------------------------------------------------------
+
+
+def filter_toc(
+    toc: list[dict[str, Any]],
+    depth: int | None = None,
+    parent_node_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Filter a TOC tree by depth and/or parent node.
+
+    Pure function — no I/O.  Shared by core (NoteService) and MCP server so
+    that both layers can apply the same filtering without MCP importing core
+    internals.
+    """
+    if parent_node_id is not None:
+
+        def _find_subtree(
+            nodes: list[dict[str, Any]], target_id: str
+        ) -> list[dict[str, Any]] | None:
+            for node in nodes:
+                if node.get('id') == target_id:
+                    return node.get('children', [])
+                found = _find_subtree(node.get('children', []), target_id)
+                if found is not None:
+                    return found
+            return None
+
+        subtree = _find_subtree(toc, parent_node_id)
+        if subtree is None:
+            return []
+        toc = subtree
+
+    if depth is not None and depth >= 0:
+        # depth=0 -> roots + direct children (H1 + H2 overview)
+        # depth=1 -> full tree (no trimming)
+        # depth=N (N>=1) -> full tree
+        effective_depth = depth + 1
+
+        def _trim_depth(nodes: list[dict[str, Any]], current: int) -> list[dict[str, Any]]:
+            if current > effective_depth:
+                return []
+            result = []
+            for node in nodes:
+                trimmed = dict(node)
+                trimmed['children'] = _trim_depth(node.get('children', []), current + 1)
+                result.append(trimmed)
+            return result
+
+        if depth == 0:
+            toc = _trim_depth(toc, 0)
+        # depth >= 1: return full tree (no trimming needed)
+
+    return toc

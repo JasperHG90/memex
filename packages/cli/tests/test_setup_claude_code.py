@@ -71,11 +71,11 @@ class TestMcpServerEntry:
         assert entry['type'] == 'stdio'
         assert entry['command'] == 'uv'
         assert entry['args'] == ['run', 'memex', 'mcp', 'run']
-        assert entry['env']['MEMEX_SERVER__ACTIVE_VAULT'] == 'my-vault'
+        assert entry['env']['MEMEX_VAULT__ACTIVE'] == 'my-vault'
 
     def test_vault_name_propagated(self):
         for name in ('global', 'work', 'personal'):
-            assert _mcp_server_entry(name)['env']['MEMEX_SERVER__ACTIVE_VAULT'] == name
+            assert _mcp_server_entry(name)['env']['MEMEX_VAULT__ACTIVE'] == name
 
 
 # ===========================================================================
@@ -217,7 +217,7 @@ class TestSetupCreatesFiles:
         """Without --vault, the default vault should be 'global'."""
         _invoke('--project-dir', str(tmp_path))
         data = json.loads((tmp_path / '.mcp.json').read_text())
-        assert data['mcpServers']['memex']['env']['MEMEX_SERVER__ACTIVE_VAULT'] == 'global'
+        assert data['mcpServers']['memex']['env']['MEMEX_VAULT__ACTIVE'] == 'global'
 
 
 # ===========================================================================
@@ -256,7 +256,7 @@ class TestMcpJsonMerge:
         _invoke('--project-dir', str(tmp_path), '--vault', 'new-vault', '--force')
 
         data = json.loads((tmp_path / '.mcp.json').read_text())
-        assert data['mcpServers']['memex']['env']['MEMEX_SERVER__ACTIVE_VAULT'] == 'new-vault'
+        assert data['mcpServers']['memex']['env']['MEMEX_VAULT__ACTIVE'] == 'new-vault'
 
     def test_creates_mcp_json_from_scratch(self, tmp_path):
         """When no .mcp.json exists, one is created with the correct structure."""
@@ -414,12 +414,12 @@ class TestVaultOption:
     def test_custom_vault_in_mcp_json(self, tmp_path):
         _invoke('--project-dir', str(tmp_path), '--vault', 'work')
         data = json.loads((tmp_path / '.mcp.json').read_text())
-        assert data['mcpServers']['memex']['env']['MEMEX_SERVER__ACTIVE_VAULT'] == 'work'
+        assert data['mcpServers']['memex']['env']['MEMEX_VAULT__ACTIVE'] == 'work'
 
     def test_vault_with_special_characters(self, tmp_path):
         _invoke('--project-dir', str(tmp_path), '--vault', 'my-project_v2')
         data = json.loads((tmp_path / '.mcp.json').read_text())
-        assert data['mcpServers']['memex']['env']['MEMEX_SERVER__ACTIVE_VAULT'] == 'my-project_v2'
+        assert data['mcpServers']['memex']['env']['MEMEX_VAULT__ACTIVE'] == 'my-project_v2'
 
 
 # ===========================================================================
@@ -607,7 +607,7 @@ class TestHookTemplateContent:
     def test_session_end_references_memex_cli(self):
         content = _load_template('hooks/on_session_end.sh')
         assert 'memex' in content
-        assert 'memory add' in content
+        assert 'note add' in content
 
     def test_session_end_has_project_dir_placeholder(self):
         content = _load_template('hooks/on_session_end.sh')

@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from memex_common.exceptions import MemexError
 from memex_common.schemas import LineageDirection, LineageResponse
@@ -31,15 +31,23 @@ async def get_resource(path: str, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, 'Failed to retrieve resource')
 
 
+# Deprecated: use GET /lineage/note/{id} instead. Remove after 2026-06-01.
 @router.get('/notes/{id}/lineage', response_model=LineageResponse)
 async def get_note_lineage(
     id: UUID,
+    response: Response,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: LineageDirection = LineageDirection.UPSTREAM,
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
-    """Get the lineage of a note."""
+    """Get the lineage of a note.
+
+    .. deprecated:: Use ``GET /api/v1/lineage/note/{id}`` instead.
+    """
+    response.headers['Deprecation'] = 'true'
+    response.headers['Sunset'] = '2026-06-01'
+    response.headers['Link'] = '</api/v1/lineage>; rel="successor-version"'
     try:
         return await api.get_lineage(
             entity_type='note',
@@ -61,8 +69,8 @@ async def get_lineage(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     direction: LineageDirection = LineageDirection.UPSTREAM,
-    depth: int = 3,
-    limit: int = 10,
+    depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
     """Get the lineage of any entity type."""
     if entity_type not in VALID_LINEAGE_TYPES:

@@ -4,7 +4,8 @@ File processing module using markitdown and pymupdf4llm.
 
 import logging
 import asyncio
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -119,15 +120,34 @@ class FileContentProcessor:
 
 
 def _parse_pdf_date(raw: str | None) -> datetime | None:
-    """Parse a PDF date string (e.g. ``D:20260310064822Z00'00'``) into a UTC datetime."""
+    """Parse a PDF date string (e.g. ``D:20260310064822Z00'00'``) into a UTC datetime.
+
+    PDF date format: ``D:YYYYMMDDHHmmSSOHH'mm'`` where O is +, -, or Z.
+    The timezone offset is parsed and applied to convert the result to UTC.
+    """
     if not raw:
         return None
     s = raw[2:] if raw.startswith('D:') else raw
     try:
         dt = datetime.strptime(s[:14], '%Y%m%d%H%M%S')
-        return dt.replace(tzinfo=timezone.utc)
     except (ValueError, IndexError):
         return None
+
+    # Parse timezone offset from the remainder (e.g. "Z00'00'", "+05'30'", "-08'00'")
+    tz_part = s[14:]
+    if tz_part:
+        m = re.match(r"([Z+\-])(\d{2})'(\d{2})'", tz_part)
+        if m:
+            sign_char, hours_s, mins_s = m.group(1), m.group(2), m.group(3)
+            offset_minutes = int(hours_s) * 60 + int(mins_s)
+            if sign_char == '-':
+                offset_minutes = -offset_minutes
+            tz = timezone(timedelta(minutes=offset_minutes))
+            dt = dt.replace(tzinfo=tz)
+            return dt.astimezone(timezone.utc)
+
+    # No timezone suffix or unrecognised format — assume UTC
+    return dt.replace(tzinfo=timezone.utc)
 
 
 def _file_mtime_utc(path: Path) -> datetime | None:

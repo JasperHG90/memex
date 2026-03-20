@@ -4,19 +4,19 @@ In this tutorial, we will install Memex, start the server, create a vault, and i
 
 ## Prerequisites
 
-* **Python 3.12+** installed ([python.org](https://www.python.org/downloads/))
+* **Python 3.12+** installed ([python.org](https://www.python.org/downloads/)) — 3.13 also supported
 * **Docker** installed and running ([docs.docker.com](https://docs.docker.com/get-docker/)) — needed for PostgreSQL with pgvector
-* **uv** package manager installed ([docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/))
+* **uv** >= 0.10.0 package manager installed ([docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/))
 
 ## Step 1: Install Memex
 
 First, we need to install the Memex CLI tool. We will use `uv tool install` to install it globally.
 
 ```bash
-uv tool install git+https://github.com/JasperHG90/memex.git[mcp,dashboard,server]
+uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
-This installs the `memex` CLI along with the server, dashboard, and MCP integration packages.
+This installs the `memex` CLI along with the server package.
 
 Next, let's create a shell alias so we can run `memex` directly:
 
@@ -117,7 +117,7 @@ We should see confirmation that the vault was created. Vaults keep different kno
 Now let's ingest our first piece of knowledge. We will add a quick inline note to the vault we just created:
 
 ```bash
-memex memory add -v notes "Memex provides long-term memory that evolves. It extracts structured facts from unstructured data and synthesizes mental models over time."
+memex note add -v notes "Memex provides long-term memory that evolves. It extracts structured facts from unstructured data and synthesizes mental models over time."
 ```
 
 We should see a response confirming the note was ingested, including a note ID.

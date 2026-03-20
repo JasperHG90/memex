@@ -62,12 +62,12 @@ async def test_ingest_batch_internal_skips_duplicates(api, mock_metastore, mock_
 
     note_dto = NoteCreateDTO(name='Dup', description='Dup', content='ZHVw', vault_id=vault_id)
 
-    # Calculate what the UUID (note_key) and fingerprint would be
+    # Calculate what the idempotency key and fingerprint would be
     # NoteCreateDTO content is already bytes
     temp_note = NoteInput(
         name=note_dto.name, description=note_dto.description, content=note_dto.content
     )
-    expected_uuid = UUID(temp_note.uuid)
+    expected_uuid = UUID(temp_note.idempotency_key)
     expected_fingerprint = temp_note.content_fingerprint
 
     # Mock returns (id, content_hash) tuples for two-gate check

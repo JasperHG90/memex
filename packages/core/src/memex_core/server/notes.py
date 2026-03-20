@@ -8,7 +8,13 @@ from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import NoteDTO, NoteSearchRequest, NoteSearchResult, NodeDTO
+from memex_common.schemas import (
+    FindNoteResult,
+    NoteDTO,
+    NoteSearchRequest,
+    NoteSearchResult,
+    NodeDTO,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -30,12 +36,14 @@ router = APIRouter(prefix='/api/v1')
 )
 async def list_notes(
     api: Annotated[MemexAPI, Depends(get_api)],
-    limit: int = 100,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     sort: Literal['-created_at'] | None = Query(
         None, description='Sort option: -created_at for recency'
     ),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    after: str | None = Query(None, description='Only notes on or after this date (ISO 8601).'),
+    before: str | None = Query(None, description='Only notes on or before this date (ISO 8601).'),
 ):
     """
     List notes.
@@ -45,13 +53,41 @@ async def list_notes(
     - offset: Number of notes to skip
     - sort: Optional sort option. Use '-created_at' for most recent first.
     - vault_id: Optional vault ID(s) or name(s) to filter by.
+    - after: ISO 8601 date string. Only notes with date >= after.
+    - before: ISO 8601 date string. Only notes with date <= before.
     """
+    from datetime import datetime as dt
+
+    parsed_after = None
+    parsed_before = None
+    try:
+        if after is not None:
+            parsed_after = dt.fromisoformat(after)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'Invalid "after" date format: {exc}')
+    try:
+        if before is not None:
+            parsed_before = dt.fromisoformat(before)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f'Invalid "before" date format: {exc}')
+
     try:
         resolved = await resolve_vault_ids(api, vault_id)
         if sort == '-created_at':
-            docs = await api.get_recent_notes(limit=limit, vault_ids=resolved)
+            docs = await api.get_recent_notes(
+                limit=limit,
+                vault_ids=resolved,
+                after=parsed_after,
+                before=parsed_before,
+            )
         else:
-            docs = await api.list_notes(limit=limit, offset=offset, vault_ids=resolved)
+            docs = await api.list_notes(
+                limit=limit,
+                offset=offset,
+                vault_ids=resolved,
+                after=parsed_after,
+                before=parsed_before,
+            )
         return ndjson_response([build_note_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list notes')
@@ -86,6 +122,22 @@ async def search_notes(
         return ndjson_response(results)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note search failed')
+
+
+@router.get('/notes/find', response_model=list[FindNoteResult])
+async def find_notes_by_title(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    query: str = Query(..., description='Title search query'),
+    vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    limit: Annotated[int, Query(ge=1, le=500, description='Maximum results to return')] = 5,
+):
+    """Fuzzy-search notes by title using trigram similarity."""
+    try:
+        resolved = await resolve_vault_ids(api, vault_id)
+        results = await api.find_notes_by_title(query=query, vault_ids=resolved, limit=limit)
+        return [FindNoteResult(**r) for r in results]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to find notes by title')
 
 
 @router.get('/notes/{note_id}/page-index')
@@ -181,6 +233,31 @@ async def set_note_status(
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to set note status')
+
+
+class UpdateNoteDateRequest(BaseModel):
+    date: str
+
+
+@router.patch('/notes/{note_id}/date')
+async def update_note_date(
+    note_id: UUID,
+    request: Annotated[UpdateNoteDateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Update a note's publish_date and cascade delta to all memory unit timestamps."""
+    from datetime import datetime
+
+    try:
+        new_date = datetime.fromisoformat(request.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f'Invalid date format: {request.date!r}')
+
+    try:
+        result = await api.update_note_date(note_id, new_date)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to update note date')
 
 
 class RenameNoteRequest(BaseModel):

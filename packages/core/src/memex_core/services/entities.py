@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
@@ -15,18 +16,56 @@ from memex_core.services.base import BaseService
 logger = logging.getLogger('memex.core.services.entities')
 
 
+@dataclass
+class EntityWithMetadata:
+    """Wraps an ORM Entity with its vault-scoped MentalModel metadata."""
+
+    entity: Any
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _wrap_with_metadata(entity: Any, mental_model: Any | None) -> EntityWithMetadata:
+    """Wrap an entity with mental model entity_metadata."""
+    metadata = (mental_model.entity_metadata if mental_model else None) or {}
+    return EntityWithMetadata(entity=entity, metadata=metadata)
+
+
 class EntityService(BaseService):
     """Entity CRUD, search, and graph traversal operations."""
 
+    async def _resolve_default_vault_id(self) -> UUID:
+        """Resolve the active vault name from config to a UUID via direct DB lookup."""
+        from memex_core.memory.sql_models import Vault
+        from sqlmodel import select
+
+        vault_name = self.config.server.default_active_vault
+        # Try parsing as UUID first
+        try:
+            return UUID(vault_name)
+        except ValueError:
+            pass
+
+        async with self.metastore.session() as session:
+            stmt = select(Vault).where(Vault.name == vault_name)
+            vault = (await session.exec(stmt)).first()
+            if vault:
+                return vault.id
+            raise ResourceNotFoundError(f'Active vault "{vault_name}" not found.')
+
     async def list_entities_ranked(
-        self, limit: int = 100, vault_ids: list[UUID] | None = None
-    ) -> AsyncGenerator[Any, None]:
+        self,
+        limit: int = 100,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
+    ) -> AsyncGenerator[EntityWithMetadata, None]:
         """
         Stream entities ranked by hybrid score.
         Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
         """
-        from memex_core.memory.sql_models import Entity, EntityCooccurrence, UnitEntity
+        from memex_core.memory.sql_models import Entity, EntityCooccurrence, MentalModel, UnitEntity
         from sqlmodel import select, func, desc, col
+
+        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
 
         # Subquery for centrality (sum of cooccurrence counts)
         centrality_stmt = (
@@ -45,7 +84,20 @@ class EntityService(BaseService):
             .group_by(Entity.id)
         ).subquery()
 
-        stmt = select(Entity).join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+        rank_score = (
+            0.4 * Entity.mention_count
+            + 0.4 * Entity.retrieval_count
+            + 0.2 * centrality_stmt.c.centrality
+        ).label('rank_score')
+
+        stmt = (
+            select(Entity, MentalModel, rank_score)
+            .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+            .outerjoin(
+                MentalModel,
+                (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+            )
+        )
 
         if vault_ids:
             stmt = (
@@ -54,18 +106,15 @@ class EntityService(BaseService):
                 .distinct()
             )
 
-        stmt = stmt.order_by(
-            desc(
-                0.4 * Entity.mention_count
-                + 0.4 * Entity.retrieval_count
-                + 0.2 * centrality_stmt.c.centrality
-            )
-        ).limit(limit)
+        if entity_type:
+            stmt = stmt.where(Entity.entity_type == entity_type)
+
+        stmt = stmt.order_by(desc(rank_score)).limit(limit)
 
         async with self.metastore.session() as session:
             stream = await session.stream(stmt)
             async for row in stream:
-                yield row[0]
+                yield _wrap_with_metadata(row[0], row[1])
 
     async def get_entity_cooccurrences(
         self,
@@ -136,22 +185,48 @@ class EntityService(BaseService):
             results = (await session.exec(stmt)).all()
             return [{'unit': unit, 'document': doc} for unit, doc in results]
 
-    async def get_entity(self, entity_id: UUID | str) -> Any | None:
-        """Get an entity by ID."""
-        from memex_core.memory.sql_models import Entity
-
-        eid = UUID(str(entity_id))
-        async with self.metastore.session() as session:
-            return await session.get(Entity, eid)
-
-    async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
-        """Get multiple entities by ID."""
-        from memex_core.memory.sql_models import Entity
+    async def get_entity(
+        self, entity_id: UUID | str, vault_id: UUID | None = None
+    ) -> EntityWithMetadata | None:
+        """Get an entity by ID, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel
         from sqlmodel import select
 
+        scope_vault_id = vault_id or await self._resolve_default_vault_id()
+        eid = UUID(str(entity_id))
         async with self.metastore.session() as session:
-            stmt = select(Entity).where(col(Entity.id).in_(entity_ids))
-            return list((await session.exec(stmt)).all())
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(
+                    MentalModel,
+                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+                )
+                .where(Entity.id == eid)
+            )
+            result = (await session.exec(stmt)).first()
+            if not result:
+                return None
+            return _wrap_with_metadata(result[0], result[1])
+
+    async def get_entities(
+        self, entity_ids: list[UUID], vault_id: UUID | None = None
+    ) -> list[EntityWithMetadata]:
+        """Get multiple entities by ID, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel
+        from sqlmodel import select
+
+        scope_vault_id = vault_id or await self._resolve_default_vault_id()
+        async with self.metastore.session() as session:
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(
+                    MentalModel,
+                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+                )
+                .where(col(Entity.id).in_(entity_ids))
+            )
+            results = (await session.exec(stmt)).all()
+            return [_wrap_with_metadata(row[0], row[1]) for row in results]
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """
@@ -207,38 +282,64 @@ class EntityService(BaseService):
         return True
 
     async def get_top_entities(
-        self, limit: int = 5, vault_ids: list[UUID] | None = None
-    ) -> list[Any]:
-        """Get top entities by mention count."""
-        from memex_core.memory.sql_models import Entity, UnitEntity
+        self,
+        limit: int = 5,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
+    ) -> list[EntityWithMetadata]:
+        """Get top entities by mention count, with MentalModel metadata attached."""
+        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
         from sqlmodel import select, desc, col
 
+        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
+
         async with self.metastore.session() as session:
-            stmt = select(Entity)
+            stmt = select(Entity, MentalModel).outerjoin(
+                MentalModel,
+                (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+            )
             if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
                     .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            if entity_type:
+                stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
-            return list((await session.exec(stmt)).all())
+            results = (await session.exec(stmt)).all()
+            return [_wrap_with_metadata(row[0], row[1]) for row in results]
 
     async def search_entities(
-        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
-    ) -> list[Any]:
+        self,
+        query: str,
+        limit: int = 10,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
+    ) -> list[EntityWithMetadata]:
         """Search for entities by canonical name using trigram similarity or ILIKE."""
-        from memex_core.memory.sql_models import Entity, UnitEntity
+        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
         from sqlmodel import select, col
 
+        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
+
         async with self.metastore.session() as session:
-            # Use ILIKE for broad matching
-            stmt = select(Entity).where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            stmt = (
+                select(Entity, MentalModel)
+                .outerjoin(
+                    MentalModel,
+                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+                )
+                .where(col(Entity.canonical_name).ilike(f'%{query}%'))
+            )
             if vault_ids:
                 stmt = (
                     stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
                     .where(col(UnitEntity.vault_id).in_(vault_ids))
                     .distinct()
                 )
+            if entity_type:
+                stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
-            return list((await session.exec(stmt)).all())
+            results = (await session.exec(stmt)).all()
+            return [_wrap_with_metadata(row[0], row[1]) for row in results]

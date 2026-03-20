@@ -6,30 +6,38 @@ Memex is a long-term memory system designed to give LLMs persistent, evolving kn
 
 ## Requirements
 
-1. UV
-2. Postgres with pgvector
+1. Python 3.12+ (3.13 tested in CI)
+2. [uv](https://docs.astral.sh/uv/) >= 0.10.0
+3. PostgreSQL with pgvector
 
 ## 🚀 Quick Start
 
-### 1. Install
-Requires Python 3.12+ and `uv`.
+> [!NOTE]
+> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
+
+### 1. Set up postgres
+
+Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
+
+### 2. Install
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (>= 0.10.0).
 
 ```bash
-uv tool install "git+https://github.com/JasperHG90/memex.git#subdirectory=packages/cli[mcp,server]"
+uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
 
 > The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
 
-### 2. Initialize
+### 3. Initialize
 Sets up your local storage and configuration.
 
 ```bash
 memex config init
 ```
 
-### 3. Start the Server
+### 4. Start the Server
 Memex requires a running API server for all operations.
 
 ```bash
@@ -37,7 +45,7 @@ Memex requires a running API server for all operations.
 memex server start -d
 ```
 
-### 4. Ingest
+### 5. Ingest
 Feed it knowledge.
 
 ```bash
@@ -45,18 +53,18 @@ Feed it knowledge.
 memex vault create notes --description "Notes about things"
 
 # Inline note
-memex memory add -v notes "Memex provides long-term memory that evolves."
+memex note add -v notes "Memex provides long-term memory that evolves."
 
 # Capture a webpage
 # Goes to the 'global' vault
-memex memory add --url "https://docs.python.org/3/tutorial/"
+memex note add --url "https://docs.python.org/3/tutorial/"
 
 # Point it to local files
 # Supports: MD, PDF, docx, xlsx, outlook, pptx
-memex memory add --file /path/to/file.md --vault notes
+memex note add --file /path/to/file.md --vault notes
 ```
 
-### 5. Search
+### 6. Search
 Ask questions.
 
 ```bash
@@ -65,11 +73,38 @@ memex memory search "How does Python handle memory management?"
 
 ## See it in action
 
-> [!NOTE]
-> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
+### Claude Code Plugin
 
-### Claude Code Integration
-Give Claude Code persistent memory across sessions.
+Give Claude Code persistent memory across all projects — no per-project setup needed.
+
+```bash
+# Add the Memex marketplace
+claude plugin marketplace add JasperHG90/memex
+
+# Install the plugin
+claude plugin install memex@memex
+```
+
+Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
+
+The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+
+#### Updating the claude code plugin
+
+To update the claude code plugin, first execute `claude plugin marketplace update`, then `claude plugin update memex@memex` to update the claude code plugin.
+
+#### Overriding defaults
+
+- By default, the claude code plugin uses the MCP server from tag `latest`. To override this, you can specify a project-level memex MCP server in your project's `.mcp.json`.
+- To override individual memex settings (e.g. MEMEX_BASE_URL), add these to './claude/settings.json', e.g.
+
+```json
+{
+  "env": {
+    "MEMEX_SERVER_URL": "http://host.docker.internal:8000"
+  }
+}
+```
 
 ![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
 
@@ -135,10 +170,10 @@ Search memories with multi-strategy retrieval and AI summaries.
 Feed Memex from any source — plain text, Markdown, PDFs, Word docs, PowerPoint, Excel, Outlook emails, web pages, or entire directories. File conversion is handled automatically via [MarkItDown](https://github.com/microsoft/markitdown) and [PyMuPDF](https://pymupdf.readthedocs.io/). Background and batch ingestion modes let you import large document collections without blocking.
 
 ```bash
-memex memory add "Quick inline note"
-memex memory add --file ./research-papers/        # directory of PDFs
-memex memory add --url https://example.com/article
-memex memory add --file report.md --asset diagram.png --background
+memex note add "Quick inline note"
+memex note add --file ./research-papers/        # directory of PDFs
+memex note add --url https://example.com/article
+memex note add --file report.md --asset diagram.png --background
 ```
 
 ### Five-strategy retrieval (TEMPR)
@@ -188,7 +223,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. The `memex setup claude-code` command generates MCP config, lifecycle hooks, and `/remember` + `/recall` slash commands in one step. 26 MCP tools cover the full API surface.
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 26 MCP tools cover the full API surface.
 
 ### REST API and webhooks
 
@@ -208,7 +243,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [AI Agent Memory](./docs/tutorials/ai-agent-memory.md): Build a Python agent with persistent memory.
 
 ### How-To Guides
-- [Set Up Claude Code](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory with one command.
+- [Set Up Claude Code](./docs/how-to/setup-claude-code.md): Give Claude Code long-term memory via the plugin or setup command.
 - [Configure Memex](./docs/how-to/configure-memex.md): YAML config, environment variables, model providers.
 - [Using MCP](./docs/how-to/using-mcp.md): Connect to Claude Desktop, Cursor, and other MCP clients.
 - [Organize with Vaults](./docs/how-to/organize-with-vaults.md): Isolate project knowledge.
@@ -222,6 +257,7 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [CLI Commands](./docs/reference/cli-commands.md)
 - [REST API](./docs/reference/rest-api.md)
 - [MCP Tools](./docs/reference/mcp-tools.md)
+- [MemexAPI](./docs/reference/memexapi-reference.md): Python API class — 60+ public methods.
 - [Configuration](./docs/reference/configuration.md)
 - [Evaluation Report](./docs/reference/evaluation-report.md): LoCoMo benchmark results, retrieval efficiency, and per-question analysis.
 
@@ -266,34 +302,30 @@ The `release.yaml` GitHub Action automatically builds all artifacts (Python, das
 
 ## Evaluation
 
-Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 60 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
+Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 47 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
 
 ### LoCoMo results
 
 | Category | Count | Mean Score |
 |---|---|---|
-| Single-Hop | 10 | 0.900 |
-| Multi-Hop | 14 | 1.000 |
+| Single-Hop | 9 | 0.944 |
+| Multi-Hop | 9 | 1.000 |
 | Open Domain | 3 | 1.000 |
-| Temporal | 18 | 1.000 |
-| **Non-adversarial** | **45** | **0.978** |
-| Adversarial (unweighted) | 12 | 0.667 |
+| Temporal | 15 | 1.000 |
+| **Non-adversarial** | **36** | **0.986** |
+| Adversarial (unweighted) | 11 | 0.773 |
 
 Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
 
 ### Retrieval efficiency
 
-Memex retrieval adds minimal overhead to agent workflows. Across the 60-question benchmark:
+Memex retrieval adds minimal overhead to agent workflows. Across the 47-question benchmark:
 
 | Metric | Value |
 |---|---|
-| Retrieval tokens per question (median) | **3,440** |
-| Retrieval tokens per question (mean) | 5,495 |
-| Retrieval as % of total tokens | **4.6%** |
-| Median response time | 27.8s |
-| Median turns per question | 4 |
-| Memex tool calls per question (median) | 2 |
-| Cost per question (median) | ~$0.08 |
+| Retrieval tokens per question (median) | **4,609** |
+| Retrieval tokens per question (mean) | 7,592 |
+| Retrieval as % of total tokens | **4.5%** |
 
 95% of token usage is agent overhead (system prompt, tool definitions, conversation history). The Memex MCP tools themselves return compact results — a typical question needs just one `memory_search` call (~2.4K tokens) or a two-stage `memory_search` + `note_search` (~3.4K tokens). Complex multi-hop questions that drill into specific note sections via the page index cost ~6K retrieval tokens.
 
@@ -305,6 +337,7 @@ Memex is built as a monorepo:
 - **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
 - **`packages/dashboard`**: The view. React + Vite web UI for exploring your knowledge graph.
+- **`packages/claude-code-plugin`**: The plugin. Claude Code plugin for cross-project memory integration.
 - **`packages/openclaw`**: The plugin. Memex memory integration for OpenClaw agents.
 
 ## Acknowledgements

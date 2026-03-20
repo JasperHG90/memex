@@ -1,6 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { useEntities, useBulkCooccurrences } from '@/api/hooks/use-entities';
-import { useVaultStore } from '@/stores/vault-store';
 import { GraphCanvas } from './entity-graph/graph-canvas';
 import { FilterPanel, type GraphFilters } from './entity-graph/filter-panel';
 import { ENTITY_TYPES } from './entity-graph/entity-node';
@@ -35,14 +34,6 @@ import { useEntity } from '@/api/hooks/use-entities';
 import { VaultBadge } from '@/components/shared/vault-badge';
 
 export default function EntityGraph() {
-  const writerVaultId = useVaultStore((s) => s.writerVaultId);
-  const attachedVaults = useVaultStore((s) => s.attachedVaults);
-  const vaultIds = useMemo(() => {
-    const ids = new Set<string>();
-    if (writerVaultId) ids.add(writerVaultId);
-    for (const v of attachedVaults) ids.add(v.id);
-    return [...ids];
-  }, [writerVaultId, attachedVaults]);
 
   const [filters, setFilters] = useState<GraphFilters>(DEFAULT_FILTERS);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
@@ -51,17 +42,17 @@ export default function EntityGraph() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [entityLimit, setEntityLimit] = useState(100);
 
-  // Fetch entities sorted by mention count (top entities), scoped by vault
+  // Fetch entities sorted by mention count (top entities)
+  // Note: entities are globally scoped (vault_id is null), so we don't filter by vault
   const { data: entities, isLoading: entitiesLoading } = useEntities({
     limit: entityLimit,
     sort: '-mentions',
-    vaultIds,
   });
 
   // Fetch co-occurrences for all loaded entities
   const entityIds = entities?.map((e) => e.id) ?? [];
   const { data: cooccurrences, isLoading: cooccurrencesLoading } =
-    useBulkCooccurrences(entityIds, vaultIds);
+    useBulkCooccurrences(entityIds);
 
   const isLoading = entitiesLoading || cooccurrencesLoading;
 

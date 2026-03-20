@@ -27,24 +27,34 @@ class TestRawFact:
         assert fact.fact_type == FactTypes.WORLD
 
     @pytest.mark.parametrize(
-        ('what', 'when', 'who', 'why', 'expected'),
+        ('what', 'when', 'where_', 'who', 'why', 'expected'),
         [
             (
                 'Fact',
                 'Today',
+                'Office',
                 'User',
                 'Reason',
-                'Fact | When: Today | Involving: User | Reason',
+                'Fact | When: Today | Where: Office | Involving: User | Reason',
             ),
-            ('Fact', 'N/A', 'N/A', 'N/A', 'Fact'),
-            ('Fact', None, None, None, 'Fact'),
-            ('Fact', 'Today', 'N/A', 'Reason', 'Fact | When: Today | Reason'),
+            ('Fact', 'N/A', 'N/A', 'N/A', 'N/A', 'Fact'),
+            ('Fact', None, None, None, None, 'Fact'),
+            ('Fact', 'Today', None, 'N/A', 'Reason', 'Fact | When: Today | Reason'),
+            (
+                'Fact',
+                'Today',
+                'Paris',
+                'N/A',
+                'Reason',
+                'Fact | When: Today | Where: Paris | Reason',
+            ),
         ],
     )
     def test_formatted_text(
         self,
         what: str,
         when: str | None,
+        where_: str | None,
         who: str | None,
         why: str | None,
         expected: str,
@@ -53,6 +63,7 @@ class TestRawFact:
         fact = RawFact(
             what=what,
             when=when,
+            where=where_,
             who=who,
             why=why,
             fact_type=FactTypes.WORLD,
@@ -83,3 +94,62 @@ class TestCausalRelation:
                 target_fact_index=0,
                 strength=strength,
             )
+
+
+class TestChunkMetadata:
+    """Tests for ChunkMetadata summary fields."""
+
+    def test_chunk_metadata_with_summary(self) -> None:
+        from memex_core.memory.extraction.models import ChunkMetadata
+
+        summary = {'topic': 'AI Safety', 'key_points': ['Alignment', 'Interpretability']}
+        cm = ChunkMetadata(
+            chunk_text='text',
+            fact_count=0,
+            content_index=0,
+            chunk_index=0,
+            content_hash='h1',
+            summary=summary,
+            summary_formatted='AI Safety — Alignment | Interpretability',
+        )
+        assert cm.summary == summary
+        assert cm.summary_formatted == 'AI Safety — Alignment | Interpretability'
+
+    def test_chunk_metadata_summary_defaults_to_none(self) -> None:
+        from memex_core.memory.extraction.models import ChunkMetadata
+
+        cm = ChunkMetadata(
+            chunk_text='text',
+            fact_count=0,
+            content_index=0,
+            chunk_index=0,
+            content_hash='h1',
+        )
+        assert cm.summary is None
+        assert cm.summary_formatted is None
+
+
+class TestBlockSummaryFormatted:
+    """Tests for BlockSummary.formatted property."""
+
+    def test_formatted_with_key_points(self) -> None:
+        from memex_core.memory.extraction.models import BlockSummary
+
+        bs = BlockSummary(topic='ML Ops', key_points=['CI/CD', 'Monitoring'])
+        assert bs.formatted == 'ML Ops — CI/CD | Monitoring'
+
+    def test_formatted_without_key_points(self) -> None:
+        from memex_core.memory.extraction.models import BlockSummary
+
+        bs = BlockSummary(topic='Overview')
+        assert bs.formatted == 'Overview'
+
+    def test_model_dump_roundtrip(self) -> None:
+        from memex_core.memory.extraction.models import BlockSummary
+
+        bs = BlockSummary(topic='Test', key_points=['A', 'B'])
+        d = bs.model_dump()
+        assert d == {'topic': 'Test', 'key_points': ['A', 'B']}
+        restored = BlockSummary(**d)
+        assert restored.topic == bs.topic
+        assert restored.key_points == bs.key_points

@@ -14,10 +14,10 @@ This guide shows you how to import many documents into Memex at once, using eith
 
 1. **Run the CLI import command**
 
-   Point `memex memory add` at a directory. Memex recursively scans and ingests all supported files.
+   Point `memex note add` at a directory. Memex recursively scans and ingests all supported files.
 
    ```bash
-   memex memory add --file ./my-notes/ --vault project-x
+   memex note add --file ./my-notes/ --vault project-x
    ```
 
    This processes files synchronously — the CLI waits for each file to be summarized before moving to the next.
@@ -27,7 +27,7 @@ This guide shows you how to import many documents into Memex at once, using eith
    To attach supporting files (images, PDFs) to a note, use `--asset` alongside `--file`:
 
    ```bash
-   memex memory add --file ./report.md --asset ./diagram.png --vault project-x
+   memex note add --file ./report.md --asset ./diagram.png --vault project-x
    ```
 
    > **Note:** `--asset` cannot be used with a directory `--file`. Point `--file` to a single file when using `--asset`.

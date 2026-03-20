@@ -12,6 +12,7 @@ from memex_common.schemas import MemoryUnitDTO
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
     _handle_error,
+    build_memory_unit_dto,
     get_api,
 )
 
@@ -28,20 +29,7 @@ async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         if not unit:
             raise HTTPException(status_code=404, detail=f'Memory unit {id} not found')
 
-        return MemoryUnitDTO(
-            id=unit.id,
-            text=unit.text,
-            fact_type=unit.fact_type,
-            status=unit.status,
-            metadata=unit.unit_metadata,
-            note_id=unit.note_id,
-            vault_id=unit.vault_id,
-            mentioned_at=unit.mentioned_at,
-            occurred_start=unit.occurred_start,
-            occurred_end=unit.occurred_end,
-            chunk_id=getattr(unit, 'chunk_id', None),
-            confidence=getattr(unit, 'confidence', 1.0) or 1.0,
-        )
+        return build_memory_unit_dto(unit)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get memory unit {id}')
 

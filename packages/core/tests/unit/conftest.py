@@ -99,9 +99,9 @@ def mock_filestore():
 def mock_config():
     """Mock MemexConfig with standard test values."""
     config = MagicMock()
-    config.server.active_vault = 'global'
+    config.server.default_active_vault = 'global'
+    config.server.default_reader_vault = 'global'
     config.server.memory.extraction.model.model = 'test-model'
-    config.server.attached_vaults = []
     config.server.logging.level = 'WARNING'
     config.server.logging.json_output = False
     return config

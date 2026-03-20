@@ -44,7 +44,6 @@ class Manifest(BaseModel):
         ...,
         description='List of tags associated with the note for easier retrieval.',
     )
-    # TODO: add narrative & entities
 
     @field_serializer('date_created')
     def serialize_date_created(self, date_created: dt.datetime) -> str:

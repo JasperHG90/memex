@@ -14,9 +14,9 @@ def mock_retrieval_engine():
     return RetrievalEngine(embedder=MagicMock(), reranker=MagicMock())
 
 
-def test_deduplicate_and_cite_keeps_both(mock_retrieval_engine):
+def test_attach_citations_keeps_both(mock_retrieval_engine):
     """
-    Test that _deduplicate_and_cite keeps BOTH the Observation and its cited Fact
+    Test that _attach_citations keeps BOTH the Observation and its cited Fact
     in the results, and attaches citation metadata to the Observation.
     """
     # 1. Setup Data
@@ -52,7 +52,7 @@ def test_deduplicate_and_cite_keeps_both(mock_retrieval_engine):
     results = [obs_unit, fact_unit]
 
     # 3. Apply Deduplication
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
+    deduplicated = mock_retrieval_engine._attach_citations(results)
 
     # 4. Assertions — both items should remain
     assert len(deduplicated) == 2, 'Both observation and fact should remain in results'
@@ -95,7 +95,7 @@ def test_deduplicate_no_match(mock_retrieval_engine):
     )
 
     results = [u1, u2]
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
+    deduplicated = mock_retrieval_engine._attach_citations(results)
 
     assert len(deduplicated) == 2
 
@@ -118,7 +118,7 @@ def test_deduplicate_missing_evidence(mock_retrieval_engine):
     )
 
     results = [obs_unit]
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
+    deduplicated = mock_retrieval_engine._attach_citations(results)
 
     assert len(deduplicated) == 1
     # Should contain no citations since the evidence wasn't found in the list
@@ -141,7 +141,7 @@ def test_deduplicate_self_reference_ignored(mock_retrieval_engine):
     )
 
     results = [unit]
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
+    deduplicated = mock_retrieval_engine._attach_citations(results)
 
     assert len(deduplicated) == 1
     assert deduplicated[0].unit_metadata.get('citations') is None
@@ -185,7 +185,7 @@ def test_deduplicate_multiple_observations_same_fact(mock_retrieval_engine):
     )
 
     results = [obs1, fact_unit, obs2]
-    deduplicated = mock_retrieval_engine._deduplicate_and_cite(results)
+    deduplicated = mock_retrieval_engine._attach_citations(results)
 
     # All three should remain
     assert len(deduplicated) == 3

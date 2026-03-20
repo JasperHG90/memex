@@ -157,6 +157,7 @@ def webhook_client():
             'unit_ids': [],
         }
     )
+    mock_api.batch_manager.create_single_job = AsyncMock(return_value=uuid4())
 
     test_app.dependency_overrides[get_api] = lambda: mock_api
     # No auth config on app state = signature validation skipped
@@ -184,6 +185,7 @@ def webhook_client_with_secret():
             'unit_ids': [],
         }
     )
+    mock_api.batch_manager.create_single_job = AsyncMock(return_value=uuid4())
 
     # Set up auth config with webhook secret
     auth_config = MagicMock()
@@ -208,13 +210,13 @@ class TestWebhookEndpoint:
         response = client.post('/api/v1/ingestions/webhook', json=payload)
         assert response.status_code == 202
         body = response.json()
-        assert body['status'] == 'success'
-        assert body['note_id'] is not None
+        assert body['status'] == 'pending'
+        assert body['job_id'] is not None
 
-        # Verify api.ingest was called with correct NoteInput
-        mock_api.ingest.assert_called_once()
-        call_args = mock_api.ingest.call_args
-        note_arg = call_args[0][0]
+        # Verify create_single_job was called with api.ingest and correct note
+        mock_api.batch_manager.create_single_job.assert_called_once()
+        call_kwargs = mock_api.batch_manager.create_single_job.call_args.kwargs
+        note_arg = call_kwargs['note']
         assert note_arg._metadata.name == 'Test Webhook Note'
         assert note_arg._content == b'## Hello\nWorld'
 
@@ -227,7 +229,8 @@ class TestWebhookEndpoint:
         }
         client.post('/api/v1/ingestions/webhook', json=payload)
 
-        note_arg = mock_api.ingest.call_args[0][0]
+        call_kwargs = mock_api.batch_manager.create_single_job.call_args.kwargs
+        note_arg = call_kwargs['note']
         expected_key = _generate_webhook_note_key('my-source', 'some content')
         assert note_arg._explicit_key == expected_key
 
@@ -240,7 +243,8 @@ class TestWebhookEndpoint:
             'tags': ['a', 'b'],
         }
         client.post('/api/v1/ingestions/webhook', json=payload)
-        note_arg = mock_api.ingest.call_args[0][0]
+        call_kwargs = mock_api.batch_manager.create_single_job.call_args.kwargs
+        note_arg = call_kwargs['note']
         metadata = json.loads(note_arg.metadata)
         assert 'a' in metadata.get('tags', [])
         assert 'b' in metadata.get('tags', [])
@@ -255,8 +259,8 @@ class TestWebhookEndpoint:
             'vault_id': vid,
         }
         client.post('/api/v1/ingestions/webhook', json=payload)
-        mock_api.ingest.assert_called_once()
-        call_kwargs = mock_api.ingest.call_args[1]
+        mock_api.batch_manager.create_single_job.assert_called_once()
+        call_kwargs = mock_api.batch_manager.create_single_job.call_args.kwargs
         assert str(call_kwargs['vault_id']) == vid
 
     def test_invalid_payload_returns_400(self, webhook_client):
@@ -301,7 +305,7 @@ class TestWebhookSignatureValidation:
             },
         )
         assert response.status_code == 202
-        mock_api.ingest.assert_called_once()
+        mock_api.batch_manager.create_single_job.assert_called_once()
 
     def test_missing_signature_returns_401(self, webhook_client_with_secret):
         client, _, _ = webhook_client_with_secret

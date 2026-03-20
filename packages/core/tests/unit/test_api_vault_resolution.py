@@ -73,10 +73,10 @@ async def test_resolve_vault_identifier_ambiguous_name(api, mock_session):
 
 @pytest.mark.asyncio
 async def test_ingest_resolves_vault_from_config(api, mock_session):
-    """Test that ingest uses resolve_vault_identifier for config.server.active_vault."""
+    """Test that ingest uses resolve_vault_identifier for config.server.default_active_vault."""
 
     # Setup config with a name
-    api.config.server.active_vault = 'MyVault'
+    api.config.server.default_active_vault = 'MyVault'
     target_id = uuid4()
 
     # Mock resolution logic within ingest

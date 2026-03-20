@@ -77,11 +77,11 @@ class MockAsyncClientContext:
 async def setup_cli_e2e(db_session: AsyncSession):
     os.environ['MEMEX_CLI__SERVER_URL'] = 'http://test'
     os.environ['MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL'] = 'mock-model'
-    os.environ['MEMEX_SERVER__ACTIVE_VAULT'] = str(GLOBAL_VAULT_ID)
+    os.environ['MEMEX_SERVER__DEFAULT_ACTIVE_VAULT'] = str(GLOBAL_VAULT_ID)
     yield
     os.environ.pop('MEMEX_CLI__SERVER_URL', None)
     os.environ.pop('MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL', None)
-    os.environ.pop('MEMEX_SERVER__ACTIVE_VAULT', None)
+    os.environ.pop('MEMEX_SERVER__DEFAULT_ACTIVE_VAULT', None)
 
 
 @pytest.mark.asyncio
@@ -110,12 +110,17 @@ async def test_cli_memory_add(db_session: AsyncSession, setup_cli_e2e):
         patch(
             'memex_core.memory.extraction.core.run_dspy_operation', new_callable=AsyncMock
         ) as mock_run_dspy,
+        patch(
+            'memex_core.processing.dates.run_dspy_operation',
+            new_callable=AsyncMock,
+            return_value=(MagicMock(extracted_date=None), TokenUsage(total_tokens=0)),
+        ),
     ):
         mock_run_dspy.return_value = (mock_prediction, mock_usage)
-        result = runner.invoke(app, ['memory', 'add', content], env=os.environ)
+        result = runner.invoke(app, ['note', 'add', content], env=os.environ)
 
         assert result.exit_code == 0, f'Error: {result.stdout}'
-        assert 'Memory added successfully' in result.stdout
+        assert 'Note added successfully' in result.stdout
 
 
 @pytest.mark.asyncio

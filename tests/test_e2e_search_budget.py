@@ -42,7 +42,7 @@ async def test_api_search_propagates_budget(mock_deps):
 
         # Mock internal retrieval engine to capture calls
         mock_retrieval = MagicMock()
-        mock_retrieval.retrieve = AsyncMock(return_value=[])
+        mock_retrieval.retrieve = AsyncMock(return_value=([], None))
 
         # Inject mock engine
         api._retrieval = mock_retrieval

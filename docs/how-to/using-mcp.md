@@ -4,7 +4,7 @@ This guide shows you how to connect Memex to AI assistants via the Model Context
 
 ## Prerequisites
 
-* Memex installed with the MCP extra (`uv tool install git+https://github.com/JasperHG90/memex.git[mcp]`)
+* Memex installed with the MCP extra (`uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 * A running Memex server (`memex server start`)
 * An MCP-compatible AI client
 
@@ -48,12 +48,14 @@ Add the following to your `claude_desktop_config.json`:
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+        "MEMEX_VAULT__ACTIVE": "global"
       }
     }
   }
 }
 ```
+
+All vault parameters on MCP tools are optional and default to the resolved config values. Set `MEMEX_VAULT__ACTIVE` to control the write vault and `MEMEX_VAULT__SEARCH` (JSON array) to control read scope.
 
 ### Configure for Claude Code
 
@@ -74,7 +76,7 @@ To manually configure, add to your `.claude/settings.json`:
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "my-project"
+        "MEMEX_VAULT__ACTIVE": "my-project"
       }
     }
   }
@@ -92,12 +94,39 @@ Add to your Cursor MCP settings (`.cursor/mcp.json` in your project root):
       "command": "uv",
       "args": ["run", "memex", "mcp", "run"],
       "env": {
-        "MEMEX_SERVER__ACTIVE_VAULT": "global"
+        "MEMEX_VAULT__ACTIVE": "global"
       }
     }
   }
 }
 ```
+
+### Vault Configuration for MCP
+
+MCP servers are spawned as subprocesses by your AI client (Claude Desktop, Claude Code, Cursor, etc.). Unlike the CLI — which runs in your shell and reliably finds `.memex.yaml` from your working directory — MCP subprocesses are **not guaranteed** to inherit your project's CWD. This means a `.memex.yaml` in your project root may not be found by the MCP server.
+
+For this reason, always set vault configuration via environment variables in the MCP server config:
+
+```json
+{
+  "mcpServers": {
+    "memex": {
+      "command": "uv",
+      "args": ["run", "memex", "mcp", "run"],
+      "env": {
+        "MEMEX_VAULT__ACTIVE": "my-project",
+        "MEMEX_VAULT__SEARCH": "[\"my-project\", \"shared\"]"
+      }
+    }
+  }
+}
+```
+
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation. Pydantic-settings automatically JSON-decodes string env vars when the target field is a complex type like `list[str]`, so the string `'["a", "b"]'` becomes the Python list `["a", "b"]`.
+
+> **Tip:** Running `memex setup claude-code --vault my-project` sets `MEMEX_VAULT__ACTIVE` in the MCP config automatically.
+
+For the full vault resolution precedence (shared by CLI and MCP), see [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp).
 
 ### Use SSE Transport (Remote Server)
 
@@ -123,10 +152,10 @@ Then configure your client to connect via SSE instead of spawning a subprocess:
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
-| "memex_mcp is not installed" | Missing MCP extra | Run `uv tool install git+https://github.com/JasperHG90/memex.git[mcp]` |
+| "memex_mcp is not installed" | Missing MCP extra | Run `uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"` |
 | Tools not appearing in client | Config file in wrong location | Check the path for your OS (see above) |
 | "Connection refused" errors | Memex server not running | Start with `memex server start` |
-| Wrong vault in results | `MEMEX_SERVER__ACTIVE_VAULT` not set | Add the env var to your MCP config |
+| Wrong vault in results | `MEMEX_VAULT__ACTIVE` not set | Add the env var to your MCP config |
 | Slow tool responses | Large result sets | Reduce `limit` parameter or set `token_budget` |
 | "No results found" | Empty vault or unprocessed notes | Check `memex note list` and wait for extraction to complete |
 

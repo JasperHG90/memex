@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from memex_core.api import MemexAPI
@@ -21,6 +22,7 @@ from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import setup_auth
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.services.audit import AuditService
+from memex_core.server.kv import router as kv_router
 from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
@@ -39,6 +41,11 @@ from memex_core.memory.models import get_embedding_model, get_reranking_model, g
 
 logger = logging.getLogger('memex.core.server')
 
+# Parse CORS config at module level (middleware must be added before app starts).
+# The full config is re-parsed in lifespan() so test fixtures can set env vars
+# before the server starts.
+_cors_config = parse_memex_config().server.cors
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,13 +58,21 @@ async def lifespan(app: FastAPI):
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
 
-    # Warn when binding to a non-localhost address without authentication
-    if config.server.host != '127.0.0.1' and not config.server.auth.enabled:
-        logger.warning(
-            'Server is binding to %s without authentication enabled. '
-            'Set server.auth.enabled=true and configure API keys for production.',
-            config.server.host,
-        )
+    # Refuse to bind to a non-localhost address without authentication
+    _is_localhost = config.server.host in ('127.0.0.1', 'localhost', '::1')
+    if not _is_localhost and not config.server.auth.enabled:
+        if config.server.allow_insecure:
+            logger.warning(
+                'Server is binding to %s without authentication (--allow-insecure). '
+                'This is NOT recommended for production.',
+                config.server.host,
+            )
+        else:
+            raise RuntimeError(
+                f'Refusing to bind to {config.server.host} without authentication. '
+                'Either enable auth (server.auth.enabled=true) or set '
+                'server.allow_insecure=true to override this check.'
+            )
 
     metastore = get_metastore(config.server.meta_store)
     filestore = get_filestore(config.server.file_store)
@@ -89,20 +104,20 @@ async def lifespan(app: FastAPI):
     configure_llm_timeout(config.server.llm_timeout_seconds)
 
     try:
-        active_vault_name = config.server.active_vault
+        active_vault_name = config.server.default_active_vault
         active_vault_id = await api.resolve_vault_identifier(active_vault_name)
-        attached = config.server.attached_vaults
+        reader_vault = config.server.default_reader_vault
         logger.info(
             'Memex server started. Active vault: "%s" (id: %s)',
             active_vault_name,
             active_vault_id,
         )
-        if attached:
-            logger.info('Attached vaults: %s', attached)
+        if reader_vault != active_vault_name:
+            logger.info('Default reader vault: %s', reader_vault)
 
         # Detect if local config overrides the active vault
         local_data = LocalYamlConfigSettingsSource(MemexConfig)()
-        local_vault = (local_data.get('server', {}) or {}).get('active_vault')
+        local_vault = (local_data.get('server', {}) or {}).get('default_active_vault')
         if local_vault and local_vault != GLOBAL_VAULT_NAME:
             logger.info(
                 'Notice: active vault overridden by local config to "%s".',
@@ -130,6 +145,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='Memex Core API', lifespan=lifespan)
+
+# Configure CORS (must be added before app starts, not in lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_config.origins,
+    allow_credentials=_cors_config.allow_credentials,
+    allow_methods=_cors_config.allow_methods,
+    allow_headers=_cors_config.allow_headers,
+)
+
 Instrumentator().instrument(app).expose(app, endpoint='/api/v1/metrics')
 
 
@@ -163,3 +188,4 @@ app.include_router(resources_router)
 app.include_router(health_router)
 app.include_router(summary_router)
 app.include_router(audit_router)
+app.include_router(kv_router)

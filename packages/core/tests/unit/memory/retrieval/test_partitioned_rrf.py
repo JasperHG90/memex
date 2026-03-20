@@ -44,7 +44,6 @@ class TestPartitionedRRFDisabled:
                 engine, '_perform_partitioned_rrf', new_callable=AsyncMock
             ) as mock_partitioned,
             patch.object(engine, '_hydrate_results', new_callable=AsyncMock, return_value=[]),
-            patch.object(engine, '_update_resonance', new_callable=AsyncMock),
         ):
             request = MagicMock()
             request.query = 'test'
@@ -65,7 +64,7 @@ class TestPartitionedRRFDisabled:
             with patch.object(
                 engine.embedder, 'encode', return_value=[MagicMock(tolist=lambda: [0.1])]
             ):
-                await engine.retrieve(session, request)
+                results, _ = await engine.retrieve(session, request)
 
             mock_rrf.assert_called_once()
             mock_partitioned.assert_not_called()
@@ -90,7 +89,6 @@ class TestPartitionedRRFEnabled:
                 return_value=partitioned_result,
             ) as mock_partitioned,
             patch.object(engine, '_hydrate_results', new_callable=AsyncMock, return_value=[]),
-            patch.object(engine, '_update_resonance', new_callable=AsyncMock),
         ):
             request = MagicMock()
             request.query = 'test'
@@ -111,7 +109,7 @@ class TestPartitionedRRFEnabled:
             with patch.object(
                 engine.embedder, 'encode', return_value=[MagicMock(tolist=lambda: [0.1])]
             ):
-                await engine.retrieve(session, request)
+                results, _ = await engine.retrieve(session, request)
 
             mock_partitioned.assert_called_once()
             mock_rrf.assert_not_called()

@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 
 import pytest
@@ -7,56 +8,27 @@ from httpx import AsyncClient, ASGITransport
 
 from memex_cli import app
 from memex_core.server import app as server_app
+from memex_common.client import RemoteMemexAPI
 
 runner = CliRunner()
 
 
-class MockAsyncClientContext:
-    """Mock context manager for httpx.AsyncClient"""
+@asynccontextmanager
+async def _mock_api_context(*_args, **_kwargs):
+    """Replacement for ``get_api_context`` that routes CLI requests through the
+    in-process FastAPI app via ASGITransport instead of a real HTTP server.
 
-    def __init__(self, *args, **kwargs):
-        self.base_url = kwargs.get('base_url', 'http://test')
+    The server's own lifespan handles MemexAPI initialization, so we do not
+    need to duplicate that logic here.
+    """
+    from memex_core.server import lifespan
 
-    async def __aenter__(self):
-        # Always initialize API for the current loop/context to avoid loop mismatch errors
-        # (Since each runner.invoke creates a new loop, reusing the global state's API is dangerous)
-        from memex_core.config import parse_memex_config
-        from memex_core.storage.metastore import get_metastore
-        from memex_core.storage.filestore import get_filestore
-        from memex_core.api import MemexAPI
-        from memex_core.memory.models import get_embedding_model, get_reranking_model, get_ner_model
-
-        # Env vars should already be set by the test function
-        config = parse_memex_config()
-        metastore = get_metastore(config.server.meta_store)
-        filestore = get_filestore(config.server.file_store)
-        await metastore.connect()
-
-        embedding_model = await get_embedding_model()
-        reranking_model = await get_reranking_model()
-        ner_model = await get_ner_model()
-
-        api = MemexAPI(
-            embedding_model=embedding_model,
-            reranking_model=reranking_model,
-            ner_model=ner_model,
-            metastore=metastore,
-            filestore=filestore,
-            config=config,
-        )
-        await api.initialize()
-        server_app.state.api = api
-
-        # Create a new client connected to the FastAPI app
-        self.client = AsyncClient(transport=ASGITransport(app=server_app), base_url=self.base_url)
-        await self.client.__aenter__()
-        return self.client
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.client.__aexit__(exc_type, exc_val, exc_tb)
-        # Close the API's metastore to release connections and avoid OOM
-        if hasattr(server_app.state, 'api'):
-            await server_app.state.api.metastore.close()
+    async with lifespan(server_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=server_app),
+            base_url='http://test/api/v1/',
+        ) as client:
+            yield RemoteMemexAPI(client)
 
 
 def _setup_env(postgres_container):
@@ -78,7 +50,7 @@ def test_cli_vault_list(postgres_container):
     """Test 'memex vault list' command."""
     _setup_env(postgres_container)
 
-    with patch('memex_cli.utils.httpx.AsyncClient', side_effect=MockAsyncClientContext):
+    with patch('memex_cli.vaults.get_api_context', _mock_api_context):
         result = runner.invoke(
             app,
             [
@@ -110,7 +82,7 @@ def test_cli_vault_create_delete(postgres_container):
     """Test creating and deleting a vault via CLI."""
     _setup_env(postgres_container)
 
-    with patch('memex_cli.utils.httpx.AsyncClient', side_effect=MockAsyncClientContext):
+    with patch('memex_cli.vaults.get_api_context', _mock_api_context):
         # Create
         result = runner.invoke(
             app,

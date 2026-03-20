@@ -152,19 +152,23 @@ def main(
         config = parse_memex_config(config_data)
 
         if vault:
-            config.server.active_vault = vault
+            config.vault.active = vault
             logger.info('Active vault overridden via --vault: "%s"', vault)
 
-        # Track which config source set active_vault
-        _local_vault = (local_data.get('server', {}) or {}).get('active_vault')
-        _global_vault = (global_data.get('server', {}) or {}).get('active_vault')
+        # Track which config source set active vault
+        _local_vault = (local_data.get('vault', {}) or {}).get('active') or (
+            local_data.get('server', {}) or {}
+        ).get('default_active_vault')
+        _global_vault = (global_data.get('vault', {}) or {}).get('active') or (
+            global_data.get('server', {}) or {}
+        ).get('default_active_vault')
         if vault:
             vault_source = 'cli'
         elif _local_vault:
             vault_source = 'local'
             logger.info(
                 'Active vault "%s" set by local config (overrides global).',
-                config.server.active_vault,
+                config.write_vault,
             )
         elif _global_vault:
             vault_source = 'global'
@@ -186,9 +190,6 @@ def main(
             logger.debug(f'Configuration valid. Root: {config.server.file_store.root}')
 
     except Exception as e:
-        # DEBUG
-        print(f'DEBUG EXCEPTION: {e}')
-
         # If the subcommand is 'init' or 'help', we can proceed without a valid config
         # But we still need basic logging to report errors if we crash later
         if ctx.invoked_subcommand in ['init', 'report-bug']:

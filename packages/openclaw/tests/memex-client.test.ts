@@ -448,10 +448,10 @@ describe('MemexClient', () => {
       expect(body.vault_ids).toEqual(['vault-1']);
     });
 
-    it('returns parsed JSON array', async () => {
-      const results = [{ note_id: 'n1', snippets: [], score: 0.9 }];
+    it('returns parsed NDJSON stream', async () => {
+      const results = [{ note_id: 'n1', score: 0.9 }];
       const client = new MemexClient(makeConfig());
-      fetchSpy.mockResolvedValueOnce(jsonResponse(results));
+      fetchSpy.mockResolvedValueOnce(ndjsonResponse(results));
 
       const res = await client.searchNotes('q');
 

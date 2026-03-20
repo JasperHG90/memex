@@ -22,13 +22,13 @@ async def setup_cli_e2e(db_session: AsyncSession):
     """Additional setup for CLI E2E tests."""
     os.environ['MEMEX_CLI__SERVER_URL'] = 'http://test'
     os.environ['MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL'] = 'gemini/flash'
-    os.environ['MEMEX_SERVER__ACTIVE_VAULT'] = 'test-vault'
+    os.environ['MEMEX_SERVER__DEFAULT_ACTIVE_VAULT'] = 'test-vault'
 
     yield
 
     os.environ.pop('MEMEX_CLI__SERVER_URL', None)
     os.environ.pop('MEMEX_SERVER__MEMORY__EXTRACTION__MODEL__MODEL', None)
-    os.environ.pop('MEMEX_SERVER__ACTIVE_VAULT', None)
+    os.environ.pop('MEMEX_SERVER__DEFAULT_ACTIVE_VAULT', None)
 
 
 class MockEmbedder:
@@ -77,6 +77,11 @@ async def test_cli_memory_add_with_asset(db_session: AsyncSession, setup_cli_e2e
                 'memex_core.memory.extraction.core.run_dspy_operation', new_callable=AsyncMock
             ) as mock_run_dspy,
             patch(
+                'memex_core.processing.dates.run_dspy_operation',
+                new_callable=AsyncMock,
+                return_value=(MagicMock(extracted_date=None), TokenUsage(total_tokens=0)),
+            ),
+            patch(
                 'memex_core.memory.extraction.engine.get_embedding_model',
                 return_value=MockEmbedder(),
             ),
@@ -90,11 +95,11 @@ async def test_cli_memory_add_with_asset(db_session: AsyncSession, setup_cli_e2e
 
             content = f'Memory with asset {uuid4()}'
             result = runner.invoke(
-                app, ['memory', 'add', content, '--asset', str(asset_file)], env=os.environ
+                app, ['note', 'add', content, '--asset', str(asset_file)], env=os.environ
             )
 
             assert result.exit_code == 0
-            assert 'Memory added successfully' in result.stdout
+            assert 'Note added successfully' in result.stdout
             assert 'Loading 1 asset(s)...' in result.stdout
 
             found_assets = list(tmp_path.rglob('test_image.png'))

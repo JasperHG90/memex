@@ -1,18 +1,19 @@
 """Retrieval endpoint."""
 
 import logging
-from typing import Annotated, Any
-from uuid import UUID
+import time
+from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, BackgroundTasks, Body, Depends
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
-from memex_common.schemas import MemoryUnitDTO, RetrievalRequest, StrategyDebugInfo
+from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
     _handle_error,
+    build_memory_unit_dto,
     get_api,
     ndjson_openapi,
     ndjson_response,
@@ -23,54 +24,6 @@ logger = logging.getLogger('memex.core.server')
 router = APIRouter(prefix='/api/v1')
 
 
-def _build_retrieval_dtos(
-    units: list[Any],
-    debug: bool = False,
-) -> list[MemoryUnitDTO]:
-    """Convert memory units to DTOs with resolved source document lineage."""
-    dtos = []
-    for u in units:
-        doc_id = getattr(u, 'note_id', None)
-        source_docs: list[UUID] = [doc_id] if doc_id else []
-
-        # Build debug_info from engine-attached data
-        debug_info: list[StrategyDebugInfo] | None = None
-        if debug:
-            raw_debug = getattr(u, '_debug_info', None)
-            if raw_debug:
-                debug_info = [
-                    StrategyDebugInfo(
-                        strategy_name=c.strategy_name,
-                        rank=c.rank,
-                        rrf_score=c.rrf_score,
-                        raw_score=c.raw_score,
-                        timing_ms=c.timing_ms,
-                    )
-                    for c in raw_debug
-                ]
-
-        dtos.append(
-            MemoryUnitDTO(
-                id=u.id,
-                note_id=doc_id,
-                source_note_ids=source_docs,
-                text=u.text,
-                fact_type=u.fact_type,
-                status=u.status,
-                mentioned_at=u.mentioned_at or u.event_date,
-                occurred_start=u.occurred_start,
-                occurred_end=u.occurred_end,
-                vault_id=u.vault_id,
-                metadata=u.unit_metadata,
-                score=getattr(u, 'score', None),
-                chunk_id=getattr(u, 'chunk_id', None),
-                confidence=getattr(u, 'confidence', 1.0) or 1.0,
-                debug_info=debug_info,
-            )
-        )
-    return dtos
-
-
 @router.post(
     '/memories/search',
     response_class=StreamingResponse,
@@ -79,9 +32,11 @@ def _build_retrieval_dtos(
 async def search_memories(
     request: Annotated[RetrievalRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
 ):
     try:
-        units = await api.search(
+        t0 = time.monotonic()
+        units, resonance_task = await api.search(
             query=request.query,
             limit=request.limit,
             vault_ids=request.vault_ids,
@@ -94,7 +49,23 @@ async def search_memories(
             before=request.before,
             tags=request.tags,
         )
+        t_search = time.monotonic() - t0
 
-        return ndjson_response(_build_retrieval_dtos(units, debug=request.debug))
+        if resonance_task is not None:
+            background_tasks.add_task(resonance_task)
+
+        t0 = time.monotonic()
+        dtos = [build_memory_unit_dto(u, debug=request.debug) for u in units]
+        t_serialize = time.monotonic() - t0
+
+        logger.warning(
+            'PROFILE endpoint | search=%.0fms serialize=%.0fms total=%.0fms | results=%d',
+            t_search * 1000,
+            t_serialize * 1000,
+            (t_search + t_serialize) * 1000,
+            len(units),
+        )
+
+        return ndjson_response(dtos)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Retrieval failed')

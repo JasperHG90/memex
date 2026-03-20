@@ -126,7 +126,7 @@ All data from the Memex API lives in TanStack Query's cache. This provides:
 
 Local UI state that does not come from the server is managed by Zustand stores:
 
-- **VaultStore** (`vault-store.ts`): Tracks the active writer vault and attached read vaults. Initialized on app mount by fetching the server configuration.
+- **VaultStore** (`vault-store.ts`): Tracks the default write vault and reader vault. Initialized on app mount by fetching the server configuration.
 - **UIStore** (`ui-store.ts`): Tracks modal visibility (command palette, quick note), sidebar state.
 - **PreferencesStore** (`preferences-store.ts`): User preferences (theme, display density) persisted to localStorage.
 

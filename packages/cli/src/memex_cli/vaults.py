@@ -29,6 +29,10 @@ async def list_vaults(
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one vault name per line.')
     ] = False,
+    compact: Annotated[
+        bool,
+        typer.Option('--compact', help='Output as a plain markdown table with note counts.'),
+    ] = False,
 ):
     """
     List all available vaults.
@@ -36,6 +40,27 @@ async def list_vaults(
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:
+        if compact:
+            try:
+                rows = await api.list_vaults_with_counts()
+            except Exception as e:
+                handle_api_error(e)
+
+            lines = [
+                '| Name | Notes | Last Modified | Active | Description |',
+                '|------|-------|---------------|--------|-------------|',
+            ]
+            for row in rows:
+                v = row['vault']
+                count = row['note_count']
+                last_mod_dt = row.get('last_note_added_at')
+                last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
+                active = 'yes' if v.is_active else ''
+                desc = v.description or ''
+                lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
+            print('\n'.join(lines))
+            return
+
         try:
             vaults = await api.list_vaults()
         except Exception as e:
@@ -63,8 +88,8 @@ async def list_vaults(
         console.print(table)
 
     # Show active from config
-    console.print(f'\n[bold]Active Vault (Write):[/bold] {config.server.active_vault}')
-    console.print(f'[bold]Attached Vaults (Read):[/bold] {config.server.attached_vaults or "None"}')
+    console.print(f'\n[bold]Active Vault (Write):[/bold] {config.write_vault}')
+    console.print(f'[bold]Read Vaults:[/bold] {config.read_vaults}')
 
 
 @app.command('create')

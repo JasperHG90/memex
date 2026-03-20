@@ -172,19 +172,21 @@ class TestIngestFromFileEventDate:
     """Test event_date resolution in ingest_from_file for non-markdown files."""
 
     @pytest.mark.asyncio
-    async def test_uses_file_mtime_date(self, api, tmp_path):
-        """When file mtime is available, it should be used as event_date."""
-        test_file = tmp_path / 'doc.pdf'
-        test_file.write_bytes(b'fake pdf content')
+    async def test_llm_date_takes_priority_over_file_mtime(self, api, tmp_path):
+        """LLM extraction should be tried first, even when file mtime is available."""
+        test_file = tmp_path / 'doc.docx'
+        test_file.write_bytes(b'fake docx content')
 
         file_date = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
         extracted = ExtractedContent(
-            content='PDF content as markdown.',
+            content='This report was written in March 2022.',
             source=str(test_file),
-            content_type='pdf',
+            content_type='docx',
             metadata={},
             document_date=file_date,
         )
+
+        llm_date = datetime(2022, 3, 1, tzinfo=timezone.utc)
 
         with (
             patch(
@@ -192,6 +194,11 @@ class TestIngestFromFileEventDate:
                 new_callable=AsyncMock,
                 return_value=uuid4(),
             ),
+            patch(
+                'memex_core.services.ingestion.extract_document_date',
+                new_callable=AsyncMock,
+                return_value=llm_date,
+            ) as mock_extract_date,
             patch.object(
                 IngestionService,
                 'ingest',
@@ -204,6 +211,49 @@ class TestIngestFromFileEventDate:
 
             await api.ingest_from_file(test_file)
 
+            mock_extract_date.assert_called_once()
+            _, kwargs = mock_ingest.call_args
+            assert kwargs['event_date'] == llm_date
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mtime_when_llm_returns_none(self, api, tmp_path):
+        """When LLM returns None, file mtime should be used as fallback."""
+        test_file = tmp_path / 'doc.docx'
+        test_file.write_bytes(b'fake docx content')
+
+        file_date = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        extracted = ExtractedContent(
+            content='Document content with no date references.',
+            source=str(test_file),
+            content_type='docx',
+            metadata={},
+            document_date=file_date,
+        )
+
+        with (
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
+            ),
+            patch(
+                'memex_core.services.ingestion.extract_document_date',
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as mock_extract_date,
+            patch.object(
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
+            ) as mock_ingest,
+        ):
+            api._ingestion._file_processor = MagicMock()
+            api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
+
+            await api.ingest_from_file(test_file)
+
+            mock_extract_date.assert_called_once()
             _, kwargs = mock_ingest.call_args
             assert kwargs['event_date'] == file_date
 
@@ -249,6 +299,48 @@ class TestIngestFromFileEventDate:
             mock_extract_date.assert_called_once()
             _, kwargs = mock_ingest.call_args
             assert kwargs['event_date'] == llm_date
+
+    @pytest.mark.asyncio
+    async def test_pdf_metadata_used_when_llm_returns_none(self, api, tmp_path):
+        """For PDFs, creation_date metadata should be used when LLM returns None."""
+        test_file = tmp_path / 'doc.pdf'
+        test_file.write_bytes(b'fake pdf content')
+
+        pdf_creation_date = datetime(2023, 5, 10, tzinfo=timezone.utc)
+        extracted = ExtractedContent(
+            content='PDF content as markdown.',
+            source=str(test_file),
+            content_type='pdf',
+            metadata={'creation_date': pdf_creation_date},
+            document_date=None,
+        )
+
+        with (
+            patch(
+                'memex_core.services.vaults.VaultService.resolve_vault_identifier',
+                new_callable=AsyncMock,
+                return_value=uuid4(),
+            ),
+            patch(
+                'memex_core.services.ingestion.extract_document_date',
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as mock_extract_date,
+            patch.object(
+                IngestionService,
+                'ingest',
+                new_callable=AsyncMock,
+                return_value={'status': 'success'},
+            ) as mock_ingest,
+        ):
+            api._ingestion._file_processor = MagicMock()
+            api._ingestion._file_processor.extract = AsyncMock(return_value=extracted)
+
+            await api.ingest_from_file(test_file)
+
+            mock_extract_date.assert_called_once()
+            _, kwargs = mock_ingest.call_args
+            assert kwargs['event_date'] == pdf_creation_date
 
 
 class TestIngestEventDateToRetainContent:

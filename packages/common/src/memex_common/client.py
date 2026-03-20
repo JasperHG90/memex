@@ -11,15 +11,18 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel
 
+from memex_common.vault_utils import resolve_vault_list
 from memex_common.schemas import (
     RetrievalRequest,
     ReflectionRequest,
     IngestURLRequest,
     IngestFileRequest,
+    BatchIngestRequest,
     BatchJobStatus,
     CreateVaultRequest,
     DeadLetterItemDTO,
     DefaultVaultsResponse,
+    FindNoteResult,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -27,6 +30,9 @@ from memex_common.schemas import (
     ReflectionQueueDTO,
     IngestResponse,
     EntityDTO,
+    KVEntryDTO,
+    KVPutRequest,
+    KVSearchRequest,
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
@@ -72,6 +78,11 @@ class RemoteMemexAPI:
         response = await self.client.delete(path, params=params)
         return await self._handle_response(response)
 
+    async def _put(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+        payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
+        response = await self.client.put(path, json=payload)
+        return await self._handle_response(response)
+
     async def _patch(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
         payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
         response = await self.client.patch(path, json=payload)
@@ -83,20 +94,32 @@ class RemoteMemexAPI:
         result = await self._get('vaults')
         return [VaultDTO(**v) for v in result]
 
+    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
+        """List all vaults with note counts. Wraps list_vaults for API compat."""
+        vaults = await self.list_vaults()
+        return [
+            {
+                'vault': v,
+                'note_count': v.note_count,
+                'last_note_added_at': v.last_note_added_at,
+            }
+            for v in vaults
+        ]
+
     async def get_active_vault(self) -> VaultDTO:
         """Get the currently active vault."""
         result = await self._get('vaults', params={'state': 'active'})
         return VaultDTO(**result[0])
 
     async def get_default_vaults(self) -> DefaultVaultsResponse:
-        """Get the active (writer) vault and attached read-only vaults."""
+        """Get the active (writer) vault and default reader vaults."""
         result = await self._get('vaults', params={'is_default': True})
         if not result:
             raise Exception('No default vaults found')
-        # Parse as DefaultVaultsResponse - first is active, rest are attached
+        # Parse as DefaultVaultsResponse - first is active, rest are readers
         return DefaultVaultsResponse(
             active_vault=VaultDTO(**result[0]),
-            attached_vaults=[VaultDTO(**v) for v in result[1:]],
+            reader_vaults=[VaultDTO(**v) for v in result[1:]],
         )
 
     async def create_vault(self, request: CreateVaultRequest) -> VaultDTO:
@@ -131,12 +154,9 @@ class RemoteMemexAPI:
         response = await self.client.post(f'vaults/{identifier}/set-writer')
         return await self._handle_response(response)
 
-    async def toggle_attached_vault(self, identifier: str, attach: bool = True) -> dict[str, Any]:
-        """Attach or detach a vault for read-only search inclusion."""
-        response = await self.client.post(
-            f'vaults/{identifier}/toggle-attached',
-            params={'attach': str(attach).lower()},
-        )
+    async def set_reader_vault(self, identifier: str) -> dict[str, Any]:
+        """Set the default reader vault on the server."""
+        response = await self.client.post(f'vaults/{identifier}/set-reader')
         return await self._handle_response(response)
 
     # --- Memory ---
@@ -152,6 +172,15 @@ class RemoteMemexAPI:
         if response.status_code == 202:
             return BatchJobStatus(**response.json())
         return IngestResponse(**response.json())
+
+    async def ingest_batch(
+        self, notes: list[NoteCreateDTO], vault_id: str | UUID | None = None, batch_size: int = 32
+    ) -> BatchJobStatus:
+        """Ingest a batch of notes. Returns 202 with a job_id for status tracking."""
+        request = BatchIngestRequest(notes=notes, vault_id=vault_id, batch_size=batch_size)
+        response = await self.client.post('ingestions/batch', json=request.model_dump(mode='json'))
+        response.raise_for_status()
+        return BatchJobStatus(**response.json())
 
     async def ingest_url(
         self, request: IngestURLRequest, background: bool = False
@@ -248,14 +277,18 @@ class RemoteMemexAPI:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[str | UUID] | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
     ) -> list[NoteDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        if after is not None:
+            params['after'] = after.isoformat()
+        if before is not None:
+            params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -381,11 +414,9 @@ class RemoteMemexAPI:
     ) -> SystemStatsCountsDTO:
         """Get total counts for notes, entities, and reflection queue."""
         params: dict[str, Any] = {}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         result = await self._get('stats/counts', params=params or None)
         return SystemStatsCountsDTO(**result)
 
@@ -399,14 +430,18 @@ class RemoteMemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[str | UUID] | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
     ) -> list[NoteDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        if after is not None:
+            params['after'] = after.isoformat()
+        if before is not None:
+            params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
         return [NoteDTO(**d) for d in result]
 
@@ -416,14 +451,15 @@ class RemoteMemexAPI:
         limit: int = 20,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> list[EntityDTO]:
         """Search for entities by name."""
         params: dict[str, Any] = {'q': query, 'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        if entity_type:
+            params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
         if not isinstance(result, list):
             result = [result]
@@ -435,16 +471,17 @@ class RemoteMemexAPI:
         q: str | None = None,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> AsyncGenerator[EntityDTO, None]:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
         if q:
             params['q'] = q
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        if entity_type:
+            params['entity_type'] = entity_type
 
         async with self.client.stream('GET', 'entities', params=params) as response:
             response.raise_for_status()
@@ -474,11 +511,9 @@ class RemoteMemexAPI:
         """Get mentions for an entity."""
         # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
         params: dict[str, Any] = {'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         result = await self._get(f'entities/{entity_id}/mentions', params=params)
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
@@ -502,11 +537,9 @@ class RemoteMemexAPI:
         """Get co-occurrences for a set of entity IDs."""
         ids_str = ','.join(str(i) for i in ids)
         params: dict[str, Any] = {'ids': ids_str}
-        vid_list = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in vid_list:
-            vid_list.append(vault_id)
-        if vid_list:
-            params['vault_id'] = [str(v) for v in vid_list]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         return await self._get('cooccurrences', params=params)
 
     async def get_entity_cooccurrences(
@@ -518,11 +551,9 @@ class RemoteMemexAPI:
     ) -> list[dict[str, Any]]:
         """Get co-occurrence edges for an entity."""
         params: dict[str, Any] = {'limit': limit}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
         return await self._get(f'entities/{entity_id}/cooccurrences', params=params)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
@@ -588,14 +619,15 @@ class RemoteMemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        entity_type: str | None = None,
     ) -> list[EntityDTO]:
         """Get top entities by mention count."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-mentions'}
-        ids = list(vault_ids) if vault_ids else []
-        if vault_id and vault_id not in ids:
-            ids.append(vault_id)
-        if ids:
-            params['vault_id'] = [str(v) for v in ids]
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        if entity_type:
+            params['entity_type'] = entity_type
         result = await self._get('entities', params=params)
         return [EntityDTO(**e) for e in result]
 
@@ -611,6 +643,10 @@ class RemoteMemexAPI:
     async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
         """Rename a note (updates title in metadata, page index, and doc_metadata)."""
         return await self._patch(f'notes/{note_id}/title', {'new_title': new_title})
+
+    async def update_note_date(self, note_id: UUID, new_date: dt.datetime) -> dict[str, Any]:
+        """Update a note's publish_date and cascade delta to memory unit timestamps."""
+        return await self._patch(f'notes/{note_id}/date', {'date': new_date.isoformat()})
 
     async def get_resource(self, path: str) -> bytes:
         """
@@ -655,3 +691,94 @@ class RemoteMemexAPI:
         }
         result = await self._get(f'notes/{note_id}/lineage', params=params)
         return LineageResponse(**result)
+
+    # --- Notes: title search ---
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID | str] | None = None,
+        limit: int = 5,
+    ) -> list[FindNoteResult]:
+        """Fuzzy-search notes by title using trigram similarity."""
+        params: dict[str, Any] = {'query': query, 'limit': limit}
+        if vault_ids:
+            params['vault_id'] = [str(v) for v in vault_ids]
+        result = await self._get('notes/find', params=params)
+        return [FindNoteResult(**r) for r in result]
+
+    # --- Embeddings ---
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for the given text via the REST API."""
+        result = await self._post('embed', {'text': text})
+        return result['embedding']
+
+    # --- KV store ---
+    async def kv_put(
+        self,
+        value: str,
+        key: str,
+        embedding: list[float] | None = None,
+    ) -> KVEntryDTO:
+        """Create or update a key-value entry."""
+        request = KVPutRequest(
+            key=key,
+            value=value,
+            embedding=embedding,
+        )
+        result = await self._put('kv', request)
+        return KVEntryDTO(**result)
+
+    async def kv_get(
+        self,
+        key: str,
+    ) -> KVEntryDTO | None:
+        """Get a KV entry by exact key. Returns None if not found."""
+        params: dict[str, Any] = {'key': key}
+        try:
+            result = await self._get('kv/get', params=params)
+            return KVEntryDTO(**result)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def kv_search(
+        self,
+        query: str,
+        namespaces: list[str] | None = None,
+        limit: int = 5,
+    ) -> list[KVEntryDTO]:
+        """Semantic search over KV entries."""
+        request = KVSearchRequest(
+            query=query,
+            namespaces=namespaces,
+            limit=limit,
+        )
+        result = await self._post('kv/search', request)
+        return [KVEntryDTO(**r) for r in result]
+
+    async def kv_delete(
+        self,
+        key: str,
+    ) -> bool:
+        """Delete a KV entry by key."""
+        params: dict[str, Any] = {'key': key}
+        try:
+            await self._delete('kv/delete', params=params)
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise
+
+    async def kv_list(
+        self,
+        namespaces: list[str] | None = None,
+    ) -> list[KVEntryDTO]:
+        """List KV entries, optionally filtered by namespace prefixes."""
+        params: dict[str, Any] = {}
+        if namespaces is not None:
+            params['namespaces'] = ','.join(namespaces)
+        result = await self._get('kv', params=params or None)
+        return [KVEntryDTO(**r) for r in result]

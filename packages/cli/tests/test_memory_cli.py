@@ -92,22 +92,10 @@ def test_add_memory_with_vault(runner, mock_api, mock_config, monkeypatch):
     )
     monkeypatch.setattr('memex_cli.memory.get_api_context', mock_get_api_context)
 
-    # Need to pass config somehow? runner invoke obj?
-    # Based on existing test signature, maybe mock_config is available?
-    # But wait, original code passed `obj=mock_config`.
-    # Let's assume runner.invoke uses obj passed inconftest or we pass it here?
-    # The original test_add_memory_with_vault in read_file output used `obj=mock_config`.
-
-    # Wait, the read_file output for test_add_memory_with_vault:
-    # result = runner.invoke(app, ['add', 'test', '--vault', 'MyVault'], obj=mock_config)
-
-    # I need mock_config here.
-    # It is a fixture.
-
     result = runner.invoke(app, ['add', 'test', '--vault', 'MyVault'], obj=mock_config)
     assert result.exit_code == 0
     assert captured_config is not None
-    assert captured_config.server.active_vault == 'MyVault'
+    assert captured_config.vault.active == 'MyVault'
 
 
 def test_add_memory_with_key(runner, mock_api, mock_config, monkeypatch):

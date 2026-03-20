@@ -2,25 +2,35 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 from memex_core.memory.sql_models import Entity
+from memex_core.services.entities import EntityWithMetadata
 
 
 @pytest.mark.asyncio
 async def test_search_entities(api, mock_metastore):
     read_session = mock_metastore.session.return_value.__aenter__.return_value
 
-    # Mock entities
+    # Mock entities — service now returns (Entity, MentalModel|None) tuples from LEFT JOIN
     e1 = Entity(id=uuid4(), canonical_name='Apple Inc.')
     e2 = Entity(id=uuid4(), canonical_name='Pineapple')
 
-    mock_res = MagicMock()
-    mock_res.all.return_value = [e1, e2]
-    read_session.exec.return_value = mock_res
+    # First exec call: vault resolution (Vault lookup)
+    mock_vault = MagicMock()
+    mock_vault.id = uuid4()
+    mock_vault_res = MagicMock()
+    mock_vault_res.first.return_value = mock_vault
+
+    # Second exec call: actual entity search
+    mock_entity_res = MagicMock()
+    mock_entity_res.all.return_value = [(e1, None), (e2, None)]
+
+    read_session.exec.side_effect = [mock_vault_res, mock_entity_res]
 
     result = await api.search_entities(query='apple')
 
     assert len(result) == 2
-    assert result[0].canonical_name == 'Apple Inc.'
-    assert result[1].canonical_name == 'Pineapple'
+    assert isinstance(result[0], EntityWithMetadata)
+    assert result[0].entity.canonical_name == 'Apple Inc.'
+    assert result[1].entity.canonical_name == 'Pineapple'
 
     # Verify the query was called correctly
     read_session.exec.assert_called()
@@ -35,8 +45,8 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
 
     mock_config = MagicMock()
     mock_config.server.memory.extraction.model.model = 'test-model'
-    mock_config.server.active_vault = 'global'
-    mock_config.server.attached_vaults = []
+    mock_config.server.default_active_vault = 'global'
+    mock_config.server.default_reader_vault = 'global'
     mock_config.server.logging.level = 'WARNING'
     mock_config.server.logging.json_output = False
     mock_config.server.host = '127.0.0.1'
@@ -47,9 +57,10 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_metastore.session.return_value.__aenter__.return_value.get = AsyncMock(return_value=None)
     mock_metastore.session.return_value.__aenter__.return_value.commit = AsyncMock()
 
-    # Override search_entities to return mock data
+    # Override search_entities to return EntityWithMetadata wrappers
     e1 = Entity(id=uuid4(), canonical_name='Search Match')
-    api.search_entities = AsyncMock(return_value=[e1])
+    wrapped_e1 = EntityWithMetadata(entity=e1, metadata={})
+    api.search_entities = AsyncMock(return_value=[wrapped_e1])
     api.initialize = AsyncMock()  # Mock initialize to avoid DB calls
 
     app.dependency_overrides[get_api] = lambda: api

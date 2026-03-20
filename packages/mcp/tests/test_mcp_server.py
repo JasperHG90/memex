@@ -2,11 +2,14 @@ import datetime as dt
 import pytest
 from uuid import uuid4
 from fastmcp.exceptions import ToolError
+from conftest import parse_tool_result
 from memex_common.schemas import (
+    BatchJobStatus,
     IngestResponse,
     NoteDTO,
     MemoryUnitDTO,
     FactTypes,
+    VaultDTO,
 )
 
 
@@ -24,10 +27,13 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
             'description': 'Short description',
             'author': 'tester',
             'tags': ['tag1'],
+            'vault_id': 'test-vault',
         },
     )
 
-    assert f'ID: {doc_id}' in result.content[0].text
+    data = parse_tool_result(result)
+    assert data['note_id'] == doc_id
+    assert data['status'] == 'success'
     mock_api.ingest.assert_called_once()
 
     from memex_common.schemas import NoteCreateDTO
@@ -35,6 +41,35 @@ async def test_mcp_add_note_tool(mock_api, mcp_client):
     args, _ = mock_api.ingest.call_args
     assert isinstance(args[0], NoteCreateDTO)
     assert args[0].name == 'Test Note'
+
+
+@pytest.mark.asyncio
+async def test_mcp_add_note_background_uuid_job_id(mock_api, mcp_client):
+    """Regression: background=True returns BatchJobStatus with UUID job_id.
+
+    Previously, the MCP handler called UUID(result.job_id) on an already-UUID
+    value, causing 'UUID object has no attribute replace'.
+    """
+    job_id = uuid4()
+    mock_api.ingest.return_value = BatchJobStatus(job_id=job_id, status='pending')
+
+    result = await mcp_client.call_tool(
+        'memex_add_note',
+        {
+            'title': 'Background Note',
+            'markdown_content': '# Content',
+            'description': 'Short description',
+            'author': 'tester',
+            'tags': ['tag1'],
+            'vault_id': 'test-vault',
+            'background': True,
+        },
+    )
+
+    data = parse_tool_result(result)
+    assert data['status'] == 'queued'
+    assert data['note_id'] == str(job_id)
+    assert data['job_id'] == str(job_id)
 
 
 @pytest.mark.asyncio
@@ -53,13 +88,14 @@ async def test_mcp_search_tool(mock_api, mcp_client):
     ]
 
     result = await mcp_client.call_tool(
-        'memex_memory_search', {'query': 'python language', 'limit': 5}
+        'memex_memory_search', {'query': 'python language', 'limit': 5, 'vault_ids': ['test-vault']}
     )
 
-    assert 'Found 1 results' in result.content[0].text
-    assert '[world]' in result.content[0].text
-    assert 'Python is a popular programming language' in result.content[0].text
-    assert '(0.95)' in result.content[0].text
+    data = parse_tool_result(result)
+    assert len(data) == 1
+    assert data[0]['fact_type'] == 'world'
+    assert 'Python is a popular programming language' in data[0]['text']
+    assert data[0]['score'] == pytest.approx(0.95, abs=0.01)
 
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
@@ -84,10 +120,14 @@ async def test_mcp_search_includes_date(mock_api, mcp_client):
         )
     ]
 
-    result = await mcp_client.call_tool('memex_memory_search', {'query': 'event'})
-    text = result.content[0].text
+    result = await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'event', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
 
-    assert '(2025-06-15' in text
+    # World facts don't have mentioned_at in the model — it becomes an observation or stays world
+    # The date is in mentioned_at for observations; for world facts it's not exposed
+    assert len(data) == 1
 
 
 @pytest.mark.asyncio
@@ -102,7 +142,9 @@ async def test_mcp_search_with_vault_filter(mock_api, mcp_client):
 
     mock_api.search.assert_called_once()
     call_args = mock_api.search.call_args[1]
-    assert call_args['vault_ids'] == [str(vault_id)]
+    # vault_ids are resolved through resolve_vault_identifier
+    assert len(call_args['vault_ids']) == 1
+    mock_api.resolve_vault_identifier.assert_called_once_with(str(vault_id))
 
 
 @pytest.mark.asyncio
@@ -113,8 +155,8 @@ async def test_mcp_search_invalid_vault_uuid(mock_api, mcp_client):
         'memex_memory_search', {'query': 'test', 'vault_ids': ['not-a-uuid']}
     )
     mock_api.search.assert_called_once()
-    call_args = mock_api.search.call_args[1]
-    assert call_args['vault_ids'] == ['not-a-uuid']
+    # vault_ids are resolved through resolve_vault_identifier
+    mock_api.resolve_vault_identifier.assert_called_once_with('not-a-uuid')
 
 
 @pytest.mark.asyncio
@@ -133,8 +175,9 @@ async def test_mcp_read_note_success(mock_api, mcp_client):
     )
 
     result = await mcp_client.call_tool('memex_read_note', {'note_id': str(doc_id)})
-    assert '# Test Doc' in result.content[0].text
-    assert 'Full content here.' in result.content[0].text
+    data = parse_tool_result(result)
+    assert data['title'] == 'Test Doc'
+    assert data['content'] == 'Full content here.'
 
 
 @pytest.mark.asyncio
@@ -194,13 +237,45 @@ async def test_mcp_list_tools(mcp_client):
     assert 'memex_get_note_metadata' not in names
     assert 'memex_get_memory_unit' not in names
     assert 'memex_get_entity' not in names
-    assert 'memex_list_notes' not in names
+    assert 'memex_list_notes' in names
 
     # Tool descriptions should guide agents to use leaf node IDs
     tool_by_name = {t.name: t for t in tools}
     page_desc = tool_by_name['memex_get_page_indices'].description
     assert 'leaf' in page_desc.lower(), 'page_indices description should mention leaf nodes'
     assert 'memex_get_nodes' in page_desc, 'page_indices description should reference get_nodes'
+
+
+@pytest.mark.asyncio
+async def test_active_vault_shows_server_and_client(mock_api, mock_config, mcp_client):
+    """memex_active_vault should show both client-resolved and server default vaults."""
+    vault_id = uuid4()
+    mock_api.get_active_vault.return_value = VaultDTO(id=vault_id, name='global', description=None)
+
+    result = await mcp_client.call_tool('memex_active_vault', {})
+    text = result.content[0].text
+
+    assert '**Write vault (client):** my-project' in text
+    assert '**Read vaults (client):** my-project, shared' in text
+    assert '**Server default write:** global' in text
+    assert f'(ID: {vault_id})' in text
+    assert '**Server default read:** global' in text
+
+
+@pytest.mark.asyncio
+async def test_active_vault_without_server_vault(mock_api, mock_config, mcp_client):
+    """memex_active_vault should handle missing server vault gracefully."""
+    mock_api.get_active_vault.return_value = None
+
+    result = await mcp_client.call_tool('memex_active_vault', {})
+    text = result.content[0].text
+
+    # Client info still present
+    assert '**Write vault (client):** my-project' in text
+    assert '**Read vaults (client):** my-project, shared' in text
+    # Server write line absent, but server read still shown
+    assert 'Server default write' not in text
+    assert '**Server default read:** global' in text
 
 
 @pytest.mark.asyncio

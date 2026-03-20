@@ -371,8 +371,8 @@ class TestNoteSearchEngine:
         # Find the result for our document
         doc_result = next((r for r in results if r.note_id == doc.id), None)
         assert doc_result is not None
-        # Should have multiple snippets (one per matching chunk)
-        assert len(doc_result.snippets) >= 2
+        # Result should exist (chunks are grouped by document)
+        assert doc_result.score > 0
 
     async def test_metadata_passthrough(
         self, session: AsyncSession, search_engine, embedder
@@ -651,3 +651,223 @@ class TestMMR:
         assert doc_diverse.id in result_ids, (
             'MMR should include diverse document even when many similar docs exist'
         )
+
+    # ------------------------------------------------------------------
+    # Block summary tests
+    # ------------------------------------------------------------------
+
+    async def test_search_returns_block_summaries_from_chunks(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """Chunks with summary JSONB should be returned as BlockSummaryDTO in results."""
+        summary_data = {'topic': 'Neural Networks', 'key_points': ['Training', 'Inference']}
+        doc = Note(
+            id=uuid4(),
+            original_text='Neural network research paper.',
+            vault_id=GLOBAL_VAULT_ID,
+            doc_metadata={},
+        )
+        session.add(doc)
+
+        chunk_text = 'Neural networks enable deep learning for various tasks.'
+        embedding = embedder.encode([chunk_text])[0].tolist()
+        chunk = Chunk(
+            id=uuid4(),
+            note_id=doc.id,
+            vault_id=GLOBAL_VAULT_ID,
+            text=chunk_text,
+            embedding=embedding,
+            chunk_index=0,
+            content_hash=content_hash(chunk_text),
+            summary=summary_data,
+            summary_formatted='Neural Networks — Training | Inference',
+        )
+        session.add(chunk)
+
+        unit = MemoryUnit(
+            id=uuid4(),
+            note_id=doc.id,
+            text=chunk_text,
+            embedding=embedding,
+            fact_type=FactTypes.WORLD,
+            event_date=datetime.now(timezone.utc),
+            vault_id=GLOBAL_VAULT_ID,
+        )
+        session.add(unit)
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='neural networks deep learning',
+            strategies=['semantic'],
+            limit=5,
+        )
+        results = await search_engine.search(session, request)
+
+        matching = [r for r in results if r.note_id == doc.id]
+        assert len(matching) == 1
+        assert len(matching[0].summaries) == 1
+        assert matching[0].summaries[0].topic == 'Neural Networks'
+        assert matching[0].summaries[0].key_points == ['Training', 'Inference']
+
+    async def test_search_returns_empty_summaries_for_null_chunks(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """Chunks without summary (NULL) should produce empty summaries list."""
+        doc = Note(
+            id=uuid4(),
+            original_text='Old note without summaries.',
+            vault_id=GLOBAL_VAULT_ID,
+            doc_metadata={},
+        )
+        session.add(doc)
+
+        chunk_text = 'Legacy content with no block summaries generated.'
+        embedding = embedder.encode([chunk_text])[0].tolist()
+        chunk = Chunk(
+            id=uuid4(),
+            note_id=doc.id,
+            vault_id=GLOBAL_VAULT_ID,
+            text=chunk_text,
+            embedding=embedding,
+            chunk_index=0,
+            content_hash=content_hash(chunk_text),
+            # summary=None (default)
+        )
+        session.add(chunk)
+
+        unit = MemoryUnit(
+            id=uuid4(),
+            note_id=doc.id,
+            text=chunk_text,
+            embedding=embedding,
+            fact_type=FactTypes.WORLD,
+            event_date=datetime.now(timezone.utc),
+            vault_id=GLOBAL_VAULT_ID,
+        )
+        session.add(unit)
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='legacy content block summaries',
+            strategies=['semantic'],
+            limit=5,
+        )
+        results = await search_engine.search(session, request)
+
+        matching = [r for r in results if r.note_id == doc.id]
+        assert len(matching) == 1
+        assert matching[0].summaries == []
+
+    async def test_search_falls_back_to_page_index_description(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """When no chunk summaries exist, fall back to page_index metadata.description."""
+        page_index = {
+            'metadata': {'description': 'A guide to distributed systems'},
+            'toc': [],
+        }
+        doc = Note(
+            id=uuid4(),
+            original_text='Distributed systems guide.',
+            vault_id=GLOBAL_VAULT_ID,
+            doc_metadata={},
+            page_index=page_index,
+        )
+        session.add(doc)
+
+        chunk_text = 'Distributed systems involve multiple networked computers.'
+        embedding = embedder.encode([chunk_text])[0].tolist()
+        chunk = Chunk(
+            id=uuid4(),
+            note_id=doc.id,
+            vault_id=GLOBAL_VAULT_ID,
+            text=chunk_text,
+            embedding=embedding,
+            chunk_index=0,
+            content_hash=content_hash(chunk_text),
+            # summary=None → triggers fallback
+        )
+        session.add(chunk)
+
+        unit = MemoryUnit(
+            id=uuid4(),
+            note_id=doc.id,
+            text=chunk_text,
+            embedding=embedding,
+            fact_type=FactTypes.WORLD,
+            event_date=datetime.now(timezone.utc),
+            vault_id=GLOBAL_VAULT_ID,
+        )
+        session.add(unit)
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='distributed systems networked',
+            strategies=['semantic'],
+            limit=5,
+        )
+        results = await search_engine.search(session, request)
+
+        matching = [r for r in results if r.note_id == doc.id]
+        assert len(matching) == 1
+        assert len(matching[0].summaries) == 1
+        assert matching[0].summaries[0].topic == 'A guide to distributed systems'
+        assert matching[0].summaries[0].key_points == []
+
+    async def test_search_returns_multiple_block_summaries_ordered(
+        self, session: AsyncSession, search_engine, embedder
+    ) -> None:
+        """Multiple chunks with summaries should all appear, ordered by chunk_index."""
+        doc = Note(
+            id=uuid4(),
+            original_text='Multi-section paper.',
+            vault_id=GLOBAL_VAULT_ID,
+            doc_metadata={},
+        )
+        session.add(doc)
+
+        sections = [
+            ('Introduction to machine learning concepts.', 'Introduction', ['ML basics']),
+            ('Experimental methodology and data collection.', 'Methods', ['Data pipeline']),
+            ('Results showed significant improvement.', 'Results', ['Accuracy improved']),
+        ]
+        for idx, (text, topic, key_points) in enumerate(sections):
+            embedding = embedder.encode([text])[0].tolist()
+            chunk = Chunk(
+                id=uuid4(),
+                note_id=doc.id,
+                vault_id=GLOBAL_VAULT_ID,
+                text=text,
+                embedding=embedding,
+                chunk_index=idx,
+                content_hash=content_hash(text),
+                summary={'topic': topic, 'key_points': key_points},
+                summary_formatted=f'{topic} — {" | ".join(key_points)}',
+            )
+            session.add(chunk)
+
+        unit = MemoryUnit(
+            id=uuid4(),
+            note_id=doc.id,
+            text=sections[0][0],
+            embedding=embedder.encode([sections[0][0]])[0].tolist(),
+            fact_type=FactTypes.WORLD,
+            event_date=datetime.now(timezone.utc),
+            vault_id=GLOBAL_VAULT_ID,
+        )
+        session.add(unit)
+        await session.commit()
+
+        request = NoteSearchRequest(
+            query='machine learning methodology results',
+            strategies=['semantic'],
+            limit=5,
+        )
+        results = await search_engine.search(session, request)
+
+        matching = [r for r in results if r.note_id == doc.id]
+        assert len(matching) == 1
+        assert len(matching[0].summaries) == 3
+        assert matching[0].summaries[0].topic == 'Introduction'
+        assert matching[0].summaries[1].topic == 'Methods'
+        assert matching[0].summaries[2].topic == 'Results'

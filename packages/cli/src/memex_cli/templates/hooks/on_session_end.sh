@@ -16,7 +16,7 @@ if [ -f "$COMPACT_FILE" ]; then
     rm -f "$COMPACT_FILE"
 fi
 
-uv run memex memory add \
+uv run memex note add \
     "Session ended${compact_note}." \
     --tags "session-marker" \
     2>/dev/null || exit 0

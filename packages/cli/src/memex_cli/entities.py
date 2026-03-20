@@ -151,6 +151,15 @@ async def list_entities(
     ctx: typer.Context,
     limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of entities.')] = 50,
     query: Annotated[str | None, typer.Option('--query', '-q', help='Search query.')] = None,
+    entity_type: Annotated[
+        str | None,
+        typer.Option(
+            '--type',
+            '-t',
+            help='Filter by entity type: Person, Organization, Location, '
+            'Concept, Technology, File, Misc.',
+        ),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -162,9 +171,11 @@ async def list_entities(
     async with get_api_context(config) as api:
         try:
             if query:
-                entities = await api.search_entities(query=query, limit=limit)
+                entities = await api.search_entities(
+                    query=query, limit=limit, entity_type=entity_type
+                )
             else:
-                async for ent in api.list_entities_ranked(limit=limit):
+                async for ent in api.list_entities_ranked(limit=limit, entity_type=entity_type):
                     entities.append(ent)
         except Exception as exc:
             handle_api_error(exc)
@@ -175,11 +186,12 @@ async def list_entities(
 
     table = Table(title=f'Entities (Top {limit})')
     table.add_column('Name', style='cyan')
+    table.add_column('Type', style='magenta')
     table.add_column('Mentions', style='green')
     table.add_column('ID', style='dim')
 
     for e in entities:
-        table.add_row(e.name, str(e.mention_count), str(e.id))
+        table.add_row(e.name, e.entity_type or '', str(e.mention_count), str(e.id))
 
     console.print(table)
 

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import time
 from collections import defaultdict
@@ -8,7 +9,9 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 import math
 
+import numpy as np
 import tiktoken
+from cachetools import TTLCache
 from sqlalchemy import func, literal, union_all
 from sqlalchemy.orm import defer, selectinload
 from sqlmodel import select, col
@@ -126,6 +129,7 @@ class RetrievalEngine:
         reflection_config: ReflectionConfig | None = None,
         retrieval_config: RetrievalConfig | None = None,
         lm: Any | None = None,
+        session_factory: Any | None = None,
     ):
         self.embedder = embedder
         self.reranker = reranker
@@ -133,10 +137,15 @@ class RetrievalEngine:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
+        self._session_factory = session_factory
 
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
         self.candidate_pool_size = self.retrieval_config.candidate_pool_size
+
+        # Query embedding cache: avoids re-encoding recently seen queries
+        self._embedding_cache: TTLCache[str, np.ndarray] = TTLCache(maxsize=256, ttl=300)
+        self._embedding_cache_lock = asyncio.Lock()
 
         from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
@@ -160,16 +169,45 @@ class RetrievalEngine:
         }
         self.mm_strategy = MentalModelStrategy()
 
+    async def _get_embeddings_cached(self, queries: list[str]) -> np.ndarray:
+        """Return embeddings for *queries*, serving cache hits and batch-encoding misses."""
+        results: list[np.ndarray] = []
+        misses: list[tuple[int, str]] = []  # (index, query_text)
+
+        async with self._embedding_cache_lock:
+            for i, q in enumerate(queries):
+                key = hashlib.sha256(q.encode()).hexdigest()
+                cached = self._embedding_cache.get(key)
+                if cached is not None:
+                    results.append(cached)
+                else:
+                    results.append(np.empty(0))  # placeholder
+                    misses.append((i, q))
+
+        if misses:
+            miss_texts = [q for _, q in misses]
+            encoded = await asyncio.to_thread(self.embedder.encode, miss_texts)
+            async with self._embedding_cache_lock:
+                for (idx, q), emb in zip(misses, encoded):
+                    key = hashlib.sha256(q.encode()).hexdigest()
+                    self._embedding_cache[key] = emb
+                    results[idx] = emb
+
+        return np.array(results)
+
     async def retrieve(
         self,
         session: AsyncSession,
         request: RetrievalRequest,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], dict[str, Any] | None]:
         """
         Retrieve memories and synthesized observations using In-DB RRF.
         If a reranker is available, fetches a larger pool and re-ranks them.
         """
+        _t = time.monotonic
+
         # 1. Query Expansion (Multi-Query)
+        t0 = _t()
         queries = [request.query]
         query_weights = [2.0]  # Original query is weighted higher
 
@@ -182,9 +220,12 @@ class RetrievalEngine:
             for var in variations:
                 queries.append(var)
                 query_weights.append(1.0)
+        t_expand = _t() - t0
 
-        # 2. Get Embeddings for all queries
-        all_embeddings = await asyncio.to_thread(self.embedder.encode, queries)
+        # 2. Get Embeddings for all queries (with per-query caching)
+        t0 = _t()
+        all_embeddings = await self._get_embeddings_cached(queries)
+        t_embed = _t() - t0
 
         # 3. Determine budget and limit
         token_budget = request.token_budget
@@ -196,10 +237,15 @@ class RetrievalEngine:
             effective_limit = 50
 
         use_reranker = self.reranker is not None and request.rerank
-        candidate_depth = max(effective_limit * 3, 50) if use_reranker else effective_limit
+        # Cap reranker input: cross-encoder cost is O(n) per candidate, so keep
+        # the pool small.  effective_limit * 2 gives enough headroom for diversity
+        # without 200+ ONNX forward passes.
+        rerank_cap = min(effective_limit * 2, 75)
+        candidate_depth = rerank_cap if use_reranker else effective_limit
 
         # 3b. NLP Temporal Extraction (upstream of RRF)
         # Only extract if no explicit date filters were provided and feature is enabled.
+        t0 = _t()
         filters = dict(request.filters) if request.filters else {}
         if (
             self.retrieval_config.temporal_extraction_enabled
@@ -216,6 +262,7 @@ class RetrievalEngine:
                     temporal_range[0],
                     temporal_range[1],
                 )
+        t_temporal = _t() - t0
 
         # 4. Perform Retrieval (Fused across all queries)
         if request.vault_ids:
@@ -223,6 +270,17 @@ class RetrievalEngine:
 
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
+
+        # Pre-compute NER entities off the event loop so graph strategies don't block
+        t0 = _t()
+        if self.ner_model is not None:
+            try:
+                filters['_ner_entities'] = await asyncio.to_thread(
+                    self.ner_model.predict, request.query
+                )
+            except (ValueError, RuntimeError, OSError) as e:
+                logger.warning('NER pre-extraction failed: %s', e)
+        t_ner = _t() - t0
 
         # Thread temporal filters for strategy-level date filtering
         if request.after:
@@ -234,6 +292,7 @@ class RetrievalEngine:
 
         use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
 
+        t0 = _t()
         all_ranked_items = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
             if use_partitioned:
@@ -260,42 +319,47 @@ class RetrievalEngine:
                 )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
+        t_rrf = _t() - t0
 
         # Free embedding arrays — can be ~100KB+ and no longer needed
         del all_embeddings
 
         if not all_ranked_items:
-            return []
+            return ([], None)
 
         # 5. Multi-Query RRF Fusion (Final Blend)
         fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
 
         if not fused_items:
-            return []
+            return ([], None)
 
         # 6. Hydrate Objects
+        t0 = _t()
         final_results = await self._hydrate_results(session, fused_items)
+        t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
         if not request.include_superseded:
             threshold = self.retrieval_config.superseded_threshold
             final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
-        # 7. Rerank
+        # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
+        t0 = _t()
         if use_reranker:
-            # Rerank against original query
-            final_results = self._rerank_results(
-                request.query, final_results, min_score=request.min_score
+            final_results = await self._rerank_results(
+                request.query, final_results[:rerank_cap], min_score=request.min_score
             )
+        t_rerank = _t() - t0
 
         # 8. Position-Aware Blending
         if request.fusion_strategy == 'position_aware' and use_reranker:
             final_results = self._apply_position_aware_blending(final_results)
 
-        # 9. Deduplicate and Cite
-        final_results = self._deduplicate_and_cite(final_results)
+        # 9. Attach Citations
+        final_results = self._attach_citations(final_results)
 
         # 9b. MMR diversity filtering
+        t0 = _t()
         mmr_lambda = request.mmr_lambda
         if mmr_lambda is None and self.retrieval_config:
             mmr_lambda = self.retrieval_config.mmr_lambda
@@ -329,10 +393,56 @@ class RetrievalEngine:
             for orig_pos, vunit in virtual_positions:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
+        t_mmr = _t() - t0
 
-        # 10. Update Resonance
-        if final_results:
-            await self._update_resonance(session, final_results, vault_id=primary_vault_id)
+        # 10. Collect resonance update info (deferred to background)
+        t0 = _t()
+        resonance_context: dict[str, Any] | None = None
+        if final_results and self.queue_service:
+            try:
+                retrieved_unit_ids = [u.id for u in final_results]
+                stmt = select(UnitEntity.entity_id).where(
+                    col(UnitEntity.unit_id).in_(retrieved_unit_ids)
+                )
+                result = await session.exec(stmt)
+                active_entity_ids = set(result.all())
+                if active_entity_ids:
+                    resonance_context = {
+                        'entity_ids': active_entity_ids,
+                        'vault_id': primary_vault_id,
+                    }
+            except (ValueError, RuntimeError, OSError) as e:
+                logger.error(f'Failed to collect resonance data: {e}')
+        t_resonance = _t() - t0
+
+        logger.warning(
+            'PROFILE retrieve | expand=%.0fms embed=%.0fms temporal=%.0fms ner=%.0fms '
+            'rrf=%.0fms hydrate=%.0fms rerank=%.0fms mmr=%.0fms resonance=%.0fms '
+            'total=%.0fms | queries=%d results=%d',
+            t_expand * 1000,
+            t_embed * 1000,
+            t_temporal * 1000,
+            t_ner * 1000,
+            t_rrf * 1000,
+            t_hydrate * 1000,
+            t_rerank * 1000,
+            t_mmr * 1000,
+            t_resonance * 1000,
+            (
+                t_expand
+                + t_embed
+                + t_temporal
+                + t_ner
+                + t_rrf
+                + t_hydrate
+                + t_rerank
+                + t_mmr
+                + t_resonance
+            )
+            * 1000,
+            len(queries),
+            len(final_results),
+        )
 
         # 10b. Attach debug info to results
         if debug_ctx is not None:
@@ -346,8 +456,8 @@ class RetrievalEngine:
             final_results = self._filter_by_token_budget(final_results, token_budget)
 
         if token_budget is not None:
-            return final_results  # token_budget is the sole constraint
-        return final_results[: request.limit]
+            return (final_results, resonance_context)
+        return (final_results[: request.limit], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int
@@ -415,7 +525,9 @@ class RetrievalEngine:
         """Fast path: run a single strategy without RRF overhead."""
         stmt = strategy.get_statement(query, query_embedding, limit=limit, **filters)
         subq = stmt.subquery(name=f'sq_{strategy_name}')
-        rank_order = subq.c.score.desc() if is_desc else subq.c.score.asc()
+
+        best_score = func.max(subq.c.score).label('best_score')
+        rank_order = best_score.desc() if is_desc else best_score.asc()
 
         final_stmt = (
             select(
@@ -423,6 +535,7 @@ class RetrievalEngine:
                 literal(result_type).label('type'),
             )
             .select_from(subq)
+            .group_by(subq.c.id)
             .order_by(rank_order)
             .limit(limit)
         )
@@ -589,20 +702,41 @@ class RetrievalEngine:
             else None
         )
 
-        # Run per-type queries sequentially — AsyncSession is not safe for concurrent use
-        per_type_results: list[Sequence[Any]] = []
-        for ft in fact_types:
-            result = await self._perform_rrf_retrieval(
-                session,
-                query,
-                query_embedding,
-                per_type_budget,
-                {**filters, 'fact_type': ft},
-                strategies=unit_only_strategies,
-                strategy_weights=strategy_weights,
-                debug_ctx=debug_ctx,
-            )
-            per_type_results.append(result)
+        # Parallel path: create a separate session per fact type to avoid
+        # AsyncSession concurrency issues.  Falls back to sequential if no
+        # session factory is available.
+        if self._session_factory is not None:
+            sf = self._session_factory
+
+            async def _run_ft(ft: str) -> Sequence[Any]:
+                async with sf() as ft_session:
+                    return await self._perform_rrf_retrieval(
+                        ft_session,
+                        query,
+                        query_embedding,
+                        per_type_budget,
+                        {**filters, 'fact_type': ft},
+                        strategies=unit_only_strategies,
+                        strategy_weights=strategy_weights,
+                        debug_ctx=debug_ctx,
+                    )
+
+            per_type_results = list(await asyncio.gather(*[_run_ft(ft) for ft in fact_types]))
+        else:
+            # Sequential fallback (no session factory)
+            per_type_results = []
+            for ft in fact_types:
+                result = await self._perform_rrf_retrieval(
+                    session,
+                    query,
+                    query_embedding,
+                    per_type_budget,
+                    {**filters, 'fact_type': ft},
+                    strategies=unit_only_strategies,
+                    strategy_weights=strategy_weights,
+                    debug_ctx=debug_ctx,
+                )
+                per_type_results.append(result)
 
         # Collect mental model results separately (mental models have no fact_type)
         mm_results: Sequence[Any] = []
@@ -817,7 +951,7 @@ class RetrievalEngine:
 
         return final_results
 
-    def _rerank_results(
+    async def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
         """Re-rank results using a cross-encoder with multiplicative boosts.
@@ -848,7 +982,7 @@ class RetrievalEngine:
                     )
                 )
 
-            scores = self.reranker.score(query, formatted_texts)
+            scores = await asyncio.to_thread(self.reranker.score, query, formatted_texts)
 
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
@@ -892,28 +1026,6 @@ class RetrievalEngine:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
             return results
 
-    async def _update_resonance(
-        self, session: AsyncSession, units: list[MemoryUnit], vault_id: UUID = GLOBAL_VAULT_ID
-    ) -> None:
-        """Updates entity resonance priorities based on retrieval."""
-        if not self.queue_service:
-            return
-
-        try:
-            retrieved_unit_ids = [u.id for u in units]
-            stmt = select(UnitEntity.entity_id).where(
-                col(UnitEntity.unit_id).in_(retrieved_unit_ids)
-            )
-            result = await session.exec(stmt)
-            active_entity_ids = set(result.all())
-
-            if active_entity_ids:
-                await self.queue_service.handle_retrieval_event(
-                    session, active_entity_ids, vault_id=vault_id
-                )
-        except (ValueError, RuntimeError, OSError) as e:
-            logger.error(f'Failed to update resonance priorities: {e}')
-
     @staticmethod
     async def _compute_pairwise_cosine(
         session: AsyncSession, unit_ids: list[UUID]
@@ -929,6 +1041,7 @@ class RetrievalEngine:
                 SELECT id, embedding
                 FROM memory_units
                 WHERE id = ANY(:unit_ids)
+                  AND embedding IS NOT NULL
             )
             SELECT a.id AS id_a, b.id AS id_b,
                    1 - (a.embedding <=> b.embedding) AS similarity
@@ -1032,7 +1145,7 @@ class RetrievalEngine:
 
         return selected
 
-    def _deduplicate_and_cite(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
+    def _attach_citations(self, units: list[MemoryUnit]) -> list[MemoryUnit]:
         """
         Identify 'Observation' units and their evidence.
         Attach citation metadata to observations that reference facts in the result set.

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column,
+    Computed,
     ForeignKey,
     Integer,
     Text,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSVECTOR
 from sqlalchemy.types import Uuid as SA_UUID
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -205,6 +206,12 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         description='Synthesized observations about this entity, stored as a list of JSON-serialized Observation objects.',
     )
 
+    entity_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
+        description='Structured metadata derived from observations (description, category, status).',
+    )
+
     last_refreshed: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
         description='Last time this model was updated by the reflection engine.',
@@ -343,6 +350,11 @@ class Note(SQLModel, table=True):  # type: ignore
             "status IN ('active', 'superseded', 'appended')",
             name='ck_notes_status',
         ),
+        Index(
+            'idx_notes_title_trgm',
+            sql_text('lower(title) gin_trgm_ops'),
+            postgresql_using='gin',
+        ),
     )
 
 
@@ -385,6 +397,16 @@ class Chunk(SQLModel, table=True):  # type: ignore
     chunk_index: int = Field(
         sa_column=Column(Integer, nullable=False),
         description='The sequential index of this chunk within the document.',
+    )
+    summary: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='Block-level summary blob: {"topic": ..., "key_points": [...]}',
+    )
+    summary_formatted: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Pre-formatted block summary: "topic — point1 | point2 | ..."',
     )
     created_at: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
@@ -613,6 +635,21 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Additional metadata associated with the memory unit.',
     )
 
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed(
+                "to_tsvector('english', "
+                "coalesce(text, '') || ' ' || "
+                "coalesce(metadata->>'tags', '') || ' ' || "
+                "coalesce(metadata->>'enriched_tags', '') || ' ' || "
+                "coalesce(metadata->>'enriched_keywords', ''))",
+                persisted=True,
+            ),
+        ),
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -684,6 +721,11 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             postgresql_ops={'embedding': 'vector_cosine_ops'},
             postgresql_where=sql_text("status = 'stale'"),
         ),
+        Index(
+            'idx_memory_units_search_tsvector',
+            'search_tsvector',
+            postgresql_using='gin',
+        ),
     )
 
     @property
@@ -742,12 +784,6 @@ class Entity(SQLModel, table=True):  # type: ignore
         default=None,
         sa_column=Column(Text, index=True),
         description='Double Metaphone phonetic code for the canonical name.',
-    )
-
-    entity_metadata: dict[str, Any] = Field(
-        default={},
-        sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
-        description='Additional metadata associated with the entity (e.g. bio, type).',
     )
 
     entity_type: str | None = Field(
@@ -1293,113 +1329,50 @@ class AuditLog(SQLModel, table=True):  # type: ignore
     )
 
 
-# ---------------------------------------------------------------------------
-# Webhooks
-# ---------------------------------------------------------------------------
+class KVEntry(SQLModel, table=True):  # type: ignore
+    """
+    What it is: A key-value store entry scoped by namespace prefix.
+    Function: Provides simple, named storage for configuration, preferences,
+    and structured data that doesn't fit the note/memory model.
+    Key Features:
+        - Keys must start with a namespace prefix: global:, user:, project:, or app:.
+        - Unique constraint on key.
+        - btree index with text_pattern_ops for efficient prefix queries.
+        - Optional embedding for semantic search over values.
+    """
 
-
-class WebhookEvent(str, Enum):
-    """Supported webhook event types."""
-
-    INGESTION_COMPLETED = 'ingestion.completed'
-    REFLECTION_COMPLETED = 'reflection.completed'
-
-
-class DeliveryStatus(str, Enum):
-    """Status of a webhook delivery attempt."""
-
-    PENDING = 'pending'
-    SUCCESS = 'success'
-    FAILED = 'failed'
-
-
-class WebhookRegistration(SQLModel, table=True):  # type: ignore
-    """A registered webhook endpoint that receives event notifications."""
-
-    __tablename__ = 'webhook_registrations'
+    __tablename__ = 'kv_entries'
 
     id: UUID = Field(
-        default_factory=uuid4,
-        primary_key=True,
-        description='Unique identifier for the webhook.',
-    )
-    url: str = Field(
-        max_length=2048,
-        description='The HTTPS URL to deliver events to.',
-    )
-    secret: str = Field(
-        max_length=255,
-        description='Shared secret for HMAC-SHA256 payload signing.',
-    )
-    events: list[str] = Field(
-        sa_column=Column(ARRAY(Text), nullable=False),
-        description='List of event types this webhook subscribes to.',
-    )
-    active: bool = Field(
-        default=True,
-        description='Whether this webhook is currently enabled.',
-    )
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
-        description='When the webhook was registered.',
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the KV entry.',
     )
 
-    deliveries: list['WebhookDelivery'] = Relationship(back_populates='webhook')
+    key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The key for this entry. Must start with global:, user:, project:, or app:.',
+    )
 
-    __table_args__ = (Index('idx_webhook_registrations_active', 'active'),)
+    value: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The value stored under this key.',
+    )
 
-
-class WebhookDelivery(SQLModel, table=True):  # type: ignore
-    """Record of a single webhook delivery attempt."""
-
-    __tablename__ = 'webhook_deliveries'
-
-    id: UUID = Field(
-        default_factory=uuid4,
-        primary_key=True,
-        description='Unique identifier for the delivery.',
-    )
-    webhook_id: UUID = Field(
-        sa_column=Column(
-            SA_UUID(),
-            ForeignKey('webhook_registrations.id', ondelete='CASCADE'),
-            nullable=False,
-        ),
-        description='The webhook this delivery belongs to.',
-    )
-    event: str = Field(
-        max_length=100,
-        description='The event type that triggered this delivery.',
-    )
-    payload: dict[str, Any] = Field(
-        sa_column=Column(JSONB, nullable=False),
-        description='The JSON payload sent to the webhook URL.',
-    )
-    status: str = Field(
-        default=DeliveryStatus.PENDING,
-        max_length=20,
-        description='Current delivery status.',
-    )
-    attempts: int = Field(
-        default=0,
-        sa_column=Column(Integer, nullable=False, server_default='0'),
-        description='Number of delivery attempts made.',
-    )
-    last_error: str | None = Field(
+    embedding: list[float] | None = Field(
         default=None,
-        sa_column=Column(Text, nullable=True),
-        description='Error message from the last failed attempt.',
-    )
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
-        description='When the delivery was created.',
+        sa_column=Column(Vector(EMBEDDING_DIMENSION)),
+        description='Optional embedding vector for semantic search over values.',
     )
 
-    webhook: WebhookRegistration | None = Relationship(back_populates='deliveries')
+    created_at: datetime = created_at_field()
+    updated_at: datetime = updated_at_field()
 
     __table_args__ = (
-        Index('idx_webhook_deliveries_webhook_id', 'webhook_id'),
-        Index('idx_webhook_deliveries_status', 'status'),
+        UniqueConstraint('key', name='uq_kv_key'),
+        Index(
+            'idx_kv_key_prefix',
+            'key',
+            postgresql_using='btree',
+            postgresql_ops={'key': 'text_pattern_ops'},
+        ),
     )

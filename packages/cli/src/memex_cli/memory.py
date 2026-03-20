@@ -145,7 +145,7 @@ async def add_memory(
     config: MemexConfig = ctx.obj
     # Override active vault if specified
     if vault:
-        config.server.active_vault = vault
+        config.vault.active = vault
 
     # Determine input source
     if file:
@@ -182,9 +182,7 @@ async def add_memory(
                         assets_dict[asset_path.name] = base64.b64encode(asset_data)
 
                 console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
-                req = IngestURLRequest(
-                    url=url, assets=assets_dict, vault_id=config.server.active_vault
-                )
+                req = IngestURLRequest(url=url, assets=assets_dict, vault_id=config.write_vault)
                 result = await api.ingest_url(req, background=background)
             except Exception as e:
                 handle_api_error(e)
@@ -221,8 +219,8 @@ async def add_memory(
                     f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
                 )
                 metadata = {}
-                if config.server.active_vault:
-                    metadata['vault_id'] = str(config.server.active_vault)
+                if config.write_vault:
+                    metadata['vault_id'] = str(config.write_vault)
 
                 result = await api.ingest_upload(
                     files=files_to_upload, metadata=metadata, background=background
@@ -272,7 +270,7 @@ async def add_memory(
                     files=assets_dict,
                     tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
                     note_key=key,
-                    vault_id=config.server.active_vault,
+                    vault_id=config.write_vault,
                 )
 
                 result = await api.ingest(note, background=background)
@@ -337,10 +335,6 @@ async def search_memory(
     Search for memories.
     """
     config: MemexConfig = ctx.obj
-    if vault:
-        # Override config: treat provided vaults as the full search scope
-        config.server.active_vault = vault[0]
-        config.server.attached_vaults = vault[1:]
 
     # Compute strategy inclusion list from exclusion flags
     all_strategies = ['semantic', 'keyword', 'graph', 'temporal', 'mental_model']
@@ -358,10 +352,12 @@ async def search_memory(
     if strategies is not None:
         console.print(f'[dim]Active strategies: {", ".join(strategies)}[/dim]')
 
-    # Resolve vault_ids to pass directly to the server
+    # Resolve vault_ids: explicit --vault flags take precedence, else use config
     vault_ids: list[str] | None = None
     if vault:
         vault_ids = [v.strip() for v in vault]
+    else:
+        vault_ids = config.read_vaults
 
     async with get_api_context(config) as api:
         try:
@@ -388,7 +384,7 @@ async def search_memory(
         if compact:
             for unit in results:
                 text = unit.text.replace('\n', ' ')[:200]
-                print(f'- [{unit.fact_type}] {text}')
+                console.print(f'- \\[{unit.fact_type}] {text}')
             return
 
         if json_output:

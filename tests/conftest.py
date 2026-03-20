@@ -20,6 +20,16 @@ import logging
 postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breaker():
+    """Reset the global LLM circuit breaker before each test to prevent cross-test contamination."""
+    from memex_core.llm import get_circuit_breaker
+
+    get_circuit_breaker().reset()
+    yield
+    get_circuit_breaker().reset()
+
+
 @pytest.fixture(scope='session')
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     postgres.start()

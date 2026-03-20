@@ -9,11 +9,11 @@ from platformdirs import user_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.base')
 
-# Shared ONNX Runtime options optimized for memory-constrained environments
+# Shared ONNX Runtime options
 options = ort.SessionOptions()  # type: ignore
 options.log_severity_level = 3
-# Disable memory pattern caching between runs to reduce resident memory
-options.enable_mem_pattern = False
+# Re-use memory layouts between runs of the same model (models are singletons)
+options.enable_mem_pattern = True
 # Disable CPU memory arena to prevent the allocator from holding memory between runs
 options.enable_cpu_mem_arena = False
 
