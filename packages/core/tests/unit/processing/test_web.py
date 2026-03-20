@@ -1,7 +1,8 @@
 import pytest
 import requests  # type: ignore[import-untyped]
 from unittest.mock import patch, MagicMock
-from memex_core.processing.web import WebContentProcessor, _parse_document_date
+from memex_core.processing.dates import parse_datetime
+from memex_core.processing.web import WebContentProcessor
 
 
 @pytest.mark.asyncio
@@ -197,8 +198,8 @@ async def test_no_title_when_metadata_title_empty():
             assert result.metadata.get('title') is None
 
 
-def test_parse_document_date_valid_iso():
-    result = _parse_document_date('2023-06-15')
+def test_parse_datetime_valid_iso():
+    result = parse_datetime('2023-06-15')
     assert result is not None
     assert result.year == 2023
     assert result.month == 6
@@ -206,21 +207,17 @@ def test_parse_document_date_valid_iso():
     assert result.tzinfo is not None
 
 
-def test_parse_document_date_valid_natural():
-    result = _parse_document_date('January 5, 2024')
+def test_parse_datetime_valid_natural():
+    result = parse_datetime('January 5, 2024')
     assert result is not None
     assert result.year == 2024
     assert result.month == 1
     assert result.day == 5
 
 
-def test_parse_document_date_none():
-    assert _parse_document_date(None) is None
+def test_parse_datetime_empty():
+    assert parse_datetime('') is None
 
 
-def test_parse_document_date_empty():
-    assert _parse_document_date('') is None
-
-
-def test_parse_document_date_invalid():
-    assert _parse_document_date('not a date at all') is None
+def test_parse_datetime_invalid():
+    assert parse_datetime('not a date at all') is None

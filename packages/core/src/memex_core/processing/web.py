@@ -4,14 +4,13 @@ Web processing module using trafilatura and cloudscraper.
 
 import logging
 import asyncio
-from datetime import datetime, timezone
 from typing import Any
 
 import cloudscraper  # type: ignore
 import requests  # type: ignore[import-untyped]
 import trafilatura
-from dateutil import parser as dateutil_parser
 
+from memex_core.processing.dates import parse_datetime
 from memex_core.processing.models import ExtractedContent
 
 logger = logging.getLogger('memex.core.processing.web')
@@ -34,7 +33,8 @@ class WebContentProcessor:
         data = await asyncio.to_thread(WebContentProcessor._sync_process, url)
 
         # Parse document date from trafilatura metadata
-        document_date = _parse_document_date(data.get('date'))
+        raw_date = data.get('date')
+        document_date = parse_datetime(raw_date) if raw_date else None
 
         # Create the ExtractedContent object
         return ExtractedContent(
@@ -49,6 +49,8 @@ class WebContentProcessor:
     @staticmethod
     def _sync_process(url: str) -> dict[str, Any]:
         """Synchronous fetch and extract logic."""
+        if not url.startswith(('http://', 'https://')):
+            url = f'https://{url}'
         scraper = cloudscraper.create_scraper()
         try:
             response = scraper.get(url)
@@ -97,18 +99,3 @@ class WebContentProcessor:
             'url': get_val(metadata, 'url') or url,
             'hostname': get_val(metadata, 'hostname'),
         }
-
-
-def _parse_document_date(date_str: str | None) -> datetime | None:
-    """Parse a date string from trafilatura metadata into a timezone-aware datetime."""
-    if not date_str:
-        return None
-    try:
-        parsed = dateutil_parser.parse(date_str)
-        # Ensure timezone-aware (assume UTC if naive)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
-    except (ValueError, OverflowError):
-        logger.warning(f'Could not parse document date: {date_str!r}')
-        return None

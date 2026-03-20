@@ -29,7 +29,7 @@ import { useNote, useNotePageIndex } from '@/api/hooks/use-notes';
 import { useSummary } from '@/api/hooks/use-summary';
 import { useVaultStore } from '@/stores/vault-store';
 import { usePreferencesStore } from '@/stores/preferences-store';
-import type { NoteSearchResult, NoteSnippet } from '@/api/generated';
+import type { NoteSearchResult, BlockSummaryDTO } from '@/api/generated';
 
 const DOC_STRATEGIES = ['semantic', 'keyword', 'graph', 'temporal'];
 
@@ -207,7 +207,8 @@ export default function NoteSearch() {
     if (showSummary && results.length > 0 && !summaryMutation.data && !summaryMutation.isPending) {
       const texts = results
         .slice(0, 20)
-        .flatMap((r) => r.snippets.slice(0, 2).map((s) => s.text));
+        .map((r) => summariesToText(r.summaries))
+        .filter((t) => t.length > 0);
       summaryMutation.mutate({ query, texts });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,7 +234,8 @@ export default function NoteSearch() {
       if (checked && results.length > 0 && !summaryMutation.data) {
         const texts = results
           .slice(0, 20)
-          .flatMap((r) => r.snippets.slice(0, 2).map((s) => s.text));
+          .map((r) => summariesToText(r.summaries))
+          .filter((t) => t.length > 0);
         summaryMutation.mutate({ query, texts });
       }
     },
@@ -388,12 +390,10 @@ function NoteResultCard({
           )}
         </div>
 
-        {/* Snippets */}
-        {result.snippets.length > 0 && (
-          <div className="mb-3 space-y-2">
-            {result.snippets.slice(0, 2).map((snippet, i) => (
-              <SnippetPreview key={i} snippet={snippet} />
-            ))}
+        {/* Summaries */}
+        {result.summaries && result.summaries.length > 0 && (
+          <div className="mb-3">
+            <SummariesPreview summaries={result.summaries} />
           </div>
         )}
 
@@ -416,18 +416,24 @@ function NoteResultCard({
   );
 }
 
-function SnippetPreview({ snippet }: { snippet: NoteSnippet }) {
-  const truncatedText =
-    snippet.text.length > 300 ? snippet.text.slice(0, 300) + '...' : snippet.text;
+function summariesToText(summaries: BlockSummaryDTO[] | undefined): string {
+  if (!summaries || summaries.length === 0) return '';
+  return summaries.map((s) => s.topic).join(' | ');
+}
+
+function SummariesPreview({ summaries }: { summaries: BlockSummaryDTO[] }) {
+  if (summaries.length === 0) return null;
 
   return (
-    <div className="rounded-md bg-muted/30 border border-border p-2">
-      {snippet.node_title && (
-        <p className="text-[10px] font-bold text-primary mb-1">{snippet.node_title}</p>
-      )}
-      <div className="prose prose-invert prose-xs max-w-none line-clamp-2 text-xs text-muted-foreground [&>*]:m-0 [&>*]:text-muted-foreground">
-        <ReactMarkdown>{truncatedText}</ReactMarkdown>
-      </div>
+    <div className="rounded-md bg-muted/30 border border-border p-2 space-y-0.5">
+      {summaries.map((s, i) => (
+        <div key={i} className="text-xs text-muted-foreground">
+          <span className="font-medium text-primary">{s.topic}</span>
+          {s.key_points && s.key_points.length > 0 && (
+            <span> — {s.key_points.join(' | ')}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -450,9 +456,11 @@ function NoteDetailDialog({
 
   if (!noteId) return null;
 
-  const pageIndexNodes = pageIndexData?.page_index
-    ? flattenPageIndex(pageIndexData.page_index)
+  const rawPageIndex = pageIndexData?.page_index;
+  const tocTree = rawPageIndex
+    ? (Array.isArray(rawPageIndex) ? rawPageIndex : (rawPageIndex as Record<string, unknown>).toc ?? [])
     : [];
+  const pageIndexNodes = flattenPageIndex(tocTree);
 
   const noteTitle = note?.title ?? note?.name ?? 'Note Details';
   const metadata = note?.doc_metadata ?? {};

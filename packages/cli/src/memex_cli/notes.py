@@ -2,9 +2,12 @@
 Note Management Commands.
 """
 
+import base64
 import json
+import mimetypes
 import pathlib
 from typing import Annotated, Any
+import aiofiles
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
@@ -14,7 +17,13 @@ from rich.tree import Tree
 
 from memex_common.config import MemexConfig
 from memex_common.client import RemoteMemexAPI
-from memex_common.schemas import NoteDTO
+from memex_common.schemas import (
+    BatchJobStatus,
+    IngestResponse,
+    NoteCreateDTO,
+    NoteDTO,
+    IngestURLRequest,
+)
 from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
 
 console = Console()
@@ -26,6 +35,188 @@ app = typer.Typer(
 )
 
 
+@app.command('add')
+@async_command
+async def add_note(
+    ctx: typer.Context,
+    content: Annotated[str | None, typer.Argument(help='The content of the note to add.')] = None,
+    file: Annotated[
+        pathlib.Path | None,
+        typer.Option('--file', '-f', help='Path to a file or directory to ingest.', dir_okay=True),
+    ] = None,
+    url: Annotated[
+        str | None,
+        typer.Option('--url', '-u', help='URL to scrape and ingest.'),
+    ] = None,
+    asset: Annotated[
+        list[pathlib.Path] | None,
+        typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
+    ] = None,
+    vault: Annotated[
+        str | None, typer.Option('--vault', '-v', help='Target vault (write).')
+    ] = None,
+    key: Annotated[
+        str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
+    ] = None,
+    background: Annotated[
+        bool, typer.Option('--background', '-b', help='Queue as background job.')
+    ] = False,
+):
+    """
+    Add a new note to Memex.
+    You can provide text directly, use --file to load from disk, or --url to scrape a website.
+    Use --asset to attach auxiliary files (images, PDFs) to a note.
+    """
+    config: MemexConfig = ctx.obj
+    # Override active vault if specified
+    if vault:
+        config.vault.active = vault
+
+    # Determine input source
+    if file:
+        file_path = file
+        if not file_path.exists():
+            console.print(f'[red]Error: Path does not exist: {file_path}[/red]')
+            raise typer.Exit(1)
+    elif url:
+        pass  # Valid input
+    elif content:
+        pass
+    else:
+        console.print('[red]Error: Must provide content, --file, or --url.[/red]')
+        raise typer.Exit(1)
+
+    console.print('[bold green]Adding Note[/bold green]')
+
+    async with get_api_context(config) as api:
+        result: IngestResponse | BatchJobStatus | dict[str, str]
+        if url:
+            try:
+                # Load assets if provided
+                assets_dict = {}
+                if asset:
+                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
+                    for asset_path in asset:
+                        if not asset_path.exists():
+                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
+                            continue
+
+                        async with aiofiles.open(asset_path, 'rb') as f:
+                            asset_data = await f.read()
+
+                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
+
+                console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
+                req = IngestURLRequest(url=url, assets=assets_dict, vault_id=config.write_vault)
+                result = await api.ingest_url(req, background=background)
+            except Exception as e:
+                handle_api_error(e)
+        elif file and not asset:
+            # Multi-part upload using aiofiles (Traditional path)
+            try:
+                files_to_upload = []
+                if file.is_dir():
+                    console.print(f'[cyan]Scanning directory {file.name}...[/cyan]')
+                    # Recursively find all files
+                    for p in file.rglob('*'):
+                        if p.is_file() and not p.name.startswith('.'):
+                            async with aiofiles.open(p, 'rb') as f:
+                                data = await f.read()
+
+                            mime_type, _ = mimetypes.guess_type(p)
+                            mime_type = mime_type or 'application/octet-stream'
+                            # Use relative path as filename to preserve structure
+                            rel_path = str(p.relative_to(file))
+                            files_to_upload.append(('files', (rel_path, data, mime_type)))
+                else:
+                    console.print(f'[cyan]Reading file {file.name}...[/cyan]')
+                    async with aiofiles.open(file, 'rb') as f:
+                        data = await f.read()
+                    mime_type, _ = mimetypes.guess_type(file)
+                    mime_type = mime_type or 'application/octet-stream'
+                    files_to_upload.append(('files', (file.name, data, mime_type)))
+
+                if not files_to_upload:
+                    console.print('[red]Error: No files found to upload.[/red]')
+                    raise typer.Exit(1)
+
+                console.print(
+                    f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
+                )
+                metadata = {}
+                if config.write_vault:
+                    metadata['vault_id'] = str(config.write_vault)
+
+                result = await api.ingest_upload(
+                    files=files_to_upload, metadata=metadata, background=background
+                )
+            except Exception as e:
+                handle_api_error(e)
+        else:
+            # Handle NoteDTO path (content + assets or file + assets)
+            try:
+                note_content = ''
+                note_name = 'Quick Note'
+                note_description = 'Added via CLI'
+
+                if file:
+                    if file.is_dir():
+                        console.print(
+                            '[red]Error: --asset cannot be used with a directory --file. Point --file to a markdown file instead.[/red]'
+                        )
+                        raise typer.Exit(1)
+
+                    console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
+                    async with aiofiles.open(file, 'r', encoding='utf-8') as f:
+                        note_content = await f.read()
+                    note_name = file.stem
+                else:
+                    note_content = content or ''
+
+                # Encode content
+                # Load assets
+                assets_dict = {}
+                if asset:
+                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
+                    for asset_path in asset:
+                        if not asset_path.exists():
+                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
+                            continue
+
+                        async with aiofiles.open(asset_path, 'rb') as f:
+                            asset_data = await f.read()
+
+                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
+
+                note = NoteCreateDTO(
+                    name=note_name,
+                    description=note_description,
+                    content=base64.b64encode(note_content.encode('utf-8')),
+                    files=assets_dict,
+                    tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
+                    note_key=key,
+                    vault_id=config.write_vault,
+                )
+
+                result = await api.ingest(note, background=background)
+            except Exception as e:
+                handle_api_error(e)
+
+        # 4. Show Result
+        if isinstance(result, BatchJobStatus):
+            console.print(f'[bold green]Queued.[/bold green] Job ID: [cyan]{result.job_id}[/cyan]')
+            console.print(f'[dim]Poll: GET /api/v1/ingestions/{result.job_id}[/dim]')
+        elif isinstance(result, dict):
+            # Fire-and-forget background (url/upload): server accepted but no job ID
+            console.print('[bold green]Accepted.[/bold green] Ingestion running in background.')
+        elif result.status == 'skipped':
+            console.print(f'[yellow]Note skipped: {result.reason}[/yellow]')
+        else:
+            console.print(f'[green]Note added successfully![/green] UUID: {result.note_id}')
+            if result.unit_ids:
+                console.print(f'Extracted {len(result.unit_ids)} memory units.')
+
+
 @app.command('list')
 @async_command
 async def list_notes(
@@ -33,6 +224,14 @@ async def list_notes(
     limit: int = 50,
     offset: int = 0,
     vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    after: Annotated[
+        str | None,
+        typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -44,11 +243,36 @@ async def list_notes(
     """
     List all notes.
     """
+    from datetime import datetime
+
     config: MemexConfig = ctx.obj
+
+    parsed_after = None
+    parsed_before = None
+    if after is not None:
+        try:
+            parsed_after = datetime.fromisoformat(after)
+        except ValueError:
+            console.print(f'[red]Invalid --after date: {after}[/red]')
+            raise typer.Exit(code=1)
+    if before is not None:
+        try:
+            parsed_before = datetime.fromisoformat(before)
+        except ValueError:
+            console.print(f'[red]Invalid --before date: {before}[/red]')
+            raise typer.Exit(code=1)
+
+    vault_ids = vault if vault else config.read_vaults
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.list_notes(limit=limit, offset=offset, vault_ids=vault or None)
+            notes = await api.list_notes(
+                limit=limit,
+                offset=offset,
+                vault_ids=vault_ids,
+                after=parsed_after,
+                before=parsed_before,
+            )
         except Exception as e:
             handle_api_error(e)
 
@@ -68,11 +292,17 @@ async def list_notes(
 
     table = Table(title='Notes')
     table.add_column('Title', style='cyan')
+    table.add_column('Vault', style='yellow')
+    table.add_column('Publish Date', style='green')
     table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
 
     for d in notes:
-        table.add_row(d.name or 'Untitled', str(d.created_at), str(d.id))
+        pub_date = ''
+        if hasattr(d, 'publish_date') and d.publish_date:
+            pub_date = str(d.publish_date.date())
+        vault_name = getattr(d, 'vault_name', '') or ''
+        table.add_row(d.name or 'Untitled', vault_name, pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 
@@ -83,6 +313,14 @@ async def list_recent(
     ctx: typer.Context,
     limit: int = 10,
     vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    after: Annotated[
+        str | None,
+        typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
+    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -94,11 +332,35 @@ async def list_recent(
     """
     Show most recent notes.
     """
+    from datetime import datetime
+
     config: MemexConfig = ctx.obj
+
+    parsed_after = None
+    parsed_before = None
+    if after is not None:
+        try:
+            parsed_after = datetime.fromisoformat(after)
+        except ValueError:
+            console.print(f'[red]Invalid --after date: {after}[/red]')
+            raise typer.Exit(code=1)
+    if before is not None:
+        try:
+            parsed_before = datetime.fromisoformat(before)
+        except ValueError:
+            console.print(f'[red]Invalid --before date: {before}[/red]')
+            raise typer.Exit(code=1)
+
+    vault_ids = vault if vault else None
 
     async with get_api_context(config) as api:
         try:
-            notes = await api.get_recent_notes(limit=limit, vault_ids=vault or None)
+            notes = await api.get_recent_notes(
+                limit=limit,
+                vault_ids=vault_ids,
+                after=parsed_after,
+                before=parsed_before,
+            )
         except Exception as e:
             handle_api_error(e)
 
@@ -118,11 +380,17 @@ async def list_recent(
 
     table = Table(title='Recent Notes')
     table.add_column('Title', style='cyan')
-    table.add_column('Created At', style='green')
+    table.add_column('Vault', style='yellow')
+    table.add_column('Publish Date', style='green')
+    table.add_column('Created At', style='dim')
     table.add_column('ID', style='dim')
 
     for d in notes:
-        table.add_row(d.name or 'Untitled', str(d.created_at), str(d.id))
+        pub_date = ''
+        if hasattr(d, 'publish_date') and d.publish_date:
+            pub_date = str(d.publish_date.date())
+        vault_name = getattr(d, 'vault_name', '') or ''
+        table.add_row(d.name or 'Untitled', vault_name, pub_date, str(d.created_at), str(d.id))
 
     console.print(table)
 
@@ -130,14 +398,72 @@ async def list_recent(
 def _print_compact_note(d: Any) -> None:
     """Print a single note in compact one-line format."""
     title = d.title or d.name or 'Untitled'
+    note_id = str(d.id) if d.id else ''
     date = str(d.created_at.date()) if d.created_at else 'unknown'
+    vault_name = getattr(d, 'vault_name', '') or ''
+    vault_tag = f' @{vault_name}' if vault_name else ''
     desc = ''
     if d.doc_metadata:
         desc = d.doc_metadata.get('description', '') or ''
-    if len(desc) > 150:
-        desc = desc[:147] + '...'
+    if len(desc) > 120:
+        desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    print(f'- **{title}** ({date}){suffix}')
+    console.print(f'- **{title}**{vault_tag} ({date}) [{note_id}]{suffix}')
+
+
+@app.command('find')
+@async_command
+async def find_note(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument(help='Approximate title to search for.')],
+    limit: int = 5,
+    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    Find notes by approximate title match (trigram similarity).
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            results = await api.find_notes_by_title(
+                query=query,
+                vault_ids=vault or None,
+                limit=limit,
+            )
+        except Exception as e:
+            handle_api_error(e)
+
+    if not results:
+        console.print('[dim]No matching notes found.[/dim]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        return
+
+    table = Table(title=f'Notes matching "{query}"')
+    table.add_column('Title', style='cyan')
+    table.add_column('Score', style='yellow', justify='right')
+    table.add_column('Date', style='green')
+    table.add_column('Status', style='dim')
+    table.add_column('Note ID', style='dim')
+
+    for r in results:
+        date = r.publish_date or r.created_at
+        if hasattr(date, 'date'):
+            date = str(date.date())
+        else:
+            date = str(date)[:10] if date else ''
+        table.add_row(
+            r.title or 'Untitled',
+            f'{r.score:.2f}',
+            date,
+            r.status or '',
+            str(r.note_id),
+        )
+
+    console.print(table)
 
 
 @app.command('delete')
@@ -171,6 +497,44 @@ async def delete_note(
         console.print(f'[green]Note {note_id} deleted successfully.[/green]')
     else:
         console.print(f'[red]Note {note_id} not found.[/red]')
+
+
+@app.command('update-date')
+@async_command
+async def update_date(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of note to update.')],
+    new_date: Annotated[
+        str, typer.Argument(help='New date (ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).')
+    ],
+):
+    """
+    Update a note's publish_date and cascade the delta to all memory unit timestamps.
+    """
+    from datetime import datetime
+
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(note_id, 'note')
+
+    try:
+        parsed_date = datetime.fromisoformat(new_date)
+    except ValueError:
+        console.print(
+            f'[red]Invalid date format: {new_date}. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.[/red]'
+        )
+        raise typer.Exit(code=1)
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.update_note_date(uuid_obj, parsed_date)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print('[green]Note date updated successfully.[/green]')
+    console.print(f'  Old date: {result.get("old_date")}')
+    console.print(f'  New date: {result.get("new_date")}')
+    console.print(f'  Memory units updated: {result.get("units_updated", 0)}')
 
 
 @app.command('rename')
@@ -452,12 +816,14 @@ async def search_notes(
     if strategies is not None:
         console.print(f'[dim]Active strategies: {", ".join(strategies)}[/dim]')
 
+    vault_ids = vault if vault else config.read_vaults
+
     async with get_api_context(config) as api:
         try:
             results = await api.search_notes(
                 query=query,
                 limit=limit,
-                vault_ids=vault or None,
+                vault_ids=vault_ids,
                 expand_query=expand,
                 fusion_strategy=fusion_strategy,
                 strategies=strategies,
@@ -493,9 +859,12 @@ async def search_notes(
             metadata.get('name') or metadata.get('title') or metadata.get('filename') or 'Untitled'
         )
 
-        # Aggregate snippets into a single preview string
-        preview_texts = [s.text.strip() for s in doc.snippets]
-        preview = ' ... '.join(preview_texts) if preview_texts else '[No preview available]'
+        # Build preview from block summaries
+        if doc.summaries:
+            parts = [s.topic for s in doc.summaries]
+            preview = ' | '.join(parts) if parts else '[No preview available]'
+        else:
+            preview = '[No preview available]'
 
         # Truncate preview if it's excessively long (though Rich wraps, this keeps it cleaner)
         if len(preview) > 300:
@@ -634,7 +1003,9 @@ async def export_notes(
             notes = [note]
         else:
             try:
-                notes = await api.list_notes(limit=10000, vault_ids=vault or None)
+                notes = await api.list_notes(
+                    limit=10000, vault_ids=vault if vault else config.read_vaults
+                )
             except Exception as e:
                 handle_api_error(e)
 

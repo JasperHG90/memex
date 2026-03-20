@@ -6,7 +6,7 @@ import logging
 import secrets
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from starlette.responses import JSONResponse
 
 from memex_common.config import AuthConfig
@@ -96,3 +96,35 @@ def setup_auth(app: FastAPI, auth_config: AuthConfig) -> None:
         len(auth_config.api_keys),
         len(auth_config.exempt_paths),
     )
+
+
+async def require_admin_auth(request: Request) -> None:
+    """FastAPI dependency that enforces API key auth on admin routes.
+
+    Unlike the global middleware, this always requires a valid API key
+    regardless of whether global auth is enabled.  When no auth config
+    is present (auth disabled globally), admin endpoints are blocked
+    entirely — fail-closed.
+    """
+    auth_config: AuthConfig | None = getattr(request.app.state, 'auth_config', None)
+
+    audit = _get_audit_service(request)
+    api_key = request.headers.get('X-API-Key')
+    if not api_key:
+        if audit:
+            audit.log(
+                action='auth.admin.missing_key',
+                details={'path': request.url.path, 'method': request.method},
+            )
+        raise HTTPException(
+            status_code=401,
+            detail=('Admin endpoints require authentication. Provide a valid X-API-Key header.'),
+        )
+
+    if auth_config is None or not _validate_key(api_key, auth_config):
+        if audit:
+            audit.log(
+                action='auth.admin.failure',
+                details={'path': request.url.path, 'method': request.method},
+            )
+        raise HTTPException(status_code=403, detail='Invalid API key.')

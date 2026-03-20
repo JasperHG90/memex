@@ -26,8 +26,8 @@ def sanitize_text(text: str) -> str:
     return re.sub(r'[\ud800-\udfff]', '', text)
 
 
-def parse_datetime(date_str: str) -> datetime | None:
-    """Parse a datetime string into a datetime object."""
+def parse_iso_datetime(date_str: str) -> datetime | None:
+    """Parse a strict ISO 8601 datetime string into a datetime object."""
     try:
         dt = date_parser.isoparse(date_str)
         if dt.tzinfo is None:

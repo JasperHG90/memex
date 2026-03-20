@@ -1,0 +1,25 @@
+{
+  "name": "memex",
+  "owner": {
+    "name": "Memex",
+    "email": "hello@memexhq.com"
+  },
+  "metadata": {
+    "description": "Official Memex plugins for Claude Code — long-term memory, knowledge capture, and retrieval."
+  },
+  "plugins": [
+    {
+      "name": "memex",
+      "source": "./packages/claude-code-plugin",
+      "description": "Long-term memory for Claude Code powered by Memex. Provides persistent knowledge capture, retrieval, and memory-augmented workflows across all projects.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Memex"
+      },
+      "repository": "https://github.com/JasperHG90/memex",
+      "license": "Apache-2.0",
+      "keywords": ["memory", "knowledge-management", "rag", "notes"],
+      "category": "productivity"
+    }
+  ]
+}

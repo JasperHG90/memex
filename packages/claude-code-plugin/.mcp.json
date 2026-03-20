@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "memex": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli",
+        "memex",
+        "mcp",
+        "run"
+      ]
+    }
+  }
+}

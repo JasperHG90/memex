@@ -1,5 +1,6 @@
 import pytest
 from uuid import uuid4
+from conftest import parse_tool_result
 from memex_common.schemas import (
     MemoryUnitDTO,
     FactTypes,
@@ -23,14 +24,17 @@ async def test_mcp_search_expanded_output(mock_api, mcp_client):
         )
     ]
 
-    result = await mcp_client.call_tool('memex_memory_search', {'query': 'python', 'limit': 1})
+    result = await mcp_client.call_tool(
+        'memex_memory_search', {'query': 'python', 'limit': 1, 'vault_ids': ['test-vault']}
+    )
 
-    output_text = result.content[0].text
-    assert 'Found 1 results' in output_text
-    assert f'[Unit: {unit_id}]' in output_text
-    assert f'[Note: {doc_id}]' in output_text
-    assert '[world]' in output_text
-    assert '(0.95)' in output_text
+    data = parse_tool_result(result)
+    assert len(data) == 1
+    unit = data[0]
+    assert unit['id'] == str(unit_id)
+    assert unit['note_id'] == str(doc_id)
+    assert unit['fact_type'] == 'world'
+    assert unit['score'] == pytest.approx(0.95, abs=0.01)
 
 
 @pytest.mark.asyncio
@@ -39,7 +43,8 @@ async def test_mcp_search_with_budget(mock_api, mcp_client):
     mock_api.search.return_value = []
 
     await mcp_client.call_tool(
-        'memex_memory_search', {'query': 'python', 'limit': 1, 'token_budget': 500}
+        'memex_memory_search',
+        {'query': 'python', 'limit': 1, 'token_budget': 500, 'vault_ids': ['test-vault']},
     )
 
     # Verify call args

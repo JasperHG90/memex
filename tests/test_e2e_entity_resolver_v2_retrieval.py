@@ -132,7 +132,7 @@ async def test_retrieval_ner_canonical(db_session: AsyncSession, setup_data):
     engine = get_engine(ner_model=mock_ner)
 
     req = RetrievalRequest(query='What did Elon Musk do?', limit=10)
-    results = await engine.retrieve(db_session, req)
+    results, _ = await engine.retrieve(db_session, req)
 
     # Should find both Elon memories
     found_ids = [r.id for r in results]
@@ -155,7 +155,7 @@ async def test_retrieval_ner_alias(db_session: AsyncSession, setup_data):
     engine = get_engine(ner_model=mock_ner)
 
     req = RetrievalRequest(query='Tell me about JS', limit=10)
-    results = await engine.retrieve(db_session, req)
+    results, _ = await engine.retrieve(db_session, req)
 
     found_ids = [r.id for r in results]
     assert setup_data['mem_js'].id in found_ids
@@ -171,7 +171,7 @@ async def test_retrieval_ner_phonetic(db_session: AsyncSession, setup_data):
     engine = get_engine(ner_model=mock_ner)
 
     req = RetrievalRequest(query='Where is Stefen?', limit=10)
-    results = await engine.retrieve(db_session, req)
+    results, _ = await engine.retrieve(db_session, req)
 
     found_ids = [r.id for r in results]
     assert setup_data['mem_stephen'].id in found_ids
@@ -188,7 +188,7 @@ async def test_retrieval_fallback(db_session: AsyncSession, setup_data):
 
     # Query matching 'Elon' via trigram/ilike
     req = RetrievalRequest(query='Elon', limit=10)
-    results = await engine.retrieve(db_session, req)
+    results, _ = await engine.retrieve(db_session, req)
 
     found_ids = [r.id for r in results]
     assert setup_data['mem_elon_new'].id in found_ids

@@ -184,8 +184,10 @@ class TestMigration002:
 
         engine = create_async_engine(postgres_uri, poolclass=NullPool)
         async with engine.connect() as conn:
+            from memex_core.migration import get_expected_head
+
             result = await conn.execute(text('SELECT version_num FROM alembic_version'))
-            assert result.scalar() == '004_note_status'
+            assert result.scalar() == get_expected_head()
         await engine.dispose()
 
     @pytest.mark.asyncio

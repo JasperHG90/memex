@@ -37,8 +37,10 @@ def test_config_env_vars():
 
 
 def test_config_server_url_default():
-    config = MemexConfig()
-    assert config.server_url == 'http://127.0.0.1:8000'
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop('MEMEX_SERVER_URL', None)
+        config = MemexConfig()
+        assert config.server_url == 'http://127.0.0.1:8000'
 
 
 def test_config_server_url_override():
@@ -47,8 +49,10 @@ def test_config_server_url_override():
 
 
 def test_config_server_url_derived_from_custom_host_port():
-    config = MemexConfig(server={'host': '10.0.0.1', 'port': 9000})
-    assert config.server_url == 'http://10.0.0.1:9000'
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop('MEMEX_SERVER_URL', None)
+        config = MemexConfig(server={'host': '10.0.0.1', 'port': 9000})
+        assert config.server_url == 'http://10.0.0.1:9000'
 
 
 def test_default_model_propagation():
@@ -87,7 +91,7 @@ def test_default_model_sub_override_preserved():
 def test_token_fields_on_page_index_text_splitting():
     """PageIndexTextSplitting has token-based fields with reasonable defaults."""
     ts = PageIndexTextSplitting()
-    assert ts.scan_chunk_size_tokens == 6000
+    assert ts.scan_chunk_size_tokens == 20_000
     assert ts.short_doc_threshold_tokens == 500
     assert ts.max_node_length_tokens == 1250
     assert ts.block_token_target == 2000

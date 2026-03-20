@@ -13,7 +13,7 @@ def mock_api(mock_metastore):
     api.ingest_batch_internal = MagicMock()
     api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
     api.metastore = mock_metastore
-    api.config.active_vault = 'global'
+    api.config.server.default_active_vault = 'global'
     return api
 
 
@@ -24,24 +24,20 @@ def manager(mock_api):
 
 @pytest.mark.asyncio
 async def test_create_job(manager, mock_api, mock_session):
-    """Test job creation and initial persistence."""
+    """Test job creation, persistence, and background task scheduling."""
     notes = [MagicMock()]
     vault_id = uuid4()
+    resolved_vault_id = mock_api.resolve_vault_identifier.return_value
 
-    # Patch _run_job to prevent background execution during this test
-    with patch.object(manager, '_run_job', new_callable=AsyncMock) as _:
+    with patch.object(manager, '_run_job', new_callable=AsyncMock) as mock_run_job:
         job_id = await manager.create_job(notes, vault_id)
 
     assert isinstance(job_id, UUID)
     mock_session.add.assert_called()
     mock_session.commit.assert_called()
-    # Verify the background task was scheduled (called)
-    # Since create_task calls it, we check if the coroutine was created?
-    # Actually, patch.object replaces the method. create_job calls self._run_job(...)
-    # Since it's an async method, it returns a coroutine. create_task schedules it.
-    # The mock needs to be awaited? No, create_task takes a coroutine.
-    # If _run_job is AsyncMock, calling it returns a coroutine (which is mock_run.return_value if configured, or a new coroutine).
-    # We just want to ensure it doesn't execute real logic.
+
+    # Verify _run_job was invoked with the correct arguments to schedule the task
+    mock_run_job.assert_called_once_with(job_id, notes, resolved_vault_id, 32)
 
 
 @pytest.mark.asyncio
@@ -51,11 +47,11 @@ async def test_run_job_success(manager, mock_api, mock_session):
     vault_id = uuid4()
     notes = [MagicMock()]
 
-    # Mock job retrieval
+    # Mock job retrieval (via SELECT ... FOR UPDATE)
     job = BatchJob(
         id=job_id, vault_id=vault_id, status=BatchJobStatus.PENDING, notes_count=len(notes)
     )
-    mock_session.get.return_value = job
+    mock_session.exec.return_value.first.return_value = job
 
     # Mock API ingestion to return an async generator
     async def mock_ingest_gen(*args, **kwargs):
@@ -87,7 +83,7 @@ async def test_run_job_failure(manager, mock_api, mock_session):
     job = BatchJob(
         id=job_id, vault_id=vault_id, status=BatchJobStatus.PENDING, notes_count=len(notes)
     )
-    mock_session.get.return_value = job
+    mock_session.exec.return_value.first.return_value = job
 
     # Mock API ingestion to raise exception when iterated
     async def mock_ingest_gen_fail(*args, **kwargs):

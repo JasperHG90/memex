@@ -70,7 +70,7 @@ def _mcp_server_entry(vault: str) -> dict:
         'command': 'uv',
         'args': ['run', 'memex', 'mcp', 'run'],
         'env': {
-            'MEMEX_SERVER__ACTIVE_VAULT': vault,
+            'MEMEX_VAULT__ACTIVE': vault,
         },
     }
 
@@ -234,12 +234,24 @@ async def setup_claude_code(
     Generates MCP server config, slash-command skills (/remember, /recall),
     hooks for session lifecycle events, and optionally appends
     memory-integration instructions to CLAUDE.md.
+
+    .. deprecated::
+        This command is deprecated. Use the Memex Claude Code plugin instead:
+        ``claude plugin install memex`` or ``claude --plugin-dir <path-to-memex-plugin>``.
+        See ``packages/claude-code-plugin/README.md`` for details.
     """
+    console.print(
+        '[yellow]Deprecation notice:[/yellow] This command is deprecated. '
+        'Use the Memex Claude Code plugin instead:\n'
+        '  [bold]claude plugin install memex[/bold]\n'
+        '  or: [bold]claude --plugin-dir packages/claude-code-plugin[/bold]\n'
+        'The plugin provides the same functionality without per-project setup.\n'
+    )
     project_dir = project_dir.resolve()
     config: MemexConfig | None = ctx.obj
 
     # --- Resolve vault name ---------------------------------------------------
-    vault_name = vault or (config.server.active_vault if config else 'global')
+    vault_name = vault or (config.write_vault if config else 'global')
 
     # --- Health check ---------------------------------------------------------
     check_url = server_url or (config.server_url if config else None)

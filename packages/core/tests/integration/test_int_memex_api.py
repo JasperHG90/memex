@@ -20,7 +20,7 @@ async def test_int_ingest_success(api, metastore, fake_retain_factory):
     # Create a NoteInput
     note_content = b'# Test NoteInput\nThis is a test.'
     note = NoteInput(name='test_int_note', description='desc', content=note_content)
-    note_uuid = note.uuid
+    note_uuid = note.idempotency_key
 
     # Execute Ingest
     result = await api.ingest(note)
@@ -61,7 +61,7 @@ async def test_int_ingest_rollback_on_error(api, metastore, filestore):
     api.memory.retain.side_effect = RuntimeError('Extraction Failed!')
 
     note = NoteInput(name='fail_note', description='desc', content=b'fail')
-    note_uuid = note.uuid
+    note_uuid = note.idempotency_key
 
     with pytest.raises(RuntimeError, match='Extraction Failed!'):
         await api.ingest(note)
@@ -114,7 +114,7 @@ async def test_int_list_documents_vault_filter(
         await session.commit()
 
     # 2. Config for Vault A
-    memex_config.server.active_vault = str(vault_a)
+    memex_config.server.default_active_vault = str(vault_a)
     api_a = MemexAPI(
         embedding_model=mock_embedding_model,
         reranking_model=mock_reranking_model,
@@ -129,7 +129,7 @@ async def test_int_list_documents_vault_filter(
     assert docs_a[0].vault_id == vault_a
 
     # 3. Config for Global
-    memex_config.server.active_vault = 'global'
+    memex_config.server.default_active_vault = 'global'
     api_global = MemexAPI(
         embedding_model=mock_embedding_model,
         reranking_model=mock_reranking_model,

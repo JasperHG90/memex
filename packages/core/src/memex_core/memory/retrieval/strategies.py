@@ -129,7 +129,7 @@ class KeywordStrategy:
         permissive_query_str = func.regexp_replace(cast(ts_query_base, String), '&', '|', 'g')
         ts_query = func.to_tsquery('english', permissive_query_str)
 
-        ts_vector = func.to_tsvector('english', col(MemoryUnit.text))
+        ts_vector = col(MemoryUnit.search_tsvector)
         rank = func.ts_rank_cd(ts_vector, ts_query)
 
         statement = select(MemoryUnit.id).select_from(MemoryUnit)
@@ -210,6 +210,7 @@ def _build_ner_seeds(
     ner_model: FastNERModel | None,
     similarity_threshold: float,
     include_ilike: bool = False,
+    pre_extracted_entities: list[dict] | None = None,
 ) -> Select | CompoundSelect:
     """Build a UNION query of seed entity IDs from NER or fallback similarity.
 
@@ -218,13 +219,23 @@ def _build_ner_seeds(
     phonetic, and optionally ILIKE/trigram conditions. Without NER, falls back
     to ILIKE + pg_trgm similarity on the raw query string.
 
+    Args:
+        pre_extracted_entities: If provided, skip NER prediction and use these
+            entities directly. Each dict must have a ``'word'`` key.
+
     Returns:
         A ``Select | CompoundSelect`` producing a single ``id`` column.
     """
     extracted_names: list[str] = []
     extracted_phonetics: list[str] = []
 
-    if ner_model:
+    if pre_extracted_entities is not None:
+        extracted_names = [e['word'] for e in pre_extracted_entities]
+        for name in extracted_names:
+            p_code = get_phonetic_code(name)
+            if p_code:
+                extracted_phonetics.append(p_code)
+    elif ner_model:
         try:
             extracted = ner_model.predict(query)
             extracted_names = [e['word'] for e in extracted]
@@ -290,6 +301,7 @@ def build_seed_entity_cte(
     semantic_seed_top_k: int = 5,
     semantic_seed_weight: float = 0.7,
     enable_semantic_seeding: bool = True,
+    pre_extracted_entities: list[dict] | None = None,
 ) -> CTE:
     """Build a CTE of (id, weight) seed entities from NER + optional semantic seeds.
 
@@ -314,7 +326,11 @@ def build_seed_entity_cte(
         A SQLAlchemy CTE with columns ``(id, weight)``.
     """
     ner_seeds_query = _build_ner_seeds(
-        query, ner_model, similarity_threshold, include_ilike=include_ilike
+        query,
+        ner_model,
+        similarity_threshold,
+        include_ilike=include_ilike,
+        pre_extracted_entities=pre_extracted_entities,
     )
     ner_subq = ner_seeds_query.subquery(f'{cte_name}_ner_t')
 
@@ -405,6 +421,7 @@ class EntityCooccurrenceGraphStrategy:
     ) -> Select | CompoundSelect:
         vault_ids = kwargs.get('vault_ids')
         vault_id = vault_ids[0] if vault_ids else None
+        pre_extracted_entities = kwargs.get('_ner_entities')
 
         # Build seed entity CTE via shared helper.
         # The original GraphStrategy included ilike in its NER path, so include_ilike=True.
@@ -419,6 +436,7 @@ class EntityCooccurrenceGraphStrategy:
             semantic_seed_top_k=self.semantic_seed_top_k,
             semantic_seed_weight=self.semantic_seed_weight,
             enable_semantic_seeding=self.enable_semantic_seeding,
+            pre_extracted_entities=pre_extracted_entities,
         )
 
         # Base Selects
@@ -603,6 +621,7 @@ class EntityCooccurrenceNoteGraphStrategy:
         """Build a query returning (Chunk.id, score) via entity graph traversal."""
         vault_ids = kwargs.get('vault_ids')
         vault_id = vault_ids[0] if vault_ids else None
+        pre_extracted_entities = kwargs.get('_ner_entities')
 
         # NoteGraphStrategy always included ilike in NER path
         seed_entities = build_seed_entity_cte(
@@ -616,6 +635,7 @@ class EntityCooccurrenceNoteGraphStrategy:
             semantic_seed_top_k=self.semantic_seed_top_k,
             semantic_seed_weight=self.semantic_seed_weight,
             enable_semantic_seeding=self.enable_semantic_seeding,
+            pre_extracted_entities=pre_extracted_entities,
         )
 
         # 1st Order: Entity -> UnitEntity -> MemoryUnit -> Document -> Chunk
@@ -743,6 +763,7 @@ class CausalGraphStrategy:
     ) -> Select | CompoundSelect:
         vault_ids = kwargs.get('vault_ids')
         vault_id = vault_ids[0] if vault_ids else None
+        pre_extracted_entities = kwargs.get('_ner_entities')
 
         seed_entities = build_seed_entity_cte(
             query=query,
@@ -755,6 +776,7 @@ class CausalGraphStrategy:
             semantic_seed_top_k=self.semantic_seed_top_k,
             semantic_seed_weight=self.semantic_seed_weight,
             enable_semantic_seeding=self.enable_semantic_seeding,
+            pre_extracted_entities=pre_extracted_entities,
         )
 
         # -- 1st order: seed -> UnitEntity -> MemoryUnit --------------------
@@ -849,6 +871,7 @@ class CausalNoteGraphStrategy:
     ) -> Select | CompoundSelect:
         vault_ids = kwargs.get('vault_ids')
         vault_id = vault_ids[0] if vault_ids else None
+        pre_extracted_entities = kwargs.get('_ner_entities')
 
         seed_entities = build_seed_entity_cte(
             query=query,
@@ -861,6 +884,7 @@ class CausalNoteGraphStrategy:
             semantic_seed_top_k=self.semantic_seed_top_k,
             semantic_seed_weight=self.semantic_seed_weight,
             enable_semantic_seeding=self.enable_semantic_seeding,
+            pre_extracted_entities=pre_extracted_entities,
         )
 
         include_stale = kwargs.get('include_stale', False)
@@ -960,6 +984,7 @@ class LinkExpansionGraphStrategy:
     ) -> Select | CompoundSelect:
         vault_ids = kwargs.get('vault_ids')
         vault_id = vault_ids[0] if vault_ids else None
+        pre_extracted_entities = kwargs.get('_ner_entities')
 
         # Seed entities -------------------------------------------------
         seed_entities = build_seed_entity_cte(
@@ -973,6 +998,7 @@ class LinkExpansionGraphStrategy:
             semantic_seed_top_k=self.semantic_seed_top_k,
             semantic_seed_weight=self.semantic_seed_weight,
             enable_semantic_seeding=self.enable_semantic_seeding,
+            pre_extracted_entities=pre_extracted_entities,
         )
 
         # First-order units (seed -> UnitEntity -> MemoryUnit) -----------

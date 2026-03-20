@@ -20,6 +20,16 @@ postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 from unittest.mock import patch, AsyncMock, MagicMock
 
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breaker():
+    """Reset the global LLM circuit breaker before each test to prevent cross-test contamination."""
+    from memex_core.llm import get_circuit_breaker
+
+    get_circuit_breaker().reset()
+    yield
+    get_circuit_breaker().reset()
+
+
 @pytest.fixture
 def mock_embedding_model():
     mock = MagicMock()
@@ -293,7 +303,7 @@ def memex_config(postgres_uri: str) -> 'MemexConfig':
     parsed = urlparse(postgres_uri)
     return MemexConfig(
         server=ServerConfig(
-            active_vault=GLOBAL_VAULT_NAME,
+            default_active_vault=GLOBAL_VAULT_NAME,
             meta_store=PostgresMetaStoreConfig(
                 instance=PostgresInstanceConfig(
                     host=parsed.hostname or 'localhost',

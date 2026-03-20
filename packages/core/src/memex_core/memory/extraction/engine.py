@@ -34,7 +34,7 @@ from memex_core.memory.extraction.core import (
     index_document,
 )
 from memex_core.memory.models.embedding import get_embedding_model
-from memex_core.memory.extraction.utils import parse_datetime
+from memex_core.memory.extraction.utils import parse_iso_datetime
 from memex_core.memory.extraction import storage, embedding_processor, deduplication
 from memex_core.memory.extraction.pipeline.diffing import (
     assemble_llm_chunks,
@@ -315,7 +315,9 @@ class ExtractionEngine:
         block_size = (
             ts.chunk_size_tokens * CHARS_PER_TOKEN if isinstance(ts, SimpleTextSplitting) else 4000
         )
-        new_blocks = stable_chunk_text(combined_text, block_size=block_size)
+        new_blocks = await asyncio.to_thread(
+            stable_chunk_text, combined_text, block_size=block_size
+        )
 
         # 2-3. Diff new blocks against existing blocks
         block_diff = diff_blocks(new_blocks, existing_blocks)
@@ -382,10 +384,10 @@ class ExtractionEngine:
                         fact_text=raw_fact.formatted_text,
                         fact_type=raw_fact.fact_type,
                         entities=raw_fact.entities,
-                        occurred_start=parse_datetime(raw_fact.occurred_start)
+                        occurred_start=parse_iso_datetime(raw_fact.occurred_start)
                         if raw_fact.occurred_start
                         else None,
-                        occurred_end=parse_datetime(raw_fact.occurred_end)
+                        occurred_end=parse_iso_datetime(raw_fact.occurred_end)
                         if raw_fact.occurred_end
                         else None,
                         causal_relations=_convert_causal_relations(
@@ -422,10 +424,10 @@ class ExtractionEngine:
                         fact_text=f.formatted_text,
                         fact_type=f.fact_type,
                         entities=f.entities,
-                        occurred_start=parse_datetime(f.occurred_start)
+                        occurred_start=parse_iso_datetime(f.occurred_start)
                         if f.occurred_start
                         else None,
-                        occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                         causal_relations=[],
                         content_index=0,
                         chunk_index=0,
@@ -572,7 +574,7 @@ class ExtractionEngine:
         page_index_output, pi_usage = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
-            scan_chunk_size=ts.scan_chunk_size_tokens * CHARS_PER_TOKEN,
+            max_scan_tokens=ts.scan_chunk_size_tokens,
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
@@ -716,10 +718,12 @@ class ExtractionEngine:
                             fact_text=f.formatted_text,
                             fact_type=f.fact_type,
                             entities=f.entities,
-                            occurred_start=parse_datetime(f.occurred_start)
+                            occurred_start=parse_iso_datetime(f.occurred_start)
                             if f.occurred_start
                             else None,
-                            occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                            occurred_end=parse_iso_datetime(f.occurred_end)
+                            if f.occurred_end
+                            else None,
                             causal_relations=_convert_causal_relations(
                                 relations_from_llm=f.causal_relations,
                                 fact_start_idx=global_fact_idx,
@@ -851,7 +855,7 @@ class ExtractionEngine:
         page_index_output, pi_usage = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
-            scan_chunk_size=ts.scan_chunk_size_tokens * CHARS_PER_TOKEN,
+            max_scan_tokens=ts.scan_chunk_size_tokens,
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
@@ -941,8 +945,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=_convert_causal_relations(
                         relations_from_llm=f.causal_relations,
                         fact_start_idx=global_fact_idx,
@@ -977,8 +983,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=[],
                     content_index=0,
                     chunk_index=first_block_seq,
@@ -1085,9 +1093,13 @@ class ExtractionEngine:
         # When skip_block_hashes is given, only embed+store non-retained blocks.
         effective_skip = skip_block_hashes or set()
         block_chunk_metadata: list[ChunkMetadata] = []
+        seen_block_ids: dict[str, int] = {}  # block.id -> first block.seq
         for block in page_index_output.blocks:
             if block.id in effective_skip:
                 continue
+            if block.id in seen_block_ids:
+                continue  # duplicate content — will reuse the first block's chunk
+            seen_block_ids[block.id] = block.seq
             block_chunk_metadata.append(
                 ChunkMetadata(
                     chunk_text=block.content,
@@ -1095,6 +1107,8 @@ class ExtractionEngine:
                     content_index=0,
                     chunk_index=block.seq,
                     content_hash=block.id,
+                    summary=block.summary.model_dump() if block.summary else None,
+                    summary_formatted=block.summary.formatted if block.summary else None,
                 )
             )
 
@@ -1115,7 +1129,10 @@ class ExtractionEngine:
         #   node.id -> block_hash (node_to_block_map)
         #   block_hash -> block.seq (from blocks list)
         #   block.seq -> chunk UUID (block_chunk_map)
-        block_hash_to_seq = {b.id: b.seq for b in page_index_output.blocks}
+        block_hash_to_seq: dict[str, int] = {}
+        for b in page_index_output.blocks:
+            if b.id not in block_hash_to_seq:
+                block_hash_to_seq[b.id] = b.seq
         node_hash_to_block_id: dict[str, UUID] = {}
 
         for node_id, block_hash in page_index_output.node_to_block_map.items():
@@ -1199,10 +1216,10 @@ class ExtractionEngine:
                         fact_text=f.formatted_text,
                         fact_type=f.fact_type,
                         entities=f.entities,
-                        occurred_start=parse_datetime(f.occurred_start)
+                        occurred_start=parse_iso_datetime(f.occurred_start)
                         if f.occurred_start
                         else None,
-                        occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                         causal_relations=_convert_causal_relations(
                             relations_from_llm=f.causal_relations,
                             fact_start_idx=chunk_start_fact_idx,
@@ -1239,8 +1256,10 @@ class ExtractionEngine:
                     fact_text=f.formatted_text,
                     fact_type=f.fact_type,
                     entities=f.entities,
-                    occurred_start=parse_datetime(f.occurred_start) if f.occurred_start else None,
-                    occurred_end=parse_datetime(f.occurred_end) if f.occurred_end else None,
+                    occurred_start=parse_iso_datetime(f.occurred_start)
+                    if f.occurred_start
+                    else None,
+                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
                     causal_relations=[],
                     content_index=0,
                     chunk_index=0,

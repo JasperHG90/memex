@@ -57,7 +57,7 @@ async def test_reranking_failure_fallback(mock_embedder, mock_session):
             # Request with rerank=True
             request = RetrievalRequest(query='test', limit=5, rerank=True)
 
-            results = await engine.retrieve(mock_session, request)
+            results, _ = await engine.retrieve(mock_session, request)
 
             # Assert reranker was called
             mock_reranker.score.assert_called_once()
@@ -83,7 +83,7 @@ def test_deduplicate_malformed_evidence_ids():
     )
 
     results = [u1, u2]
-    deduplicated = engine._deduplicate_and_cite(results)
+    deduplicated = engine._attach_citations(results)
 
     # Both units remain; citation metadata is attached to u2
     assert len(deduplicated) == 2
@@ -96,36 +96,35 @@ def test_deduplicate_malformed_evidence_ids():
 
 
 @pytest.mark.asyncio
-async def test_resonance_queue_called(mock_embedder, mock_session):
-    """Test that _update_resonance pushes to the queue service."""
+async def test_resonance_context_collected(mock_embedder, mock_session):
+    """Test that retrieve() collects resonance context for background scheduling."""
     mock_queue = AsyncMock()
+    entity_id = uuid4()
 
-    # Config needed to init QueueService? We can inject the mock directly
     engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
     engine.queue_service = mock_queue
 
     u1 = MemoryUnit(id=uuid4(), text='Unit', embedding=[])
 
-    await engine._update_resonance(mock_session, [u1])
+    with (
+        patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf,
+        patch.object(engine, '_hydrate_results', new_callable=AsyncMock, return_value=[u1]),
+    ):
+        mock_rrf.return_value = [MagicMock(id=u1.id, type='unit')]
 
-    # It should query the DB for entities first.
-    # We mocked the session, but _update_resonance calls session.exec(...)
-    # We need to verify session.exec was called to fetch UnitEntities
-    mock_session.exec.assert_called_once()
+        # Mock entity lookup to return an entity ID
+        mock_result = MagicMock()
+        mock_result.all.return_value = [entity_id]
+        mock_session.exec.return_value = mock_result
 
-    # Since mock_session.exec returning a mock result with .all() defaults to [],
-    # queue_service won't be called unless we populate the result.
-    mock_result = MagicMock()
-    mock_result.all.return_value = ['entity-uuid-1']
-    mock_session.exec.return_value = mock_result
+        request = RetrievalRequest(query='test')
+        results, resonance_ctx = await engine.retrieve(mock_session, request)
 
-    # Call again
-    mock_session.reset_mock()
-    mock_session.exec.return_value = mock_result
-
-    await engine._update_resonance(mock_session, [u1])
-
-    mock_queue.handle_retrieval_event.assert_awaited_once()
+        assert len(results) == 1
+        assert resonance_ctx is not None
+        assert entity_id in resonance_ctx['entity_ids']
+        # queue_service.handle_retrieval_event should NOT have been called inline
+        mock_queue.handle_retrieval_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -139,7 +138,7 @@ async def test_filters_propagation(mock_embedder, mock_session):
     with patch.object(engine, '_perform_rrf_retrieval', new_callable=AsyncMock) as mock_rrf:
         mock_rrf.return_value = []
 
-        await engine.retrieve(mock_session, request)
+        await engine.retrieve(mock_session, request)  # return value not needed
 
         # Verify call args
         args, kwargs = mock_rrf.call_args
@@ -149,3 +148,58 @@ async def test_filters_propagation(mock_embedder, mock_session):
         expected_filters: dict[str, Any] = filters.copy()
         expected_filters['include_stale'] = False
         assert passed_filters == expected_filters
+
+
+@pytest.mark.asyncio
+async def test_retrieve_empty_returns_none_resonance(mock_embedder, mock_session):
+    """When RRF returns no results, resonance_ctx should be None."""
+    engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
+
+    with patch.object(
+        engine,
+        '_perform_rrf_retrieval',
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        request = RetrievalRequest(query='test')
+        results, resonance_ctx = await engine.retrieve(mock_session, request)
+
+        assert results == []
+        assert resonance_ctx is None
+
+
+@pytest.mark.asyncio
+async def test_resonance_collection_error_still_returns_results(mock_embedder, mock_session):
+    """If entity lookup for resonance fails, results are still returned."""
+    mock_queue = AsyncMock()
+    engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
+    engine.queue_service = mock_queue
+
+    u1 = MemoryUnit(id=uuid4(), text='Unit', embedding=[])
+
+    with (
+        patch.object(
+            engine,
+            '_perform_rrf_retrieval',
+            new_callable=AsyncMock,
+        ) as mock_rrf,
+        patch.object(
+            engine,
+            '_hydrate_results',
+            new_callable=AsyncMock,
+            return_value=[u1],
+        ),
+    ):
+        mock_rrf.return_value = [MagicMock(id=u1.id, type='unit')]
+
+        # Make session.exec raise on the entity lookup call (step 10)
+        # The first call(s) to session.exec are in _perform_rrf_retrieval
+        # which is mocked, so the only real call is the entity lookup.
+        mock_session.exec.side_effect = RuntimeError('DB error')
+
+        request = RetrievalRequest(query='test')
+        results, resonance_ctx = await engine.retrieve(mock_session, request)
+
+        assert len(results) == 1
+        assert results[0].id == u1.id
+        assert resonance_ctx is None

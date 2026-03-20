@@ -1,4 +1,4 @@
-"""Tests for SearchService vault resolution — attached_vaults fallback."""
+"""Tests for SearchService vault resolution — default_reader_vault fallback."""
 
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -33,11 +33,10 @@ def vault_service():
 def search_service(vault_service):
     """SearchService with mocked dependencies."""
     config = MagicMock()
-    config.server.active_vault = 'my-vault'
-    config.server.attached_vaults = ['extra-vault-1', 'extra-vault-2']
+    config.server.default_reader_vault = 'my-vault'
 
     memory = AsyncMock()
-    memory.recall = AsyncMock(return_value=[])
+    memory.recall = AsyncMock(return_value=([], None))
 
     svc = SearchService(
         metastore=MagicMock(),
@@ -53,29 +52,31 @@ def search_service(vault_service):
 
 
 @pytest.mark.asyncio
-async def test_search_resolves_attached_vaults_when_no_vault_ids(search_service, vault_service):
-    """When vault_ids=None, search should resolve active_vault + attached_vaults."""
+async def test_search_resolves_default_reader_vault_when_no_vault_ids(
+    search_service, vault_service
+):
+    """When vault_ids=None, search should resolve default_reader_vault."""
     # Mock the session context manager
     mock_session = AsyncMock()
     search_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
     search_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
-    search_service.memory.recall = AsyncMock(return_value=[])
+    search_service.memory.recall = AsyncMock(return_value=([], None))
 
     await search_service.search(query='test query', vault_ids=None)
 
-    # Verify recall was called and the request had 3 vault_ids
+    # Verify recall was called and the request had 1 vault_id (default_reader_vault)
     search_service.memory.recall.assert_called_once()
     request = search_service.memory.recall.call_args[0][1]
-    assert len(request.vault_ids) == 3, 'Should have active_vault + 2 attached_vaults'
+    assert len(request.vault_ids) == 1, 'Should have default_reader_vault only'
 
 
 @pytest.mark.asyncio
 async def test_search_uses_explicit_vault_ids_when_provided(search_service, vault_service):
-    """When vault_ids are explicitly provided, attached_vaults should NOT be added."""
+    """When vault_ids are explicitly provided, default_reader_vault should NOT be added."""
     mock_session = AsyncMock()
     search_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
     search_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
-    search_service.memory.recall = AsyncMock(return_value=[])
+    search_service.memory.recall = AsyncMock(return_value=([], None))
 
     explicit_id = uuid4()
     await search_service.search(query='test', vault_ids=[explicit_id])
@@ -86,14 +87,13 @@ async def test_search_uses_explicit_vault_ids_when_provided(search_service, vaul
 
 
 @pytest.mark.asyncio
-async def test_search_no_attached_vaults_only_active(vault_service):
-    """When no attached_vaults configured, only active_vault is used."""
+async def test_search_default_reader_vault_only(vault_service):
+    """When no vault_ids provided, only default_reader_vault is used."""
     config = MagicMock()
-    config.server.active_vault = 'solo-vault'
-    config.server.attached_vaults = []  # Empty
+    config.server.default_reader_vault = 'solo-vault'
 
     memory = AsyncMock()
-    memory.recall = AsyncMock(return_value=[])
+    memory.recall = AsyncMock(return_value=([], None))
 
     svc = SearchService(
         metastore=MagicMock(),
@@ -110,4 +110,4 @@ async def test_search_no_attached_vaults_only_active(vault_service):
     await svc.search(query='test')
 
     request = memory.recall.call_args[0][1]
-    assert len(request.vault_ids) == 1, 'Should only have the active vault'
+    assert len(request.vault_ids) == 1, 'Should only have the default reader vault'

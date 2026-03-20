@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 20 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 26 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -54,7 +54,7 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 |-----------|------|----------|---------|-------------|
 | `query` | string | Yes | - | The search query. |
 | `limit` | int | No | `10` | Maximum number of results to return. |
-| `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
+| `vault_ids` | string[] | No | from config | List of vault UUIDs or names to search in. Defaults to `config.read_vaults`. |
 | `token_budget` | int | No | - | Token budget for retrieval. |
 | `strategies` | string[] | No | all | Strategies to run: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
 | `include_superseded` | bool | No | `false` | Include superseded (low-confidence) memory units. |
@@ -63,6 +63,8 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
 Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
+
+All vault parameters are optional and default to the resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads).
 
 ---
 
@@ -75,13 +77,27 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `query` | string | Yes | - | The note search query. |
 | `limit` | int | No | `5` | Maximum number of notes to return. |
 | `expand_query` | bool | No | `false` | Enable multi-query expansion via LLM. |
-| `vault_ids` | string[] | No | - | List of vault UUIDs or names to search in. |
+| `vault_ids` | string[] | No | from config | List of vault UUIDs or names to search in. Defaults to `config.read_vaults`. |
 | `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
 | `after` | string | No | - | Only notes after this ISO 8601 date. |
 | `before` | string | No | - | Only notes before this ISO 8601 date. |
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 
 Returns note titles, IDs, scores, snippets, and inline metadata.
+
+---
+
+### `memex_find_note`
+
+Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. Use when you know (part of) the title. For content search, use `memex_note_search`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Title search query (partial or fuzzy match). |
+| `vault_ids` | string[] | No | - | Vault UUIDs or names to search in. `null` = all vaults. |
+| `limit` | int | No | `5` | Maximum results to return. |
+
+Returns note titles, IDs, similarity scores, status, and publish dates.
 
 ---
 
@@ -139,7 +155,7 @@ Read full note content. Only when total_tokens < 500. Otherwise use `memex_get_p
 
 ### `memex_add_note`
 
-Add a note to the Memex knowledge base. Confirm the target vault with the user before calling; use `memex_active_vault` to check or `memex_list_vaults` to enumerate.
+Add a note to the Memex knowledge base. The vault parameter is optional and defaults to `config.write_vault`. Use `memex_active_vault` to check the current write vault or `memex_list_vaults` to enumerate.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -149,7 +165,7 @@ Add a note to the Memex knowledge base. Confirm the target vault with the user b
 | `author` | string | Yes | - | Name of the model authoring this note. |
 | `tags` | string[] | Yes | - | Tags for easier retrieval. |
 | `supporting_files` | string[] | No | - | Absolute paths to supporting files (images, CSVs). |
-| `vault_id` | string | No | Active vault | UUID or name of the vault to add the note to. Defaults to active vault. |
+| `vault_id` | string | No | `config.write_vault` | UUID or name of the vault to add the note to. Defaults to resolved write vault from config. |
 | `note_key` | string | No | - | Unique stable key for incremental updates. |
 | `background` | bool | No | `false` | Queue ingestion in background. |
 
@@ -211,7 +227,7 @@ Retrieve 1+ file resources (images, audio, documents) by path. Get paths from `m
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `paths` | string[] | Yes | Resource path(s). |
-| `vault_id` | string | No | Vault UUID or name. Omit for active vault. |
+| `vault_id` | string | No | Vault UUID or name. Defaults to `config.write_vault`. |
 
 Returns `Image`, `Audio`, `File`, or error strings for each path. Per-item failures don't block other resources.
 
@@ -279,9 +295,83 @@ Returns unit text, type, confidence, note ID, and supersession context for each 
 
 ---
 
+## KV Store Tools
+
+### `memex_kv_write`
+
+Write a fact to the key-value store. Generates an embedding for semantic search. Use for storing structured preferences, settings, or facts. Key should be a short, namespaced identifier (e.g. `"tool:python:pkg_mgr"`).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `value` | string | Yes | - | The fact or preference text to store. |
+| `key` | string | Yes | - | Namespaced key, e.g. `"tool:python:pkg_mgr"`. |
+| `vault_id` | string | No | `null` (global) | Vault UUID or name. `null` = global (available in all vaults). |
+
+Returns the stored key-value pair and scope.
+
+---
+
+### `memex_kv_get`
+
+Get a fact by exact key from the KV store.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `key` | string | Yes | - | Exact key to look up. |
+| `vault_id` | string | No | - | Vault UUID or name. Checks vault-specific first, then global. |
+
+Returns the key, value, scope, and last updated timestamp. Returns "Key not found" if the key does not exist.
+
+---
+
+### `memex_kv_search`
+
+Fuzzy search facts in the KV store by semantic similarity. Returns the closest matching entries.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query text. |
+| `vault_id` | string | No | - | Vault UUID or name. `null` = search global entries only. |
+| `limit` | int | No | `5` | Maximum results to return. |
+
+Returns matching facts with keys, values, scopes, and timestamps.
+
+---
+
+### `memex_kv_list`
+
+List all facts in the KV store. Without `vault_id`, returns global entries only.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | No | - | Vault UUID or name. `null` = global entries only; with vault = both global and vault-scoped. |
+
+Returns all KV entries with keys, values, scopes, and timestamps.
+
+---
+
+## Note Browsing Tools
+
+### `memex_list_notes`
+
+List notes with optional date filters. Use `after`/`before` for temporal queries like "documents from 2026".
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | No | from config | Vault UUID or name. Omit to use config defaults. |
+| `after` | string | No | - | Only notes on/after this date (ISO 8601, e.g. `2026-01-01`). |
+| `before` | string | No | - | Only notes on/before this date (ISO 8601, e.g. `2026-12-31`). |
+| `limit` | int | No | `50` | Max notes to return. |
+
+Returns note titles, IDs, creation dates, publish dates, and vault IDs.
+
+---
+
 ## Vault Tools
 
-### `memex_active_vault`
+### `memex_active_vault` [DEPRECATED]
+
+> **Deprecated.** Use `memex_list_vaults` instead, which now includes an `is_active` flag on each vault. This tool will be removed in a future version.
 
 Retrieve the currently active vault information. No parameters.
 
@@ -291,17 +381,19 @@ Returns the active vault name and ID.
 
 ### `memex_list_vaults`
 
-List all available vaults. No parameters.
+List all available vaults. Each vault includes an `is_active` flag indicating the current writer vault. No parameters.
 
-Returns vault names, IDs, and descriptions.
+Returns vault names, IDs, descriptions, and active status.
 
 ---
 
 ### `memex_recent_notes`
 
-Browse recent notes. Filter by vault name or UUID. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
+Browse recent notes. Defaults to all vaults. Filter by vault names/UUIDs and optional date range. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `limit` | int | No | `20` | Maximum notes to return. |
-| `vault_id` | string | No | - | Vault UUID or name to filter by. |
+| `vault_ids` | string[] | No | - | Vault UUIDs or names. Omit for all vaults. |
+| `after` | string | No | - | Only notes on/after this date (ISO 8601). |
+| `before` | string | No | - | Only notes on/before this date (ISO 8601). |

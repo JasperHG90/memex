@@ -16,7 +16,7 @@ from memex_common.exceptions import (
     ResourceNotFoundError,
     VaultNotFoundError,
 )
-from memex_common.schemas import NoteDTO, EntityDTO
+from memex_common.schemas import MemoryUnitDTO, NoteDTO, EntityDTO, StrategyDebugInfo
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
@@ -79,7 +79,9 @@ def build_note_dto(doc: Any) -> NoteDTO:
             name=doc_title or _resolve_doc_name(metadata),
             original_text=doc.get('original_text'),
             created_at=doc['created_at'],
+            publish_date=doc.get('publish_date'),
             vault_id=doc['vault_id'],
+            vault_name=doc.get('vault_name'),
             assets=doc.get('assets', []),
             doc_metadata=metadata,
         )
@@ -92,19 +94,83 @@ def build_note_dto(doc: Any) -> NoteDTO:
         name=doc_title or _resolve_doc_name(metadata),
         original_text=doc.original_text,
         created_at=doc.created_at,
+        publish_date=getattr(doc, 'publish_date', None),
         vault_id=doc.vault_id,
+        vault_name=getattr(doc, 'vault_name', None),
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
     )
 
 
 def build_entity_dto(entity: Any) -> EntityDTO:
-    """Build an EntityDTO from an ORM entity object."""
+    """Build an EntityDTO from an ORM entity object or EntityWithMetadata wrapper.
+
+    Accepts either an ``EntityWithMetadata`` (preferred) or a plain ORM entity
+    (backward-compatible, produces empty metadata).
+    """
+    from memex_core.services.entities import EntityWithMetadata
+
+    if isinstance(entity, EntityWithMetadata):
+        metadata = entity.metadata or {}
+        orm_entity = entity.entity
+    else:
+        metadata = {}
+        orm_entity = entity
+
     return EntityDTO(
-        id=entity.id,
-        name=entity.canonical_name,
-        mention_count=entity.mention_count,
-        entity_type=getattr(entity, 'entity_type', None),
+        id=orm_entity.id,
+        name=orm_entity.canonical_name,
+        mention_count=orm_entity.mention_count,
+        entity_type=getattr(orm_entity, 'entity_type', None),
+        metadata=metadata,
+    )
+
+
+def build_memory_unit_dto(
+    unit: Any,
+    *,
+    debug: bool = False,
+) -> MemoryUnitDTO:
+    """Build a MemoryUnitDTO from a MemoryUnit ORM/model object.
+
+    Handles all field variations across retrieval, mentions, and single-unit
+    endpoints.  Optional ``debug`` flag controls whether per-strategy
+    attribution data is included.
+    """
+    doc_id = getattr(unit, 'note_id', None)
+    source_docs: list[UUID] = [doc_id] if doc_id else []
+
+    debug_info: list[StrategyDebugInfo] | None = None
+    if debug:
+        raw_debug = getattr(unit, '_debug_info', None)
+        if raw_debug:
+            debug_info = [
+                StrategyDebugInfo(
+                    strategy_name=c.strategy_name,
+                    rank=c.rank,
+                    rrf_score=c.rrf_score,
+                    raw_score=c.raw_score,
+                    timing_ms=c.timing_ms,
+                )
+                for c in raw_debug
+            ]
+
+    return MemoryUnitDTO(
+        id=unit.id,
+        note_id=doc_id,
+        source_note_ids=source_docs,
+        text=unit.text,
+        fact_type=unit.fact_type,
+        status=unit.status,
+        mentioned_at=unit.mentioned_at or getattr(unit, 'event_date', None),
+        occurred_start=unit.occurred_start,
+        occurred_end=unit.occurred_end,
+        vault_id=unit.vault_id,
+        metadata=unit.unit_metadata,
+        score=getattr(unit, 'score', None),
+        chunk_id=getattr(unit, 'chunk_id', None),
+        confidence=getattr(unit, 'confidence', 1.0) or 1.0,
+        debug_info=debug_info,
     )
 
 

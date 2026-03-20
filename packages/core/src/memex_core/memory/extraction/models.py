@@ -289,6 +289,8 @@ class ChunkMetadata(SQLModel):
         default='',
         description='SHA-256 hash of whitespace-normalized text for incremental diffing.',
     )
+    summary: dict[str, Any] | None = None
+    summary_formatted: str | None = None
 
 
 class RetainContent(SQLModel):
@@ -471,11 +473,13 @@ class RawFact(BaseFact):
     def formatted_text(self) -> str:
         """
         Reconstructs the combined text format used by the legacy application:
-        'What | When | Involving: Who | Why'
+        'What | When | Where | Involving: Who | Why'
         """
         parts = [self.what]
         if self.when and str(self.when).upper() != 'N/A':
             parts.append(f'When: {self.when}')
+        if self.where and str(self.where).upper() != 'N/A':
+            parts.append(f'Where: {self.where}')
         if self.who and str(self.who).upper() != 'N/A':
             parts.append(f'Involving: {self.who}')
         if self.why and str(self.why).upper() != 'N/A':

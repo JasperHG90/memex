@@ -1,7 +1,7 @@
 """
 The Hindsight "Reflect" Engine.
 
-This module orchestrates the 5-phase reflection loop to update Mental Models
+This module orchestrates the reflection loop (Phases 0-6) to update Mental Models
 based on new evidence and memories.
 """
 
@@ -31,10 +31,12 @@ from memex_core.memory.reflect.prompts import (
     ComparePhaseSignature,
     CandidateObservation,
     UnvalidatedCandidateObservation,
+    ReflectMemoryContext,
     ReflectObservationContext,
     UpdateExistingSignature,
     ReflectEvidenceContext,
     ReflectComparisonObservation,
+    EnrichmentSignature,
 )
 from memex_core.memory.reflect.utils import (
     build_memory_context,
@@ -173,7 +175,7 @@ class ReflectionEngine:
         self,
         req: ReflectionRequest,
         models_map: dict[UUID, MentalModel],
-        entities_map: dict[UUID, str],
+        entities_map: dict[UUID, Entity],
         memories_map: dict[UUID, list[MemoryUnit]],
         sem: asyncio.Semaphore,
         db_lock: asyncio.Lock,
@@ -182,10 +184,11 @@ class ReflectionEngine:
         eid = req.entity_id
         async with sem:
             try:
+                entity = entities_map.get(eid)
                 return await self._reflect_entity_internal(
                     entity_id=eid,
                     mental_model=models_map[eid],
-                    entity_name=entities_map.get(eid, 'Unknown'),
+                    entity=entity,
                     recent_memories=memories_map.get(eid, []),
                     db_lock=db_lock,
                     vault_id=req.vault_id,
@@ -203,6 +206,7 @@ class ReflectionEngine:
             try:
                 self.session.add(model)
                 flag_modified(model, 'observations')
+                flag_modified(model, 'entity_metadata')
                 await self.session.commit()
                 saved_count += 1
             except (SQLAlchemyError, OSError, RuntimeError) as inner_e:
@@ -214,12 +218,14 @@ class ReflectionEngine:
         self,
         entity_id: UUID,
         mental_model: MentalModel,
-        entity_name: str,
+        entity: Entity | None,
         recent_memories: list[MemoryUnit],
         db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> MentalModel:
         """Internal logic for single entity reflection, decoupled from DB fetching logic."""
+        entity_name = entity.canonical_name if entity else 'Unknown'
+        entity_type = entity.entity_type if entity else None
 
         # 0. Acquire Advisory Lock for this Entity to prevent concurrent reflection
         # Use transaction-level lock (automatically released at end of transaction/session)
@@ -257,10 +263,29 @@ class ReflectionEngine:
         validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
 
         # Phase 4: Compare (LLM)
-        final_obs = await self._phase_4_compare(updated_observations, validated, vault_id=vault_id)
+        final_obs, entity_summary = await self._phase_4_compare(
+            updated_observations, validated, vault_id=vault_id, entity_name=entity_name
+        )
 
         # Phase 5: Finalize Model
-        await self._phase_5_finalize(mental_model, final_obs, db_lock)
+        await self._phase_5_finalize(
+            mental_model,
+            final_obs,
+            db_lock,
+            entity_summary=entity_summary,
+            entity_type=entity_type,
+        )
+
+        # Phase 6: Enrich (Memory Evolution)
+        if self.config.server.memory.reflection.enrichment_enabled:
+            await self._phase_6_enrich(
+                entity_name=entity_name,
+                entity_summary=entity_summary,
+                final_obs=final_obs,
+                recent_memories=recent_memories,
+                db_lock=db_lock,
+                vault_id=vault_id,
+            )
 
         return mental_model
 
@@ -269,14 +294,22 @@ class ReflectionEngine:
         mental_model: MentalModel,
         final_obs: list[Observation],
         db_lock: asyncio.Lock,
+        entity_summary: str = '',
+        entity_type: str | None = None,
     ) -> None:
         """
         Phase 5: Prepare Model (CPU/GPU).
-        Updates observations, version, and embedding.
+        Updates observations, version, embedding, and entity metadata.
         """
         mental_model.observations = [obs.model_dump(mode='json') for obs in final_obs]
         mental_model.version += 1
         mental_model.last_refreshed = datetime.now(timezone.utc)
+
+        mental_model.entity_metadata = {
+            'description': entity_summary,
+            'category': entity_type,
+            'observation_count': len(final_obs),
+        }
 
         obs_text = ' '.join([f'{o.title} - {o.content}' for o in final_obs])
         full_text = format_for_embedding(
@@ -290,6 +323,126 @@ class ReflectionEngine:
         async with db_lock:
             self.session.add(mental_model)
             flag_modified(mental_model, 'observations')
+            flag_modified(mental_model, 'entity_metadata')
+
+    async def _phase_6_enrich(
+        self,
+        entity_name: str,
+        entity_summary: str,
+        final_obs: list[Observation],
+        recent_memories: list[MemoryUnit],
+        db_lock: asyncio.Lock,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """
+        Phase 6: Enrich (Memory Evolution).
+        Pushes enriched tags from the mental model back into contributing memory units,
+        making them discoverable for concepts identified during reflection.
+        """
+        if not final_obs:
+            return
+
+        # 1. Collect evidence unit IDs from all observations (preserve insertion order)
+        evidence_ids: dict[UUID, None] = {}
+        for obs in final_obs:
+            for ev in obs.evidence:
+                if ev.memory_id:
+                    evidence_ids[ev.memory_id] = None
+
+        if not evidence_ids:
+            return
+
+        # 2. Build unit map from recent_memories, load any missing from DB
+        unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
+        missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
+
+        if missing_ids:
+            async with db_lock:
+                stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(list(missing_ids)))
+                result = await self.session.exec(stmt)
+                for unit in result.all():
+                    unit_map[unit.id] = unit
+
+        # 3. Filter to only units we have evidence for
+        target_units = [unit_map[uid] for uid in evidence_ids if uid in unit_map]
+        if not target_units:
+            return
+
+        # 4. Build LLM context
+        obs_context = [
+            ReflectObservationContext(index_id=i, title=o.title, content=o.content)
+            for i, o in enumerate(final_obs)
+        ]
+
+        memory_context = []
+        for i, unit in enumerate(target_units):
+            meta = unit.unit_metadata or {}
+            existing_tags = meta.get('enriched_tags', [])
+            existing_kw = meta.get('enriched_keywords', [])
+            all_existing = existing_tags + existing_kw
+            tag_suffix = f' [tags: {", ".join(all_existing)}]' if all_existing else ''
+            occurred = (unit.event_date or datetime.now(timezone.utc)).isoformat()
+            memory_context.append(
+                ReflectMemoryContext(
+                    index_id=i,
+                    content=unit.text + tag_suffix,
+                    occurred=occurred,
+                )
+            )
+
+        # 5. Call LLM
+        enrich_predictor = dspy.Predict(EnrichmentSignature)
+
+        assert self.lm is not None, 'LM must be initialized for Phase 6'
+        result, _ = await run_dspy_operation(
+            lm=self.lm,
+            predictor=enrich_predictor,
+            input_kwargs={
+                'entity_name': entity_name,
+                'entity_summary': entity_summary,
+                'observations': obs_context,
+                'memories': memory_context,
+            },
+            session=self.session,
+            context_metadata={'phase': 'enrich', 'operation': 'reflect'},
+            vault_id=vault_id,
+        )
+
+        if not result or not result.enrichments:
+            logger.info('Phase 6: No enrichments generated.')
+            return
+
+        # 6. Apply enrichments under db_lock
+        now_iso = datetime.now(timezone.utc).isoformat()
+        enriched_count = 0
+
+        async with db_lock:
+            for enrichment in result.enrichments:
+                idx = enrichment.memory_index
+                if idx < 0 or idx >= len(target_units):
+                    logger.warning(f'Phase 6: Invalid memory_index {idx}, skipping.')
+                    continue
+
+                unit = target_units[idx]
+                if unit.unit_metadata is None:
+                    unit.unit_metadata = {}
+
+                # Set-union: accumulate tags across reflection cycles
+                existing_tags = set(unit.unit_metadata.get('enriched_tags', []))
+                existing_kw = set(unit.unit_metadata.get('enriched_keywords', []))
+
+                new_tags = existing_tags | {t.lower().strip() for t in enrichment.enriched_tags}
+                new_kw = existing_kw | {k.lower().strip() for k in enrichment.enriched_keywords}
+
+                unit.unit_metadata['enriched_tags'] = sorted(new_tags)
+                unit.unit_metadata['enriched_keywords'] = sorted(new_kw)
+                unit.unit_metadata['enriched_at'] = now_iso
+                unit.unit_metadata['enriched_by_entity'] = entity_name
+
+                flag_modified(unit, 'unit_metadata')
+                enriched_count += 1
+
+        logger.info(f'Phase 6: Enriched {enriched_count} memory units for entity "{entity_name}".')
 
     async def _batch_get_or_create_models(
         self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID
@@ -308,7 +461,8 @@ class ReflectionEngine:
         if missing_ids:
             entities = await self._batch_get_entities(list(missing_ids))
             for eid in missing_ids:
-                name = entities.get(eid, 'Unknown')
+                entity = entities.get(eid)
+                name = entity.canonical_name if entity else 'Unknown'
                 new_model = MentalModel(
                     entity_id=eid, name=name, observations=[], vault_id=vault_id
                 )
@@ -317,10 +471,10 @@ class ReflectionEngine:
 
         return models_map
 
-    async def _batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, str]:
+    async def _batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, Entity]:
         query = select(Entity).where(col(Entity.id).in_(entity_ids))
         results = (await self.session.exec(query)).all()
-        return {e.id: e.canonical_name for e in results}
+        return {e.id: e for e in results}
 
     async def _batch_fetch_recent_memories(
         self,
@@ -411,8 +565,47 @@ class ReflectionEngine:
     ) -> list[Observation]:
         """
         Phase 0: Check if existing observations have new supporting/contradicting evidence.
+        Also prunes stale evidence referencing deleted memory units (liveness check).
         """
         current_observations = [Observation(**obs) for obs in model.observations]
+        if not current_observations:
+            return current_observations
+
+        # Liveness check: prune evidence citing deleted memory units
+        all_evidence_ids: set[UUID] = set()
+        for obs in current_observations:
+            for ev in obs.evidence:
+                all_evidence_ids.add(ev.memory_id)
+
+        if all_evidence_ids:
+            live_stmt = select(MemoryUnit.id).where(col(MemoryUnit.id).in_(list(all_evidence_ids)))
+            live_result = await self.session.exec(live_stmt)
+            live_ids = set(live_result.all())
+            dead_ids = all_evidence_ids - live_ids
+
+            if dead_ids:
+                pruned = False
+                pruned_to_empty: set[UUID] = set()
+                for obs in current_observations:
+                    original_len = len(obs.evidence)
+                    obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in dead_ids]
+                    if len(obs.evidence) < original_len:
+                        pruned = True
+                        if not obs.evidence:
+                            pruned_to_empty.add(obs.id)
+
+                # Only drop observations that were pruned to empty, not naturally empty ones
+                if pruned_to_empty:
+                    current_observations = [
+                        obs for obs in current_observations if obs.id not in pruned_to_empty
+                    ]
+
+                if pruned:
+                    model.observations = [
+                        obs.model_dump(mode='json') for obs in current_observations
+                    ]
+                    flag_modified(model, 'observations')
+
         if not current_observations or not memories:
             return current_observations
 
@@ -674,12 +867,14 @@ class ReflectionEngine:
         existing: list[Observation],
         new_obs: list[ValidatedObservation],
         vault_id: UUID = GLOBAL_VAULT_ID,
-    ) -> list[Observation]:
+        entity_name: str = '',
+    ) -> tuple[list[Observation], str]:
         """
         Phase 4: Merge new validated observations with existing ones.
+        Returns (final_observations, entity_summary).
         """
         if not new_obs:
-            return existing
+            return existing, ''
 
         # 1. Collect all unique evidence to build a shared context
         all_uuids = set()
@@ -771,6 +966,7 @@ class ReflectionEngine:
             lm=self.lm,
             predictor=compare_predictor,
             input_kwargs={
+                'entity_name': entity_name,
                 'evidence_context': evidence_context,
                 'existing_context': existing_ctx,
                 'new_context': new_ctx,
@@ -819,4 +1015,6 @@ class ReflectionEngine:
                 )
             )
 
-        return final_list
+        raw_summary = getattr(result.result, 'entity_summary', '')
+        entity_summary = raw_summary if isinstance(raw_summary, str) else ''
+        return final_list, entity_summary

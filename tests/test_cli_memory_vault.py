@@ -146,7 +146,7 @@ async def test_cli_memory_add_url_with_vault_name(db_session: AsyncSession, setu
         ) as mock_ingest:
             # Run CLI
             result = runner.invoke(
-                app, ['memory', 'add', '--url', url, '-v', vault_name], env=os.environ
+                app, ['note', 'add', '--url', url, '-v', vault_name], env=os.environ
             )
 
             assert result.exit_code == 0, f'CLI failed: {result.stdout}'

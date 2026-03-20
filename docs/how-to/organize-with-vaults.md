@@ -10,8 +10,8 @@ This guide shows you how to create, manage, and switch between vaults to isolate
 ## Understanding Vault Roles
 
 - **Global Vault**: Every Memex instance has a built-in `global` vault (ID: `ac9b6a45-d388-5ddb-9fa9-50d4e5bca511`). Data goes here when no vault is specified.
-- **Active Vault**: The vault currently used for all write operations (ingestion, note creation).
-- **Attached Vaults**: Additional vaults included in search queries (read-only context).
+- **Write Vault**: The vault used for all write operations (ingestion, note creation). Resolved via `config.write_vault` (`vault.active` > `server.default_active_vault`).
+- **Read Vaults**: Vaults included in search queries. Resolved via `config.read_vaults` (`vault.search` > `[vault.active]` > `[server.default_reader_vault]`).
 
 ## Instructions
 
@@ -39,7 +39,7 @@ Use the `--vault` or `-v` flag on any ingestion or search command:
 
 ```bash
 # Ingest into a specific vault
-memex memory add --url "https://example.com" --vault project-x
+memex note add --url "https://example.com" --vault project-x
 
 # Search across specific vaults
 memex memory search "Status" --vault project-x --vault global
@@ -50,22 +50,25 @@ memex memory search "Status" --vault project-x --vault global
 Place a `.memex.yaml` in your project directory:
 
 ```yaml
-server:
-  active_vault: "project-x"
-  attached_vaults: ["global", "reference-material"]
+vault:
+  active: "project-x"
+  search: ["project-x", "global", "reference-material"]
 ```
 
-The `active_vault` is used for write operations. `attached_vaults` are included in search results as read-only context.
+The `vault.active` setting is used for write operations. `vault.search` controls which vaults are included in search results.
 
-**Environment variable override:**
+> **Note:** `.memex.yaml` is reliable for the CLI (which runs in your shell's CWD), but MCP servers are spawned as subprocesses by AI clients — the working directory they inherit is not guaranteed to be your project root. If you use both CLI and MCP, prefer environment variables for consistent vault resolution. See [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp) for details.
+
+**Environment variable override (recommended for CLI + MCP consistency):**
 
 ```bash
-export MEMEX_SERVER__ACTIVE_VAULT=project-x
+export MEMEX_VAULT__ACTIVE=project-x
+export MEMEX_VAULT__SEARCH='["project-x", "global"]'
 ```
 
 ### 4. Search Across Multiple Vaults
 
-By default, searches query the active vault plus all attached vaults. To restrict or expand the scope:
+By default, searches query all vaults in `config.read_vaults`. To restrict or expand the scope:
 
 ```bash
 # Search only in one vault
@@ -110,7 +113,7 @@ To verify your vault setup, check the resolved configuration:
 memex config show
 ```
 
-Look for the `active_vault` and `attached_vaults` fields to confirm they match your intent.
+Look for the `vault.active` and `vault.search` fields (or `server.default_active_vault` / `server.default_reader_vault`) to confirm they match your intent.
 
 ## See Also
 

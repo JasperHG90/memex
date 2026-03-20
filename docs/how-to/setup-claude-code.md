@@ -2,13 +2,29 @@
 
 This guide shows you how to configure Claude Code to use Memex as its long-term memory backend.
 
-## Prerequisites
+## Recommended: Use the Claude Code Plugin
 
-* Memex installed (`uv tool install memex-cli[mcp]`)
+The easiest way to integrate Memex with Claude Code is via the marketplace plugin. It works across all projects automatically — no per-project setup needed.
+
+```bash
+# Add the marketplace (one-time)
+claude plugin marketplace add JasperHG90/memex
+
+# Install the plugin
+claude plugin install memex@memex
+```
+
+See [packages/claude-code-plugin](../../packages/claude-code-plugin/) for details.
+
+## Alternative: Per-Project Setup
+
+If you prefer per-project configuration (e.g. to customize vaults or hooks per project), use the setup command below.
+
+### Prerequisites
+
+* Memex installed (`uv tool install "memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"`)
 * A running Memex server (`memex server start -d`)
 * Claude Code installed
-
-## Instructions
 
 ### 1. Run the Setup Command
 
@@ -81,6 +97,36 @@ memex setup claude-code --no-hooks
 memex setup claude-code --with-session-tracking
 ```
 
+## Server URL Configuration
+
+By default, Memex connects to `http://127.0.0.1:8000`. If your server runs on a different host (common in devcontainers, remote setups, or Docker environments), configure the URL using one of these methods in priority order:
+
+1. **`~/.config/memex/config.yaml`** (recommended):
+
+   ```yaml
+   server_url: http://host.docker.internal:8000
+   ```
+
+2. **Environment variable** in your shell profile (`.bashrc` / `.zshrc`):
+
+   ```bash
+   export MEMEX_SERVER_URL=http://host.docker.internal:8000
+   ```
+
+3. **`.mcp.json` env block** — only affects the MCP server, not hooks:
+
+   ```json
+   {
+     "mcpServers": {
+       "memex": {
+         "env": { "MEMEX_SERVER_URL": "http://host.docker.internal:8000" }
+       }
+     }
+   }
+   ```
+
+Options 1 and 2 cover both the MCP server and lifecycle hooks. Option 3 only covers the MCP server.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -88,7 +134,7 @@ memex setup claude-code --with-session-tracking
 | "Vault not found" warning during setup | Create the vault first: `memex vault create <name>` |
 | Hooks not firing | Check `.claude/settings.local.json` has the `hooks` key, then restart Claude Code |
 | `/remember` or `/recall` not available | Verify `.claude/skills/remember/SKILL.md` exists; restart Claude Code |
-| "Connection refused" in hooks | Ensure Memex server is running: `memex server start -d` |
+| "Connection refused" in hooks | Ensure the server is running (`memex server start -d`) and the URL is correct. If the server isn't at `http://127.0.0.1:8000` (e.g., in a devcontainer), set the URL via `~/.config/memex/config.yaml` (`server_url: http://host:port`), or export `MEMEX_SERVER_URL` in your shell profile. See the [plugin README](../../packages/claude-code-plugin/README.md#server-url) for details. |
 | Stale CLAUDE.md section | Re-run with `--force` to replace the existing Memex section |
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.
@@ -96,5 +142,5 @@ memex setup claude-code --with-session-tracking
 ## See Also
 
 * [Using MCP](using-mcp.md) — manual MCP configuration for Claude Desktop, Cursor, and SSE transport
-* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all 26 MCP tools
+* [MCP Tools Reference](../reference/mcp-tools.md) — full parameter documentation for all MCP tools
 * [CLI Commands — setup claude-code](../reference/cli-commands.md#setup-claude-code) — all flags and options

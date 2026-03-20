@@ -91,7 +91,9 @@ async def test_phase_4_compare_logic(engine):
         engine.lm = MagicMock()  # Needs to be set
 
         # Execute
-        final_obs = await engine._phase_4_compare(existing=[obs_existing], new_obs=[obs_new])
+        final_obs, entity_summary = await engine._phase_4_compare(
+            existing=[obs_existing], new_obs=[obs_new]
+        )
 
         # Verify Input to LLM
         call_args = mock_run_dspy.call_args
@@ -123,6 +125,9 @@ async def test_phase_4_compare_logic(engine):
         # The returned evidence index was "0", so it should match the first UUID in sorted list
         expected_uuid = UUID(all_uuids[0])
         assert final_obs[0].evidence[0].memory_id == expected_uuid
+
+        # Check entity_summary is extracted
+        assert isinstance(entity_summary, str)
 
 
 @pytest.mark.asyncio
@@ -181,7 +186,9 @@ async def test_phase_4_updates_trend_state(engine):
         # We pass a DUMMY new observation to ensure logic proceeds past the "if not new_obs: return" check.
         # The LLM mock ignores this input anyway and returns the "mock_result" defined above.
         dummy_new = ValidatedObservation(title='Dummy', content='Dummy', evidence=[])
-        final_obs = await engine._phase_4_compare(existing=[obs_existing], new_obs=[dummy_new])
+        final_obs, entity_summary = await engine._phase_4_compare(
+            existing=[obs_existing], new_obs=[dummy_new]
+        )
 
         # Verify
         assert len(final_obs) == 1

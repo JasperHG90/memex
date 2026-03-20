@@ -63,9 +63,11 @@ _MCP_JSON_TEMPLATE = """\
 
 _MEMEX_YAML_TEMPLATE = """\
 server_url: {server_url}
+vault:
+  active: "{vault}"
 server:
-  active_vault: "{vault}"
-  attached_vaults: []
+  default_active_vault: "{vault}"
+  default_reader_vault: "{vault}"
 """
 
 _CLAUDE_MD = """\
@@ -74,24 +76,58 @@ _CLAUDE_MD = """\
 You have access to Memex, a long-term memory system. Use it to answer questions \
 about conversations between people.
 
-## Retrieval
+## CRITICAL — First action
 
-`memex_memory_search` — atomic facts, observations, mental models across the knowledge graph.
-`memex_note_search` — raw source notes with inline metadata (title, description, tags) \
-via hybrid retrieval. Use the metadata to filter before reading.
+Before doing anything else, fetch ALL tool schemas in a single call:
 
-## Note reading
+```
+ToolSearch(query="select:mcp__memex__memex_memory_search,mcp__memex__memex_note_search,\
+mcp__memex__memex_list_entities,mcp__memex__memex_get_entity_mentions,\
+mcp__memex__memex_get_entity_cooccurrences,mcp__memex__memex_get_notes_metadata,\
+mcp__memex__memex_get_page_indices,mcp__memex__memex_get_nodes,\
+mcp__memex__memex_read_note", max_results=9)
+```
 
-1. `memex_get_page_indices` (Note IDs -> table of contents)
-2. `memex_get_nodes` (node IDs -> section text)
-3. Fallback only: `memex_read_note`
+Do NOT call ToolSearch more than once. After this single call you have all the tools you need.
 
-## Workflow
+### Retrieval
 
-1. Search memories first with `memex_memory_search`
-2. If needed, search source notes with `memex_note_search`
-3. For verification, use two-speed reading: `memex_get_page_indices` then `memex_get_nodes`
-4. Answer the question concisely based on what you found
+Route by query type:
+
+IF query asks about relationships, connections, "how X relates to Y", or landscape:
+- `memex_list_entities(query="X")` → entity IDs, types, mention counts
+- `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts
+- `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+- Then read source notes via Search/Read below as needed
+
+IF query asks about specific content or document lookup:
+- **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
+- **Filter**: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. \
+After `memex_note_search`, metadata is inline — skip.
+- **Read**: `memex_get_page_indices` → `memex_get_nodes` (batch). \
+`memex_read_note` only when total_tokens < 500.
+- **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → \
+`memex_get_resources` for each. Use images as visual input. Reproduce diagrams as \
+Mermaid/ASCII in response. NEVER skip this step.
+
+IF query is broad: run entity exploration AND search in parallel.
+
+PROHIBITED:
+- `memex_recent_notes` for discovery.
+- Fabricating Note/Node/Unit IDs. Only use IDs from tool output.
+- `memex_get_notes_metadata` after `memex_note_search` (metadata already inline).
+- `memex_read_note` on notes over 500 tokens. Use `memex_get_page_indices` + `memex_get_nodes`.
+- Creating diagrams without first checking assets via `memex_list_assets` → `memex_get_resources`.
+- Presenting Memex information without citations.
+
+### Citations — MANDATORY
+
+Every response using Memex data MUST include:
+1. Inline numbered references [1], [2] on every claim from Memex.
+2. Reference list at end of response. Each entry uses a type prefix:
+   - `[note]` — title + note ID
+   - `[memory]` — title + memory ID + source note ID
+   - `[asset]` — filename + note ID
 """
 
 
@@ -121,6 +157,11 @@ def _setup_claude_workdir(server_url: str) -> str:
                     'allow': [
                         'mcp__memex__memex_memory_search',
                         'mcp__memex__memex_note_search',
+                        'mcp__memex__memex_list_entities',
+                        'mcp__memex__memex_get_entities',
+                        'mcp__memex__memex_get_entity_mentions',
+                        'mcp__memex__memex_get_entity_cooccurrences',
+                        'mcp__memex__memex_get_notes_metadata',
                         'mcp__memex__memex_get_page_indices',
                         'mcp__memex__memex_get_nodes',
                         'mcp__memex__memex_read_note',
@@ -268,42 +309,45 @@ def _collect_session_trace(
 ) -> dict[str, str | None]:
     """Copy the Claude Code session trace file for a question.
 
-    Reads ``~/.claude/history.jsonl`` to find the last session ID, then copies
-    the session trace from ``~/.claude/projects/<slug>/<session_id>.jsonl``
-    into ``<output_dir>/traces/<question_id>.jsonl``.
+    Finds the most recently modified ``.jsonl`` in the Claude Code project
+    directory for the workdir, then copies it into
+    ``<output_dir>/traces/<question_id>.jsonl``.
 
     Returns dict with ``session_id`` and ``trace_file`` (both may be None on failure).
     """
     result: dict[str, str | None] = {'session_id': None, 'trace_file': None}
 
     try:
-        history_path = Path.home() / '.claude' / 'history.jsonl'
-        if not history_path.exists():
-            logger.warning('No history.jsonl found at %s', history_path)
+        # Claude Code stores project data under ~/.claude/projects/<slug>/
+        # where slug = absolute path with / replaced by - (leading - kept).
+        # Claude Code may also replace underscores with dashes in the slug.
+        projects_root = Path.home() / '.claude' / 'projects'
+        slug = workdir.replace('/', '-')
+        project_dir = projects_root / slug
+
+        if not project_dir.exists():
+            # Fallback: try with underscores also replaced by dashes
+            slug_alt = slug.replace('_', '-')
+            project_dir_alt = projects_root / slug_alt
+            if project_dir_alt.exists():
+                project_dir = project_dir_alt
+            else:
+                logger.warning('Project dir not found at %s (or %s)', project_dir, project_dir_alt)
+                return result
+
+        # Find the most recently modified .jsonl (the trace for the last -p call)
+        traces = sorted(
+            project_dir.glob('*.jsonl'),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if not traces:
+            logger.warning('No session traces in %s', project_dir)
             return result
 
-        # Read last line to get most recent session
-        lines = history_path.read_text().strip().splitlines()
-        if not lines:
-            logger.warning('history.jsonl is empty')
-            return result
-
-        last_entry = json.loads(lines[-1])
-        session_id = last_entry.get('session_id') or last_entry.get('sessionId')
-        if not session_id:
-            logger.warning('No session_id in last history entry')
-            return result
-
+        trace_src = traces[0]
+        session_id = trace_src.stem
         result['session_id'] = session_id
-
-        # Compute project slug: absolute workdir path with / and _ replaced by -,
-        # leading - stripped (matches Claude Code's slug computation)
-        slug = workdir.replace('/', '-').replace('_', '-').lstrip('-')
-        trace_src = Path.home() / '.claude' / 'projects' / slug / f'{session_id}.jsonl'
-
-        if not trace_src.exists():
-            logger.warning('Session trace not found at %s', trace_src)
-            return result
 
         # Copy to output traces dir
         traces_dir = Path(output_dir) / 'traces'
@@ -317,6 +361,29 @@ def _collect_session_trace(
         logger.warning('Failed to collect session trace', exc_info=True)
 
     return result
+
+
+def _extract_tool_calls_from_trace(trace_path: str) -> list[dict[str, Any]]:
+    """Extract tool_use blocks from a Claude Code session trace file."""
+    tool_calls: list[dict[str, Any]] = []
+    try:
+        for line in Path(trace_path).read_text().strip().splitlines():
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            if obj.get('type') != 'assistant':
+                continue
+            for block in obj.get('message', {}).get('content', []):
+                if isinstance(block, dict) and block.get('type') == 'tool_use':
+                    tool_calls.append(
+                        {
+                            'name': block.get('name', ''),
+                            'input': block.get('input', {}),
+                        }
+                    )
+    except Exception:
+        logger.warning('Failed to extract tool calls from trace', exc_info=True)
+    return tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +432,14 @@ def answer_questions(
 
         result = _run_claude_code(q['question'], workdir=workdir)
 
-        # Capture session trace
+        # Capture session trace and extract tool calls from it
         output_dir = str(Path(output_path).parent)
         trace_info = _collect_session_trace(workdir, output_dir, q['id'])
+
+        # If stdout parsing missed tool calls, extract from the trace file
+        trace_file = trace_info.get('trace_file')
+        if not result['tool_calls'] and trace_file:
+            result['tool_calls'] = _extract_tool_calls_from_trace(trace_file)
 
         record = {
             'id': q['id'],

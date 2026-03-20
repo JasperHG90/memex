@@ -8,7 +8,7 @@ from typing import Generic, TypeVar, cast, Self, AsyncGenerator
 from abc import ABCMeta, abstractmethod
 from contextlib import asynccontextmanager
 
-from cachetools import cached, LRUCache
+from cachetools import LRUCache
 from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
@@ -23,12 +23,46 @@ from memex_core.config import (
 T = TypeVar('T', bound=FileStoreConfig)
 
 
+def validate_path_safe(base_path: str, requested_path: str, *, local: bool = False) -> str:
+    """Validate that a requested path does not escape the base directory.
+
+    Uses ``os.path.realpath`` for local paths (resolving symlinks) and
+    ``posixpath.normpath`` for remote/cloud paths.
+
+    Args:
+        base_path: The root directory or prefix.
+        requested_path: The relative path to join under *base_path*.
+        local: If ``True``, use OS-native resolution (``os.path.realpath``).
+
+    Returns:
+        The resolved, joined path.
+
+    Raises:
+        ValueError: If *requested_path* resolves outside *base_path*.
+    """
+    stripped = requested_path.lstrip('/')
+    if local:
+        root = os.path.realpath(base_path)
+        joined = os.path.realpath(os.path.join(root, stripped))
+        separator = os.sep
+    else:
+        root = base_path.rstrip('/')
+        joined = posixpath.normpath(f'{root}/{stripped}') if stripped else root
+        separator = '/'
+
+    if not joined.startswith(root + separator) and joined != root:
+        raise ValueError(
+            f'Path traversal detected: {requested_path!r} resolves outside root directory.'
+        )
+    return joined
+
+
 @dataclass
 class _StagingState:
     """Per-transaction staging state."""
 
     staged_files: dict[str, str] = field(default_factory=dict)  # staged_key -> final_key
-    pending_deletes: set[str] = field(default_factory=set)
+    pending_deletes: dict[str, bool] = field(default_factory=dict)  # key -> recursive
 
 
 class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
@@ -61,15 +95,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         """
         if not self.config.root:
             raise ValueError('Root path is not set.')
-        root = self.config.root.rstrip('/')
-        stripped = key.lstrip('/')
-        if not stripped:
-            return root
-        joined = posixpath.normpath(f'{root}/{stripped}')
-        # Reject if normpath resolved .. components above root
-        if not joined.startswith(root + '/') and joined != root:
-            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
-        return joined
+        return validate_path_safe(self.config.root, key)
 
     async def check_connection(self) -> bool:
         """Verify the backend is reachable by listing the root."""
@@ -115,7 +141,10 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
                 await asyncio.gather(*tasks)
 
         if stage.pending_deletes:
-            tasks = [self._delete(key, recursive=False) for key in stage.pending_deletes]
+            tasks = [
+                self._delete(key, recursive=recursive)
+                for key, recursive in stage.pending_deletes.items()
+            ]
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -223,7 +252,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         """
         if txn_id is not None:
             stage = self._get_stage(txn_id)
-            stage.pending_deletes.add(key)
+            stage.pending_deletes[key] = recursive
         else:
             await self._delete(key, recursive=recursive)
 
@@ -291,6 +320,10 @@ class LocalAsyncFileStore(BaseAsyncFileStore[LocalFileStoreConfig]):
     AsyncFileSystemWrapper).
     """
 
+    def __init__(self, config: LocalFileStoreConfig):
+        self._join_path_cache: LRUCache = LRUCache(maxsize=128)
+        super().__init__(config)
+
     def initialize(self) -> AsyncFileSystemWrapper:
         """Initialize the local filesystem backend.
 
@@ -300,9 +333,10 @@ class LocalAsyncFileStore(BaseAsyncFileStore[LocalFileStoreConfig]):
         """
         return AsyncFileSystemWrapper(LocalFileSystem())
 
-    @cached(cache=LRUCache(maxsize=128))
     def join_path(self, key: str) -> str:
         """Join root path with a key using OS-native path resolution.
+
+        Results are cached per-instance via an LRU cache.
 
         Args:
             key: relative path to the file, e.g. path/to/file.txt
@@ -315,11 +349,12 @@ class LocalAsyncFileStore(BaseAsyncFileStore[LocalFileStoreConfig]):
         """
         if not self.config.root:
             raise ValueError('Root path is not set.')
-        root_real = os.path.realpath(self.config.root)
-        joined = os.path.realpath(os.path.join(root_real, key.lstrip('/')))
-        if not joined.startswith(root_real + os.sep) and joined != root_real:
-            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
-        return joined
+        cached_result = self._join_path_cache.get(key)
+        if cached_result is not None:
+            return cached_result
+        result = validate_path_safe(self.config.root, key, local=True)
+        self._join_path_cache[key] = result
+        return result
 
 
 class S3AsyncFileStore(BaseAsyncFileStore['S3FileStoreConfig']):
@@ -361,20 +396,8 @@ class S3AsyncFileStore(BaseAsyncFileStore['S3FileStoreConfig']):
         """
         bucket = self.config.bucket
         prefix = self.config.root.strip('/')
-        stripped = key.lstrip('/')
-
-        if prefix:
-            root = f'{bucket}/{prefix}'
-        else:
-            root = bucket
-
-        if not stripped:
-            return root
-
-        joined = posixpath.normpath(f'{root}/{stripped}')
-        if not joined.startswith(root + '/') and joined != root:
-            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
-        return joined
+        root = f'{bucket}/{prefix}' if prefix else bucket
+        return validate_path_safe(root, key)
 
 
 class GCSAsyncFileStore(BaseAsyncFileStore['GCSFileStoreConfig']):
@@ -411,20 +434,8 @@ class GCSAsyncFileStore(BaseAsyncFileStore['GCSFileStoreConfig']):
         """
         bucket = self.config.bucket
         prefix = self.config.root.strip('/')
-        stripped = key.lstrip('/')
-
-        if prefix:
-            root = f'{bucket}/{prefix}'
-        else:
-            root = bucket
-
-        if not stripped:
-            return root
-
-        joined = posixpath.normpath(f'{root}/{stripped}')
-        if not joined.startswith(root + '/') and joined != root:
-            raise ValueError(f'Path traversal detected: {key!r} resolves outside root directory.')
-        return joined
+        root = f'{bucket}/{prefix}' if prefix else bucket
+        return validate_path_safe(root, key)
 
 
 # Alias for type hinting

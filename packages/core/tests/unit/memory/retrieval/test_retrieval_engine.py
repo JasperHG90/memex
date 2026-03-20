@@ -80,7 +80,7 @@ async def test_retrieve_empty_results(mock_embedder):
 
     engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
 
-    results = await engine.retrieve(session, RetrievalRequest(query='test query'))
+    results, _ = await engine.retrieve(session, RetrievalRequest(query='test query'))
 
     assert results == []
     session.exec.assert_called()
@@ -143,17 +143,17 @@ async def test_min_score_filtering(mock_embedder, mock_reranker):
     # Filter with min_score=0.5
     # High (0.99) > 0.5 -> Keep
     # Low (0.006) < 0.5 -> Drop
-    filtered = engine._rerank_results('query', units, min_score=0.5)
+    filtered = await engine._rerank_results('query', units, min_score=0.5)
 
     assert len(filtered) == 1
     assert filtered[0].text == 'High Relevance'
 
     # Filter with min_score=0.0 (Keep all)
-    filtered_all = engine._rerank_results('query', units, min_score=0.0)
+    filtered_all = await engine._rerank_results('query', units, min_score=0.0)
     assert len(filtered_all) == 2
 
     # Filter with min_score=0.999 (Drop all)
-    filtered_none = engine._rerank_results('query', units, min_score=0.999)
+    filtered_none = await engine._rerank_results('query', units, min_score=0.999)
     assert len(filtered_none) == 0
 
 

@@ -24,6 +24,18 @@ release version:
   git tag "v{{version}}"
   echo "Tagged v{{version}}. Push with: git push && git push --tags"
 
+# Serve documentation locally with live reload
+docs-serve:
+  uv run zensical serve --dev-addr localhost:8005 --open
+
+# Build documentation site
+docs-build:
+  uv run zensical build
+
+# Build docs with clean cache
+docs-clean:
+  uv run zensical build --clean
+
 # Install python dependencies
 install:
   uv sync --all-groups --all-extras
@@ -38,6 +50,10 @@ rtk_setup:
 
 # Install python dependencies and pre-commit hooks
 setup: install prek_setup rtk_setup
+
+# Audit dependencies for known vulnerabilities
+audit:
+  uv run pip-audit
 
 # Run pre-commit
 prek:
@@ -85,21 +101,67 @@ dashboard-generate-api:
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 
-# Run internal quality benchmark (requires running Memex server)
-benchmark-internal server='http://localhost:8001/api/v1/':
-  uv run memex-eval run --server {{server}}
+# Start postgres, run server in a temp dir, execute benchmark, then tear down
+benchmark-internal server='http://localhost:8001/api/v1/' *args='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  TMPDIR=$(mktemp -d)
+  mkdir -p "$TMPDIR/filestore"
+  trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$TMPDIR"; docker compose stop db' EXIT
+  MEMEX_PORT=8001 MEMEX_SERVER__FILE_STORE__TYPE=local MEMEX_SERVER__FILE_STORE__ROOT="$TMPDIR/filestore" uv run memex server start &
+  SERVER_PID=$!
+  echo "Waiting for server on :8001..."
+  until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
+  uv run memex-eval run --server {{server}} {{args}}
 
-# Run internal benchmark (deterministic checks only, no LLM judge)
-benchmark-internal-fast server='http://localhost:8001/api/v1/':
-  uv run memex-eval run --server {{server}} --no-llm-judge
+# Start postgres, run server in a temp dir, execute benchmark (no LLM judge), then tear down
+benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  TMPDIR=$(mktemp -d)
+  mkdir -p "$TMPDIR/filestore"
+  trap 'kill $SERVER_PID 2>/dev/null || true; rm -rf "$TMPDIR"; docker compose stop db' EXIT
+  MEMEX_PORT=8001 MEMEX_SERVER__FILE_STORE__TYPE=local MEMEX_SERVER__FILE_STORE__ROOT="$TMPDIR/filestore" uv run memex server start &
+  SERVER_PID=$!
+  echo "Waiting for server on :8001..."
+  until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
+  uv run memex-eval run --server {{server}} --no-llm-judge {{args}}
 
 # Run LongMemEval external benchmark
 benchmark-longmemeval dataset_path server='http://localhost:8001/api/v1/':
   uv run memex-eval longmemeval --dataset-path {{dataset_path}} --server {{server}}
 
-# Run LoCoMo external benchmark
-benchmark-locomo dataset_path server='http://localhost:8001/api/v1/':
-  uv run memex-eval locomo --dataset-path {{dataset_path}} --server {{server}}
+# Start the benchmark server (persistent data dir, stays running)
+bench-server datadir='.temp/bench-data':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  docker compose up -d db
+  echo "Waiting for postgres..."
+  until docker compose exec db pg_isready -U postgres -q 2>/dev/null; do sleep 1; done
+  mkdir -p "{{datadir}}/filestore"
+  echo "Starting server on :8001 (data: {{datadir}}/filestore)..."
+  MEMEX_PORT=8001 MEMEX_SERVER__FILE_STORE__TYPE=local MEMEX_SERVER__FILE_STORE__ROOT="{{datadir}}/filestore" uv run memex server start
+
+# Run LoCoMo external benchmark (assumes bench-server is running)
+benchmark-locomo dataset_path='data/locomo' outdir='.temp/locomo-eval' server='http://localhost:8001/api/v1/' *args='':
+  #!/usr/bin/env bash
+  set -euo pipefail
+  curl -sf {{server}}vaults >/dev/null 2>&1 || { echo "Server not running. Start with: just bench-server"; exit 1; }
+  mkdir -p {{outdir}}
+  echo "=== Phase 0: Ingest (skips if vault has data) ==="
+  uv run memex-eval locomo-ingest -d {{dataset_path}} -s {{server}} -v {{args}}
+  echo "=== Phase 1: Answer ==="
+  uv run memex-eval locomo-answer -q {{outdir}}/questions.jsonl -o {{outdir}}/answers.jsonl -s {{server}} -v
+  echo "=== Phase 2: Judge ==="
+  uv run memex-eval locomo-judge -q {{outdir}}/questions.jsonl -a {{outdir}}/answers.jsonl -o {{outdir}}/results.json -v
+  echo "=== Phase 3: Report ==="
+  uv run memex-eval locomo-report -r {{outdir}}/results.json -a {{outdir}}/answers.jsonl -t {{outdir}}/traces -o {{outdir}}/report -v
 
 # Run database migrations to latest
 db-upgrade:

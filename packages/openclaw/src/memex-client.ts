@@ -282,6 +282,10 @@ export class MemexClient {
       limit?: number;
       expand_query?: boolean;
       summarize?: boolean;
+      reason?: boolean;
+      mmr_lambda?: number | null;
+      fusion_strategy?: string;
+      strategy_weights?: Record<string, number> | null;
       strategies?: NoteStrategy[];
       after?: string;
       before?: string;
@@ -295,6 +299,10 @@ export class MemexClient {
       limit: opts?.limit ?? 5,
       expand_query: opts?.expand_query ?? false,
       summarize: opts?.summarize ?? false,
+      ...(opts?.reason != null && { reason: opts.reason }),
+      ...(opts?.mmr_lambda != null && { mmr_lambda: opts.mmr_lambda }),
+      ...(opts?.fusion_strategy && { fusion_strategy: opts.fusion_strategy }),
+      ...(opts?.strategy_weights && { strategy_weights: opts.strategy_weights }),
       ...(opts?.strategies && { strategies: opts.strategies }),
       ...(opts?.after && { after: opts.after }),
       ...(opts?.before && { before: opts.before }),
@@ -317,16 +325,16 @@ export class MemexClient {
       throw new Error(`Memex note search failed: ${response.status} ${response.statusText}`);
     }
 
-    return response.json() as Promise<NoteSearchResult[]>;
+    return this._parseNdjsonStream<NoteSearchResult>(response);
   }
 
   /** GET /api/v1/notes/{id} */
-  async getNote(noteId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  async getNote(noteId: string, signal?: AbortSignal): Promise<NoteDTO> {
     const response = await fetch(`${this.baseUrl}/api/v1/notes/${noteId}`, { signal });
     if (!response.ok) {
       throw new Error(`Memex getNote failed: ${response.status} ${response.statusText}`);
     }
-    return response.json() as Promise<Record<string, unknown>>;
+    return response.json() as Promise<NoteDTO>;
   }
 
   /** GET /api/v1/notes/{id}/page-index */
@@ -417,6 +425,76 @@ export class MemexClient {
     );
     if (!response.ok) {
       throw new Error(`Memex migrateNote failed: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  /** POST /api/v1/nodes/batch */
+  async getNodesBatch(nodeIds: string[], signal?: AbortSignal): Promise<NodeDTO[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/nodes/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node_ids: nodeIds }),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Memex getNodesBatch failed: ${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<NodeDTO[]>;
+  }
+
+  /** POST /api/v1/notes/metadata/batch */
+  async getNoteMetadataBatch(
+    noteIds: string[],
+    signal?: AbortSignal,
+  ): Promise<NoteMetadataOutput[]> {
+    const response = await fetch(`${this.baseUrl}/api/v1/notes/metadata/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note_ids: noteIds }),
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Memex getNoteMetadataBatch failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    return response.json() as Promise<NoteMetadataOutput[]>;
+  }
+
+  /** PATCH /api/v1/notes/{id}/date */
+  async updateNoteDate(noteId: string, date: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/notes/${noteId}/date`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex updateNoteDate failed: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  /** DELETE /api/v1/notes/{id} */
+  async deleteNote(noteId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/notes/${noteId}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex deleteNote failed: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  /** DELETE /api/v1/memories/{id} */
+  async deleteMemoryUnit(unitId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/memories/${unitId}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      throw new Error(`Memex deleteMemoryUnit failed: ${response.status} ${response.statusText}`);
     }
   }
 

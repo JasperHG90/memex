@@ -6,11 +6,11 @@ from memex_core.services.ingestion import IngestionService
 
 
 @pytest.mark.asyncio
-async def test_uuid_idempotency_same_file(
+async def test_idempotency_key_same_file(
     mock_metastore, mock_filestore, mock_config, api, tmp_path, mock_session
 ):
     """
-    Verify that the same source file results in the same UUID across
+    Verify that the same source file produces the same idempotency key across
     multiple ingestions (stable identity via source_uri).
     """
     pdf_file = tmp_path / 'test.pdf'
@@ -44,9 +44,9 @@ async def test_uuid_idempotency_same_file(
         note1 = mock_ingest.call_args_list[0][0][0]
         note2 = mock_ingest.call_args_list[1][0][0]
 
-        # UUID is the same across ingestions
-        assert note1.uuid == note2.uuid
+        # Idempotency key is the same across ingestions
+        assert note1.idempotency_key == note2.idempotency_key
 
-        # Verify the UUID format is what we expect (MD5 of source_uri = note_key)
-        expected_uuid = hashlib.md5(str(pdf_file.absolute()).encode('utf-8')).hexdigest()
-        assert note1.uuid == expected_uuid
+        # Verify it is the MD5 hex digest of the source_uri (= note_key)
+        expected_key = hashlib.md5(str(pdf_file.absolute()).encode('utf-8')).hexdigest()
+        assert note1.idempotency_key == expected_key

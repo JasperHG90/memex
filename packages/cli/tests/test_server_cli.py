@@ -37,9 +37,10 @@ def test_start_prod(mock_dependencies, runner):
 
         mock_execvp.assert_called_once()
         cmd = mock_execvp.call_args[0][1]
-        assert 'gunicorn' in cmd[0]
-        assert '-b' in cmd
-        assert '0.0.0.0:9000' in cmd
+        assert 'granian' in cmd[0]
+        assert '--port' in cmd
+        assert '9000' in cmd
+        assert '--workers' in cmd
 
 
 def test_start_already_running(runner):

@@ -21,6 +21,7 @@ from rich.console import Console
 
 from memex_eval.external.locomo_common import (
     CATEGORY_NAMES,
+    EXCLUDED_QUESTION_IDS,
     QUESTION_TYPES,
     read_jsonl,
 )
@@ -33,12 +34,8 @@ console = Console()
 
 _MEMEX_TOOL_PREFIX = 'mcp__memex__'
 
-# Image-dependent questions are excluded from scoring.
-_EXCLUDED_REASONS: dict[str, str] = {
-    'q-018': 'Book title only visible in shared image (book cover)',
-    'q-027': 'Precautionary sign content only visible in shared photo',
-    'q-037': 'References a photo not available to the memory system',
-}
+# Re-export for backward compatibility; canonical source is locomo_common.
+_EXCLUDED_REASONS = EXCLUDED_QUESTION_IDS
 
 
 # ---------------------------------------------------------------------------

@@ -44,11 +44,12 @@ async def list_vaults(
     """
     try:
         if state == 'active':
-            active_vault_name = api.config.server.active_vault
+            active_vault_name = api.config.server.default_active_vault
             vault = await api.get_vault_by_name(active_vault_name)
             if not vault:
                 raise HTTPException(
-                    status_code=404, detail=f'Active vault "{active_vault_name}" not found'
+                    status_code=404,
+                    detail=f'Active vault "{active_vault_name}" not found',
                 )
             return ndjson_response(
                 [VaultDTO(id=vault.id, name=vault.name, description=vault.description)]
@@ -56,37 +57,55 @@ async def list_vaults(
 
         if is_default:
             # Resolve the active vault
-            active_vault_name = api.config.server.active_vault
+            active_vault_name = api.config.server.default_active_vault
             active = await api.get_vault_by_name(active_vault_name)
             if not active:
                 raise HTTPException(
-                    status_code=404, detail=f'Active vault "{active_vault_name}" not found'
+                    status_code=404,
+                    detail=f'Active vault "{active_vault_name}" not found',
                 )
             active_dto = VaultDTO(id=active.id, name=active.name, description=active.description)
 
-            # Resolve attached vaults (skip any that fail)
-            attached_dtos: list[VaultDTO] = []
-            for vault_name in api.config.server.attached_vaults:
+            # Resolve default reader vault (if different from active)
+            reader_name = api.config.server.default_reader_vault
+            dtos: list[VaultDTO] = [active_dto]
+            if reader_name != active_vault_name:
                 try:
-                    vault = await api.get_vault_by_name(vault_name)
-                    if vault:
-                        attached_dtos.append(
-                            VaultDTO(id=vault.id, name=vault.name, description=vault.description)
+                    reader = await api.get_vault_by_name(reader_name)
+                    if reader:
+                        dtos.append(
+                            VaultDTO(
+                                id=reader.id,
+                                name=reader.name,
+                                description=reader.description,
+                            )
                         )
                     else:
-                        logger.warning('Attached vault "%s" not found, skipping', vault_name)
+                        logger.warning('Reader vault "%s" not found, skipping', reader_name)
                 except (MemexError, OSError) as e:
                     logger.warning(
-                        'Failed to resolve attached vault "%s", skipping: %s', vault_name, e
+                        'Failed to resolve reader vault "%s", skipping: %s',
+                        reader_name,
+                        e,
                     )
 
-            # Return both active and attached as default vaults response
-            return ndjson_response([active_dto, *attached_dtos])
+            return ndjson_response(dtos)
 
-        # Default: list all vaults
-        vaults = await api.list_vaults()
+        # Default: list all vaults with note counts
+        rows = await api.list_vaults_with_counts()
+        active_vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
         return ndjson_response(
-            [VaultDTO(id=v.id, name=v.name, description=v.description) for v in vaults]
+            [
+                VaultDTO(
+                    id=row['vault'].id,
+                    name=row['vault'].name,
+                    description=row['vault'].description,
+                    is_active=(row['vault'].id == active_vault_id),
+                    note_count=row['note_count'],
+                    last_note_added_at=row['last_note_added_at'],
+                )
+                for row in rows
+            ]
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list vaults')
@@ -151,37 +170,27 @@ async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get
     """
     try:
         vault_id = await api.resolve_vault_identifier(identifier)
-        api.config.server.active_vault = identifier
+        api.config.server.default_active_vault = identifier
         return {'status': 'success', 'active_vault': str(vault_id)}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to set writer vault')
 
 
-@router.post('/vaults/{identifier}/toggle-attached')
-async def toggle_attached_vault(
+@router.post('/vaults/{identifier}/set-reader')
+async def set_reader_vault(
     identifier: str,
-    attach: bool,
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
     """
-    Attach or detach a vault for read-only search inclusion.
+    Set the default reader vault for search/retrieval.
     This is a runtime override — on restart, config file values apply again.
     """
     try:
-        # Validate the vault exists
-        await api.resolve_vault_identifier(identifier)
-
-        if attach:
-            if identifier not in api.config.server.attached_vaults:
-                api.config.server.attached_vaults.append(identifier)
-        else:
-            api.config.server.attached_vaults = [
-                v for v in api.config.server.attached_vaults if v != identifier
-            ]
-
+        vault_id = await api.resolve_vault_identifier(identifier)
+        api.config.server.default_reader_vault = identifier
         return {
             'status': 'success',
-            'attached_vaults': api.config.server.attached_vaults,
+            'default_reader_vault': str(vault_id),
         }
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
-        raise _handle_error(e, 'Failed to toggle attached vault')
+        raise _handle_error(e, 'Failed to set reader vault')

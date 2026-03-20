@@ -220,8 +220,18 @@ async def store_chunks_batch(
             'embedding': chunk.embedding,
             'content_hash': chunk.content_hash,
             'status': ContentStatus.ACTIVE,
+            'summary': chunk.summary,
+            'summary_formatted': chunk.summary_formatted,
         }
         insert_data.append(row)
+
+    # Deduplicate by content_hash — keep first occurrence to avoid
+    # "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    seen_hashes: dict[str, int] = {}
+    for idx, row in enumerate(insert_data):
+        if row['content_hash'] not in seen_hashes:
+            seen_hashes[row['content_hash']] = idx
+    insert_data = [insert_data[i] for i in sorted(seen_hashes.values())]
 
     stmt = (
         pg_insert(Chunk)
@@ -232,6 +242,8 @@ async def store_chunks_batch(
                 'chunk_index': pg_insert(Chunk).excluded.chunk_index,
                 'status': ContentStatus.ACTIVE,
                 'embedding': pg_insert(Chunk).excluded.embedding,
+                'summary': pg_insert(Chunk).excluded.summary,
+                'summary_formatted': pg_insert(Chunk).excluded.summary_formatted,
             },
         )
         .returning(Chunk.id, Chunk.chunk_index)
@@ -360,36 +372,37 @@ async def check_duplicates_in_window(
         else:
             indices_to_check_semantic.append(i)
 
-    # 2. Semantic Check
-    distance_threshold = 1.0 - similarity_threshold
-
-    for i in indices_to_check_semantic:
-        emb = embeddings[i]
+    # 2. Semantic Check — run sequentially (single session is not safe for concurrent use)
+    if indices_to_check_semantic:
         from typing import Any, cast
 
-        similarity_expr = (
-            cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb) < distance_threshold
-        )
+        distance_threshold = 1.0 - similarity_threshold
 
-        statement = (
-            select(1)
-            .where(
-                and_(
-                    col(MemoryUnit.event_date) >= start_date,
-                    col(MemoryUnit.event_date) <= end_date,
-                )
+        for idx in indices_to_check_semantic:
+            emb = embeddings[idx]
+            similarity_expr = (
+                cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb) < distance_threshold
             )
-            .where(similarity_expr)
-            .limit(1)
-        )
 
-        # Vault Scoping
-        if vault_ids:
-            statement = statement.where(col(MemoryUnit.vault_id).in_(vault_ids))
+            statement = (
+                select(1)
+                .where(
+                    and_(
+                        col(MemoryUnit.event_date) >= start_date,
+                        col(MemoryUnit.event_date) <= end_date,
+                    )
+                )
+                .where(similarity_expr)
+                .limit(1)
+            )
 
-        result = await session.exec(statement)
-        if result.first() is not None:
-            is_duplicate[i] = True
+            # Vault Scoping
+            if vault_ids:
+                statement = statement.where(col(MemoryUnit.vault_id).in_(vault_ids))
+
+            result = await session.exec(statement)
+            if result.first() is not None:
+                is_duplicate[idx] = True
 
     return is_duplicate
 
@@ -515,13 +528,19 @@ async def reindex_blocks(
 ) -> None:
     """Batch-update chunk_index for retained blocks.
 
+    Uses a single UPDATE with CASE/WHEN to avoid O(N) roundtrips.
+
     Args:
         session: Active database session.
         block_updates: List of ``(chunk_id, new_chunk_index)`` tuples.
     """
-    for chunk_id, new_index in block_updates:
-        stmt = update(Chunk).where(col(Chunk.id) == chunk_id).values(chunk_index=new_index)
-        await session.exec(stmt)
+    if not block_updates:
+        return
+
+    chunk_ids = [cid for cid, _ in block_updates]
+    whens = [(Chunk.id == cid, new_idx) for cid, new_idx in block_updates]
+    stmt = update(Chunk).where(col(Chunk.id).in_(chunk_ids)).values(chunk_index=case(*whens))
+    await session.exec(stmt)
 
 
 # --- Node CRUD operations ---

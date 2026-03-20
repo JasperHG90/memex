@@ -1,4 +1,5 @@
 from typing import cast, Self, Any, AsyncGenerator
+import asyncio
 import hashlib
 import pathlib as plb
 import logging
@@ -50,6 +51,7 @@ from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
 from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
+from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.notes import NoteService
 from memex_core.services.reflection import ReflectionService
@@ -87,7 +89,7 @@ class NoteInput:
         self._metadata.update('files', list(self._files.keys()))
         self._metadata.update('tags', tags or [])
         self._metadata.update('etag', self.etag)
-        self._metadata.update('uuid', self.uuid)
+        self._metadata.update('uuid', self.idempotency_key)
 
     @cached_property
     def etag(self) -> str:
@@ -139,13 +141,16 @@ class NoteInput:
         )
 
     @cached_property
-    def uuid(self) -> str:
-        """Backward-compatible alias for note_key."""
+    def idempotency_key(self) -> str:
+        """Stable identity key for idempotent ingestion (delegates to note_key).
+
+        This is an MD5 hex digest, not a UUID despite the metadata field name.
+        """
         return self.note_key
 
     @classmethod
-    def calculate_uuid_from_dto(cls, dto: Any) -> str:
-        """Calculate the UUID (note_key) for a NoteCreateDTO without full instantiation."""
+    def calculate_idempotency_key_from_dto(cls, dto: Any) -> str:
+        """Calculate the idempotency key (note_key) for a NoteCreateDTO."""
         content = dto.content
         files = dto.files
         # DTO might have note_key
@@ -158,7 +163,7 @@ class NoteInput:
             tags=dto.tags,
             note_key=doc_key,
         )
-        return temp_note.uuid
+        return temp_note.idempotency_key
 
     @classmethod
     def calculate_fingerprint_from_dto(cls, dto: Any) -> str:
@@ -181,7 +186,7 @@ class NoteInput:
     def manifest(self) -> bytes:
         if (
             self._metadata.description is None
-            or self.uuid is None
+            or self.idempotency_key is None
             or self.etag is None
             or self._metadata.files is None
             or self._metadata.tags is None
@@ -191,7 +196,7 @@ class NoteInput:
             Manifest(
                 name=self._metadata.name or 'Untitled',
                 description=self._metadata.description,
-                uuid=self.uuid,
+                uuid=self.idempotency_key,
                 etag=self.etag,
                 files=self._metadata.files,
                 tags=self._metadata.tags,
@@ -343,6 +348,7 @@ class MemexAPI:
             ner_model=self.ner_model,
             lm=self.lm,
             retrieval_config=self.config.server.memory.retrieval,
+            session_factory=self.metastore.session_maker(),
         )
 
         self._doc_search = NoteSearchEngine(
@@ -409,6 +415,11 @@ class MemexAPI:
             config=self.config,
             vaults=self._vaults,
         )
+        self._kv = KVService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -465,7 +476,7 @@ class MemexAPI:
                 logger.debug('Global Vault already exists (concurrent creation handled).')
 
             # 2. Ensure Active Vault (if different from global)
-            active_identifier = self.config.server.active_vault
+            active_identifier = self.config.server.default_active_vault
             if active_identifier != GLOBAL_VAULT_NAME:
                 try:
                     # Check if it exists
@@ -502,15 +513,16 @@ class MemexAPI:
         # Clear cache after initialization to ensure resolve_vault_identifier sees new vaults
         _VAULT_RESOLUTION_CACHE.clear()
 
-        # 3. Validate attached vaults
-        for av_name in self.config.server.attached_vaults:
+        # 3. Validate default reader vault (if different from active)
+        reader_name = self.config.server.default_reader_vault
+        if reader_name != active_identifier:
             try:
-                av_id = await self.resolve_vault_identifier(av_name)
-                logger.info('Attached vault: "%s" (id: %s)', av_name, av_id)
+                reader_id = await self.resolve_vault_identifier(reader_name)
+                logger.info('Default reader vault: "%s" (id: %s)', reader_name, reader_id)
             except VaultNotFoundError:
                 logger.warning(
-                    'Attached vault "%s" not found. It will be skipped during retrieval.',
-                    av_name,
+                    'Default reader vault "%s" not found. It will be skipped during retrieval.',
+                    reader_name,
                 )
 
         # Reconcile interrupted batch jobs
@@ -592,6 +604,10 @@ class MemexAPI:
         """Update a note's title. Delegates to NoteService."""
         return await self._notes.update_note_title(note_id, new_title)
 
+    async def update_note_date(self, note_id: UUID, new_date: datetime) -> dict[str, Any]:
+        """Update a note's publish_date and cascade to memory units. Delegates to NoteService."""
+        return await self._notes.update_note_date(note_id, new_date)
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)
@@ -622,10 +638,17 @@ class MemexAPI:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
-            limit=limit, offset=offset, vault_id=vault_id, vault_ids=vault_ids
+            limit=limit,
+            offset=offset,
+            vault_id=vault_id,
+            vault_ids=vault_ids,
+            after=after,
+            before=before,
         )
 
     async def get_stats_counts(
@@ -641,17 +664,28 @@ class MemexAPI:
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
-            limit=limit, vault_id=vault_id, vault_ids=vault_ids
+            limit=limit,
+            vault_id=vault_id,
+            vault_ids=vault_ids,
+            after=after,
+            before=before,
         )
 
     async def list_entities_ranked(
-        self, limit: int = 100, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 100,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> AsyncGenerator[Any, None]:
         """Stream entities ranked by hybrid score. Delegates to EntityService."""
-        async for entity in self._entities.list_entities_ranked(limit=limit, vault_ids=vault_ids):
+        async for entity in self._entities.list_entities_ranked(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        ):
             yield entity
 
     async def get_entity_cooccurrences(
@@ -677,13 +711,13 @@ class MemexAPI:
         """Get entity mentions. Delegates to EntityService."""
         return await self._entities.get_entity_mentions(entity_id, limit=limit, vault_ids=vault_ids)
 
-    async def get_entity(self, entity_id: UUID | str) -> Any | None:
+    async def get_entity(self, entity_id: UUID | str, vault_id: UUID | None = None) -> Any | None:
         """Get an entity by ID. Delegates to EntityService."""
-        return await self._entities.get_entity(entity_id)
+        return await self._entities.get_entity(entity_id, vault_id=vault_id)
 
-    async def get_entities(self, entity_ids: list[UUID]) -> list[Any]:
+    async def get_entities(self, entity_ids: list[UUID], vault_id: UUID | None = None) -> list[Any]:
         """Get multiple entities by ID. Delegates to EntityService."""
-        return await self._entities.get_entities(entity_ids)
+        return await self._entities.get_entities(entity_ids, vault_id=vault_id)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
         """Get a memory unit by ID. Delegates to StatsService."""
@@ -697,7 +731,7 @@ class MemexAPI:
         """Get daily aggregated token usage. Delegates to StatsService."""
         return await self._stats.get_daily_token_usage()
 
-    async def retrieve(self, request: RetrievalRequest) -> list[MemoryUnit]:
+    async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
         return await self._search.retrieve(request)
 
@@ -714,7 +748,7 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         tags: list[str] | None = None,
-    ) -> list[MemoryUnit]:
+    ) -> tuple[list[MemoryUnit], Any]:
         """Search with reranking. Delegates to SearchService."""
         return await self._search.search(
             query=query,
@@ -816,6 +850,10 @@ class MemexAPI:
         """List all vaults. Delegates to VaultService."""
         return await self._vaults.list_vaults()
 
+    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
+        """List all vaults with note counts. Delegates to VaultService."""
+        return await self._vaults.list_vaults_with_counts()
+
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""
         return await self._vaults.get_vault_by_name(name)
@@ -853,16 +891,27 @@ class MemexAPI:
         return await self._reflection.retry_dead_letter_item(item_id)
 
     async def get_top_entities(
-        self, limit: int = 5, vault_ids: list[UUID] | None = None
+        self,
+        limit: int = 5,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Get top entities by mention count. Delegates to EntityService."""
-        return await self._entities.get_top_entities(limit=limit, vault_ids=vault_ids)
+        return await self._entities.get_top_entities(
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        )
 
     async def search_entities(
-        self, query: str, limit: int = 10, vault_ids: list[UUID] | None = None
+        self,
+        query: str,
+        limit: int = 10,
+        vault_ids: list[UUID] | None = None,
+        entity_type: str | None = None,
     ) -> list[Any]:
         """Search entities by name. Delegates to EntityService."""
-        return await self._entities.search_entities(query, limit=limit, vault_ids=vault_ids)
+        return await self._entities.search_entities(
+            query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+        )
 
     async def get_lineage(
         self,
@@ -882,4 +931,74 @@ class MemexAPI:
             direction=direction,
             depth=depth,
             limit=limit,
+        )
+
+    # --- Note title search ---
+
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Fuzzy-search notes by title. Delegates to NoteService."""
+        return await self._notes.find_notes_by_title(
+            query=query, vault_ids=vault_ids, limit=limit, threshold=threshold
+        )
+
+    # --- Embeddings ---
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Generate an embedding vector for the given text.
+
+        Exposes the embedding model through the public API so that callers
+        (MCP, CLI) do not need to import core internals.
+        """
+        result = await asyncio.to_thread(self.embedding_model.encode, [text])
+        return result[0].tolist()
+
+    # --- KV store ---
+
+    async def kv_put(
+        self,
+        key: str,
+        value: str,
+        embedding: list[float] | None = None,
+    ) -> Any:
+        """Upsert a KV entry. Delegates to KVService."""
+        return await self._kv.put(key=key, value=value, embedding=embedding)
+
+    async def kv_get(self, key: str) -> Any | None:
+        """Get a KV entry by key. Delegates to KVService."""
+        return await self._kv.get(key=key)
+
+    async def kv_search(
+        self,
+        query_embedding: list[float],
+        namespaces: list[str] | None = None,
+        limit: int = 5,
+    ) -> list[Any]:
+        """Semantic search over KV entries. Delegates to KVService."""
+        return await self._kv.search(
+            query_embedding=query_embedding, namespaces=namespaces, limit=limit
+        )
+
+    async def kv_delete(self, key: str) -> bool:
+        """Delete a KV entry. Delegates to KVService."""
+        return await self._kv.delete(key=key)
+
+    async def kv_list(
+        self,
+        namespaces: list[str] | None = None,
+        limit: int = 100,
+        exclude_prefix: str | None = None,
+        key_prefix: str | None = None,
+    ) -> list[Any]:
+        """List KV entries. Delegates to KVService."""
+        return await self._kv.list_entries(
+            namespaces=namespaces,
+            limit=limit,
+            exclude_prefix=exclude_prefix,
+            key_prefix=key_prefix,
         )

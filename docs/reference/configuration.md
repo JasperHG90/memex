@@ -18,6 +18,7 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 |:----|:-----|:--------|:------------|
 | `server_url` | string | `""` (derived) | URL of the Memex Core server used by clients (CLI, MCP, Dashboard). If empty, derived from `server.host` and `server.port`. |
 | `server` | object | — | Core API server and storage configuration. See [Server Settings](#server-settings). |
+| `vault` | object | — | Client-side vault overrides. See [Vault Settings](#vault-settings-vault). |
 | `dashboard` | object | — | Dashboard UI configuration. See [Dashboard Settings](#dashboard-settings). |
 
 ---
@@ -29,9 +30,11 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 | `host` | string | `127.0.0.1` | Host to bind the API server to. |
 | `port` | int | `8000` | Port to bind the API server to. |
 | `workers` | int | `4` | Number of worker processes (Gunicorn). |
-| `active_vault` | string | `global` | Name of the vault used for writing new memories. |
-| `attached_vaults` | list[string] | `[]` | Additional vault names included as read-only in search and retrieval. |
+| `default_active_vault` | string | `global` | Server default vault for writing new memories. Clients can override via `vault.active`. |
+| `default_reader_vault` | string | `""` | Server default vault for read-only search. Clients can override via `vault.search`. |
 | `default_model` | [ModelConfig](#modelconfig) | `gemini/gemini-3-flash-preview` | System-wide default LLM. Sub-configs with `model: null` inherit this value. |
+| `allow_insecure` | bool | `false` | Allow binding to non-localhost addresses without authentication. When `false` (default), the server refuses to start on a non-localhost address unless auth is enabled. |
+| `cors` | object | — | CORS (Cross-Origin Resource Sharing) configuration. See [CORS](#cors-servercors). |
 
 ### Default Model Propagation
 
@@ -44,6 +47,17 @@ When the server starts, `default_model` is propagated to any sub-config whose `m
 - `server.document.model`
 
 Set a sub-config's `model` explicitly to override the default for that subsystem.
+
+---
+
+### CORS (`server.cors`)
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `origins` | list[string] | `["http://localhost:5173", "http://localhost:3000"]` | Allowed origins for CORS requests. |
+| `allow_credentials` | bool | `true` | Whether to allow credentials (cookies, auth headers) in CORS requests. |
+| `allow_methods` | list[string] | `["*"]` | HTTP methods allowed in CORS requests. |
+| `allow_headers` | list[string] | `["*"]` | HTTP headers allowed in CORS requests. |
 
 ---
 
@@ -281,6 +295,83 @@ Reusable model configuration block used by `default_model`, `extraction.model`, 
 
 ---
 
+## Vault Settings (`vault`)
+
+Client-side vault preferences for CLI and MCP. These control which vaults are used for writes and reads, separate from the server's own defaults.
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `active` | string \| null | `null` | Client write vault name. Overrides `server.default_active_vault`. |
+| `search` | list[string] \| null | `null` | Client read vault names for search scope. Overrides `server.default_reader_vault`. |
+
+### Convenience Properties on `MemexConfig`
+
+| Property | Resolution Order | Description |
+|:---------|:-----------------|:------------|
+| `config.write_vault` | `vault.active` > `server.default_active_vault` | Resolved write vault name. |
+| `config.read_vaults` | `vault.search` > `[vault.active]` > `[server.default_reader_vault]` | Resolved list of read vault names. |
+
+### Resolution Precedence
+
+The write and read vaults are resolved identically for both CLI and MCP:
+
+| Priority | Write vault | Read vaults |
+|:---------|:------------|:------------|
+| 1 (highest) | Explicit param (`--vault` / tool `vault_id`) | Explicit param (`--vault` / tool `vault_ids`) |
+| 2 | Env var `MEMEX_VAULT__ACTIVE` | Env var `MEMEX_VAULT__SEARCH` |
+| 3 | `.memex.yaml` → `vault.active` | `.memex.yaml` → `vault.search` |
+| 4 | Global config → `vault.active` | Global config → `vault.search` |
+| 5 (lowest) | `server.default_active_vault` (default: `global`) | `[server.default_reader_vault]` (default: `[global]`) |
+
+> **CLI vs MCP:** The CLI always picks up `.memex.yaml` from CWD because you control the working directory. MCP is spawned as a subprocess by the IDE — whether it inherits the project CWD is **not guaranteed**. For consistent behavior across both, use environment variables.
+
+### Environment Variables for Vault Config
+
+```bash
+# In a shell (CLI)
+export MEMEX_VAULT__ACTIVE=my-project
+export MEMEX_VAULT__SEARCH='["my-project", "shared"]'
+```
+
+```json
+// In .claude/mcp.json (MCP)
+{
+  "env": {
+    "MEMEX_VAULT__ACTIVE": "my-project",
+    "MEMEX_VAULT__SEARCH": "[\"my-project\", \"shared\"]"
+  }
+}
+```
+
+> **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation. Pydantic-settings automatically JSON-decodes string env vars when the target field is a complex type like `list[str]`, so the string `'["a", "b"]'` becomes the Python list `["a", "b"]`.
+
+### Example Configurations
+
+**Per-project** (`.memex.yaml` — reliable for CLI, not guaranteed for MCP):
+
+```yaml
+vault:
+  active: my-project
+  search: [my-project, shared-knowledge]
+```
+
+**Simple** — only set write vault, reads default to `[active]`:
+
+```yaml
+vault:
+  active: my-project
+```
+
+**No vault section** — falls back to server defaults:
+
+```yaml
+server:
+  default_active_vault: global
+  default_reader_vault: global
+```
+
+---
+
 ## Environment Variable Mapping
 
 All configuration keys can be set via environment variables using the `MEMEX_` prefix and double underscores (`__`) for nesting.
@@ -294,7 +385,11 @@ export MEMEX_SERVER_URL=http://localhost:8000
 # Server settings
 export MEMEX_SERVER__HOST=0.0.0.0
 export MEMEX_SERVER__PORT=9000
-export MEMEX_SERVER__ACTIVE_VAULT=project-alpha
+export MEMEX_SERVER__DEFAULT_ACTIVE_VAULT=project-alpha
+
+# Client vault overrides
+export MEMEX_VAULT__ACTIVE=my-project
+export MEMEX_VAULT__SEARCH='["my-project", "shared"]'
 
 # PostgreSQL
 export MEMEX_SERVER__META_STORE__INSTANCE__HOST=db.example.com
@@ -312,6 +407,13 @@ export MEMEX_SERVER__META_STORE__STATEMENT_TIMEOUT_MS=60000
 export MEMEX_SERVER__AUTH__ENABLED=true
 export MEMEX_SERVER__AUTH__API_KEYS='["key1", "key2"]'
 export MEMEX_SERVER__AUTH__WEBHOOK_SECRET=my-webhook-secret
+
+# CORS
+export MEMEX_SERVER__CORS__ORIGINS='["http://localhost:5173", "https://app.example.com"]'
+export MEMEX_SERVER__CORS__ALLOW_CREDENTIALS=true
+
+# Security
+export MEMEX_SERVER__ALLOW_INSECURE=false
 
 # Rate limiting
 export MEMEX_SERVER__RATE_LIMIT__ENABLED=true
@@ -348,6 +450,8 @@ export MEMEX_SERVER__MEMORY__CONTRADICTION__ALPHA=0.1
 | `MEMEX_CONFIG_PATH` | Explicit path to a YAML config file. Overrides local file search. |
 | `MEMEX_LOAD_GLOBAL_CONFIG` | Set to `false` to skip loading `~/.config/memex/config.yaml`. |
 | `MEMEX_LOAD_LOCAL_CONFIG` | Set to `false` to skip searching CWD and parents for config files. |
+| `MEMEX_VAULT__ACTIVE` | Client write vault override. Equivalent to `vault.active` in YAML. See [Vault Settings](#vault-settings-vault). |
+| `MEMEX_VAULT__SEARCH` | Client read vaults override. Must be a **string** containing a JSON array (e.g., `'["a", "b"]'`). Pydantic-settings JSON-decodes it automatically. Equivalent to `vault.search` in YAML. See [Vault Settings](#vault-settings-vault). |
 
 ---
 
@@ -399,6 +503,12 @@ server:
   default_model:
     model: openai/gpt-4o
     api_key: sk-...
+
+  cors:
+    origins:
+      - "https://app.example.com"
+      - "https://admin.example.com"
+    allow_credentials: true
 
   auth:
     enabled: true
@@ -468,6 +578,18 @@ dashboard:
   host: 0.0.0.0
   port: 3001
 ```
+
+### Per-Project (vault override)
+
+Place a `.memex.yaml` in your project root to set the vault context per project:
+
+```yaml
+vault:
+  active: my-project              # client write target
+  search: [my-project, shared]    # client read scope
+```
+
+The `vault.active` setting overrides `server.default_active_vault`. The `vault.search` list overrides the default reader vault and controls which vaults are included in search queries.
 
 ### Local Ollama
 

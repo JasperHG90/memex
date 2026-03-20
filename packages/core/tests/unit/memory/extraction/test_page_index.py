@@ -1,6 +1,7 @@
 """Tests for PageIndex models, utils, and short-doc bypass."""
 
-from unittest.mock import MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,7 +14,10 @@ from memex_core.memory.extraction.models import (
     content_hash_md5,
     estimate_token_count,
 )
-from memex_core.memory.extraction.pipeline.diffing import build_page_index_with_metadata
+from memex_core.memory.extraction.pipeline.diffing import (
+    _inject_subtree_tokens,
+    build_page_index_with_metadata,
+)
 from memex_core.memory.extraction.utils import (
     assess_structure_quality,
     build_tree_from_regex_headers,
@@ -24,7 +28,7 @@ from memex_core.memory.extraction.utils import (
     hydrate_tree,
     strip_header_from_content,
 )
-from memex_core.memory.extraction.core import index_document
+from memex_core.memory.extraction.core import AsyncMarkdownPageIndex, index_document
 
 
 # ---------------------------------------------------------------------------
@@ -691,3 +695,143 @@ class TestBuildPageIndexWithMetadataTotalTokens:
 
         result = build_page_index_with_metadata([node], {'title': 'Test'})
         assert result['metadata']['total_tokens'] == 0
+
+
+# ---------------------------------------------------------------------------
+# _inject_subtree_tokens
+# ---------------------------------------------------------------------------
+
+
+class TestInjectSubtreeTokens:
+    def test_single_node(self) -> None:
+        nodes = [{'token_estimate': 50, 'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 50
+        assert nodes[0]['subtree_tokens'] == 50
+
+    def test_parent_with_children(self) -> None:
+        child_a: dict[str, Any] = {'token_estimate': 20, 'children': []}
+        child_b: dict[str, Any] = {'token_estimate': 30, 'children': []}
+        nodes: list[dict[str, Any]] = [
+            {'token_estimate': 10, 'children': [child_a, child_b]},
+        ]
+        total = _inject_subtree_tokens(nodes)
+        assert nodes[0]['subtree_tokens'] == 60
+        assert child_a['subtree_tokens'] == 20
+        assert child_b['subtree_tokens'] == 30
+        assert total == 60
+
+    def test_deeply_nested(self) -> None:
+        leaf: dict[str, Any] = {'token_estimate': 15, 'children': []}
+        mid: dict[str, Any] = {'token_estimate': 10, 'children': [leaf]}
+        nodes: list[dict[str, Any]] = [
+            {'token_estimate': 5, 'children': [mid]},
+        ]
+        total = _inject_subtree_tokens(nodes)
+        assert leaf['subtree_tokens'] == 15
+        assert mid['subtree_tokens'] == 25
+        assert nodes[0]['subtree_tokens'] == 30
+        assert total == 30
+
+    def test_none_token_estimate(self) -> None:
+        nodes: list[dict[str, Any]] = [{'token_estimate': None, 'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 0
+        assert nodes[0]['subtree_tokens'] == 0
+
+    def test_missing_token_estimate(self) -> None:
+        nodes: list[dict[str, Any]] = [{'children': []}]
+        total = _inject_subtree_tokens(nodes)
+        assert total == 0
+        assert nodes[0]['subtree_tokens'] == 0
+
+
+class TestBuildPageIndexSubtreeTokens:
+    def test_subtree_tokens_on_all_nodes(self) -> None:
+        """build_page_index_with_metadata should inject subtree_tokens on every node."""
+        headers = detect_markdown_headers_regex(STRUCTURED_DOC)
+        tree = build_tree_from_regex_headers(headers)
+        hydrate_tree(tree, headers, STRUCTURED_DOC)
+        for node in tree:
+            node._assign_content_hash_ids()
+
+        result = build_page_index_with_metadata(tree, {'title': 'Test'})
+
+        def _check(nodes: list[dict]) -> int:
+            total = 0
+            for n in nodes:
+                assert 'subtree_tokens' in n, f'Node {n["id"]} missing subtree_tokens'
+                children_sum = _check(n.get('children', []))
+                own = n.get('token_estimate', 0) or 0
+                assert n['subtree_tokens'] == own + children_sum
+                total += n['subtree_tokens']
+            return total
+
+        root_total = _check(result['toc'])
+        assert result['metadata']['total_tokens'] == root_total
+
+
+# ---------------------------------------------------------------------------
+# TestScanDocumentParallel — token-based chunking logic
+# ---------------------------------------------------------------------------
+
+
+class TestScanDocumentParallel:
+    """Tests for _scan_document_parallel token-based chunking."""
+
+    def _make_indexer(self) -> AsyncMarkdownPageIndex:
+        mock_lm = MagicMock()
+        return AsyncMarkdownPageIndex(lm=mock_lm)
+
+    @pytest.mark.asyncio
+    async def test_small_doc_sends_single_call(self) -> None:
+        """A short document should be scanned in a single LLM call."""
+        indexer = self._make_indexer()
+        short_text = 'Hello world. ' * 50  # ~100 tokens
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            result = await indexer._scan_document_parallel(short_text, max_scan_tokens=20_000)
+
+        assert result == []
+        mock_chunk.assert_called_once_with(short_text, '', 0)
+
+    @pytest.mark.asyncio
+    async def test_large_doc_chunks_by_tokens(self) -> None:
+        """A large document should be split into multiple chunks."""
+        indexer = self._make_indexer()
+        large_text = 'word ' * 50_000  # ~50K tokens
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            await indexer._scan_document_parallel(large_text, max_scan_tokens=20_000)
+
+        assert mock_chunk.call_count >= 3
+        # First chunk starts at offset 0
+        first_call_offset = mock_chunk.call_args_list[0][0][2]
+        assert first_call_offset == 0
+        # Last chunk should reach near the end of the document
+        last_call_args = mock_chunk.call_args_list[-1][0]
+        last_offset = last_call_args[2]
+        last_chunk = last_call_args[0]
+        assert last_offset + len(last_chunk) >= len(large_text) - 200
+
+    @pytest.mark.asyncio
+    async def test_boundary_doc_exactly_at_limit(self) -> None:
+        """A document exactly at the token limit should be sent as a single call."""
+        indexer = self._make_indexer()
+        # Build text that is exactly at the limit
+        # estimate_token_count uses tiktoken; we pick a size and measure
+        boundary_text = 'word ' * 20_000  # should be ~20K tokens
+
+        token_count = estimate_token_count(boundary_text)
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            await indexer._scan_document_parallel(boundary_text, max_scan_tokens=token_count)
+
+        # Boundary is <= so exactly at limit should be a single call
+        mock_chunk.assert_called_once_with(boundary_text, '', 0)

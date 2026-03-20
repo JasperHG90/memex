@@ -14,7 +14,7 @@ The `memex` CLI allows you to:
 ## Installation
 
 ```bash
-uv tool install memex-cli
+uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
 ```
 
 ## Quick Start
@@ -27,7 +27,7 @@ memex config init
 memex server start
 
 # Ingest a webpage
-memex memory add --url "https://example.com"
+memex note add --url "https://example.com"
 
 # Search for answers
 memex memory search "What are the key points?"

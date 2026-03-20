@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlmodel import col
 
+from sqlalchemy import text
+
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
-from memex_common.schemas import NodeDTO
+from memex_common.schemas import NodeDTO, filter_toc
 
 from memex_core.config import MemexConfig
 from memex_core.services.vaults import VaultService
@@ -93,6 +96,76 @@ class NoteService:
                 'linked_note_id': str(linked_note_id) if linked_note_id else None,
             }
 
+    async def update_note_date(self, note_id: UUID, new_date: datetime) -> dict[str, Any]:
+        """Update the publish_date of a note, cascading delta to all memory unit timestamps."""
+        from datetime import timezone
+
+        from sqlmodel import update
+
+        from memex_core.memory.sql_models import MemoryUnit, Note
+
+        # Normalize to UTC if naive
+        if new_date.tzinfo is None:
+            new_date = new_date.replace(tzinfo=timezone.utc)
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, note_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            old_date = doc.publish_date or doc.created_at
+            delta = new_date - old_date
+
+            # Early return if no change
+            if delta == timedelta(0):
+                return {
+                    'note_id': str(note_id),
+                    'old_date': old_date.isoformat(),
+                    'new_date': new_date.isoformat(),
+                    'units_updated': 0,
+                }
+
+            # Update Note.publish_date
+            doc.publish_date = new_date
+
+            # Update doc_metadata
+            if doc.doc_metadata is None:
+                doc.doc_metadata = {}
+            meta = dict(doc.doc_metadata)
+            meta['publish_date'] = new_date.isoformat()
+            doc.doc_metadata = meta
+
+            # Update page_index metadata
+            if isinstance(doc.page_index, dict):
+                pi = dict(doc.page_index)
+                pi_meta = dict(pi.get('metadata') or {})
+                pi_meta['publish_date'] = new_date.isoformat()
+                pi['metadata'] = pi_meta
+                doc.page_index = pi
+
+            session.add(doc)
+
+            # Bulk update all MemoryUnit temporal fields by delta
+            result = await session.exec(
+                update(MemoryUnit)
+                .where(col(MemoryUnit.note_id) == note_id)
+                .values(
+                    event_date=MemoryUnit.event_date + delta,
+                    mentioned_at=MemoryUnit.mentioned_at + delta,  # type: ignore[operator]
+                    occurred_start=MemoryUnit.occurred_start + delta,  # type: ignore[operator]
+                    occurred_end=MemoryUnit.occurred_end + delta,  # type: ignore[operator]
+                )
+            )
+            units_updated: int = result.rowcount  # type: ignore[assignment]
+
+            await session.commit()
+            return {
+                'note_id': str(note_id),
+                'old_date': old_date.isoformat(),
+                'new_date': new_date.isoformat(),
+                'units_updated': units_updated,
+            }
+
     async def update_note_title(self, note_id: UUID, new_title: str) -> dict[str, Any]:
         """Update the title of a note, cascading to page_index and doc_metadata."""
         from memex_core.memory.sql_models import Note
@@ -166,46 +239,11 @@ class NoteService:
         depth: int | None = None,
         parent_node_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Filter a TOC tree by depth and/or parent node."""
-        if parent_node_id is not None:
-            # Find subtree rooted at parent_node_id
-            def _find_subtree(
-                nodes: list[dict[str, Any]], target_id: str
-            ) -> list[dict[str, Any]] | None:
-                for node in nodes:
-                    if node.get('id') == target_id:
-                        return node.get('children', [])
-                    found = _find_subtree(node.get('children', []), target_id)
-                    if found is not None:
-                        return found
-                return None
+        """Filter a TOC tree by depth and/or parent node.
 
-            subtree = _find_subtree(toc, parent_node_id)
-            if subtree is None:
-                return []
-            toc = subtree
-
-        if depth is not None and depth >= 0:
-            # depth=0 → roots + direct children (H1 + H2 overview)
-            # depth=1 → full tree (no trimming)
-            # depth=N (N>=1) → full tree
-            effective_depth = depth + 1
-
-            def _trim_depth(nodes: list[dict[str, Any]], current: int) -> list[dict[str, Any]]:
-                if current > effective_depth:
-                    return []
-                result = []
-                for node in nodes:
-                    trimmed = dict(node)
-                    trimmed['children'] = _trim_depth(node.get('children', []), current + 1)
-                    result.append(trimmed)
-                return result
-
-            if depth == 0:
-                toc = _trim_depth(toc, 0)
-            # depth >= 1: return full tree (no trimming needed)
-
-        return toc
+        Delegates to :func:`memex_common.schemas.filter_toc`.
+        """
+        return filter_toc(toc, depth=depth, parent_node_id=parent_node_id)
 
     async def get_note_page_index(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve the page index for a document, or None if not indexed.
@@ -263,17 +301,46 @@ class NoteService:
             return [NodeDTO.model_validate(n) for n in results]
 
     async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
-        """Return metadata for multiple notes. Skips notes that are not found."""
-        results: list[dict[str, Any]] = []
-        for nid in note_ids:
-            try:
-                meta = await self.get_note_metadata(nid)
-                if meta:
-                    meta['note_id'] = str(nid)
-                    results.append(meta)
-            except Exception:
-                pass
-        return results
+        """Return metadata for multiple notes in a single query.
+
+        Skips notes that are not found or have no page_index metadata.
+        """
+        if not note_ids:
+            return []
+
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note, Vault
+
+        async with self.metastore.session() as session:
+            stmt = select(Note).where(col(Note.id).in_(note_ids))
+            notes = (await session.exec(stmt)).all()
+
+            # Collect unique vault IDs to batch-fetch vault names
+            vault_ids = {n.vault_id for n in notes if n.vault_id is not None}
+            vault_map: dict[UUID, str] = {}
+            if vault_ids:
+                vault_stmt = select(Vault).where(col(Vault.id).in_(list(vault_ids)))
+                vaults = (await session.exec(vault_stmt)).all()
+                vault_map = {v.id: v.name for v in vaults}
+
+            results: list[dict[str, Any]] = []
+            for doc in notes:
+                if doc.page_index is None or not isinstance(doc.page_index, dict):
+                    continue
+                metadata = doc.page_index.get('metadata')
+                if metadata is None:
+                    continue
+                metadata = dict(metadata)
+                metadata['has_assets'] = bool(doc.assets)
+                metadata.setdefault('vault_id', str(doc.vault_id))
+                vault_name = vault_map.get(doc.vault_id)
+                if vault_name:
+                    metadata.setdefault('vault_name', vault_name)
+                metadata['note_id'] = str(doc.id)
+                results.append(metadata)
+
+            return results
 
     async def list_notes(
         self,
@@ -281,13 +348,18 @@ class NoteService:
         offset: int = 0,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """
         List ingested documents.
         Filters by the given vault_id(s), or returns all vaults if not provided.
+        Optional after/before filters use COALESCE(publish_date, created_at).
         """
-        from memex_core.memory.sql_models import Note
+        from sqlalchemy import func
         from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -297,30 +369,128 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            if after is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
+                stmt = stmt.where(date_col >= after)
+            if before is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
+                stmt = stmt.where(date_col <= before)
 
-            stmt = stmt.offset(offset).limit(limit)
-            return list((await session.exec(stmt)).all())
+            stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
+            notes = list((await session.exec(stmt)).all())
+            return await self._attach_vault_names(session, notes)
 
     async def get_recent_notes(
         self,
         limit: int = 5,
         vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[Any]:
         """Get the most recent notes."""
+        from sqlalchemy import func
+        from sqlmodel import select
+
         from memex_core.memory.sql_models import Note
-        from sqlmodel import desc, select
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
 
         async with self.metastore.session() as session:
-            stmt = select(Note).order_by(desc(Note.created_at))
+            stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            if after is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
+                stmt = stmt.where(date_col >= after)
+            if before is not None:
+                date_col = func.coalesce(Note.publish_date, Note.created_at)
+                stmt = stmt.where(date_col <= before)
             stmt = stmt.limit(limit)
-            return list((await session.exec(stmt)).all())
+            notes = list((await session.exec(stmt)).all())
+            return await self._attach_vault_names(session, notes)
+
+    @staticmethod
+    async def _attach_vault_names(session: Any, notes: list[Any]) -> list[Any]:
+        """Batch-fetch vault names and attach them to Note objects."""
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Vault
+
+        vault_ids = {n.vault_id for n in notes if n.vault_id is not None}
+        vault_map: dict[UUID, str] = {}
+        if vault_ids:
+            vault_stmt = select(Vault).where(col(Vault.id).in_(list(vault_ids)))
+            vaults = (await session.exec(vault_stmt)).all()
+            vault_map = {v.id: v.name for v in vaults}
+        for note in notes:
+            object.__setattr__(note, 'vault_name', vault_map.get(note.vault_id))
+        return notes
+
+    async def find_notes_by_title(
+        self,
+        query: str,
+        vault_ids: list[UUID] | None = None,
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> list[dict[str, Any]]:
+        """Fuzzy-search notes by title using trigram similarity.
+
+        Uses the pg_trgm GIN index on lower(title) for efficient matching.
+        Returns results ordered by similarity score descending.
+        """
+        async with self.metastore.session() as session:
+            await session.exec(
+                text('SELECT set_limit(:threshold)'), params={'threshold': threshold}
+            )
+
+            if vault_ids:
+                stmt = text("""
+                    SELECT
+                        id, title,
+                        similarity(lower(title), lower(:query)) AS score,
+                        vault_id, created_at, publish_date, status
+                    FROM notes
+                    WHERE lower(title) % lower(:query)
+                      AND vault_id = ANY(:vault_ids)
+                    ORDER BY score DESC
+                    LIMIT :limit
+                """)
+                params: dict[str, Any] = {
+                    'query': query,
+                    'vault_ids': list(vault_ids),
+                    'limit': limit,
+                }
+            else:
+                stmt = text("""
+                    SELECT
+                        id, title,
+                        similarity(lower(title), lower(:query)) AS score,
+                        vault_id, created_at, publish_date, status
+                    FROM notes
+                    WHERE lower(title) % lower(:query)
+                    ORDER BY score DESC
+                    LIMIT :limit
+                """)
+                params = {'query': query, 'limit': limit}
+
+            result = await session.exec(stmt, params=params)
+            rows = []
+            for row in result:
+                rows.append(
+                    {
+                        'note_id': row[0],
+                        'title': row[1],
+                        'score': float(row[2]),
+                        'vault_id': row[3],
+                        'created_at': row[4],
+                        'publish_date': row[5],
+                        'status': row[6],
+                    }
+                )
+            return rows
 
     async def delete_note(self, note_id: UUID) -> bool:
         """
@@ -329,21 +499,28 @@ class NoteService:
         Uses AsyncTransaction for atomicity across metastore + filestore.
         ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
         FileStore cleanup handles: assets and filestore_path.
-        After deletion, orphaned mental models (entities with no remaining links) are cleaned up.
+        After deletion, orphaned entities (and their mental models) are removed, and
+        mention_count is recalculated for entities still referenced by other notes.
         """
-        from sqlmodel import select
+        from sqlalchemy import update
+        from sqlmodel import func, select
 
         from memex_core.memory.sql_models import (
-            MentalModel,
+            Entity,
             MemoryUnit,
+            MentalModel,
             Note,
             UnitEntity,
         )
+
+        from memex_core.services.mental_model_cleanup import prune_stale_evidence
 
         async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
             doc = await txn.db_session.get(Note, note_id)
             if not doc:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            note_vault_id = doc.vault_id
 
             # Collect entity_ids linked to this note's memory units before deletion.
             unit_ids_stmt = select(MemoryUnit.id).where(col(MemoryUnit.note_id) == note_id)
@@ -368,9 +545,10 @@ class NoteService:
             # ORM cascades handle memory_units, chunks, and their children
             await txn.db_session.delete(doc)
 
-            # Flush so cascades execute, then clean up orphaned mental models
+            # Flush so cascades execute, then clean up orphaned entities
             await txn.db_session.flush()
 
+            orphaned_entity_ids: set[UUID] = set()
             if entity_ids_for_cleanup:
                 for eid in entity_ids_for_cleanup:
                     # Check if any other units still reference this entity
@@ -378,11 +556,37 @@ class NoteService:
                         select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
                     )
                     if remaining.first() is None:
-                        # No remaining links — delete mental models for this entity
+                        orphaned_entity_ids.add(eid)
+                        # No remaining links — delete entity and its mental models.
+                        # MentalModel has no FK CASCADE, so delete explicitly first.
                         mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
                         mm_result = await txn.db_session.exec(mm_stmt)
                         for mm in mm_result.all():
                             await txn.db_session.delete(mm)
+                        # Entity FK cascades handle aliases, cooccurrences, links
+                        entity = await txn.db_session.get(Entity, eid)
+                        if entity:
+                            await txn.db_session.delete(entity)
+                    else:
+                        # Update mention_count to reflect actual remaining links
+                        count_result = await txn.db_session.exec(
+                            select(func.count())
+                            .select_from(UnitEntity)
+                            .where(col(UnitEntity.entity_id) == eid)
+                        )
+                        actual_count = count_result.one()
+                        await txn.db_session.exec(
+                            update(Entity)
+                            .where(col(Entity.id) == eid)
+                            .values(mention_count=actual_count)
+                        )
+
+                # Prune stale evidence from mental models of shared (non-orphaned) entities
+                shared_entity_ids = entity_ids_for_cleanup - orphaned_entity_ids
+                if shared_entity_ids and unit_ids:
+                    await prune_stale_evidence(
+                        txn.db_session, shared_entity_ids, unit_ids, note_vault_id
+                    )
 
         return True
 

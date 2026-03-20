@@ -5,7 +5,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.config import ReflectionConfig
-from memex_core.memory.sql_models import Entity, ReflectionQueue
+from memex_core.memory.sql_models import Entity, ReflectionQueue, ReflectionStatus
 
 
 @pytest.fixture
@@ -54,34 +54,47 @@ async def test_extraction_flow_integration(
 async def test_retrieval_flow_integration(
     session: AsyncSession, queue_service: ReflectionQueueService
 ):
-    """Test that retrieving entities updates the queue and entity stats."""
+    """Test that retrieval updates entity stats and queue priority but does NOT re-queue."""
     # 1. Create Entity
     entity = Entity(canonical_name=f'Retrieval Flow {uuid4()}')
     session.add(entity)
     await session.commit()
     await session.refresh(entity)
 
-    # 2. Trigger Retrieval Event
-    # Change config to weight resonance
+    # 2. First: trigger extraction so a queue item exists
+    await queue_service.handle_extraction_event(session, {entity.id})
+
+    stmt = select(ReflectionQueue).where(ReflectionQueue.entity_id == entity.id)
+    result = await session.exec(stmt)
+    queue_item = result.one()
+    assert queue_item.status == ReflectionStatus.PENDING
+
+    # 3. Simulate reflection completing — delete the queue item
+    await session.delete(queue_item)
+    await session.commit()
+
+    # 4. Trigger Retrieval Event — should update entity stats but NOT create queue item
     queue_service.config.weight_urgency = 0.0
     queue_service.config.weight_resonance = 1.0
 
     await queue_service.handle_retrieval_event(session, {entity.id})
 
-    # 3. Verify Entity Updated
+    # 5. Verify Entity Updated
     await session.refresh(entity)
     assert entity.retrieval_count == 1
     assert entity.last_retrieved_at is not None
 
-    # 4. Verify Queue Item Created
-    stmt = select(ReflectionQueue).where(ReflectionQueue.entity_id == entity.id)
+    # 6. Verify NO queue item was created (retrieval doesn't re-queue)
+    result = await session.exec(stmt)
+    assert result.first() is None
+
+    # 7. Now create a queue item via extraction again to test priority updates
+    await queue_service.handle_extraction_event(session, {entity.id})
     result = await session.exec(stmt)
     queue_item = result.one()
+    original_status = queue_item.status
 
-    # Priority = log10(1) * 1.0 = 0
-    assert queue_item.priority_score == 0.0
-
-    # Trigger 9 more times to reach 10 (log10(10) = 1)
+    # 8. Trigger retrieval 9 more times to reach 10 total (log10(10) = 1)
     for _ in range(9):
         await queue_service.handle_retrieval_event(session, {entity.id})
 
@@ -90,6 +103,8 @@ async def test_retrieval_flow_integration(
 
     assert entity.retrieval_count == 10
     assert queue_item.priority_score == 1.0  # log10(10) * 1.0
+    # Status should remain unchanged — retrieval doesn't flip to PENDING
+    assert queue_item.status == original_status
 
 
 @pytest.mark.asyncio

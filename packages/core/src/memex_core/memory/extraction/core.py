@@ -848,7 +848,7 @@ async def extract_facts_from_text(
     """Backward-compatible: chunks text internally, then extracts."""
     # We prefer stable chunking to ensure consistency with incremental updates.
     # Note: stable_chunk_text ignores chunk_overlap, which is acceptable.
-    stable_blocks = stable_chunk_text(text, block_size=chunk_max_chars)
+    stable_blocks = await asyncio.to_thread(stable_chunk_text, text, block_size=chunk_max_chars)
     chunks = [b.text for b in stable_blocks]
 
     return await extract_facts_from_chunks(
@@ -890,7 +890,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
     async def aforward(
         self,
         full_text: str,
-        chunk_size: int = 3000,
+        max_scan_tokens: int = 20_000,
         max_node_length: int = 5000,
         block_size: int = 1000,
     ) -> tuple[PageIndexOutput, TokenUsage]:
@@ -907,7 +907,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             )
         else:
             output = await self._llm_path(
-                full_text, regex_headers, quality, chunk_size, max_node_length, block_size
+                full_text, regex_headers, quality, max_scan_tokens, max_node_length, block_size
             )
         return output, self._total_usage
 
@@ -959,13 +959,13 @@ class AsyncMarkdownPageIndex(dspy.Module):
         full_text: str,
         regex_headers: list[DetectedHeader],
         quality: StructureQuality,
-        chunk_size: int,
+        max_scan_tokens: int,
         max_node_length: int,
         block_size: int,
     ) -> PageIndexOutput:
         self._logger.info('[LLM Path] Document is not well-structured. Running full LLM scan.')
 
-        flat_headers = await self._scan_document_parallel(full_text, chunk_size)
+        flat_headers = await self._scan_document_parallel(full_text, max_scan_tokens)
         flat_headers = await self._detect_and_fill_gaps(flat_headers, full_text, max_gap_size=4000)
 
         if not flat_headers:
@@ -996,6 +996,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
             flat_headers = verify_headers(flat_headers, full_text)
 
         flat_headers = [h for h in flat_headers if h.verified]
+        for i, h in enumerate(flat_headers):
+            h.id = i
 
         if not flat_headers:
             return PageIndexOutput(
@@ -1036,12 +1038,25 @@ class AsyncMarkdownPageIndex(dspy.Module):
 
     # ---- LLM-dependent scanning ----
 
-    async def _scan_document_parallel(self, text: str, chunk_size: int) -> list[DetectedHeader]:
-        tasks = []
-        overlap = 200
+    async def _scan_document_parallel(
+        self, text: str, max_scan_tokens: int
+    ) -> list[DetectedHeader]:
+        doc_tokens = estimate_token_count(text)
 
-        for start in range(0, len(text), chunk_size - overlap):
-            end = min(start + chunk_size, len(text))
+        if doc_tokens <= max_scan_tokens:
+            self._logger.info(
+                f'[LLM Path] Scanning full document ({doc_tokens} tokens) in single call.'
+            )
+            return deduplicate_and_sort([await self._process_single_chunk(text, '', 0)])
+
+        chars_per_token = len(text) / doc_tokens if doc_tokens > 0 else 4.0
+        chunk_chars = int(max_scan_tokens * chars_per_token)
+        overlap_chars = 200
+        tasks = []
+        num_chunks = 0
+
+        for start in range(0, len(text), chunk_chars - overlap_chars):
+            end = min(start + chunk_chars, len(text))
             chunk = text[start:end]
             ctx_start = max(0, start - 200)
             prev_context = text[ctx_start:start]
@@ -1049,7 +1064,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
             if len(chunk) < 50:
                 continue
             tasks.append(self._process_single_chunk(chunk, prev_context, start))
+            num_chunks += 1
 
+        self._logger.info(
+            f'[LLM Path] Scanning document ({doc_tokens} tokens) in {num_chunks} chunks.'
+        )
         results = await asyncio.gather(*tasks)
         return deduplicate_and_sort(results)
 
@@ -1334,7 +1353,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
 async def index_document(
     full_text: str,
     lm: dspy.LM,
-    scan_chunk_size: int = 3000,
+    max_scan_tokens: int = 20_000,
     max_node_length: int = 5000,
     block_token_target: int = 1000,
     short_doc_threshold: int = 2000,
@@ -1347,7 +1366,7 @@ async def index_document(
     Args:
         full_text: The full document text to index.
         lm: DSPy language model for LLM calls.
-        scan_chunk_size: Chunk size for LLM scanning path.
+        max_scan_tokens: Max tokens per LLM scan call. Small docs go in one call.
         max_node_length: Max characters per node before refinement.
         block_token_target: Target token count per block.
         short_doc_threshold: Documents below this with no headers bypass PageIndex.
@@ -1392,7 +1411,7 @@ async def index_document(
     indexer = AsyncMarkdownPageIndex(lm=lm)
     return await indexer.aforward(
         full_text,
-        chunk_size=scan_chunk_size,
+        max_scan_tokens=max_scan_tokens,
         max_node_length=max_node_length,
         block_size=block_token_target,
     )
