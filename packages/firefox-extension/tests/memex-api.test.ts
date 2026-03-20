@@ -179,4 +179,41 @@ describe('saveNote', () => {
     const headers = mockFetch.mock.calls[0][1].headers;
     expect(headers['X-API-Key']).toBeUndefined();
   });
+
+  it('sends files map when images are provided', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-img' }),
+    });
+
+    await saveNote('http://localhost:8000', '', {
+      name: 'Article with Images',
+      description: '',
+      content: '# Article\n\n![](image-0.jpg)',
+      tags: [],
+      vaultId: 'vault-1',
+      files: { 'image-0.jpg': 'BASE64DATA' },
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.files).toEqual({ 'image-0.jpg': 'BASE64DATA' });
+  });
+
+  it('sends empty files map when no images provided', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-no-img' }),
+    });
+
+    await saveNote('http://localhost:8000', '', {
+      name: 'Text Only',
+      description: '',
+      content: 'No images here',
+      tags: [],
+      vaultId: undefined,
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.files).toEqual({});
+  });
 });

@@ -79,7 +79,13 @@ async function setupPopupMocks(
             set: async function() {},
           },
         },
-        runtime: { openOptionsPage: function() {} },
+        runtime: {
+          openOptionsPage: function() {},
+          sendMessage: async function(msg) {
+            if (msg && msg.action === 'downloadImage') return { ok: false };
+            return {};
+          },
+        },
       };
 
       window.__lastSaveBody = null;
@@ -254,7 +260,13 @@ test.describe('vault loading', () => {
             },
           },
           storage: { local: { get: async function(d) { return d; }, set: async function() {} } },
-          runtime: { openOptionsPage: function() {} },
+          runtime: {
+          openOptionsPage: function() {},
+          sendMessage: async function(msg) {
+            if (msg && msg.action === 'downloadImage') return { ok: false };
+            return {};
+          },
+        },
         };
         window.fetch = async function(url) {
           if (typeof url === 'string' && url.indexOf('/api/v1/vaults') !== -1) throw new Error('Network error');

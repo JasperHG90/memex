@@ -46,6 +46,7 @@ export async function saveNote(
     tags: string[];
     vaultId: string | undefined;
     background?: boolean;
+    files?: Record<string, string>;
   },
 ): Promise<IngestResponse> {
   const url = `${serverUrl}/api/v1/ingestions${note.background ? '?background=true' : ''}`;
@@ -61,6 +62,7 @@ export async function saveNote(
       content: utf8ToBase64(note.content),
       tags: note.tags,
       vault_id: note.vaultId,
+      files: note.files ?? {},
     }),
   });
   if (!resp.ok) {

@@ -35,6 +35,8 @@ export interface ExtractResult {
   publishedTime?: string;
   url?: string;
   hostname?: string;
+  /** Map of local filename → base64-encoded image bytes. */
+  images?: Record<string, string>;
 }
 
 /** Message sent from popup to content script. */
