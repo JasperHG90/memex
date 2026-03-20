@@ -556,10 +556,11 @@ class MemexAPI:
         file_path: str | plb.Path,
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
+        note_key: str | None = None,
     ) -> dict[str, Any]:
         """Ingest from file. Delegates to IngestionService."""
         return await self._ingestion.ingest_from_file(
-            file_path, vault_id=vault_id, reflect_after=reflect_after
+            file_path, vault_id=vault_id, reflect_after=reflect_after, note_key=note_key
         )
 
     async def ingest(
