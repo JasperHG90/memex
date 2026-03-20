@@ -196,22 +196,31 @@ async def _stamp_alembic_head(engine) -> None:
 
 
 @pytest_asyncio.fixture(scope='function')
-async def db_session(postgres_url: str) -> AsyncGenerator[AsyncSession, None]:
+async def _truncate_db(postgres_url: str) -> AsyncGenerator[None, None]:
+    """Truncate all tables and re-seed the global vault before each test."""
+    engine = create_async_engine(postgres_url, poolclass=NullPool)
+    session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_maker() as session:
+        for table in reversed(SQLModel.metadata.sorted_tables):
+            await session.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
+        await session.commit()
+
+        vault = Vault(id=GLOBAL_VAULT_ID, name=GLOBAL_VAULT_NAME, description='Test Global Vault')
+        session.add(vault)
+        await session.commit()
+
+    await engine.dispose()
+    yield
+
+
+@pytest_asyncio.fixture(scope='function')
+async def db_session(postgres_url: str, _truncate_db: None) -> AsyncGenerator[AsyncSession, None]:
     """Provides a clean database session for each test, with truncated tables."""
     engine = create_async_engine(postgres_url, poolclass=NullPool)
     session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     async with session_maker() as session:
-        # Truncate all tables
-        for table in reversed(SQLModel.metadata.sorted_tables):
-            await session.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
-        await session.commit()
-
-        # Re-initialize Global Vault
-        vault = Vault(id=GLOBAL_VAULT_ID, name=GLOBAL_VAULT_NAME, description='Test Global Vault')
-        session.add(vault)
-        await session.commit()
-
         yield session
 
     await engine.dispose()
@@ -294,10 +303,12 @@ def clear_vault_cache():
 
 
 @pytest.fixture(scope='function')
-def client(postgres_container: PostgresContainer) -> Generator[TestClient, None, None]:
+def client(
+    postgres_container: PostgresContainer, _truncate_db: None
+) -> Generator[TestClient, None, None]:
     """
     Create a TestClient with environment variables configured to point
-    to the test container.
+    to the test container. DB is truncated before each test.
     """
     _set_env_vars(postgres_container)
     os.environ['MEMEX_LOAD_LOCAL_CONFIG'] = 'false'
@@ -307,9 +318,12 @@ def client(postgres_container: PostgresContainer) -> Generator[TestClient, None,
 
 
 @pytest_asyncio.fixture(scope='function')
-async def async_client(postgres_container: PostgresContainer) -> AsyncGenerator[AsyncClient, None]:
+async def async_client(
+    postgres_container: PostgresContainer, _truncate_db: None
+) -> AsyncGenerator[AsyncClient, None]:
     """
     Create an AsyncClient for interacting with the FastAPI app directly.
+    DB is truncated before each test.
     """
     _set_env_vars(postgres_container)
     os.environ['MEMEX_LOAD_LOCAL_CONFIG'] = 'false'
