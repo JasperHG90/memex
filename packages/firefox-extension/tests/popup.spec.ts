@@ -8,11 +8,13 @@ function buildArticleHTML(opts: {
   title?: string;
   content?: string;
   byline?: string;
+  jsonLd?: string;
 } = {}) {
   const title = opts.title ?? 'Why Neural Networks Are Changing Everything';
   const content = opts.content ?? '<p>A deep dive into modern AI architectures and their impact.</p>'.repeat(5);
   const byline = opts.byline ?? 'Jane Doe';
-  return `<!DOCTYPE html><html><head><title>${title}</title></head><body>
+  const jsonLd = opts.jsonLd ?? '';
+  return `<!DOCTYPE html><html><head><title>${title}</title>${jsonLd}</head><body>
     <article>
       <h1>${title}</h1>
       <p class="author">${byline}</p>
@@ -210,6 +212,30 @@ test.describe('article extraction', () => {
     await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 
+  test('populates author and publish date from metadata', async ({ page }) => {
+    const htmlWithMeta = buildArticleHTML({
+      jsonLd: '<meta property="article:author" content="Jane Doe"><meta property="article:published_time" content="2025-12-09T00:00:00Z">',
+    });
+    await setupPopupMocks(page, { articleHTML: htmlWithMeta });
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await expect(page.locator('#author')).toHaveValue('Jane Doe');
+    await expect(page.locator('#publish-date')).toHaveValue('2025-12-09');
+  });
+
+  test('author and publish date fields are editable', async ({ page }) => {
+    const htmlWithMeta = buildArticleHTML({
+      jsonLd: '<meta property="article:author" content="Jane Doe"><meta property="article:published_time" content="2025-12-09T00:00:00Z">',
+    });
+    await setupPopupMocks(page, { articleHTML: htmlWithMeta });
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.locator('#author').fill('Custom Author');
+    await expect(page.locator('#author')).toHaveValue('Custom Author');
+  });
+
   test('falls back to tab title when Readability fails', async ({ page }) => {
     await setupPopupMocks(page, {
       articleHTML: '<html><head></head><body><p>x</p></body></html>',
@@ -322,6 +348,25 @@ test.describe('save flow', () => {
 
     const body = await page.evaluate(() => (window as any).__lastSaveBody);
     expect(body.name).toBe('My Custom Title');
+  });
+
+  test('uses edited author and date in saved frontmatter', async ({ page }) => {
+    const htmlWithMeta = buildArticleHTML({
+      jsonLd: '<meta property="article:author" content="Original Author"><meta property="article:published_time" content="2025-12-09T00:00:00Z">',
+    });
+    await setupPopupMocks(page, { articleHTML: htmlWithMeta });
+    await page.goto('/popup/popup.html');
+
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.locator('#author').fill('Edited Author');
+    await page.locator('#publish-date').fill('2024-01-15');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('button', { name: 'Saved!' })).toBeVisible();
+
+    const body = await page.evaluate(() => (window as any).__lastSaveBody);
+    const decoded = atob(body.content);
+    expect(decoded).toContain('author: Edited Author');
+    expect(decoded).toContain('publish_date: 2024-01-15');
   });
 
   test('shows error on save failure and re-enables button', async ({ page }) => {

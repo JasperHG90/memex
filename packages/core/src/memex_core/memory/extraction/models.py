@@ -71,6 +71,11 @@ class BlockSummary(BaseModel):
         description='3-5 key points covered in this block. '
         'Each point should be a complete sentence WITHOUT trailing punctuation.',
     )
+    tags: list[str] = Field(
+        default_factory=list,
+        description='3-7 short, lowercase tags that categorize this block. '
+        'Use existing domain terminology. No hashtags.',
+    )
 
     @property
     def formatted(self) -> str:

@@ -149,7 +149,8 @@ class TestBlockSummaryFormatted:
 
         bs = BlockSummary(topic='Test', key_points=['A', 'B'])
         d = bs.model_dump()
-        assert d == {'topic': 'Test', 'key_points': ['A', 'B']}
+        assert d == {'topic': 'Test', 'key_points': ['A', 'B'], 'tags': []}
         restored = BlockSummary(**d)
         assert restored.topic == bs.topic
         assert restored.key_points == bs.key_points
+        assert restored.tags == bs.tags

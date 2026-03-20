@@ -67,6 +67,34 @@ textarea {
   margin-bottom: 12px;
 }
 
+.field-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.field-half {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+input[type="date"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  color: #1a1a2e;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input[type="date"]:focus {
+  border-color: #e94560;
+}
+
 .actions {
   display: flex;
   gap: 8px;

@@ -110,6 +110,25 @@ async def get_extraction_engine(
     )
 
 
+def _synthesize_tags(
+    page_index_output: PageIndexOutput,
+    user_tags: list[str],
+) -> list[str]:
+    """Merge user-provided tags with LLM-generated block tags."""
+    if user_tags:
+        return user_tags  # User-provided tags take priority
+    seen: set[str] = set()
+    tags: list[str] = []
+    for block in page_index_output.blocks:
+        if block.summary:
+            for tag in block.summary.tags:
+                normalized = tag.strip().lower()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    tags.append(normalized)
+    return tags[:15]  # Cap at 15 tags
+
+
 def _synthesize_description(
     page_index_output: PageIndexOutput,
     fallback: str | None,
@@ -802,12 +821,14 @@ class ExtractionEngine:
         synthesized_desc = _synthesize_description(
             page_index_output, retain_params.get('note_description')
         )
+        user_tags = retain_params.get('tags', [])
+        synthesized_tags = _synthesize_tags(page_index_output, user_tags)
         page_index = build_page_index_with_metadata(
             page_index_output.toc,
             metadata={
                 'title': retain_params.get('note_name'),
                 'description': synthesized_desc,
-                'tags': retain_params.get('tags', []),
+                'tags': synthesized_tags,
                 'publish_date': str(event_date) if event_date else None,
                 'source_uri': retain_params.get('source_uri'),
             },
@@ -815,6 +836,8 @@ class ExtractionEngine:
         )
         await storage.update_note_page_index(session, note_id, page_index)
         await storage.update_note_description(session, note_id, synthesized_desc)
+        if synthesized_tags:
+            await storage.update_note_tags(session, note_id, synthesized_tags)
 
         provided_name: str | None = contents[0].payload.get('note_name') if contents else None
         resolved_title = await resolve_title_from_page_index(
@@ -912,12 +935,14 @@ class ExtractionEngine:
         synthesized_desc = _synthesize_description(
             page_index_output, retain_params.get('note_description')
         )
+        user_tags = retain_params.get('tags', [])
+        synthesized_tags = _synthesize_tags(page_index_output, user_tags)
         page_index = build_page_index_with_metadata(
             page_index_output.toc,
             metadata={
                 'title': retain_params.get('note_name'),
                 'description': synthesized_desc,
-                'tags': retain_params.get('tags', []),
+                'tags': synthesized_tags,
                 'publish_date': str(event_date) if event_date else None,
                 'source_uri': retain_params.get('source_uri'),
             },
@@ -925,6 +950,8 @@ class ExtractionEngine:
         )
         await storage.update_note_page_index(session, effective_doc_id, page_index)
         await storage.update_note_description(session, effective_doc_id, synthesized_desc)
+        if synthesized_tags:
+            await storage.update_note_tags(session, effective_doc_id, synthesized_tags)
 
         # Resolve and store the document title from the TOC / block summaries.
         # This supersedes the rough title stored by _track_document above.

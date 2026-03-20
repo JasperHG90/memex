@@ -8,11 +8,14 @@ import type { ExtractResult, Settings } from '../types';
 import { fetchVaults, saveNote, uploadFile } from '../lib/memex-api';
 import { buildNoteContent } from '../lib/frontmatter';
 import { extractArticleImages } from '../lib/images';
+import { extractMetadata } from '../lib/metadata';
 
 const titleEl = document.getElementById('title') as HTMLInputElement;
 const descriptionEl = document.getElementById('description') as HTMLTextAreaElement;
 const vaultEl = document.getElementById('vault') as HTMLSelectElement;
 const tagsEl = document.getElementById('tags') as HTMLInputElement;
+const authorEl = document.getElementById('author') as HTMLInputElement;
+const publishDateEl = document.getElementById('publish-date') as HTMLInputElement;
 const urlPreviewEl = document.getElementById('url-preview')!;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const statusEl = document.getElementById('status')!;
@@ -101,6 +104,10 @@ async function extractArticle(): Promise<void> {
     base.href = tab.url ?? '';
     doc.head.prepend(base);
 
+    // Extract metadata from a separate copy (Readability mutates the DOM)
+    const metadataDoc = parser.parseFromString(html, 'text/html');
+    const metadata = extractMetadata(metadataDoc);
+
     const reader = new Readability(doc);
     const article = reader.parse();
 
@@ -134,19 +141,24 @@ async function extractArticle(): Promise<void> {
       articleMarkdown = turndown.turndown(article.content);
     }
 
+    const mergedAuthor = metadata.author || article.byline || '';
+    const mergedPublishedTime = metadata.publishedTime || article.publishedTime || '';
+
     extractedData = {
       title: article.title || tab.title || '',
       markdown: articleMarkdown,
       excerpt: article.excerpt || '',
-      byline: article.byline || '',
+      byline: mergedAuthor,
       siteName: article.siteName || '',
-      publishedTime: article.publishedTime || '',
+      publishedTime: mergedPublishedTime,
       url: tab.url ?? '',
       hostname: new URL(tab.url ?? '').hostname,
       images: Object.keys(images).length > 0 ? images : undefined,
     };
 
     titleEl.value = extractedData.title ?? '';
+    authorEl.value = mergedAuthor;
+    publishDateEl.value = mergedPublishedTime;
     saveBtn.disabled = false;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -208,9 +220,9 @@ saveBtn.addEventListener('click', async () => {
         ? buildNoteContent({
             url: extractedData.url ?? '',
             hostname: extractedData.hostname ?? '',
-            byline: extractedData.byline,
+            byline: authorEl.value || extractedData.byline,
             siteName: extractedData.siteName,
-            publishedTime: extractedData.publishedTime,
+            publishedTime: publishDateEl.value || extractedData.publishedTime,
             markdown: extractedData.markdown,
           })
         : '';

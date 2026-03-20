@@ -776,6 +776,36 @@ async def update_note_description(
     await session.exec(stmt)
 
 
+async def update_note_tags(
+    session: AsyncSession,
+    note_id: str,
+    tags: list[str],
+) -> None:
+    """Update the tags in the Note.metadata JSONB column.
+
+    Args:
+        session: Active database session.
+        note_id: Note identifier.
+        tags: List of tags to set.
+    """
+    import json
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    doc_uuid = UUID(note_id)
+    stmt = (
+        update(Note)
+        .where(col(Note.id) == doc_uuid)
+        .values(
+            doc_metadata=func.jsonb_set(
+                func.coalesce(col(Note.doc_metadata), func.cast('{}', JSONB)),
+                '{tags}',
+                func.cast(json.dumps(tags), JSONB),
+            )
+        )
+    )
+    await session.exec(stmt)
+
+
 async def get_block_text(
     session: AsyncSession,
     block_id: UUID,
