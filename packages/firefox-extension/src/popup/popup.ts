@@ -235,6 +235,7 @@ saveBtn.addEventListener('click', async () => {
         vaultId: vaultEl.value || undefined,
         background: true,
         files: extractedData.images,
+        noteKey: extractedData.url || undefined,
       });
     }
 
