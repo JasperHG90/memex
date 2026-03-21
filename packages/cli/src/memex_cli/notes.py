@@ -61,6 +61,10 @@ async def add_note(
     background: Annotated[
         bool, typer.Option('--background', '-b', help='Queue as background job.')
     ] = False,
+    user_notes: Annotated[
+        str | None,
+        typer.Option('--user-notes', '-n', help='Your own context or commentary about this note.'),
+    ] = None,
 ):
     """
     Add a new note to Memex.
@@ -107,7 +111,12 @@ async def add_note(
                         assets_dict[asset_path.name] = base64.b64encode(asset_data)
 
                 console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
-                req = IngestURLRequest(url=url, assets=assets_dict, vault_id=config.write_vault)
+                req = IngestURLRequest(
+                    url=url,
+                    assets=assets_dict,
+                    vault_id=config.write_vault,
+                    user_notes=user_notes,
+                )
                 result = await api.ingest_url(req, background=background)
             except Exception as e:
                 handle_api_error(e)
@@ -146,6 +155,8 @@ async def add_note(
                 metadata = {}
                 if config.write_vault:
                     metadata['vault_id'] = str(config.write_vault)
+                if user_notes:
+                    metadata['user_notes'] = user_notes
 
                 result = await api.ingest_upload(
                     files=files_to_upload, metadata=metadata, background=background
@@ -196,6 +207,7 @@ async def add_note(
                     tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
                     note_key=key,
                     vault_id=config.write_vault,
+                    user_notes=user_notes,
                 )
 
                 result = await api.ingest(note, background=background)
