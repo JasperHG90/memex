@@ -1,0 +1,33 @@
+# LiteLLM proxy config — Gemini Flash ONLY
+#
+# Decision (2026-03-18): Ollama removed entirely because simple-shuffle
+# routing doesn't respect tier ordering — it randomly picks among all
+# entries, causing gemma3:12b to load and saturate 16GB VRAM even when
+# Gemini Flash is available. Gemini 2.5 Flash is fast and cheap enough
+# for all Memex extraction/reflection workloads.
+#
+# To re-add Ollama as fallback, use "usage-based-routing-v2" strategy
+# (NOT simple-shuffle) and add Ollama entries with higher rpm limits.
+
+model_list:
+  - model_name: "memex-default"
+    litellm_params:
+      model: "gemini/gemini-2.5-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+    model_info:
+      description: "Gemini Flash — sole provider (no VRAM pressure)"
+
+router_settings:
+  num_retries: 3
+  timeout: 300
+
+litellm_settings:
+  # Monthly budget cap — blocks requests when exceeded with BudgetExceededError.
+  # At $5/month: ~16M input tokens or ~2M output tokens on Gemini 2.5 Flash.
+  # Gemini Flash pricing: $0.30/1M input, $2.50/1M output.
+  # Adjust upward if BudgetExceededError appears in logs.
+  max_budget: 5
+  budget_duration: 30d
+
+general_settings:
+  master_key: null
