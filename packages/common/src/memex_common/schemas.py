@@ -268,6 +268,10 @@ class IngestURLRequest(VaultMixin):
         default_factory=dict,
         description='Optional dictionary of assets (filename -> base64 content).',
     )
+    user_notes: str | None = Field(
+        default=None,
+        description='Optional user-provided context or commentary to include in the note.',
+    )
 
 
 class IngestFileRequest(VaultMixin):
@@ -276,6 +280,10 @@ class IngestFileRequest(VaultMixin):
     file_path: str = Field(..., description='The absolute path to the file on the server.')
     reflect_after: bool = Field(
         default=True, description='Whether to run reflection after ingestion.'
+    )
+    user_notes: str | None = Field(
+        default=None,
+        description='Optional user-provided context or commentary to include in the note.',
     )
 
 
@@ -537,6 +545,10 @@ class NoteCreateDTO(BaseModel):
     vault_id: str | UUID | None = Field(
         default=None,
         description='Optional target vault ID or name.',
+    )
+    user_notes: str | None = Field(
+        default=None,
+        description='Optional user-provided context or commentary to include in the note.',
     )
 
     @property

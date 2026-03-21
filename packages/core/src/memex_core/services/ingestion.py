@@ -111,6 +111,7 @@ class IngestionService:
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
         assets: dict[str, bytes] | None = None,
+        user_notes: str | None = None,
     ) -> dict[str, Any]:
         """Ingest content from a URL and store it as a NoteInput."""
         from memex_core.api import NoteInput
@@ -155,6 +156,7 @@ publish_date: {extracted.metadata.get('date')}
             source_uri=url,
             original_content_hash=original_hash,
             files=decoded_assets,
+            user_notes=user_notes,
         )
 
         # Resolve document date: web metadata -> LLM fallback -> now()
@@ -174,6 +176,7 @@ publish_date: {extracted.metadata.get('date')}
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
         note_key: str | None = None,
+        user_notes: str | None = None,
     ) -> dict[str, Any]:
         """
         Ingest content from a path.
@@ -189,7 +192,7 @@ publish_date: {extracted.metadata.get('date')}
                 vault_id or self.config.server.default_active_vault
             )
             logger.info(f'Ingesting {path} as a native NoteInput.')
-            note = await NoteInput.from_file(path)
+            note = await NoteInput.from_file(path, user_notes=user_notes)
             return await self.ingest(note, vault_id=target_vault_id)
 
         try:
@@ -241,6 +244,7 @@ ingested_at: {now}
             original_content_hash=original_hash,
             files=extracted.images,
             note_key=note_key,
+            user_notes=user_notes,
         )
 
         # Resolve document date priority:

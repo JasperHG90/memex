@@ -88,6 +88,7 @@ export async function saveNote(
     background?: boolean;
     files?: Record<string, string>;
     noteKey?: string;
+    userNotes?: string;
   },
 ): Promise<IngestResponse> {
   const url = `${serverUrl}/api/v1/ingestions${note.background ? '?background=true' : ''}`;
@@ -105,6 +106,7 @@ export async function saveNote(
       vault_id: note.vaultId,
       files: note.files ?? {},
       ...(note.noteKey ? { note_key: note.noteKey } : {}),
+      ...(note.userNotes ? { user_notes: note.userNotes } : {}),
     }),
   });
   if (!resp.ok) {
@@ -127,6 +129,7 @@ export async function uploadFile(
     contentType: string;
     vaultId: string | undefined;
     noteKey?: string;
+    userNotes?: string;
   },
 ): Promise<IngestResponse> {
   const formData = new FormData();
@@ -134,6 +137,7 @@ export async function uploadFile(
   const meta: Record<string, string> = {};
   if (file.vaultId) meta.vault_id = file.vaultId;
   if (file.noteKey) meta.note_key = file.noteKey;
+  if (file.userNotes) meta.user_notes = file.userNotes;
   if (Object.keys(meta).length > 0) {
     formData.append('metadata', JSON.stringify(meta));
   }

@@ -78,9 +78,23 @@ class NoteInput:
         source_uri: str | None = None,
         original_content_hash: str | None = None,
         note_key: str | None = None,
+        user_notes: str | None = None,
     ):
         self._metadata = NoteMetadata(name=name, description=description)
         self._content = content
+
+        if user_notes and user_notes.strip():
+            notes_block = f'## User Notes\n\n{user_notes.strip()}\n\n'
+            text = self._content.decode('utf-8')
+            try:
+                closing = text.index('---', 3)
+            except ValueError:
+                closing = -1
+            if text.startswith('---') and closing != -1:
+                end = closing + 3
+                self._content = (text[:end] + '\n\n' + notes_block + text[end:]).encode('utf-8')
+            else:
+                self._content = (notes_block + text).encode('utf-8')
         self._files = files or {}
         self.source_uri = source_uri
         self.original_content_hash = original_content_hash
@@ -162,6 +176,7 @@ class NoteInput:
             files=files,
             tags=dto.tags,
             note_key=doc_key,
+            user_notes=getattr(dto, 'user_notes', None),
         )
         return temp_note.idempotency_key
 
@@ -179,6 +194,7 @@ class NoteInput:
             files=files,
             tags=dto.tags,
             note_key=doc_key,
+            user_notes=getattr(dto, 'user_notes', None),
         )
         return temp_note.content_fingerprint
 
@@ -207,7 +223,11 @@ class NoteInput:
 
     @classmethod
     async def from_file(
-        cls, path: plb.Path, name: str | None = None, description: str | None = None
+        cls,
+        path: plb.Path,
+        name: str | None = None,
+        description: str | None = None,
+        user_notes: str | None = None,
     ) -> Self:
         """
         Load a note from a file or directory.
@@ -254,6 +274,7 @@ class NoteInput:
                 description=description or 'Imported NoteInput',
                 content=content,
                 files=aux_files,
+                user_notes=user_notes,
             )
 
         files = await template.files
@@ -274,6 +295,7 @@ class NoteInput:
             content=fm.content.encode('utf-8'),
             files=aux_files,
             source_uri=str(path.absolute()),
+            user_notes=user_notes,
         )
 
 
@@ -545,10 +567,15 @@ class MemexAPI:
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
         assets: dict[str, bytes] | None = None,
+        user_notes: str | None = None,
     ) -> dict[str, Any]:
         """Ingest from URL. Delegates to IngestionService."""
         return await self._ingestion.ingest_from_url(
-            url, vault_id=vault_id, reflect_after=reflect_after, assets=assets
+            url,
+            vault_id=vault_id,
+            reflect_after=reflect_after,
+            assets=assets,
+            user_notes=user_notes,
         )
 
     async def ingest_from_file(
@@ -557,10 +584,15 @@ class MemexAPI:
         vault_id: UUID | str | None = None,
         reflect_after: bool = True,
         note_key: str | None = None,
+        user_notes: str | None = None,
     ) -> dict[str, Any]:
         """Ingest from file. Delegates to IngestionService."""
         return await self._ingestion.ingest_from_file(
-            file_path, vault_id=vault_id, reflect_after=reflect_after, note_key=note_key
+            file_path,
+            vault_id=vault_id,
+            reflect_after=reflect_after,
+            note_key=note_key,
+            user_notes=user_notes,
         )
 
     async def ingest(
