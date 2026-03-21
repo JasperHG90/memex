@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 import pathlib as plb
 
 import httpx
@@ -46,6 +47,9 @@ class ModelDownloader:
     async def _download_file(self, client: httpx.AsyncClient, filename: str, force: bool):
         """
         Streams a single file from HF to the local cache.
+
+        Uses atomic write (temp file + os.replace) to prevent corruption
+        when multiple processes download concurrently.
         """
         local_path = self.cache_dir / filename
 
@@ -56,19 +60,23 @@ class ModelDownloader:
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         download_url = f'{self.base_url}/resolve/main/{filename}'
+        # PID-scoped temp path avoids collisions if multiple processes download concurrently
+        tmp_path = local_path.with_suffix(f'{local_path.suffix}.{os.getpid()}.tmp')
 
         async with self.semaphore:
             try:
                 async with client.stream('GET', download_url, follow_redirects=True) as response:
                     response.raise_for_status()
-                    with open(local_path, 'wb') as f:
+                    with open(tmp_path, 'wb') as f:
                         async for chunk in response.aiter_bytes():
                             f.write(chunk)
+                # Atomic rename — safe even if another process races
+                os.replace(tmp_path, local_path)
             except (httpx.HTTPError, OSError, RuntimeError) as e:
                 print(f'  [Error] Failed to download {filename}: {e}')
-                # Clean up partial corruption
-                if local_path.exists():
-                    local_path.unlink()
+                # Clean up partial temp file
+                if tmp_path.exists():
+                    tmp_path.unlink()
 
     async def download_async(self, client: httpx.AsyncClient, force: bool = False) -> plb.Path:
         """
