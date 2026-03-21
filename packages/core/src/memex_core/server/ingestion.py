@@ -122,6 +122,7 @@ async def ingest_note(
             files=decoded_files,
             tags=request.tags,
             note_key=request.note_key,
+            user_notes=request.user_notes,
         )
         result = await api.ingest(note, vault_id=request.vault_id)
         _schedule_contradiction(background_tasks, result)
@@ -156,6 +157,7 @@ async def ingest_url(
                 url=request.url,
                 reflect_after=request.reflect_after,
                 assets=assets_bytes,
+                user_notes=request.user_notes,
             )
             return JSONResponse(
                 status_code=202,
@@ -167,6 +169,7 @@ async def ingest_url(
             vault_id=request.vault_id,
             reflect_after=request.reflect_after,
             assets=assets_bytes,
+            user_notes=request.user_notes,
         )
         _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
@@ -188,6 +191,7 @@ async def ingest_file(
             file_path=request.file_path,
             vault_id=request.vault_id,
             reflect_after=request.reflect_after,
+            user_notes=request.user_notes,
         )
         _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
@@ -231,12 +235,14 @@ async def ingest_upload(
 
             if background:
                 upload_note_key = parsed_metadata.get('note_key')
+                upload_user_notes = parsed_metadata.get('user_notes')
 
                 async def _ingest_file_and_cleanup(
                     file_path: str | plb.Path,
                     vault_id: UUID | str | None = None,
                     reflect_after: bool = True,
                     note_key: str | None = None,
+                    user_notes: str | None = None,
                 ) -> dict:
                     """Wrap ingest_from_file with temp-file cleanup."""
                     try:
@@ -245,6 +251,7 @@ async def ingest_upload(
                             vault_id=vault_id,
                             reflect_after=reflect_after,
                             note_key=note_key,
+                            user_notes=user_notes,
                         )
                     finally:
                         if os.path.exists(str(file_path)):
@@ -256,6 +263,7 @@ async def ingest_upload(
                     background_tasks=background_tasks,
                     file_path=tmp_path,
                     note_key=upload_note_key,
+                    user_notes=upload_user_notes,
                 )
                 return JSONResponse(
                     status_code=202,
@@ -270,6 +278,7 @@ async def ingest_upload(
                     tmp_path,
                     vault_id=parsed_metadata.get('vault_id'),
                     note_key=parsed_metadata.get('note_key'),
+                    user_notes=parsed_metadata.get('user_notes'),
                 )
                 _schedule_contradiction(background_tasks, result)
                 return IngestResponse(**result)

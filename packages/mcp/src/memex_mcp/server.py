@@ -604,6 +604,13 @@ async def memex_add_note(
         BeforeValidator(_coerce_bool),
         Field(default=False, description='Queue ingestion in background.'),
     ] = False,
+    user_notes: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Optional user-provided context or commentary to include in the note.',
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -656,6 +663,7 @@ async def memex_add_note(
             tags=tags,
             vault_id=vault_id,
             note_key=effective_note_key,
+            user_notes=user_notes,
         )
 
         result = await api.ingest(note, background=background)

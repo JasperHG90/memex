@@ -28,7 +28,7 @@ async def test_ingest_from_file_markdown(api, tmp_path):
         result = await api.ingest_from_file(md_file)
 
         assert result['status'] == 'success'
-        mock_from_file.assert_called_once_with(md_file)
+        mock_from_file.assert_called_once_with(md_file, user_notes=None)
         mock_ingest.assert_called_once_with(mock_note, vault_id=resolved_vault)
 
 
@@ -55,7 +55,7 @@ async def test_ingest_from_file_directory(api, tmp_path):
         result = await api.ingest_from_file(note_dir)
 
         assert result['status'] == 'success'
-        mock_from_file.assert_called_once_with(note_dir)
+        mock_from_file.assert_called_once_with(note_dir, user_notes=None)
         mock_ingest.assert_called_once_with(mock_note, vault_id=resolved_vault)
 
 
@@ -198,3 +198,66 @@ async def test_ingest_from_file_skips_llm_title_when_metadata_title_present(api,
         mock_llm_title.assert_not_called()
         called_note = mock_ingest.call_args[0][0]
         assert called_note._metadata.name == 'Real PDF Title'
+
+
+def test_user_notes_injected_after_frontmatter():
+    """User notes should appear as a ## User Notes section after frontmatter."""
+    content = b'---\ntitle: Test\n---\nBody text here.'
+    note = NoteInput(
+        name='Test',
+        description='desc',
+        content=content,
+        user_notes='This is important context.',
+    )
+    text = note._content.decode('utf-8')
+    assert '## User Notes' in text
+    assert 'This is important context.' in text
+    # User notes should come after frontmatter but before body
+    fm_end = text.index('---', 3) + 3
+    notes_pos = text.index('## User Notes')
+    body_pos = text.index('Body text here.')
+    assert fm_end < notes_pos < body_pos
+
+
+def test_user_notes_injected_without_frontmatter():
+    """User notes should be prepended when there is no frontmatter."""
+    content = b'Just some plain text.'
+    note = NoteInput(
+        name='Test',
+        description='desc',
+        content=content,
+        user_notes='My commentary.',
+    )
+    text = note._content.decode('utf-8')
+    assert text.startswith('## User Notes')
+    assert 'My commentary.' in text
+    assert 'Just some plain text.' in text
+
+
+def test_user_notes_none_leaves_content_unchanged():
+    """When user_notes is None, content should be unchanged."""
+    content = b'---\ntitle: Test\n---\nBody.'
+    note = NoteInput(name='Test', description='desc', content=content, user_notes=None)
+    assert note._content == content
+
+
+def test_user_notes_empty_string_leaves_content_unchanged():
+    """When user_notes is empty/whitespace, content should be unchanged."""
+    content = b'---\ntitle: Test\n---\nBody.'
+    note = NoteInput(name='Test', description='desc', content=content, user_notes='   ')
+    assert note._content == content
+
+
+def test_user_notes_with_broken_frontmatter():
+    """When content starts with --- but has no closing ---, treat as no frontmatter."""
+    content = b'--- this is not real frontmatter\nSome text.'
+    note = NoteInput(
+        name='Test',
+        description='desc',
+        content=content,
+        user_notes='My note.',
+    )
+    text = note._content.decode('utf-8')
+    assert text.startswith('## User Notes')
+    assert 'My note.' in text
+    assert '--- this is not real frontmatter' in text

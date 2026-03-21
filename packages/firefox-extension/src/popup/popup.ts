@@ -11,7 +11,7 @@ import { extractArticleImages } from '../lib/images';
 import { extractMetadata } from '../lib/metadata';
 
 const titleEl = document.getElementById('title') as HTMLInputElement;
-const descriptionEl = document.getElementById('description') as HTMLTextAreaElement;
+const userNotesEl = document.getElementById('user-notes') as HTMLTextAreaElement;
 const vaultEl = document.getElementById('vault') as HTMLSelectElement;
 const tagsEl = document.getElementById('tags') as HTMLInputElement;
 const authorEl = document.getElementById('author') as HTMLInputElement;
@@ -215,6 +215,7 @@ saveBtn.addEventListener('click', async () => {
         contentType: 'application/pdf',
         vaultId: vaultEl.value || undefined,
         noteKey: canonicalizeUrl(pdfMode.url),
+        userNotes: userNotesEl.value || undefined,
       });
     } else {
       const fullContent = extractedData.markdown
@@ -230,13 +231,14 @@ saveBtn.addEventListener('click', async () => {
 
       await saveNote(settings.serverUrl, settings.apiKey, {
         name: titleEl.value || extractedData.title || 'Untitled',
-        description: descriptionEl.value || '',
+        description: '',
         content: fullContent,
         tags,
         vaultId: vaultEl.value || undefined,
         background: true,
         files: extractedData.images,
         noteKey: extractedData.url ? canonicalizeUrl(extractedData.url) : undefined,
+        userNotes: userNotesEl.value || undefined,
       });
     }
 
