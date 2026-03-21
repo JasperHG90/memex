@@ -162,7 +162,7 @@ test.describe('popup rendering', () => {
 
     await expect(page.getByRole('heading', { name: 'Save to Memex' })).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
-    await expect(page.getByRole('textbox', { name: /Description/ })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /Additional Notes/ })).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Vault' })).toBeVisible();
     await expect(page.getByRole('textbox', { name: /Tags/ })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
@@ -191,11 +191,11 @@ test.describe('article extraction', () => {
     );
   });
 
-  test('leaves description empty for server-side generation', async ({ page }) => {
+  test('leaves additional notes empty by default', async ({ page }) => {
     await setupPopupMocks(page);
     await page.goto('/popup/popup.html');
 
-    await expect(page.getByRole('textbox', { name: /Description/ })).toHaveValue('');
+    await expect(page.getByRole('textbox', { name: /Additional Notes/ })).toHaveValue('');
   });
 
   test('displays source URL', async ({ page }) => {
