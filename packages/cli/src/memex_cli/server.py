@@ -132,6 +132,34 @@ async def _initialize_database(config):
         raise typer.Exit(1)
 
 
+async def _initialize_models():
+    """
+    Pre-download ML models before forking workers.
+    This prevents race conditions when multiple workers try to download concurrently.
+
+    Only downloads files to cache — does NOT load ONNX sessions, since this process
+    exits before workers start and the loaded models would be wasted memory.
+    """
+    from memex_core.memory.models.base import ModelDownloader
+
+    repo_ids = [
+        'JasperHG90/minilm-l12-v2-hindsight-embeddings',
+        'JasperHG90/ms-marco-minilm-l12-hindsight-reranker',
+        'JasperHG90/distilbert-hindsight-ner',
+    ]
+
+    console.print('[dim]Ensuring ML models are cached...[/dim]')
+    try:
+        async with httpx.AsyncClient() as client:
+            for repo_id in repo_ids:
+                downloader = ModelDownloader(repo_id=repo_id)
+                await downloader.download_async(client, force=False)
+        console.print('[dim]Models ready.[/dim]')
+    except Exception as e:
+        console.print(f'[bold red]Model initialization error:[/bold red] {e}')
+        raise typer.Exit(1)
+
+
 @app.command()
 def start(
     ctx: typer.Context,
@@ -181,6 +209,9 @@ def start(
 
     # Initialize schema once to avoid race conditions in workers
     asyncio.run(_initialize_database(conf))
+
+    # Pre-download models once to avoid race conditions between workers
+    asyncio.run(_initialize_models())
 
     if reload:
         # Dev mode: use uvicorn directly (granian reload is less mature)

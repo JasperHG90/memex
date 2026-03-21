@@ -29,12 +29,19 @@ COPY packages/mcp/src    packages/mcp/src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
+# 1d — pre-download ML models into the image to avoid first-startup race
+RUN uv run python -c "from memex_core.memory.models.base import ModelDownloader; \
+    ModelDownloader('JasperHG90/minilm-l12-v2-hindsight-embeddings').download(); \
+    ModelDownloader('JasperHG90/ms-marco-minilm-l12-hindsight-reranker').download(); \
+    ModelDownloader('JasperHG90/distilbert-hindsight-ner').download()"
+
 # Stage 2 — slim runtime
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends libpq5 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=uv /app/.venv /app/.venv
 COPY --from=uv /app/packages /app/packages
+COPY --from=uv /root/.cache/memex /root/.cache/memex
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
