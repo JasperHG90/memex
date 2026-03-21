@@ -5,8 +5,6 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
-
 import pytest
 
 # Add scripts/ to path so we can import memex_export_local
@@ -100,10 +98,13 @@ def sample_mental_models():
 
 
 @pytest.fixture
-def mock_pg_conn(sample_notes, sample_memory_units, sample_entities, sample_cooccurrences, sample_mental_models):
-    """Mock Postgres connection that returns sample data."""
-    conn = MagicMock()
-    cursor = MagicMock()
-    conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
-    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-    return conn
+def sample_kv_entries():
+    return [
+        {
+            'id': 'kkkk1111-1111-1111-1111-111111111111',
+            'key': 'preferred_language',
+            'value': 'Python',
+            'created_at': datetime(2026, 3, 15, tzinfo=timezone.utc),
+            'updated_at': datetime(2026, 3, 15, tzinfo=timezone.utc),
+        },
+    ]
