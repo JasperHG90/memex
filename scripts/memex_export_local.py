@@ -145,7 +145,7 @@ def compute_freshness(updated_at: datetime | None, today: date | None = None) ->
     if updated_at is None:
         return 0.5
     if today is None:
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
     ref = updated_at.date() if isinstance(updated_at, datetime) else updated_at
     age_months = (today.year - ref.year) * 12 + (today.month - ref.month)
     return round(max(0.2, 1.0 - age_months / 36), 4)
@@ -158,6 +158,7 @@ def compute_freshness(updated_at: datetime | None, today: date | None = None) ->
 def init_sqlite(db_path: Path) -> sqlite3.Connection:
     """Create/open SQLite DB with all export tables + FTS5."""
     conn = sqlite3.connect(str(db_path))
+    db_path.chmod(0o600)
     conn.execute("PRAGMA journal_mode=WAL")
 
     conn.execute("""
@@ -366,7 +367,10 @@ def get_watermark(conn: sqlite3.Connection) -> datetime | None:
     """Get last export watermark timestamp."""
     row = conn.execute("SELECT value FROM export_meta WHERE key = 'watermark'").fetchone()
     if row and row[0]:
-        return datetime.fromisoformat(row[0])
+        dt = datetime.fromisoformat(row[0])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     return None
 
 
@@ -460,6 +464,8 @@ def main(argv: list[str] | None = None) -> None:
 
     db_path = args.db_path or Path(__file__).resolve().parent.parent / "memex-local.db"
 
+    _ALLOWED_TABLES = frozenset(TABLES_TO_EXPORT)
+
     if args.stats:
         if not db_path.exists():
             print("[export] No memex-local.db found. Run export first.", file=sys.stderr)
@@ -467,8 +473,10 @@ def main(argv: list[str] | None = None) -> None:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         for table in TABLES_TO_EXPORT:
+            if table not in _ALLOWED_TABLES:
+                raise ValueError(f"Unexpected table name: {table!r}")
             try:
-                count = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]  # noqa: S608
+                count = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                 print(f"  {table}: {count} rows")
             except sqlite3.OperationalError:
                 print(f"  {table}: not exported yet")

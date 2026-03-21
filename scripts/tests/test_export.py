@@ -125,6 +125,16 @@ class TestUpsertMentalModels:
         conn.close()
 
 
+class TestUpsertKvEntries:
+    def test_insert_kv(self, tmp_path, sample_kv_entries):
+        conn = init_sqlite(tmp_path / "test.db")
+        count = upsert_kv_entries(conn, sample_kv_entries)
+        assert count == 1
+        rows = conn.execute("SELECT key, value FROM kv_entries").fetchall()
+        assert rows[0] == ('preferred_language', 'Python')
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # FTS
 # ---------------------------------------------------------------------------

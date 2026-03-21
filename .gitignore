@@ -203,5 +203,5 @@ recordings/cli/.casts/
 
 # Offline export cache
 memex-local.db
-memex-local.db-wal
-memex-local.db-shm
+*.db-wal
+*.db-shm
