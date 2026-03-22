@@ -26,15 +26,6 @@ _circuit_breaker = CircuitBreaker()
 _STATE_VALUES = {'closed': 0, 'open': 1, 'half-open': 2}
 
 
-_llm_timeout_seconds: float = 120.0
-
-
-def configure_llm_timeout(seconds: float) -> None:
-    """Set the per-call LLM timeout (called during app startup)."""
-    global _llm_timeout_seconds
-    _llm_timeout_seconds = seconds
-
-
 def configure_circuit_breaker(breaker: CircuitBreaker) -> None:
     """Replace the module-level circuit breaker (called during app startup)."""
     global _circuit_breaker
@@ -93,9 +84,9 @@ async def run_dspy_operation(
     try:
         if semaphore:
             async with semaphore:
-                result = await asyncio.wait_for(_execute(), timeout=_llm_timeout_seconds)
+                result = await _execute()
         else:
-            result = await asyncio.wait_for(_execute(), timeout=_llm_timeout_seconds)
+            result = await _execute()
 
         await _circuit_breaker.record_success()
 
@@ -109,19 +100,6 @@ async def run_dspy_operation(
             lm_.history.clear()
 
         return result
-
-    except asyncio.TimeoutError:
-        await _circuit_breaker.record_failure()
-
-        elapsed = time.monotonic() - start
-        LLM_CALLS_TOTAL.labels(status='timeout').inc()
-        LLM_CALL_DURATION_SECONDS.observe(elapsed)
-        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
-
-        logger.error(f'LLM call timed out after {_llm_timeout_seconds}s')
-        raise TimeoutError(
-            f'LLM inference timed out after {_llm_timeout_seconds}s'
-        )
 
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         await _circuit_breaker.record_failure()

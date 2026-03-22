@@ -106,9 +106,6 @@ async def lifespan(app: FastAPI):
     )
     await api.initialize()
 
-    from memex_core.llm import configure_llm_timeout
-    configure_llm_timeout(config.server.llm_timeout_seconds)
-
     try:
         active_vault_name = config.server.default_active_vault
         active_vault_id = await api.resolve_vault_identifier(active_vault_name)
