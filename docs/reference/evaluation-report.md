@@ -1,7 +1,7 @@
 # LoCoMo Evaluation Report
 
 > Model: Claude Opus 4 via Claude Code CLI | Judge: Gemini 3 Flash
-> Date: 2026-03-13
+> Date: 2026-03-22
 
 ## Summary
 
@@ -11,8 +11,8 @@
 | Overall Score (non-adversarial) | **0.986** |
 | Perfect answers | 35 (97.2%) |
 | Wrong answers | 0 (0.0%) |
-| Total cost | $9.96 |
-| Total duration | 48.6 min |
+| Total cost | $9.14 |
+| Total duration | 37.4 min |
 
 ## Scores by Category
 
@@ -22,7 +22,7 @@
 | Multi-Hop | 9 | **1.000** | 9 | 0 |
 | Open Domain | 3 | **1.000** | 3 | 0 |
 | Temporal | 15 | **1.000** | 15 | 0 |
-| Adversarial (unweighted) | 11 | 0.773 | 8 | 2 |
+| Adversarial (unweighted) | 11 | 0.727 | 8 | 3 |
 | **Non-adversarial** | **36** | **0.986** | **35** | **0** |
 
 ### A note on adversarial scoring
@@ -39,26 +39,24 @@ In the failed adversarial cases, the retrieval system found correct, relevant fa
 
 | Metric | Value |
 |---|---|
-| Total tokens (all) | 8,044,121 |
-| Retrieval tokens (Memex) | 364,856 (**4.5%** of total) |
-| Agent overhead tokens | 7,679,265 (95.5%) |
-| Retrieval tokens/question (mean) | 7,592 |
-| Retrieval tokens/question (median) | 4,609 |
+| Total tokens (all) | 5,024,120 |
+| Retrieval tokens (Memex) | 386,035 (**7.7%** of total) |
+| Agent overhead tokens | 4,638,085 (92.3%) |
+| Retrieval tokens/question (mean) | 7,804 |
+| Retrieval tokens/question (median) | 4,910 |
 
 ### Retrieval by tool
 
 | Tool | Tokens | Share | Calls | Calls/q |
 |---|---|---|---|---|
-| `memory_search` | 164,370 | 45.1% | 67 | 1.3 |
-| `note_search` | 65,644 | 18.0% | 66 | 1.3 |
-| `get_nodes` | 65,105 | 17.8% | 48 | 1.0 |
-| `get_page_indices` | 36,279 | 9.9% | 45 | 0.9 |
-| `read_note` | 19,036 | 5.2% | 21 | 0.4 |
-| `get_entity_mentions` | 9,769 | 2.7% | 4 | 0.1 |
-| `list_entities` | 2,494 | 0.7% | 18 | 0.4 |
-| `find_note` | 1,494 | 0.4% | 4 | 0.1 |
-| `get_entity_cooccurrences` | 654 | 0.2% | 1 | 0.0 |
-| `list_assets` | 11 | 0.0% | 1 | 0.0 |
+| `memory_search` | 208,433 | 54.0% | 78 | 1.6 |
+| `note_search` | 92,776 | 24.0% | 54 | 1.1 |
+| `get_nodes` | 46,258 | 12.0% | 29 | 0.6 |
+| `get_entity_mentions` | 15,829 | 4.1% | 5 | 0.1 |
+| `get_page_indices` | 13,670 | 3.5% | 28 | 0.6 |
+| `list_entities` | 7,775 | 2.0% | 28 | 0.6 |
+| `get_entity_cooccurrences` | 1,260 | 0.3% | 2 | 0.0 |
+| `read_note` | 34 | 0.0% | 1 | 0.0 |
 
 ![Retrieval token breakdown](evaluation-plots/retrieval_token_breakdown.png)
 
@@ -66,11 +64,11 @@ In the failed adversarial cases, the retrieval system found correct, relevant fa
 
 | Category | Duration | Turns | Total Tokens | Retr Tokens | Retr % | Memex Calls |
 |---|---|---|---|---|---|---|
-| Single-Hop | 46.9s | 5.6 | 84,185 | 5,170 | 5.9% | 3.6 |
-| Multi-Hop | 49.3s | 8 | 161,862 | 7,377 | 5.2% | 5.9 |
-| Open Domain | 50.1s | 8 | 129,145 | 6,781 | 5.3% | 6 |
-| Temporal | 39.3s | 6.1 | 116,425 | 5,495 | 5.0% | 4.1 |
-| Adversarial | 86.1s | 11.5 | 319,800 | 12,829 | 4.8% | 9.5 |
+| Single-Hop | 43.7s | 5.6 | 55,805 | 5,703 | 10.0% | 3.6 |
+| Multi-Hop | 35.1s | 5.4 | 68,089 | 6,387 | 11.0% | 3.4 |
+| Open Domain | 39.6s | 5.7 | 46,745 | 4,827 | 10.6% | 3.7 |
+| Temporal | 31.1s | 5 | 54,156 | 5,115 | 10.1% | 3 |
+| Adversarial | 74.3s | 10.5 | 251,671 | 15,163 | 8.1% | 8.5 |
 
 ### Distribution plots
 
@@ -88,43 +86,41 @@ In the failed adversarial cases, the retrieval system found correct, relevant fa
 
 | Metric | Value |
 |---|---|
-| ToolSearch calls/question | 1.1 (56 total, 2 questions with >1) |
-| Entity exploration | 15/50 questions (30%) |
-| Citations (inline refs) | 49/50 (98%) |
-| Citations (reference list) | 49/50 (98%) |
-| `read_note` (discouraged) | 21 total (0.4/q) |
+| ToolSearch calls/question | 1.0 (50 total, 0 questions with >1) |
+| Entity exploration | 21/50 questions (42%) |
+| Citations (inline refs) | 50/50 (100%) |
+| Citations (reference list) | 50/50 (100%) |
+| `read_note` (discouraged) | 1 total (0.0/q) |
 
 ### Memex tool call distribution
 
 | Tool | Total Calls | Calls/q |
 |---|---|---|
-| `memory_search` | 67 | 1.3 |
-| `note_search` | 66 | 1.3 |
-| `get_nodes` | 48 | 1.0 |
-| `get_page_indices` | 45 | 0.9 |
-| `read_note` | 21 | 0.4 |
-| `list_entities` | 18 | 0.4 |
-| `find_note` | 4 | 0.1 |
-| `get_entity_mentions` | 4 | 0.1 |
-| `get_entity_cooccurrences` | 1 | 0.0 |
-| `list_assets` | 1 | 0.0 |
+| `memory_search` | 78 | 1.6 |
+| `note_search` | 54 | 1.1 |
+| `get_nodes` | 29 | 0.6 |
+| `list_entities` | 28 | 0.6 |
+| `get_page_indices` | 28 | 0.6 |
+| `get_entity_mentions` | 5 | 0.1 |
+| `get_entity_cooccurrences` | 2 | 0.0 |
+| `read_note` | 1 | 0.0 |
 
 ## Retrieval Paths
 
-The agent autonomously selects a retrieval path based on question complexity. Entity exploration (`list_entities`, `get_entity_mentions`) is used as a supplementary step in any path — it was triggered in 30% of questions.
+The agent autonomously selects a retrieval path based on question complexity. Entity exploration (`list_entities`, `get_entity_mentions`) is used as a supplementary step in any path — it was triggered in 42% of questions.
 
-| Pattern | Count | Share | Avg Score | Avg Tools | Avg Duration | Avg Retr Tok | Avg Cost |
-|---|---|---|---|---|---|---|---|
-| Two-stage | 19 | 38% | 0.95 | 2.1 | 31s | 3,623 | $0.11 |
-| Deep verification | 15 | 30% | 0.87 | 4.8 | 49s | 6,298 | $0.17 |
-| Deep + entity | 6 | 12% | 1.00 | 6.0 | 57s | 7,669 | $0.20 |
-| Exhaustive | 4 | 8% | 0.88 | 28.2 | 181s | 34,728 | $0.89 |
-| Two-stage + entity | 3 | 6% | 1.00 | 3.0 | 53s | 3,623 | $0.13 |
-| Simple + entity | 2 | 4% | 0.50 | 2.5 | 31s | 2,870 | $0.10 |
+| Pattern | Count | Share | Avg Score | Avg Tools | Avg Duration | Avg Cost |
+|---|---|---|---|---|---|---|
+| Two-stage | 19 | 38% | 1.00 | 2.0 | 27s | $0.10 |
+| Two-stage + entity | 9 | 18% | 0.83 | 3.8 | 40s | $0.13 |
+| Deep verification | 7 | 14% | 0.93 | 4.4 | 41s | $0.17 |
+| Deep + entity | 7 | 14% | 0.79 | 6.1 | 54s | $0.23 |
+| Simple + entity | 5 | 10% | 0.80 | 2.8 | 31s | $0.11 |
+| Exhaustive | 3 | 6% | 0.67 | 21.7 | 181s | $0.87 |
 
 ### Two-stage path (19 questions, 38%)
 
-Memory search and note search provide sufficient context to answer directly. The most efficient path — highest volume with strong score (0.95) at lowest cost ($0.11/q). Dominates multi-hop (7) and temporal (6) questions where facts are directly retrievable.
+Memory search and note search provide sufficient context to answer directly. The most efficient path — highest volume with perfect score (1.00) at lowest cost ($0.10/q). Dominates multi-hop (7) and temporal (6) questions where facts are directly retrievable.
 
 ```mermaid
 graph LR
@@ -136,9 +132,9 @@ graph LR
 
 **Typical questions**: straightforward fact lookups — "When did Caroline go to the adoption meeting?" (q-002), "When did Melanie go to the park?" (q-006), "When did Melanie go camping in July?" (q-008).
 
-### Deep verification path (15 questions, 30%)
+### Deep verification path (7 questions, 14%)
 
-Full two-speed reading: search finds candidate notes, then `get_page_indices` → `get_nodes` drills into specific sections for precise evidence. Primarily used for temporal (5) and adversarial (5) questions that need exact details from longer conversation sessions.
+Full two-speed reading: search finds candidate notes, then `get_page_indices` → `get_nodes` drills into specific sections for precise evidence. Primarily used for temporal and adversarial questions that need exact details from longer conversation sessions.
 
 ```mermaid
 graph TD
@@ -155,9 +151,9 @@ graph TD
 
 **Typical questions**: questions requiring verification from source text — "What did Melanie do after the road trip to relax?" (q-014), "What does Caroline do to keep herself busy during her pottery break?" (q-004).
 
-### Deep + entity path (6 questions, 12%)
+### Deep + entity path (7 questions, 14%)
 
-Adds entity exploration to deep verification. The agent queries `list_entities` and/or `get_entity_mentions` to discover relationships before or after searching. Used for all open-domain (3) questions and single-hop questions involving person-to-person connections. Perfect 1.00 average score.
+Adds entity exploration to deep verification. The agent queries `list_entities` and/or `get_entity_mentions` to discover relationships before or after searching. Used for questions involving person-to-person connections and adversarial questions where the agent tries to verify subject attribution.
 
 ```mermaid
 graph TD
@@ -176,11 +172,34 @@ graph TD
     style F fill:#55A868,color:white
 ```
 
-**Typical questions**: relationship and open-domain questions — "Would Caroline likely have Dr. Seuss books on her bookshelf?" (q-013), "Would Caroline be considered religious?" (q-020), "What would Caroline's political leaning likely be?" (q-025).
+### Two-stage + entity path (9 questions, 18%)
 
-### Exhaustive path (4 questions, 8%)
+Memory and note search augmented with entity exploration. The second most common path — used for single-hop and adversarial questions where entity relationships help contextualize the answer.
 
-Multiple rounds of searching and reading across different notes and queries. The agent iterates when initial results are insufficient — refining queries, searching additional sessions, or reading more note sections. Most expensive ($0.89/q) but necessary for complex questions. Includes adversarial (2) questions where the agent tries harder to find contradicting information.
+```mermaid
+graph LR
+    A[memory_search] --> B[note_search] --> C[list_entities] --> D[Answer]
+    style A fill:#4C72B0,color:white
+    style B fill:#8172B2,color:white
+    style C fill:#DD8452,color:white
+    style D fill:#55A868,color:white
+```
+
+### Simple + entity path (5 questions, 10%)
+
+A single search round with entity exploration. No deep reading needed — memory search alone returns enough. The 0.80 average score is influenced by adversarial subject swaps rather than retrieval failures.
+
+```mermaid
+graph LR
+    A[memory_search] --> B[list_entities] --> C[Answer]
+    style A fill:#4C72B0,color:white
+    style B fill:#DD8452,color:white
+    style C fill:#55A868,color:white
+```
+
+### Exhaustive path (3 questions, 6%)
+
+Multiple rounds of searching and reading across different notes and queries. The agent iterates when initial results are insufficient — refining queries, searching additional sessions, or reading more note sections. Most expensive ($0.87/q) but necessary for complex questions. Includes adversarial questions where the agent tries harder to find contradicting information.
 
 ```mermaid
 graph TD
@@ -205,101 +224,76 @@ graph TD
     style J fill:#55A868,color:white
 ```
 
-**Typical questions**: complex multi-evidence questions — "When did Melanie read 'Nothing is Impossible'?" (q-010, 34 tools, $0.88), "What do sunflowers represent according to Caroline?" (q-030, 17 tools, $0.47).
-
-### Simple + entity path (2 questions, 4%)
-
-A single search round with entity exploration. No deep reading needed — memory search alone returns enough. Lowest retrieval token usage (2,870/q). The 0.50 average score is misleading: the non-adversarial question (q-019) scored 1.0; the average is dragged down by q-035 (adversarial subject swap, 0.0).
-
-```mermaid
-graph LR
-    A[memory_search] --> B[list_entities] --> C[Answer]
-    style A fill:#4C72B0,color:white
-    style B fill:#DD8452,color:white
-    style C fill:#55A868,color:white
-```
-
-### Two-stage + entity path (3 questions, 6%)
-
-Memory and note search augmented with entity exploration. Used primarily for single-hop (2) questions where entity relationships help contextualize the answer. Perfect 1.00 score.
-
-```mermaid
-graph LR
-    A[memory_search] --> B[note_search] --> C[list_entities] --> D[Answer]
-    style A fill:#4C72B0,color:white
-    style B fill:#8172B2,color:white
-    style C fill:#DD8452,color:white
-    style D fill:#55A868,color:white
-```
+**Typical questions**: complex multi-evidence questions — "When did Melanie read 'Nothing is Impossible'?" (q-010, 15 tools, $0.44), "What activity did Melanie used to do with her dad?" (q-039, 26 tools, $1.10).
 
 ## Resource Usage
 
 | Metric | Value |
 |---|---|
-| Total tokens | 8,044,121 |
-| Input tokens | 7,969,426 |
-| Output tokens | 74,695 |
-| Retrieval tokens (Memex) | 364,856 (4.5%) |
-| Total duration | 2,915s (48.6 min) |
-| Avg duration/question | 58.3s |
-| Median duration/question | 40.7s |
-| Total cost | $9.96 |
-| Avg cost/question | $0.199 |
+| Total tokens | 5,024,120 |
+| Input tokens | 4,946,901 |
+| Output tokens | 77,219 |
+| Retrieval tokens (Memex) | 386,035 (7.7%) |
+| Total duration | 2,244s (37.4 min) |
+| Avg duration/question | 44.9s |
+| Median duration/question | 34.5s |
+| Total cost | $9.14 |
+| Avg cost/question | $0.183 |
 
 ## Per-Question Detail
 
 | ID | Category | Score | Dur | Turns | Total Tok | Retr Tok | Retr % | Memex# | Cost |
 |---|---|---|---|---|---|---|---|---|---|
-| q-001 | adversarial | 1.0 | 73.1s | 8 | 123,445 | 8,396 | 6.8% | 6 | $0.25 |
-| q-002 | multi-hop | 1.0 | 26.7s | 4 | 63,190 | 3,464 | 5.5% | 2 | $0.10 |
-| q-003 | multi-hop | 1.0 | 44.1s | 5 | 89,804 | 4,310 | 4.8% | 3 | $0.14 |
-| q-004 | adversarial | 1.0 | 60.8s | 6 | 117,409 | 5,421 | 4.6% | 4 | $0.17 |
-| q-005 | single-hop | 1.0 | 47.1s | 7 | 94,198 | 7,135 | 7.6% | 5 | $0.18 |
-| q-006 | multi-hop | 1.0 | 27.4s | 4 | 63,294 | 3,283 | 5.2% | 2 | $0.10 |
-| q-007 | multi-hop | 1.0 | 44.9s | 6 | 116,803 | 6,140 | 5.3% | 4 | $0.16 |
-| q-008 | multi-hop | 1.0 | 31.8s | 4 | 63,587 | 3,488 | 5.5% | 2 | $0.11 |
-| q-009 | adversarial | 0.0 | 70.3s | 10 | 196,619 | 12,392 | 6.3% | 8 | $0.26 |
-| q-010 | multi-hop | 1.0 | 181.8s | 37 | 870,223 | 35,355 | 4.1% | 34 | $0.88 |
-| q-011 | adversarial | 1.0 | 48.8s | 5 | 91,115 | 5,844 | 6.4% | 3 | $0.15 |
-| q-012 | temporal | 1.0 | 31.2s | 4 | 63,220 | 3,449 | 5.5% | 2 | $0.10 |
-| q-013 | open domain | 1.0 | 43.6s | 7 | 118,052 | 6,301 | 5.3% | 5 | $0.16 |
-| q-014 | temporal | 1.0 | 42.8s | 6 | 115,134 | 4,745 | 4.1% | 4 | $0.14 |
-| q-015 | temporal | 1.0 | 30.5s | 4 | 63,760 | 3,615 | 5.7% | 2 | $0.11 |
-| q-016 | multi-hop | 1.0 | 23.8s | 4 | 63,183 | 3,409 | 5.4% | 2 | $0.10 |
-| q-017 | single-hop | 1.0 | 71.9s | 9 | 124,755 | 10,141 | 8.1% | 7 | $0.21 |
-| q-018 | single-hop | — | 300.1s | 0 | 0 | 0 | 0.0% | 0 | $0.00 |
-| q-019 | single-hop | 1.0 | 27.5s | 5 | 62,792 | 2,920 | 4.7% | 3 | $0.10 |
-| q-020 | open domain | 1.0 | 47.5s | 7 | 117,875 | 6,323 | 5.4% | 5 | $0.17 |
-| q-021 | temporal | 1.0 | 27.7s | 4 | 63,241 | 3,467 | 5.5% | 2 | $0.10 |
-| q-022 | adversarial | 1.0 | 73.5s | 9 | 181,067 | 8,259 | 4.6% | 7 | $0.22 |
-| q-023 | adversarial | 1.0 | 38.7s | 6 | 115,173 | 4,866 | 4.2% | 4 | $0.14 |
-| q-024 | temporal | 1.0 | 45.6s | 6 | 115,432 | 4,718 | 4.1% | 4 | $0.15 |
-| q-025 | open domain | 1.0 | 59.2s | 10 | 151,509 | 7,719 | 5.1% | 8 | $0.21 |
-| q-026 | adversarial | 1.0 | 206.5s | 34 | 1,262,739 | 42,316 | 3.4% | 32 | $1.12 |
-| q-027 | adversarial | — | 35.3s | 6 | 114,663 | 4,719 | 4.1% | 4 | $0.14 |
-| q-028 | temporal | 1.0 | 33.8s | 4 | 64,004 | 3,691 | 5.8% | 2 | $0.11 |
-| q-029 | single-hop | 1.0 | 44.4s | 5 | 64,820 | 3,559 | 5.5% | 3 | $0.13 |
-| q-030 | temporal | 1.0 | 95.9s | 19 | 456,064 | 20,749 | 4.5% | 17 | $0.47 |
-| q-031 | temporal | 1.0 | 46.0s | 6 | 116,023 | 4,870 | 4.2% | 4 | $0.16 |
-| q-032 | single-hop | 1.0 | 31.0s | 4 | 63,106 | 3,251 | 5.2% | 2 | $0.10 |
-| q-033 | multi-hop | 1.0 | 33.4s | 4 | 63,690 | 3,663 | 5.8% | 2 | $0.11 |
-| q-034 | single-hop | 0.5 | 53.8s | 7 | 155,029 | 8,878 | 5.7% | 5 | $0.21 |
-| q-035 | adversarial | 0.0 | 33.6s | 4 | 62,624 | 2,819 | 4.5% | 2 | $0.10 |
-| q-036 | temporal | 1.0 | 55.1s | 10 | 208,514 | 9,535 | 4.6% | 8 | $0.25 |
-| q-037 | adversarial | — | 27.3s | 4 | 63,410 | 3,320 | 5.2% | 2 | $0.11 |
-| q-038 | single-hop | 1.0 | 83.3s | 5 | 65,361 | 3,658 | 5.6% | 3 | $0.14 |
-| q-039 | adversarial | 0.5 | 239.5s | 32 | 1,135,530 | 40,493 | 3.6% | 30 | $1.09 |
-| q-040 | temporal | 1.0 | 31.3s | 4 | 63,535 | 3,579 | 5.6% | 2 | $0.10 |
-| q-041 | adversarial | 1.0 | 37.0s | 6 | 114,757 | 4,609 | 4.0% | 4 | $0.15 |
-| q-042 | adversarial | 1.0 | 65.5s | 6 | 117,324 | 5,708 | 4.9% | 4 | $0.16 |
-| q-043 | temporal | 1.0 | 24.8s | 4 | 62,984 | 3,273 | 5.2% | 2 | $0.10 |
-| q-044 | single-hop | 1.0 | 37.9s | 4 | 64,520 | 3,663 | 5.7% | 2 | $0.13 |
-| q-045 | temporal | 1.0 | 31.0s | 4 | 63,379 | 3,470 | 5.5% | 2 | $0.10 |
-| q-046 | temporal | 1.0 | 38.7s | 6 | 118,183 | 6,537 | 5.5% | 4 | $0.16 |
-| q-047 | multi-hop | 1.0 | 30.1s | 4 | 62,986 | 3,277 | 5.2% | 2 | $0.10 |
-| q-048 | single-hop | 1.0 | 24.9s | 4 | 63,087 | 3,328 | 5.3% | 2 | $0.10 |
-| q-049 | temporal | 1.0 | 29.9s | 5 | 64,010 | 3,652 | 5.7% | 3 | $0.11 |
-| q-050 | temporal | 1.0 | 24.5s | 6 | 108,899 | 3,079 | 2.8% | 4 | $0.13 |
+| q-001 | adversarial | 1.0 | 57.6s | 7 | 86,884 | 8,442 | 9.7% | 5 | $0.25 |
+| q-002 | multi-hop | 1.0 | 21.9s | 4 | 40,991 | 4,700 | 11.5% | 2 | $0.10 |
+| q-003 | multi-hop | 1.0 | 29.4s | 4 | 41,676 | 4,860 | 11.7% | 2 | $0.11 |
+| q-004 | adversarial | 1.0 | 40.5s | 6 | 81,065 | 6,158 | 7.6% | 4 | $0.16 |
+| q-005 | single-hop | 1.0 | 36.8s | 5 | 42,275 | 4,867 | 11.5% | 3 | $0.12 |
+| q-006 | multi-hop | 1.0 | 23.4s | 4 | 41,293 | 4,628 | 11.2% | 2 | $0.10 |
+| q-007 | multi-hop | 1.0 | 28.4s | 4 | 41,454 | 4,648 | 11.2% | 2 | $0.11 |
+| q-008 | multi-hop | 1.0 | 21.1s | 4 | 41,211 | 4,823 | 11.7% | 2 | $0.10 |
+| q-009 | adversarial | 0.0 | 63.6s | 11 | 158,591 | 15,720 | 9.9% | 9 | $0.29 |
+| q-010 | multi-hop | 1.0 | 119.1s | 17 | 282,051 | 19,417 | 6.9% | 15 | $0.44 |
+| q-011 | adversarial | 1.0 | 57.7s | 9 | 142,560 | 11,501 | 8.1% | 7 | $0.25 |
+| q-012 | temporal | 1.0 | 24.7s | 4 | 41,223 | 4,705 | 11.4% | 2 | $0.10 |
+| q-013 | open domain | 1.0 | 38.9s | 5 | 43,071 | 5,836 | 13.5% | 3 | $0.13 |
+| q-014 | temporal | 1.0 | 40.4s | 6 | 79,919 | 5,667 | 7.1% | 4 | $0.15 |
+| q-015 | temporal | 1.0 | 30.3s | 4 | 41,779 | 4,899 | 11.7% | 2 | $0.11 |
+| q-016 | multi-hop | 1.0 | 23.1s | 4 | 41,294 | 4,750 | 11.5% | 2 | $0.10 |
+| q-017 | single-hop | 1.0 | 38.7s | 6 | 59,682 | 6,151 | 10.3% | 4 | $0.14 |
+| q-018 | single-hop | — | 51.5s | 7 | 65,519 | 8,289 | 12.7% | 5 | $0.17 |
+| q-019 | single-hop | 1.0 | 25.0s | 5 | 40,015 | 3,401 | 8.5% | 3 | $0.10 |
+| q-020 | open domain | 1.0 | 41.1s | 7 | 54,810 | 3,807 | 6.9% | 5 | $0.13 |
+| q-021 | temporal | 1.0 | 24.1s | 4 | 40,822 | 4,466 | 10.9% | 2 | $0.10 |
+| q-022 | adversarial | 1.0 | 43.9s | 6 | 81,507 | 5,896 | 7.2% | 4 | $0.16 |
+| q-023 | adversarial | 1.0 | 26.9s | 6 | 79,599 | 5,797 | 7.3% | 4 | $0.16 |
+| q-024 | temporal | 1.0 | 35.4s | 7 | 82,081 | 6,281 | 7.7% | 5 | $0.16 |
+| q-025 | open domain | 1.0 | 38.8s | 5 | 42,354 | 4,839 | 11.4% | 3 | $0.12 |
+| q-026 | adversarial | 1.0 | 203.1s | 26 | 939,543 | 48,390 | 5.2% | 24 | $1.07 |
+| q-027 | adversarial | — | 47.7s | 6 | 80,607 | 6,004 | 7.4% | 4 | $0.17 |
+| q-028 | temporal | 1.0 | 38.8s | 4 | 41,971 | 4,948 | 11.8% | 2 | $0.11 |
+| q-029 | single-hop | 1.0 | 44.2s | 5 | 42,294 | 4,917 | 11.6% | 3 | $0.12 |
+| q-030 | temporal | 1.0 | 26.9s | 4 | 41,341 | 4,847 | 11.7% | 2 | $0.10 |
+| q-031 | temporal | 1.0 | 43.2s | 7 | 82,045 | 7,021 | 8.6% | 5 | $0.19 |
+| q-032 | single-hop | 1.0 | 31.4s | 4 | 41,116 | 4,504 | 11.0% | 2 | $0.10 |
+| q-033 | multi-hop | 1.0 | 25.4s | 4 | 41,618 | 5,006 | 12.0% | 2 | $0.10 |
+| q-034 | single-hop | 0.5 | 100.4s | 9 | 140,273 | 15,902 | 11.3% | 7 | $0.37 |
+| q-035 | adversarial | 0.0 | 23.6s | 4 | 39,506 | 3,227 | 8.2% | 2 | $0.09 |
+| q-036 | temporal | 1.0 | 33.4s | 7 | 79,890 | 5,693 | 7.1% | 5 | $0.15 |
+| q-037 | adversarial | — | 33.5s | 5 | 41,984 | 4,931 | 11.7% | 3 | $0.11 |
+| q-038 | single-hop | 1.0 | 50.2s | 8 | 55,046 | 3,668 | 6.7% | 6 | $0.14 |
+| q-039 | adversarial | 0.5 | 220.5s | 28 | 1,001,915 | 45,736 | 4.6% | 26 | $1.10 |
+| q-040 | temporal | 1.0 | 24.8s | 4 | 40,929 | 4,470 | 10.9% | 2 | $0.10 |
+| q-041 | adversarial | 1.0 | 47.4s | 9 | 115,067 | 10,877 | 9.5% | 7 | $0.22 |
+| q-042 | adversarial | 1.0 | 31.9s | 4 | 42,148 | 5,045 | 12.0% | 2 | $0.12 |
+| q-043 | temporal | 1.0 | 22.1s | 4 | 41,049 | 4,759 | 11.6% | 2 | $0.10 |
+| q-044 | single-hop | 1.0 | 36.2s | 4 | 42,334 | 5,171 | 12.2% | 2 | $0.12 |
+| q-045 | temporal | 1.0 | 28.5s | 4 | 41,320 | 4,680 | 11.3% | 2 | $0.10 |
+| q-046 | temporal | 1.0 | 37.7s | 5 | 42,275 | 4,910 | 11.6% | 3 | $0.12 |
+| q-047 | multi-hop | 1.0 | 24.3s | 4 | 41,213 | 4,651 | 11.3% | 2 | $0.10 |
+| q-048 | single-hop | 1.0 | 30.3s | 4 | 39,208 | 2,750 | 7.0% | 2 | $0.10 |
+| q-049 | temporal | 1.0 | 28.8s | 5 | 42,694 | 5,413 | 12.7% | 3 | $0.12 |
+| q-050 | temporal | 1.0 | 27.8s | 6 | 73,008 | 3,967 | 5.4% | 4 | $0.15 |
 
 ## Excluded Questions
 
@@ -311,15 +305,18 @@ graph LR
 
 ## Remaining Errors
 
-### Non-adversarial (0)
+### Non-adversarial (1)
 
-None.
+| ID | Category | Question | Issue |
+|---|---|---|---|
+| q-034 | Single-Hop | How many times has Melanie gone to the beach in 2023? | The model found both beach references (Session 6 and Session 10) but incorrectly concluded they describe the same trip due to close timing. Reasoning error, not retrieval failure. |
 
-### Adversarial (2, unweighted)
+### Adversarial (3, unweighted)
 
 | ID | Question | Issue |
 |---|---|---|
 | q-009 | What setback did Caroline face recently? | The model identifies a different event (a negative encounter while hiking) than what the benchmark expects. The benchmark swaps subject — the expected answer is about Melanie's setback. |
 | q-035 | What type of instrument does Caroline play? | The model finds acoustic guitar and piano (correct for Caroline), but the benchmark expects clarinet and violin (Melanie's instruments — subject swap). |
+| q-039 | What activity did Melanie used to do with her dad? | The model correctly identifies that horseback riding was Caroline's activity with her dad, not Melanie's. The benchmark swaps subject. |
 
 In all adversarial failures, the retrieval system found correct facts for the queried person. The failures are inherent to the adversarial format: a search tool cannot detect that a question deliberately swaps subjects.
