@@ -36,7 +36,7 @@ dependencies = [
     "cachetools-async>=0.0.5",
     "aioclock>=0.3.0",
     "prometheus-fastapi-instrumentator>=7.1.0",
-"metaphone>=0.6",
+    "metaphone>=0.6",
     "greenlet>=3.3.0",
     "async-lru>=2.1.0",
     "regex>=2025.11.3",
@@ -47,6 +47,7 @@ dependencies = [
     "alembic>=1.15.0",
     "dateparser>=1.2.2",
     "pymupdf-layout>=1.27.2",
+    "python-multipart>=0.0.22",
 ]
 
 [project.optional-dependencies]
