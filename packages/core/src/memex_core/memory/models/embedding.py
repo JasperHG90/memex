@@ -22,11 +22,12 @@ async def get_embedding_model() -> 'FastEmbedder':
     Returns:
         FastEmbedder: Embedding model instance.
     """
-    path = plb.Path(user_cache_dir('memex')) / 'JasperHG90__minilm-l12-v2-hindsight-embeddings'
+    repo_id = 'JasperHG90/minilm-l12-v2-hindsight-embeddings'
+    path = plb.Path(user_cache_dir('memex')) / repo_id.replace('/', '__') / 'main'
 
     if not path.exists():
         logger.warning(f'Embedding model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id='JasperHG90/minilm-l12-v2-hindsight-embeddings')
+        downloader = ModelDownloader(repo_id=repo_id)
         await downloader.download_async(httpx.AsyncClient(), force=False)
 
     return FastEmbedder(model_dir=str(path), model_name='model.onnx')

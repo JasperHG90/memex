@@ -11,23 +11,22 @@ from platformdirs import user_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
 
+RERANKER_REPO = 'JasperHG90/ms-marco-minilm-l12-hindsight-reranker'
+RERANKER_REVISION = 'v2'
+
 
 @alru_cache(maxsize=1)
 async def get_reranking_model() -> 'FastReranker':
-    """Get the reranking model
-
-    Args:
-        model_dir (str | plb.Path | None, optional): Location of the model directory. Defaults to None.
-        model_name (str, optional): Name of the model file. Defaults to 'model.onnx'.
+    """Get the reranking model.
 
     Returns:
         FastReranker: Reranking model instance.
     """
-    path = plb.Path(user_cache_dir('memex')) / 'JasperHG90__ms-marco-minilm-l12-hindsight-reranker'
+    path = plb.Path(user_cache_dir('memex')) / RERANKER_REPO.replace('/', '__') / RERANKER_REVISION
 
     if not path.exists():
         logger.warning(f'Reranking model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id='JasperHG90/ms-marco-minilm-l12-hindsight-reranker')
+        downloader = ModelDownloader(repo_id=RERANKER_REPO, revision=RERANKER_REVISION)
         await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
     return FastReranker(model_dir=str(path), model_name='model.onnx')

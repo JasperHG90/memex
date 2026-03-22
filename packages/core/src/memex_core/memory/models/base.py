@@ -20,14 +20,21 @@ options.enable_cpu_mem_arena = False
 
 
 class ModelDownloader:
-    def __init__(self, repo_id: str, app_name: str = 'memex', max_concurrent: int = 5):
+    def __init__(
+        self,
+        repo_id: str,
+        revision: str = 'main',
+        app_name: str = 'memex',
+        max_concurrent: int = 5,
+    ):
         self.repo_id = repo_id
+        self.revision = revision
         self.app_name = app_name
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.base_url = f'https://huggingface.co/{repo_id}'
-        self.api_url = f'https://huggingface.co/api/models/{repo_id}'
+        self.api_url = f'https://huggingface.co/api/models/{repo_id}?revision={revision}'
 
-        self.cache_dir = plb.Path(user_cache_dir(app_name)) / repo_id.replace('/', '__')
+        self.cache_dir = plb.Path(user_cache_dir(app_name)) / repo_id.replace('/', '__') / revision
 
     async def _fetch_file_list(self, client: httpx.AsyncClient) -> list[str]:
         """
@@ -59,7 +66,7 @@ class ModelDownloader:
         # Ensure directory structure exists (e.g. for 'onnx/model.onnx')
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        download_url = f'{self.base_url}/resolve/main/{filename}'
+        download_url = f'{self.base_url}/resolve/{self.revision}/{filename}'
         # PID-scoped temp path avoids collisions if multiple processes download concurrently
         tmp_path = local_path.with_suffix(f'{local_path.suffix}.{os.getpid()}.tmp')
 
