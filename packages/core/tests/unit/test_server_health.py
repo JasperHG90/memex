@@ -25,7 +25,13 @@ def client():
     mock_filestore = MagicMock()
     mock_filestore.check_connection = AsyncMock(return_value=True)
 
-    mock_api = SimpleNamespace(metastore=mock_metastore, filestore=mock_filestore)
+    mock_tracing = SimpleNamespace(enabled=False)
+    mock_server_config = SimpleNamespace(tracing=mock_tracing)
+    mock_config = SimpleNamespace(server=mock_server_config)
+
+    mock_api = SimpleNamespace(
+        metastore=mock_metastore, filestore=mock_filestore, config=mock_config
+    )
     app.state.api = mock_api
 
     yield TestClient(app)

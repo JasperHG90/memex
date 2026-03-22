@@ -33,7 +33,6 @@ from memex_core.memory.extraction.models import (
 from memex_core.memory.reflect.prompts import (
     CandidateObservation,
 )
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.types import FactTypes, FactKindTypes
 
 
@@ -56,14 +55,6 @@ GOLDEN_EXTRACTION_FACTS: list[RawFact] = [
 
 GOLDEN_EXTRACTION_OUTPUT = ExtractedOutput(
     extracted_facts=GOLDEN_EXTRACTION_FACTS,
-)
-
-GOLDEN_TOKEN_USAGE = TokenUsage(
-    input_tokens=150,
-    output_tokens=80,
-    total_tokens=230,
-    is_cached=False,
-    models=['test-model/mock'],
 )
 
 # ---------------------------------------------------------------------------
@@ -92,20 +83,20 @@ class MockDspyLM:
 
     def __init__(self) -> None:
         self.dummy_lm = DummyLM([])
-        self._responses: list[tuple[Any, TokenUsage]] = []
+        self._responses: list[Any] = []
         self._call_index = 0
         self._run_dspy_patcher: AsyncMock | None = None
 
     # -- public API -----------------------------------------------------------
 
-    def set_responses(self, responses: list[tuple[Any, TokenUsage]]) -> None:
-        """Set the ordered list of (result, TokenUsage) tuples to return."""
+    def set_responses(self, responses: list[Any]) -> None:
+        """Set the ordered list of results to return."""
         self._responses = list(responses)
         self._call_index = 0
 
-    def add_response(self, result: Any, usage: TokenUsage | None = None) -> None:
+    def add_response(self, result: Any) -> None:
         """Append a single response."""
-        self._responses.append((result, usage or GOLDEN_TOKEN_USAGE))
+        self._responses.append(result)
 
     @property
     def call_count(self) -> int:
@@ -122,16 +113,15 @@ class MockDspyLM:
         context_metadata: dict | None = None,
         semaphore: Any = None,
         vault_id: Any = None,
-    ) -> tuple[Any, TokenUsage]:
+    ) -> Any:
         """Side-effect function that replaces ``run_dspy_operation``."""
         if self._call_index < len(self._responses):
-            result, usage = self._responses[self._call_index]
+            result = self._responses[self._call_index]
         else:
             # Fall back to a generic empty result
             result = MagicMock()
-            usage = GOLDEN_TOKEN_USAGE
         self._call_index += 1
-        return result, usage
+        return result
 
 
 # ---------------------------------------------------------------------------

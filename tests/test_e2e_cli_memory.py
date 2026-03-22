@@ -8,7 +8,7 @@ from httpx import AsyncClient, ASGITransport
 from uuid import uuid4
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from memex_core.memory.sql_models import MemoryUnit, TokenUsage
+from memex_core.memory.sql_models import MemoryUnit
 from memex_core.memory.extraction.models import ExtractedOutput, RawFact
 from memex_common.types import FactTypes, FactKindTypes
 from memex_cli import app
@@ -99,7 +99,6 @@ async def test_cli_memory_add(db_session: AsyncSession, setup_cli_e2e):
     mock_extracted_output = ExtractedOutput(extracted_facts=[mock_raw_fact])
     mock_prediction = MagicMock()
     mock_prediction.extracted_facts = mock_extracted_output
-    mock_usage = TokenUsage(total_tokens=10)
 
     # Patch run_dspy_operation where it is used in extraction core
     with (
@@ -113,10 +112,10 @@ async def test_cli_memory_add(db_session: AsyncSession, setup_cli_e2e):
         patch(
             'memex_core.processing.dates.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(MagicMock(extracted_date=None), TokenUsage(total_tokens=0)),
+            return_value=MagicMock(extracted_date=None),
         ),
     ):
-        mock_run_dspy.return_value = (mock_prediction, mock_usage)
+        mock_run_dspy.return_value = mock_prediction
         result = runner.invoke(app, ['note', 'add', content], env=os.environ)
 
         assert result.exit_code == 0, f'Error: {result.stdout}'
@@ -141,7 +140,6 @@ async def test_cli_memory_search(db_session: AsyncSession, setup_cli_e2e):
 
     mock_prediction = MagicMock()
     mock_prediction.summary = 'A summary of Python.'
-    mock_usage = TokenUsage(total_tokens=10)
 
     # Patch run_dspy_operation where it is used in API
     with (
@@ -153,7 +151,7 @@ async def test_cli_memory_search(db_session: AsyncSession, setup_cli_e2e):
             'memex_core.services.search.run_dspy_operation', new_callable=AsyncMock
         ) as mock_run_dspy,
     ):
-        mock_run_dspy.return_value = (mock_prediction, mock_usage)
+        mock_run_dspy.return_value = mock_prediction
         result = runner.invoke(
             app,
             ['memory', 'search', 'Python', '--token-budget', '1000'],

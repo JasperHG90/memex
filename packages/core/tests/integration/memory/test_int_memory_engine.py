@@ -6,7 +6,7 @@ from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
-from memex_core.memory.sql_models import MentalModel, TokenUsage
+from memex_core.memory.sql_models import MentalModel
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.config import (
@@ -147,9 +147,3 @@ async def test_memory_engine_lifecycle(session: AsyncSession, postgres_uri: str)
         # Check relevance
         combined_text = ' '.join([m.text for m in memories])
         assert '40%' in combined_text or 'CO2' in combined_text
-
-        # 3. Token Usage
-        # ----------------------------
-        token_usage = (await session.exec(select(TokenUsage))).all()
-        jsonl = [tu.model_dump() for tu in token_usage]
-        assert len(jsonl) > 0, 'Expected token usage logs to be recorded.'

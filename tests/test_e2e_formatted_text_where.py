@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata, RawFact
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.types import FactTypes, FactKindTypes
 
 
@@ -117,14 +116,13 @@ def test_where_propagates_to_memory_unit_via_ingestion(client: TestClient) -> No
             content_index=0,
         )
     ]
-    mock_usage = TokenUsage(total_tokens=50)
     mock_embeddings = [[0.1] * 384]
 
     extract_path = 'memex_core.memory.extraction.engine.ExtractionEngine._extract_facts'
     embed_path = 'memex_core.memory.extraction.embedding_processor.generate_embeddings_batch'
 
     with patch(extract_path) as mock_extract, patch(embed_path) as mock_embed:
-        mock_extract.return_value = (mock_facts, mock_chunks, mock_usage)
+        mock_extract.return_value = (mock_facts, mock_chunks)
         mock_embed.return_value = mock_embeddings
 
         note_content = b'Team standup was held at Amsterdam HQ on March 19.'

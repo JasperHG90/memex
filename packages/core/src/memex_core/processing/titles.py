@@ -11,10 +11,8 @@ Priority chain:
 import logging
 import re
 from typing import Any
-from uuid import UUID
 
 import dspy
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.extraction.utils import detect_markdown_headers_regex
@@ -144,16 +142,12 @@ def _build_summary_text_from_page_index(page_index: list[dict[str, Any]]) -> str
 async def extract_title_via_llm(
     content_summary: str,
     lm: dspy.LM,
-    session: AsyncSession | None = None,
-    vault_id: UUID | None = None,
 ) -> str | None:
     """Ask the LLM to infer a title from a content summary string.
 
     Args:
         content_summary: Compact text describing the document (summaries or raw excerpt).
         lm: The DSPy language model instance.
-        session: Optional DB session for token-usage logging.
-        vault_id: Optional vault ID for token-usage logging.
 
     Returns:
         A non-empty title string, or None if extraction failed or returned nothing.
@@ -165,13 +159,10 @@ async def extract_title_via_llm(
     predictor = dspy.Predict(ExtractNoteTitle)
 
     try:
-        prediction, _ = await run_dspy_operation(
+        prediction = await run_dspy_operation(
             lm=lm,
             predictor=predictor,
             input_kwargs={'content_summary': excerpt},
-            session=session,
-            context_metadata={'operation': 'title_extraction'},
-            vault_id=vault_id,
         )
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.warning('LLM title extraction failed: %s', e, exc_info=True)
@@ -214,8 +205,6 @@ async def resolve_document_title(
     content_text: str,
     provided_name: str | None,
     lm: dspy.LM,
-    session: AsyncSession | None = None,
-    vault_id: UUID | None = None,
 ) -> str:
     """Resolve the best available title for a document being ingested (simple path).
 
@@ -229,8 +218,6 @@ async def resolve_document_title(
         content_text: Full decoded document content.
         provided_name: The caller-supplied ``note._metadata.name`` (may be None).
         lm: DSPy language model used for LLM fallback.
-        session: Optional DB session for token-usage logging.
-        vault_id: Optional vault ID for token-usage logging.
 
     Returns:
         A non-empty title string.
@@ -245,9 +232,7 @@ async def resolve_document_title(
         return md_title
 
     # Priority 3: LLM inference from raw text excerpt
-    if llm_title := await extract_title_via_llm(
-        content_text[:_TITLE_CHAR_LIMIT], lm, session=session, vault_id=vault_id
-    ):
+    if llm_title := await extract_title_via_llm(content_text[:_TITLE_CHAR_LIMIT], lm):
         logger.debug(f'Title resolved via LLM (raw text): {llm_title!r}')
         return llm_title
 
@@ -261,8 +246,6 @@ async def resolve_title_from_page_index(
     page_index_toc: list[dict[str, Any]],
     provided_name: str | None,
     lm: dspy.LM,
-    session: AsyncSession | None = None,
-    vault_id: UUID | None = None,
 ) -> str:
     """Resolve the best title using the page_index thin tree (page_index extraction path).
 
@@ -276,8 +259,6 @@ async def resolve_title_from_page_index(
         page_index_toc: Thin-tree list from ``TOCNode.tree_without_text()``.
         provided_name: The caller-supplied name (may be None or a generic fallback).
         lm: DSPy language model used for LLM fallback.
-        session: Optional DB session for token-usage logging.
-        vault_id: Optional vault ID for token-usage logging.
 
     Returns:
         A non-empty title string.
@@ -294,9 +275,7 @@ async def resolve_title_from_page_index(
     # Priority 3: LLM from block summaries
     summary_text = _build_summary_text_from_page_index(page_index_toc)
     if summary_text.strip():
-        if llm_title := await extract_title_via_llm(
-            summary_text, lm, session=session, vault_id=vault_id
-        ):
+        if llm_title := await extract_title_via_llm(summary_text, lm):
             logger.debug(f'Title resolved via LLM (page_index summaries): {llm_title!r}')
             return llm_title
 

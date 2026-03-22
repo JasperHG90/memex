@@ -43,6 +43,15 @@ async def ready(request: Request) -> JSONResponse:
         logger.warning('Readiness: filestore unreachable: %s', e, exc_info=True)
         checks['filestore'] = 'unavailable'
 
+    if api.config.server.tracing.enabled:
+        try:
+            from memex_core.tracing import check_tracing_health
+
+            checks['tracing'] = 'ok' if check_tracing_health() else 'unavailable'
+        except Exception as e:
+            logger.warning('Readiness: tracing check failed: %s', e, exc_info=True)
+            checks['tracing'] = 'unavailable'
+
     all_ok = all(v == 'ok' for v in checks.values())
     return JSONResponse(
         content={'status': 'ok' if all_ok else 'unavailable', **checks},

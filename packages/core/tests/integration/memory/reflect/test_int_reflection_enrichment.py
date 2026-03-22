@@ -153,7 +153,7 @@ async def test_enrichment_persists_to_database(session: AsyncSession, memex_conf
 
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
-        return_value=(mock_result, MagicMock()),
+        return_value=mock_result,
     ):
         await engine._phase_6_enrich(
             entity_name='Auth System',
@@ -232,7 +232,7 @@ async def test_enrichment_accumulates_across_cycles_in_db(session: AsyncSession,
 
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
-        return_value=(mock_result_1, MagicMock()),
+        return_value=mock_result_1,
     ):
         await engine._phase_6_enrich(
             entity_name='Auth System',
@@ -259,7 +259,7 @@ async def test_enrichment_accumulates_across_cycles_in_db(session: AsyncSession,
 
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
-        return_value=(mock_result_2, MagicMock()),
+        return_value=mock_result_2,
     ):
         await engine._phase_6_enrich(
             entity_name='Auth System',
@@ -336,7 +336,7 @@ async def test_enrichment_loads_missing_units_from_db(session: AsyncSession, mem
 
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
-        return_value=(mock_result, MagicMock()),
+        return_value=mock_result,
     ):
         await engine._phase_6_enrich(
             entity_name='Test Entity',
@@ -607,7 +607,7 @@ async def test_enrichment_disabled_no_metadata_written(session: AsyncSession, me
     db_lock = asyncio.Lock()
     with patch(
         'memex_core.memory.reflect.reflection.run_dspy_operation',
-        return_value=(mock_result, MagicMock()),
+        return_value=mock_result,
     ):
         await engine._phase_6_enrich(
             entity_name='Test',

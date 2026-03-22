@@ -55,9 +55,7 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     process_embeddings,
 )
 from memex_core.memory.entity_resolver import EntityResolver
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.context import get_session_id
 from memex_core.processing.titles import resolve_title_from_page_index
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
@@ -183,17 +181,17 @@ class ExtractionEngine:
         note_id: str | None = None,
         is_first_batch: bool = True,
         content_fingerprint: str | None = None,
-    ) -> tuple[list[str], TokenUsage, set[UUID]]:
+    ) -> tuple[list[str], set[UUID]]:
         """
         Main entry point: Extract facts from content and persist them to memory.
-        Returns (unit_ids, usage, touched_entity_ids).
+        Returns (unit_ids, touched_entity_ids).
 
         When ``note_id`` is provided and the document already has blocks in
         the DB, the incremental path is used: only changed blocks trigger LLM
         extraction.
         """
         if not contents:
-            return [], TokenUsage(), set()
+            return [], set()
 
         # Determine vault_id (assuming uniform per batch)
         vault_id = contents[0].vault_id if contents else GLOBAL_VAULT_ID
@@ -235,7 +233,7 @@ class ExtractionEngine:
             )
 
         # --- Full extraction path (simple strategy or no page_index LM) ---
-        extracted_facts, chunks, usage = await self._extract_facts(contents, agent_name)
+        extracted_facts, chunks = await self._extract_facts(contents, agent_name)
 
         if chunks:
             chunk_texts = [c.chunk_text for c in chunks]
@@ -248,7 +246,7 @@ class ExtractionEngine:
         if not extracted_facts:
             if note_id:
                 await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
-            return [], usage, set()
+            return [], set()
 
         processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
 
@@ -271,7 +269,7 @@ class ExtractionEngine:
             logger.info(f'All {len(processed_facts)} facts were duplicates.')
             if note_id:
                 await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
-            return [], usage, set()
+            return [], set()
 
         extracted_facts = final_extracted_facts
         processed_facts = final_processed_facts
@@ -307,19 +305,7 @@ class ExtractionEngine:
         # Update Reflection Queue Priorities
         await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
-        # Log aggregated token usage
-        usage.session_id = get_session_id()
-        usage.vault_id = vault_id
-        usage.context_metadata = {
-            'operation': 'extract',
-            'mode': 'full',
-            'note_id': note_id,
-            'unit_count': len(unit_ids),
-            'vault_id': str(vault_id),
-        }
-        session.add(usage)
-
-        return unit_ids, usage, touched_entity_ids
+        return unit_ids, touched_entity_ids
 
     async def _extract_incremental(
         self,
@@ -330,7 +316,7 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
-    ) -> tuple[list[str], TokenUsage, set[UUID]]:
+    ) -> tuple[list[str], set[UUID]]:
         """Incremental extraction: diff blocks, extract only changed content.
 
         Args:
@@ -343,7 +329,7 @@ class ExtractionEngine:
             content_fingerprint: Content fingerprint for document tracking.
 
         Returns:
-            Tuple of (unit_ids, usage, touched_entity_ids).
+            Tuple of (unit_ids, touched_entity_ids).
         """
         combined_text = '\n'.join(c.content for c in contents)
         event_date = contents[0].event_date if contents else None
@@ -375,7 +361,6 @@ class ExtractionEngine:
         )
 
         # 4. Extract facts from ADDED blocks only
-        usage = TokenUsage()
         unit_ids: list[str] = []
         touched_entity_ids: set[UUID] = set()
 
@@ -390,10 +375,9 @@ class ExtractionEngine:
             # Extract from each chunk with its context
             all_extracted_facts: list[ExtractedFact] = []
             all_chunk_metadata: list[ChunkMetadata] = []
-            total_usage = TokenUsage()
 
             for chunk_idx, (chunk_text_val, ctx) in enumerate(zip(chunk_texts, contexts)):
-                raw_facts, chunk_meta, chunk_usage = await extract_facts_from_chunks(
+                raw_facts, chunk_meta = await extract_facts_from_chunks(
                     chunks=[chunk_text_val],
                     event_date=event_date or contents[0].event_date,
                     lm=self.lm,
@@ -401,9 +385,7 @@ class ExtractionEngine:
                     agent_name=agent_name,
                     context=ctx,
                     semaphore=self.semaphore,
-                    vault_id=vault_id,
                 )
-                total_usage += chunk_usage
 
                 for fact_text, fact_count in chunk_meta:
                     all_chunk_metadata.append(
@@ -443,20 +425,16 @@ class ExtractionEngine:
                     )
                     all_extracted_facts.append(ef)
 
-            usage = total_usage
-
             # Extract facts from YAML frontmatter if present.
             # Frontmatter is at the start, so assign to chunk 0.
             fm_text, _ = _detect_frontmatter(combined_text)
             if fm_text:
-                fm_facts, fm_usage = await extract_facts_from_frontmatter(
+                fm_facts = await extract_facts_from_frontmatter(
                     frontmatter_text=fm_text,
                     event_date=event_date or contents[0].event_date,
                     lm=self.lm,
                     semaphore=self.semaphore,
-                    vault_id=vault_id,
                 )
-                usage += fm_usage
                 for f in fm_facts:
                     ef = ExtractedFact(
                         fact_text=f.formatted_text,
@@ -552,23 +530,7 @@ class ExtractionEngine:
         # Update Reflection Queue
         await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
-        # Log usage with incremental metadata
-        usage.session_id = get_session_id()
-        usage.vault_id = vault_id
-        usage.context_metadata = {
-            'operation': 'extract',
-            'mode': 'incremental',
-            'note_id': note_id,
-            'blocks_total': len(new_blocks),
-            'blocks_retained': len(retained_hashes),
-            'blocks_added': len(added_blocks),
-            'blocks_removed': len(removed_hashes),
-            'unit_count': len(unit_ids),
-            'vault_id': str(vault_id),
-        }
-        session.add(usage)
-
-        return unit_ids, usage, touched_entity_ids
+        return unit_ids, touched_entity_ids
 
     async def _extract_page_index_incremental(
         self,
@@ -579,7 +541,7 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
-    ) -> tuple[list[str], TokenUsage, set[UUID]]:
+    ) -> tuple[list[str], set[UUID]]:
         """Incremental page-index extraction with node-level change detection.
 
         Diffs new PageIndex blocks against existing blocks:
@@ -599,7 +561,7 @@ class ExtractionEngine:
             content_fingerprint: Content fingerprint for document tracking.
 
         Returns:
-            Tuple of (unit_ids, usage, touched_entity_ids).
+            Tuple of (unit_ids, touched_entity_ids).
         """
         combined_text = '\n'.join(c.content for c in contents)
         event_date = contents[0].event_date if contents else None
@@ -609,7 +571,7 @@ class ExtractionEngine:
         assert self.page_index_lm is not None
 
         # 1. Run PageIndex
-        page_index_output, pi_usage = await index_document(
+        page_index_output = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
             max_scan_tokens=ts.scan_chunk_size_tokens,
@@ -720,14 +682,13 @@ class ExtractionEngine:
         await storage.reindex_blocks(session, retained_updates)
 
         # 9. Extract facts ONLY for CONTENT_CHANGED blocks
-        usage = pi_usage
         unit_ids: list[str] = []
         touched_entity_ids: set[UUID] = set()
 
         changed_blocks = [b for b in page_index_output.blocks if b.id in content_changed_hashes]
         if changed_blocks:
             block_texts = [b.content for b in changed_blocks]
-            raw_facts, chunk_meta, extract_usage = await extract_facts_from_chunks(
+            raw_facts, chunk_meta = await extract_facts_from_chunks(
                 chunks=block_texts,
                 event_date=event_date or contents[0].event_date,
                 lm=self.lm,
@@ -735,9 +696,7 @@ class ExtractionEngine:
                 agent_name=agent_name,
                 context='',
                 semaphore=self.semaphore,
-                vault_id=vault_id,
             )
-            usage += extract_usage
 
             if raw_facts:
                 # Convert to ExtractedFacts
@@ -844,33 +803,13 @@ class ExtractionEngine:
             page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
-            session=session,
-            vault_id=vault_id,
         )
         await storage.update_note_title(session, note_id, resolved_title)
 
         # Update Reflection Queue
         await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
-        # Log usage with incremental page_index metadata
-        usage.session_id = get_session_id()
-        usage.vault_id = vault_id
-        usage.context_metadata = {
-            'operation': 'extract',
-            'mode': 'page_index_incremental',
-            'note_id': note_id,
-            'blocks_total': len(page_index_output.blocks),
-            'blocks_retained': len(retained_hashes),
-            'blocks_boundary_shift': len(boundary_shift_hashes),
-            'blocks_content_changed': len(content_changed_hashes),
-            'blocks_removed': len(removed_hashes),
-            'facts_migrated': len(chunk_migration),
-            'unit_count': len(unit_ids),
-            'vault_id': str(vault_id),
-        }
-        session.add(usage)
-
-        return unit_ids, usage, touched_entity_ids
+        return unit_ids, touched_entity_ids
 
     async def _extract_page_index(
         self,
@@ -881,7 +820,7 @@ class ExtractionEngine:
         is_first_batch: bool,
         vault_id: UUID,
         content_fingerprint: str | None = None,
-    ) -> tuple[list[str], TokenUsage, set[UUID]]:
+    ) -> tuple[list[str], set[UUID]]:
         """Page-index extraction path: hierarchical TOC → nodes → blocks → facts.
 
         1. Run index_document() → PageIndexOutput
@@ -898,7 +837,7 @@ class ExtractionEngine:
         assert self.page_index_lm is not None
 
         # 1. Run PageIndex
-        page_index_output, pi_usage = await index_document(
+        page_index_output = await index_document(
             full_text=combined_text,
             lm=self.page_index_lm,
             max_scan_tokens=ts.scan_chunk_size_tokens,
@@ -960,17 +899,15 @@ class ExtractionEngine:
             page_index_toc=page_index['toc'],
             provided_name=provided_name,
             lm=self.page_index_lm,
-            session=session,
-            vault_id=vault_id,
         )
         await storage.update_note_title(session, effective_doc_id, resolved_title)
 
         # 4. Extract facts from block texts
         block_texts = [block.content for block in page_index_output.blocks]
         if not block_texts:
-            return [], pi_usage, set()
+            return [], set()
 
-        raw_facts, chunk_meta, usage = await extract_facts_from_chunks(
+        raw_facts, chunk_meta = await extract_facts_from_chunks(
             chunks=block_texts,
             event_date=event_date or contents[0].event_date,
             lm=self.lm,
@@ -978,12 +915,10 @@ class ExtractionEngine:
             agent_name=agent_name,
             context='',
             semaphore=self.semaphore,
-            vault_id=vault_id,
         )
-        usage += pi_usage
 
         if not raw_facts:
-            return [], usage, set()
+            return [], set()
 
         # Convert to ExtractedFacts
         extracted_facts: list[ExtractedFact] = []
@@ -1024,14 +959,12 @@ class ExtractionEngine:
         fm_text, _ = _detect_frontmatter(combined_text)
         if fm_text and contents:
             first_block_seq = page_index_output.blocks[0].seq if page_index_output.blocks else 0
-            fm_facts, fm_usage = await extract_facts_from_frontmatter(
+            fm_facts = await extract_facts_from_frontmatter(
                 frontmatter_text=fm_text,
                 event_date=event_date or contents[0].event_date,
                 lm=self.lm,
                 semaphore=self.semaphore,
-                vault_id=vault_id,
             )
-            usage += fm_usage
             for f in fm_facts:
                 ef = ExtractedFact(
                     fact_text=f.formatted_text,
@@ -1055,7 +988,7 @@ class ExtractionEngine:
                 global_fact_idx += 1
 
         if not raw_facts and not extracted_facts:
-            return [], usage, set()
+            return [], set()
 
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
         processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
@@ -1069,7 +1002,7 @@ class ExtractionEngine:
         final_extracted = [ef for ef, is_dup in zip(extracted_facts, is_duplicate) if not is_dup]
 
         if not final_processed:
-            return [], usage, set()
+            return [], set()
 
         # Link facts to blocks
         for ef, pf in zip(final_extracted, final_processed):
@@ -1088,21 +1021,7 @@ class ExtractionEngine:
 
         await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
-        # Log usage
-        usage.session_id = get_session_id()
-        usage.vault_id = vault_id
-        usage.context_metadata = {
-            'operation': 'extract',
-            'mode': 'page_index',
-            'note_id': note_id,
-            'unit_count': len(unit_ids),
-            'blocks': len(page_index_output.blocks),
-            'path_used': page_index_output.path_used,
-            'vault_id': str(vault_id),
-        }
-        session.add(usage)
-
-        return unit_ids, usage, touched_entity_ids
+        return unit_ids, touched_entity_ids
 
     async def _persist_page_index_nodes_and_blocks(
         self,
@@ -1209,7 +1128,7 @@ class ExtractionEngine:
         self,
         contents: list[RetainContent],
         agent_name: str,
-    ) -> tuple[list[ExtractedFact], list[ChunkMetadata], TokenUsage]:
+    ) -> tuple[list[ExtractedFact], list[ChunkMetadata]]:
         """Run LLM extraction in parallel with semaphore."""
 
         ts = self.config.text_splitting
@@ -1233,7 +1152,6 @@ class ExtractionEngine:
                 chunk_overlap=chunk_overlap,
                 context=content.context or '',
                 semaphore=self.semaphore,
-                vault_id=content.vault_id,
             )
 
         tasks = [_sem_extract(c) for c in contents]
@@ -1241,13 +1159,11 @@ class ExtractionEngine:
 
         extracted_facts: list[ExtractedFact] = []
         chunk_metadata: list[ChunkMetadata] = []
-        total_usage = TokenUsage()
 
         global_chunk_idx = 0
         global_fact_idx = 0
 
-        for content_idx, (content, (facts, chunks, usage)) in enumerate(zip(contents, results)):
-            total_usage += usage
+        for content_idx, (content, (facts, chunks)) in enumerate(zip(contents, results)):
             facts_start_idx = 0
 
             for chunk_text, fact_count in chunks:
@@ -1297,14 +1213,12 @@ class ExtractionEngine:
         fm_text, _ = _detect_frontmatter(combined_text)
         if fm_text and contents:
             event_date = contents[0].event_date
-            fm_facts, fm_usage = await extract_facts_from_frontmatter(
+            fm_facts = await extract_facts_from_frontmatter(
                 frontmatter_text=fm_text,
                 event_date=event_date,
                 lm=self.lm,
                 semaphore=self.semaphore,
-                vault_id=contents[0].vault_id,
             )
-            total_usage += fm_usage
             for f in fm_facts:
                 ef = ExtractedFact(
                     fact_text=f.formatted_text,
@@ -1328,7 +1242,7 @@ class ExtractionEngine:
                 global_fact_idx += 1
 
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
-        return extracted_facts, chunk_metadata, total_usage
+        return extracted_facts, chunk_metadata
 
     async def _resolve_entities(
         self,

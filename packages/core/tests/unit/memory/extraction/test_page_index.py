@@ -440,7 +440,7 @@ class TestIndexDocumentShortBypass:
         short_text = 'A short note about something important.'
         mock_lm = MagicMock()
 
-        result, usage = await index_document(
+        result = await index_document(
             full_text=short_text,
             lm=mock_lm,
             short_doc_threshold=2000,
@@ -455,8 +455,6 @@ class TestIndexDocumentShortBypass:
         assert result.coverage_ratio == 1.0
         # LM should not have been called
         mock_lm.assert_not_called()
-        # Short doc bypass produces no token usage
-        assert usage.total_tokens is None or usage.total_tokens == 0
 
     @pytest.mark.asyncio
     async def test_short_doc_with_headers_uses_page_index(self) -> None:

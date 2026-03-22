@@ -20,7 +20,6 @@ from memex_core.memory.extraction.models import (
     PageIndexBlock,
     content_hash_md5,
 )
-from memex_core.memory.sql_models import TokenUsage
 
 
 # --- Fixtures ---
@@ -292,7 +291,7 @@ class TestShortCircuit:
             patch(
                 'memex_core.memory.extraction.engine.index_document',
                 new_callable=AsyncMock,
-                return_value=(pio, TokenUsage()),
+                return_value=pio,
             ),
             patch(
                 'memex_core.memory.extraction.engine.storage.get_note_nodes',
@@ -358,7 +357,7 @@ class TestShortCircuit:
         ):
             mock_persist.return_value = ([], {})
 
-            unit_ids, usage, touched = await extractor._extract_page_index_incremental(
+            unit_ids, touched = await extractor._extract_page_index_incremental(
                 session=mock_session,
                 contents=contents,
                 agent_name='test',
@@ -396,7 +395,7 @@ class TestRouting:
                 extractor,
                 '_extract_page_index_incremental',
                 new_callable=AsyncMock,
-                return_value=([], TokenUsage(), set()),
+                return_value=([], set()),
             ) as mock_incremental,
         ):
             await extractor.extract_and_persist(
@@ -437,7 +436,7 @@ class TestRouting:
                 engine,
                 '_extract_incremental',
                 new_callable=AsyncMock,
-                return_value=([], TokenUsage(), set()),
+                return_value=([], set()),
             ) as mock_simple_incr,
         ):
             await engine.extract_and_persist(

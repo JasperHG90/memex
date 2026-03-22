@@ -86,7 +86,7 @@ async def test_phase_4_compare_logic(engine):
                 ],
             )
         ]
-        mock_run_dspy.return_value = (mock_result, None)
+        mock_run_dspy.return_value = mock_result
 
         engine.lm = MagicMock()  # Needs to be set
 
@@ -178,7 +178,7 @@ async def test_phase_4_updates_trend_state(engine):
                 ],
             )
         ]
-        mock_run_dspy.return_value = (mock_result, None)
+        mock_run_dspy.return_value = mock_result
 
         engine.lm = MagicMock()
 

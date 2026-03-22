@@ -394,7 +394,7 @@ class ReflectionEngine:
         enrich_predictor = dspy.Predict(EnrichmentSignature)
 
         assert self.lm is not None, 'LM must be initialized for Phase 6'
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=enrich_predictor,
             input_kwargs={
@@ -403,9 +403,6 @@ class ReflectionEngine:
                 'observations': obs_context,
                 'memories': memory_context,
             },
-            session=self.session,
-            context_metadata={'phase': 'enrich', 'operation': 'reflect'},
-            vault_id=vault_id,
         )
 
         if not result or not result.enrichments:
@@ -621,13 +618,10 @@ class ReflectionEngine:
         update_predictor = dspy.Predict(UpdateExistingSignature)
 
         assert self.lm is not None, 'LM must be initialized'
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=update_predictor,
             input_kwargs={'recent_memories': memory_context, 'existing_observations': obs_context},
-            session=self.session,
-            context_metadata={'phase': 'update', 'operation': 'reflect'},
-            vault_id=vault_id,
         )
 
         if not result or not result.updates:
@@ -680,7 +674,7 @@ class ReflectionEngine:
         seed_predictor = dspy.Predict(SeedPhaseSignature)
 
         assert self.lm is not None, 'LM must be initialized'
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=seed_predictor,
             input_kwargs={
@@ -688,9 +682,6 @@ class ReflectionEngine:
                 'topic': topic,
                 'existing_observations': obs_context,
             },
-            session=self.session,
-            context_metadata={'phase': 'seed', 'operation': 'reflect'},
-            vault_id=vault_id,
         )
 
         if result is None:
@@ -833,13 +824,10 @@ class ReflectionEngine:
         validate_predictor = dspy.Predict(ValidatePhaseSignature)
 
         assert self.lm is not None, 'LM must be initialized'
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=validate_predictor,
             input_kwargs={'candidates': candidate_observations},
-            session=self.session,
-            context_metadata={'phase': 'validate', 'operation': 'reflect'},
-            vault_id=vault_id,
         )
 
         if result is None:
@@ -962,7 +950,7 @@ class ReflectionEngine:
         compare_predictor = dspy.Predict(ComparePhaseSignature)
 
         assert self.lm is not None, 'LM must be initialized'
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=compare_predictor,
             input_kwargs={
@@ -971,9 +959,6 @@ class ReflectionEngine:
                 'existing_context': existing_ctx,
                 'new_context': new_ctx,
             },
-            session=self.session,
-            context_metadata={'phase': 'compare', 'operation': 'reflect'},
-            vault_id=vault_id,
         )
 
         if not result or not result.result or not result.result.observations:

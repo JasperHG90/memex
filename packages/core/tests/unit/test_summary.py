@@ -11,7 +11,7 @@ async def test_summarize_search_results(api, mock_session):
     mock_prediction.summary = 'Result [0] says X and [1] says Y.'
 
     with patch('memex_core.services.search.run_dspy_operation', new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = (mock_prediction, {'tokens': 100})
+        mock_run.return_value = mock_prediction
 
         result = await api.summarize_search_results(
             query='test query',
@@ -25,11 +25,6 @@ async def test_summarize_search_results(api, mock_session):
     call_kwargs = mock_run.call_args[1]
     assert call_kwargs['input_kwargs']['query'] == 'test query'
     assert call_kwargs['input_kwargs']['search_results'] == ['first result', 'second result']
-    assert call_kwargs['context_metadata'] == {'operation': 'search_summary'}
-    assert call_kwargs['session'] is mock_session
-
-    # Verify session.commit was called inside the context manager
-    mock_session.commit.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Stats service — aggregate counts and token usage for Memex."""
+"""Stats service — aggregate counts for Memex."""
 
 from __future__ import annotations
 
@@ -6,9 +6,6 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from cachetools import TTLCache
-from cachetools_async import cached as cached_async
-from sqlalchemy import cast as sa_cast, Date
 from sqlmodel import col
 
 from memex_common.exceptions import MemoryUnitNotFoundError
@@ -130,21 +127,3 @@ class StatsService(BaseService):
             await session.commit()
 
         return True
-
-    @cached_async(TTLCache(maxsize=1, ttl=300), key=lambda self: 'token_usage')
-    async def get_daily_token_usage(self) -> list[dict[str, Any]]:
-        """Get daily aggregated token usage. Cached for 5 minutes."""
-        from memex_core.memory.sql_models import TokenUsage
-        from sqlmodel import select, func
-
-        async with self.metastore.session() as session:
-            stmt = (
-                select(
-                    sa_cast(TokenUsage.timestamp, Date).label('date'),
-                    func.sum(TokenUsage.total_tokens).label('total_tokens'),
-                )
-                .group_by(sa_cast(TokenUsage.timestamp, Date))
-                .order_by(sa_cast(TokenUsage.timestamp, Date))
-            )
-            results = (await session.exec(stmt)).all()
-            return [{'date': r.date, 'total_tokens': r.total_tokens} for r in results]

@@ -36,7 +36,6 @@ from memex_common.schemas import (
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
-    TokenUsageResponse,
     NoteDTO,
     NoteSearchResult,
     NoteSearchRequest,
@@ -419,11 +418,6 @@ class RemoteMemexAPI:
             params['vault_id'] = [str(v) for v in resolved]
         result = await self._get('stats/counts', params=params or None)
         return SystemStatsCountsDTO(**result)
-
-    async def get_token_usage(self) -> TokenUsageResponse:
-        """Get daily aggregated token usage."""
-        result = await self._get('stats/token-usage')
-        return TokenUsageResponse(**result)
 
     async def get_recent_notes(
         self,

@@ -53,7 +53,7 @@ class TestExtractDocumentDate:
         with patch(
             'memex_core.processing.dates.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_document_date(
                 'Published on June 15, 2023. Article content...', mock_lm
@@ -82,7 +82,7 @@ class TestExtractDocumentDate:
         with patch(
             'memex_core.processing.dates.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_document_date('Some text with vague dates.', mock_lm)
             assert result is None
@@ -106,7 +106,7 @@ class TestExtractDocumentDate:
         with patch(
             'memex_core.processing.dates.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_document_date('Content with no date info.', mock_lm)
             assert result is None
@@ -157,7 +157,7 @@ class TestExtractDocumentDate:
         with patch(
             'memex_core.processing.dates.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             text = 'From: user@example.com\nDate: Thu, 12 Oct 2023 14:30:00 +0000\nSubject: Test'
             result = await extract_document_date(text, mock_lm)

@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI):
     setup_rate_limiting(app, config.server.rate_limit)
     setup_auth(app, config.server.auth)
 
+    # Set up OpenTelemetry tracing if enabled
+    if config.server.tracing.enabled:
+        from memex_core.tracing import setup_tracing
+
+        setup_tracing(config.server.tracing)
+
     # Refuse to bind to a non-localhost address without authentication
     _is_localhost = config.server.host in ('127.0.0.1', 'localhost', '::1')
     if not _is_localhost and not config.server.auth.enabled:

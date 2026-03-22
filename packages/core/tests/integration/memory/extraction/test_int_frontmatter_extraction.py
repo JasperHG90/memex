@@ -18,7 +18,7 @@ async def test_frontmatter_extraction_with_real_llm():
         '---\ncreated_by: Jasper Ginn\ncreated_date: 2025-05-24\ntitle: Test Document\n---\n'
     )
 
-    facts, usage = await extract_facts_from_frontmatter(
+    facts = await extract_facts_from_frontmatter(
         frontmatter_text=frontmatter_text,
         event_date=dt.datetime(2025, 5, 24),
         lm=lm,

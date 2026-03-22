@@ -57,7 +57,7 @@ class TestExtractFactsFromChunk:
             {'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15}}
         )
 
-        facts, usage = await _extract_facts_from_chunk(
+        facts = await _extract_facts_from_chunk(
             chunk='test chunk',
             chunk_index=0,
             total_chunks=1,
@@ -69,35 +69,6 @@ class TestExtractFactsFromChunk:
 
         assert len(facts) == 1
         assert facts[0] == sample_raw_fact
-        assert usage.input_tokens == 10
-        assert usage.output_tokens == 5
-        assert usage.total_tokens == 15
-
-    @pytest.mark.asyncio
-    async def test_missing_token_usage(
-        self, mock_lm: DummyLM, mock_predictor: MagicMock, sample_raw_fact: RawFact
-    ) -> None:
-        """Test handling of missing token usage in history."""
-        mock_result = MagicMock()
-        mock_result.extracted_facts.extracted_facts = [sample_raw_fact]
-        mock_predictor.acall.return_value = mock_result
-        mock_lm.copy = MagicMock(return_value=mock_lm)  # type: ignore
-
-        # History exists but no usage key
-        mock_lm.history.append({'other_key': 'value'})
-
-        facts, usage = await _extract_facts_from_chunk(
-            chunk='test',
-            chunk_index=0,
-            total_chunks=1,
-            event_date=dt.datetime.now(),
-            context='',
-            lm=mock_lm,
-            predictor=mock_predictor,
-        )
-        assert len(facts) == 1
-        # It's None now if missing, because we allow None in SQLModel
-        assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_empty_facts_response(self, mock_lm: DummyLM, mock_predictor: MagicMock) -> None:
@@ -107,7 +78,7 @@ class TestExtractFactsFromChunk:
         mock_predictor.acall.return_value = mock_result
         mock_lm.copy = MagicMock(return_value=mock_lm)  # type: ignore
 
-        facts, _ = await _extract_facts_from_chunk(
+        facts = await _extract_facts_from_chunk(
             chunk='test',
             chunk_index=0,
             total_chunks=1,
@@ -130,7 +101,7 @@ class TestExtractFactsFromChunk:
 
         semaphore = asyncio.Semaphore(1)
 
-        facts, _ = await _extract_facts_from_chunk(
+        facts = await _extract_facts_from_chunk(
             chunk='test chunk',
             chunk_index=0,
             total_chunks=1,
@@ -181,7 +152,7 @@ class TestExtractFactsFromChunk:
         """Test that generic errors return empty list and do not crash."""
         mock_predictor.acall.side_effect = RuntimeError('Some random API error')
 
-        facts, usage = await _extract_facts_from_chunk(
+        facts = await _extract_facts_from_chunk(
             chunk='test chunk',
             chunk_index=0,
             total_chunks=1,
@@ -192,7 +163,6 @@ class TestExtractFactsFromChunk:
         )
 
         assert facts == []
-        assert usage.total_tokens is None
 
 
 class TestExtractFactsFromChunkMalformedOutput:
@@ -207,16 +177,14 @@ class TestExtractFactsFromChunkMalformedOutput:
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
         """LLM returns a valid structure but with no facts."""
-        from memex_core.memory.sql_models import TokenUsage
-
         mock_result = MagicMock()
         mock_result.extracted_facts.extracted_facts = []
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
-            return_value=(mock_result, TokenUsage()),
+            return_value=mock_result,
         ):
-            facts, usage = await _extract_facts_from_chunk(
+            facts = await _extract_facts_from_chunk(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -226,7 +194,6 @@ class TestExtractFactsFromChunkMalformedOutput:
                 predictor=mock_predictor,
             )
             assert facts == []
-            assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_value_error_from_dspy_parsing(
@@ -237,7 +204,7 @@ class TestExtractFactsFromChunkMalformedOutput:
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=ValueError('Could not parse LLM output as JSON'),
         ):
-            facts, usage = await _extract_facts_from_chunk(
+            facts = await _extract_facts_from_chunk(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -247,7 +214,6 @@ class TestExtractFactsFromChunkMalformedOutput:
                 predictor=mock_predictor,
             )
             assert facts == []
-            assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_key_error_from_malformed_structure(
@@ -258,7 +224,7 @@ class TestExtractFactsFromChunkMalformedOutput:
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=KeyError('extracted_facts'),
         ):
-            facts, usage = await _extract_facts_from_chunk(
+            facts = await _extract_facts_from_chunk(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -268,7 +234,6 @@ class TestExtractFactsFromChunkMalformedOutput:
                 predictor=mock_predictor,
             )
             assert facts == []
-            assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_os_error_returns_empty(
@@ -279,7 +244,7 @@ class TestExtractFactsFromChunkMalformedOutput:
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=OSError('Connection refused'),
         ):
-            facts, usage = await _extract_facts_from_chunk(
+            facts = await _extract_facts_from_chunk(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -289,7 +254,6 @@ class TestExtractFactsFromChunkMalformedOutput:
                 predictor=mock_predictor,
             )
             assert facts == []
-            assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_runtime_error_non_context_returns_empty(
@@ -300,7 +264,7 @@ class TestExtractFactsFromChunkMalformedOutput:
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=RuntimeError('unexpected internal error'),
         ):
-            facts, usage = await _extract_facts_from_chunk(
+            facts = await _extract_facts_from_chunk(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -310,7 +274,6 @@ class TestExtractFactsFromChunkMalformedOutput:
                 predictor=mock_predictor,
             )
             assert facts == []
-            assert usage.total_tokens is None
 
     @pytest.mark.asyncio
     async def test_runtime_error_context_length_raises_output_too_long(
@@ -342,9 +305,9 @@ class TestExtractFactsWithAutoSplit:
     ) -> None:
         """Test simple case where no splitting is required."""
         with patch('memex_core.memory.extraction.core._extract_facts_from_chunk') as mock_extract:
-            mock_extract.return_value = ([sample_raw_fact], MagicMock())
+            mock_extract.return_value = [sample_raw_fact]
 
-            facts, _ = await _extract_facts_with_auto_split(
+            facts = await _extract_facts_with_auto_split(
                 chunk='test chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -367,11 +330,11 @@ class TestExtractFactsWithAutoSplit:
             # First call raises exception, subsequent calls return facts
             mock_extract.side_effect = [
                 OutputTooLongException(),  # Main chunk fails
-                ([sample_raw_fact], MagicMock(total_tokens=10)),  # First half succeeds
-                ([sample_raw_fact], MagicMock(total_tokens=10)),  # Second half succeeds
+                [sample_raw_fact],  # First half succeeds
+                [sample_raw_fact],  # Second half succeeds
             ]
 
-            facts, usage = await _extract_facts_with_auto_split(
+            facts = await _extract_facts_with_auto_split(
                 chunk='long chunk',
                 chunk_index=0,
                 total_chunks=1,
@@ -382,7 +345,6 @@ class TestExtractFactsWithAutoSplit:
             )
 
             assert len(facts) == 2  # One from each half
-            assert usage.total_tokens == 20  # Sum of usage
             assert mock_extract.call_count == 3
 
     @pytest.mark.asyncio
@@ -400,12 +362,12 @@ class TestExtractFactsWithAutoSplit:
             mock_extract.side_effect = [
                 OutputTooLongException(),  # Root
                 OutputTooLongException(),  # Left Child
-                ([sample_raw_fact], MagicMock(total_tokens=1)),  # Left-Left
-                ([sample_raw_fact], MagicMock(total_tokens=1)),  # Left-Right
-                ([sample_raw_fact], MagicMock(total_tokens=1)),  # Right Child
+                [sample_raw_fact],  # Left-Left
+                [sample_raw_fact],  # Left-Right
+                [sample_raw_fact],  # Right Child
             ]
 
-            facts, usage = await _extract_facts_with_auto_split(
+            facts = await _extract_facts_with_auto_split(
                 chunk='test ' * 20,
                 chunk_index=0,
                 total_chunks=1,
@@ -416,7 +378,6 @@ class TestExtractFactsWithAutoSplit:
             )
 
             assert len(facts) == 3
-            assert usage.total_tokens == 3
             assert mock_extract.call_count == 5
 
 
@@ -431,9 +392,9 @@ class TestExtractFactsFromText:
         with patch(
             'memex_core.memory.extraction.core._extract_facts_with_auto_split'
         ) as mock_split_extract:
-            mock_split_extract.return_value = ([sample_raw_fact], MagicMock(total_tokens=10))
+            mock_split_extract.return_value = [sample_raw_fact]
 
-            facts, metadata, usage = await extract_facts_from_text(
+            facts, metadata = await extract_facts_from_text(
                 text='chunk1 chunk2',
                 event_date=dt.datetime.now(),
                 lm=mock_lm,
@@ -444,7 +405,6 @@ class TestExtractFactsFromText:
             )
 
             assert len(facts) > 0
-            assert (usage.total_tokens or 0) > 0
             assert mock_split_extract.call_count >= 1
 
     @pytest.mark.asyncio
@@ -455,9 +415,9 @@ class TestExtractFactsFromText:
         with patch(
             'memex_core.memory.extraction.core._extract_facts_with_auto_split'
         ) as mock_split_extract:
-            mock_split_extract.return_value = ([], MagicMock(total_tokens=0))
+            mock_split_extract.return_value = []
 
-            facts, metadata, usage = await extract_facts_from_text(
+            facts, metadata = await extract_facts_from_text(
                 text='',
                 event_date=dt.datetime.now(),
                 lm=mock_lm,
@@ -468,7 +428,6 @@ class TestExtractFactsFromText:
             )
 
             assert facts == []
-            assert usage.total_tokens in (0, None)
             # Metadata might contain one entry for the empty chunk depending on implementation
             # Current implementation: chunk_text returns [""] -> loop runs once -> metadata has 1 entry
             # But if the mock prevents the loop from running, metadata might be empty

@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from uuid import UUID
 
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
-from memex_core.memory.sql_models import TokenUsage
 
 
 def parse_ndjson(text: str):
@@ -53,7 +52,6 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         mock_extract.return_value = (
             [fact_org],
             [ChunkMetadata(chunk_text='...', fact_count=1, content_index=0, chunk_index=0)],
-            TokenUsage(total_tokens=10),
         )
 
         resp = client.post(
@@ -89,7 +87,6 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         mock_extract.return_value = (
             [fact_tech],
             [ChunkMetadata(chunk_text='...', fact_count=1, content_index=0, chunk_index=0)],
-            TokenUsage(total_tokens=10),
         )
 
         resp = client.post(
