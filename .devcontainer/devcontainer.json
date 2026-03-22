@@ -26,7 +26,8 @@
           "kokakiwi.vscode-just",
           "bierner.markdown-mermaid",
           "TendouAlice.markdown-obsidian-callout",
-          "MrtCtl.smartnotebook"
+          "MrtCtl.smartnotebook",
+          "cweijan.vscode-postgresql-client2"
         ],
         "settings": {
           "python.pythonPath": "/home/vscode/.venv/bin/python"

@@ -74,7 +74,7 @@ Each entry in `keys` is an `ApiKeyConfig`:
 
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `key` | string | *(required)* | The API key secret. Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `key` | string | *(required)* | The API key secret, or `env:VAR_NAME` to read from an environment variable. Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `policy` | string | *(required)* | Access policy: `reader` (read only), `writer` (read + write), or `admin` (full access including delete). |
 | `vault_ids` | list[string] \| null | `null` | Vault IDs or names this key is scoped to. `null` = all vaults. |
 | `description` | string \| null | `null` | Human-readable label for this key. |

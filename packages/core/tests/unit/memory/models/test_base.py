@@ -8,7 +8,7 @@ from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
 
 class TestModelDownloader:
     def test_init(self) -> None:
-        downloader = ModelDownloader('repo/id', 'app-name')
+        downloader = ModelDownloader('repo/id', app_name='app-name')
         assert downloader.repo_id == 'repo/id'
         assert downloader.app_name == 'app-name'
         assert 'repo__id' in str(downloader.cache_dir)
