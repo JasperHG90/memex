@@ -15,27 +15,22 @@ COPY packages/eval/pyproject.toml   packages/eval/pyproject.toml
 # dummy READMEs so hatchling doesn't fail
 RUN mkdir -p packages/common packages/core packages/cli packages/mcp packages/eval \
     && touch packages/common/README.md packages/core/README.md \
-             packages/cli/README.md packages/mcp/README.md packages/eval/README.md
+             packages/cli/README.md packages/mcp/README.md \
+             packages/eval/README.md
 
 # 1b — install third-party deps only (cached until lock changes)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-workspace --no-dev
+    uv sync --frozen --no-install-workspace --no-dev \
+    --package memex-common --package memex-core --package memex-cli
 
-# 1c — copy source + install workspace packages
+# 1c — copy source + install workspace packages (server only)
 COPY packages/common/src packages/common/src
 COPY packages/core/src   packages/core/src
 COPY packages/cli/src    packages/cli/src
-COPY packages/mcp/src    packages/mcp/src
-COPY packages/eval/src   packages/eval/src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
-
-# 1d — pre-download ML models into the image to avoid first-startup race
-RUN uv run python -c "from memex_core.memory.models.base import ModelDownloader; \
-    ModelDownloader('JasperHG90/minilm-l12-v2-hindsight-embeddings').download(); \
-    ModelDownloader('JasperHG90/ms-marco-minilm-l12-hindsight-reranker').download(); \
-    ModelDownloader('JasperHG90/distilbert-hindsight-ner').download()"
+    uv sync --frozen --no-dev \
+    --package memex-common --package memex-core --package memex-cli
 
 # Stage 2 — slim runtime
 FROM python:3.12-slim
@@ -43,7 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 && rm -r
 WORKDIR /app
 COPY --from=uv /app/.venv /app/.venv
 COPY --from=uv /app/packages /app/packages
-COPY --from=uv /root/.cache/memex /root/.cache/memex
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
