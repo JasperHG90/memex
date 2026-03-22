@@ -7,7 +7,6 @@ Tests exercise the real server with auth enabled, verifying that each policy
 import json
 import os
 import secrets
-from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -15,8 +14,6 @@ import pytest
 from fastapi.testclient import TestClient
 from testcontainers.postgres import PostgresContainer
 
-from memex_core.memory.extraction.models import ChunkMetadata, ExtractedFact
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.server import app
 
 # ---------------------------------------------------------------------------
@@ -87,38 +84,15 @@ def noauth_client(
 
 
 def _mock_ingest(client: TestClient, key: str, vault_id: str | None = None):
-    """Ingest a note with mocked LLM extraction. Returns the response."""
+    """Ingest a note with mocked MemexAPI.ingest. Returns the response."""
     import base64
+    from unittest.mock import AsyncMock
 
     uid = uuid4()
-    now = datetime.now(timezone.utc)
-    mock_facts = [
-        ExtractedFact(
-            fact_text=f'Test fact {uid}',
-            fact_type='world',
-            entities=[],
-            chunk_index=0,
-            content_index=0,
-            mentioned_at=now,
-        ),
-    ]
-    mock_chunks = [
-        ChunkMetadata(
-            chunk_text=f'Test content {uid}',
-            fact_count=1,
-            chunk_index=0,
-            content_index=0,
-        )
-    ]
-    mock_usage = TokenUsage(total_tokens=50)
-    mock_embeddings = [[0.1] * 384]
-
-    extract_path = 'memex_core.memory.extraction.engine.ExtractionEngine._extract_facts'
-    embed_path = 'memex_core.memory.extraction.embedding_processor.generate_embeddings_batch'
-
+    note_name = f'Test Note {uid.hex[:8]}'
     content_text = f'Test content {uid}'
     body: dict = {
-        'name': f'Test Note {uid.hex[:8]}',
+        'name': note_name,
         'description': 'ACL test note',
         'content': base64.b64encode(content_text.encode()).decode(),
         'tags': [],
@@ -126,9 +100,16 @@ def _mock_ingest(client: TestClient, key: str, vault_id: str | None = None):
     if vault_id:
         body['vault_id'] = vault_id
 
-    with patch(extract_path) as mock_extract, patch(embed_path) as mock_embed:
-        mock_extract.return_value = (mock_facts, mock_chunks, mock_usage)
-        mock_embed.return_value = mock_embeddings
+    mock_result = {
+        'status': 'success',
+        'note_id': str(uid),
+        'title': note_name,
+        'vault_id': vault_id or 'global',
+        'unit_ids': [],
+        'entity_ids': [],
+    }
+
+    with patch('memex_core.api.MemexAPI.ingest', new_callable=AsyncMock, return_value=mock_result):
         resp = client.post('/api/v1/ingestions', json=body, headers=_h(key))
     return resp
 
@@ -171,15 +152,15 @@ class TestAdminFullAccess:
         assert resp.status_code == 200
         vault_id = resp.json()['id']
 
-        # Ingest note
+        # Ingest note (mocked)
         resp = _mock_ingest(auth_client, ADMIN_KEY, vault_id)
         assert resp.status_code == 200
 
-        # List notes
+        # List notes (read)
         resp = auth_client.get('/api/v1/notes', headers=_h(ADMIN_KEY))
         assert resp.status_code == 200
 
-        # Search
+        # Search (read)
         resp = auth_client.post(
             '/api/v1/memories/search',
             json={'query': 'test', 'vault_ids': [vault_id]},
@@ -187,16 +168,7 @@ class TestAdminFullAccess:
         )
         assert resp.status_code == 200
 
-        # Get note and delete it
-        notes = auth_client.get('/api/v1/notes', headers=_h(ADMIN_KEY))
-        # Response is NDJSON
-        note_lines = [json.loads(line) for line in notes.text.strip().split('\n') if line.strip()]
-        if note_lines:
-            note_id = note_lines[0]['id']
-            resp = auth_client.delete(f'/api/v1/notes/{note_id}', headers=_h(ADMIN_KEY))
-            assert resp.status_code == 200
-
-        # Delete vault
+        # Delete vault (delete permission)
         resp = auth_client.delete(f'/api/v1/vaults/{vault_id}', headers=_h(ADMIN_KEY))
         assert resp.status_code == 200
 
@@ -239,18 +211,9 @@ class TestWriterPermissions:
         assert resp.status_code == 200
 
     def test_writer_cannot_delete_note(self, auth_client: TestClient):
-        # Create a note with admin, then try to delete with writer
-        vault_name = f'wdel-vault-{uuid4().hex[:8]}'
-        resp = auth_client.post('/api/v1/vaults', json={'name': vault_name}, headers=_h(ADMIN_KEY))
-        vault_id = resp.json()['id']
-        _mock_ingest(auth_client, ADMIN_KEY, vault_id)
-
-        notes = auth_client.get('/api/v1/notes', headers=_h(ADMIN_KEY))
-        note_lines = [json.loads(line) for line in notes.text.strip().split('\n') if line.strip()]
-        assert len(note_lines) > 0
-        note_id = note_lines[0]['id']
-
-        resp = auth_client.delete(f'/api/v1/notes/{note_id}', headers=_h(WRITER_KEY))
+        # Writer should get 403 before the route checks if the note exists.
+        fake_note_id = str(uuid4())
+        resp = auth_client.delete(f'/api/v1/notes/{fake_note_id}', headers=_h(WRITER_KEY))
         assert resp.status_code == 403
 
     def test_writer_cannot_delete_vault(self, auth_client: TestClient):

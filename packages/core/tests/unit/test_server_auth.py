@@ -112,6 +112,23 @@ class TestAuthConfig:
         with pytest.raises(ValueError, match='api_keys.*replaced.*keys'):
             AuthConfig(api_keys=[SecretStr('old-key')])
 
+    def test_env_key_resolution(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {'MY_TEST_KEY': 'resolved-secret'}):
+            config = AuthConfig(keys=[{'key': 'env:MY_TEST_KEY', 'policy': 'admin'}])
+            assert config.keys[0].key.get_secret_value() == 'resolved-secret'
+
+    def test_env_key_missing_raises(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('NONEXISTENT_KEY', None)
+            with pytest.raises(ValueError, match='NONEXISTENT_KEY.*not set'):
+                ApiKeyConfig(key='env:NONEXISTENT_KEY', policy='admin')
+
 
 # ---------------------------------------------------------------------------
 # _validate_key tests
