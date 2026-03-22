@@ -228,7 +228,7 @@ class TestExtractTitleViaLlm:
         with patch(
             'memex_core.processing.titles.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_title_via_llm('Some content about a topic.', mock_lm)
 
@@ -243,7 +243,7 @@ class TestExtractTitleViaLlm:
         with patch(
             'memex_core.processing.titles.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_title_via_llm('Some content.', mock_lm)
 
@@ -258,7 +258,7 @@ class TestExtractTitleViaLlm:
         with patch(
             'memex_core.processing.titles.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_title_via_llm('Some content.', mock_lm)
 
@@ -292,7 +292,7 @@ class TestExtractTitleViaLlm:
         with patch(
             'memex_core.processing.titles.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_prediction, MagicMock()),
+            return_value=mock_prediction,
         ):
             result = await extract_title_via_llm('Content.', mock_lm)
 

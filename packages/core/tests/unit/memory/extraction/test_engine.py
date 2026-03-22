@@ -14,7 +14,6 @@ from memex_core.memory.extraction.models import (
     FactTypes,
     ProcessedFact,
 )
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.entity_resolver import EntityResolver
 
 
@@ -62,11 +61,9 @@ def extractor(mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolve
 
     @pytest.mark.asyncio
     async def test_extract_and_persist_empty(extractor, mock_session):
-        ids, usage, touched = await extractor.extract_and_persist(mock_session, [])
+        ids, touched = await extractor.extract_and_persist(mock_session, [])
 
         assert ids == []
-
-        assert usage.total_tokens is None
 
         assert touched == set()
 
@@ -88,9 +85,7 @@ async def test_extract_and_persist_flow(extractor, mock_session):
     chunk_meta = ChunkMetadata(chunk_text='Chunk', fact_count=1, content_index=0, chunk_index=0)
 
     # Patch internal methods to isolate orchestration logic
-    extractor._extract_facts = AsyncMock(
-        return_value=([extracted_fact], [chunk_meta], TokenUsage(total_tokens=10))
-    )
+    extractor._extract_facts = AsyncMock(return_value=([extracted_fact], [chunk_meta]))
     extractor._resolve_entities = AsyncMock(return_value={uuid4()})
     # Patch deduplication to avoid actual DB calls and force no-duplicate result
     with patch(
@@ -133,12 +128,11 @@ async def test_extract_and_persist_flow(extractor, mock_session):
             mock_store_chunks.return_value = {0: str(uuid4())}
 
             contents = [RetainContent(content='Test Content')]
-            ids, usage, touched = await extractor.extract_and_persist(
+            ids, touched = await extractor.extract_and_persist(
                 mock_session, contents, note_id=str(uuid4())
             )
 
             assert len(ids) == 1
-            assert usage.total_tokens == 10
             assert len(touched) == 1
             extractor._extract_facts.assert_called_once()
             assert mock_proc_emb.call_count >= 1

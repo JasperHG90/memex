@@ -12,7 +12,6 @@ from memex_core.memory.extraction.core import (
     extract_facts_from_frontmatter,
 )
 from memex_core.memory.extraction.models import ExtractedOutput, RawFact, Entity
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.types import FactTypes, FactKindTypes
 
 
@@ -66,15 +65,13 @@ class TestExtractFactsFromFrontmatter:
         mock_output = MagicMock()
         mock_output.extracted_facts = ExtractedOutput(extracted_facts=[mock_fact])
 
-        mock_usage = TokenUsage()
-
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_output, mock_usage),
+            return_value=mock_output,
         ):
             lm = MagicMock(spec=dspy.LM)
-            facts, usage = await extract_facts_from_frontmatter(
+            facts = await extract_facts_from_frontmatter(
                 frontmatter_text='---\ncreated_by: Jasper Ginn\ncreated_date: 2025-05-24\n---\n',
                 event_date=dt.datetime(2025, 5, 24),
                 lm=lm,
@@ -93,14 +90,13 @@ class TestExtractFactsFromFrontmatter:
             side_effect=Exception('LLM call failed'),
         ):
             lm = MagicMock(spec=dspy.LM)
-            facts, usage = await extract_facts_from_frontmatter(
+            facts = await extract_facts_from_frontmatter(
                 frontmatter_text='---\ncreated_by: Test\n---\n',
                 event_date=dt.datetime(2025, 1, 1),
                 lm=lm,
             )
 
         assert facts == []
-        assert isinstance(usage, TokenUsage)
 
     @pytest.mark.asyncio
     async def test_not_called_without_frontmatter(self):
@@ -116,19 +112,17 @@ class TestExtractFactsFromFrontmatter:
         """Frontmatter with only unrelated fields still works (no crash)."""
         mock_output = MagicMock()
         mock_output.extracted_facts = ExtractedOutput(extracted_facts=[])
-        mock_usage = TokenUsage()
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             new_callable=AsyncMock,
-            return_value=(mock_output, mock_usage),
+            return_value=mock_output,
         ):
             lm = MagicMock(spec=dspy.LM)
-            facts, usage = await extract_facts_from_frontmatter(
+            facts = await extract_facts_from_frontmatter(
                 frontmatter_text='---\ntags: [python, ai]\nstatus: draft\n---\n',
                 event_date=dt.datetime(2025, 1, 1),
                 lm=lm,
             )
 
         assert facts == []
-        assert isinstance(usage, TokenUsage)

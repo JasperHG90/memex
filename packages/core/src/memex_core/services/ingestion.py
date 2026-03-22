@@ -162,11 +162,7 @@ publish_date: {extracted.metadata.get('date')}
         # Resolve document date: web metadata -> LLM fallback -> now()
         event_date = extracted.document_date
         if event_date is None:
-            async with self.metastore.session() as date_session:
-                event_date = await extract_document_date(
-                    extracted.content, self.lm, date_session, target_vault_id
-                )
-                await date_session.commit()
+            event_date = await extract_document_date(extracted.content, self.lm)
 
         return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
 
@@ -252,12 +248,7 @@ ingested_at: {now}
         # 2. PDF metadata creation date
         # 3. File processor's document_date (mtime)
         # 4. Final fallback to now()
-        event_date = None
-        async with self.metastore.session() as date_session:
-            event_date = await extract_document_date(
-                extracted.content, self.lm, date_session, target_vault_id
-            )
-            await date_session.commit()
+        event_date = await extract_document_date(extracted.content, self.lm)
 
         # 2. PDF metadata creation date
         if event_date is None:
@@ -332,19 +323,13 @@ ingested_at: {now}
                 content_text,
                 note._metadata.name,
                 self.lm,
-                session=txn.db_session,
-                vault_id=target_vault_id,
             )
 
             # Resolve event_date: passed value -> frontmatter -> LLM -> now()
             if event_date is None:
                 event_date = _extract_date_from_frontmatter(content_text)
             if event_date is None:
-                async with self.metastore.session() as date_session:
-                    event_date = await extract_document_date(
-                        content_text, self.lm, date_session, target_vault_id
-                    )
-                    await date_session.commit()
+                event_date = await extract_document_date(content_text, self.lm)
             if event_date is None:
                 event_date = datetime.now(timezone.utc)
 
@@ -478,8 +463,6 @@ ingested_at: {now}
                             decoded_content,
                             note_dto.name,
                             self.lm,
-                            session=txn.db_session,
-                            vault_id=target_vault_id,
                         )
 
                         # Extract date from frontmatter, fall back to now()

@@ -182,11 +182,10 @@ class MemoryEngine:
         Returns:
             Dictionary containing:
             - unit_ids: List of created MemoryUnit IDs.
-            - usage: TokenUsage statistics.
             - touched_entities: Set of entity IDs that were involved.
         """
         # 1. Extraction Phase
-        unit_ids, usage, touched_entities = await self.extraction.extract_and_persist(
+        unit_ids, touched_entities = await self.extraction.extract_and_persist(
             session=session,
             contents=contents,
             agent_name=agent_name,
@@ -198,7 +197,6 @@ class MemoryEngine:
         if not touched_entities:
             return {
                 'unit_ids': unit_ids,
-                'usage': usage,
                 'touched_entities': touched_entities,
             }
 
@@ -249,7 +247,6 @@ class MemoryEngine:
 
         return {
             'unit_ids': unit_ids,
-            'usage': usage,
             'touched_entities': touched_entities,
             'contradiction_task': contradiction_task,
         }

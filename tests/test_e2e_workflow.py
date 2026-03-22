@@ -8,7 +8,6 @@ from uuid import UUID
 import pytest
 
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
-from memex_core.memory.sql_models import TokenUsage
 
 
 def parse_ndjson(text: str):
@@ -62,8 +61,6 @@ def test_workflow_ingest_retrieve(client: TestClient):
             content_index=0,
         )
     ]
-    mock_usage = TokenUsage(total_tokens=100)
-
     # 384 dimensions
     mock_embeddings = [[0.1] * 384] * len(mock_facts)
 
@@ -73,7 +70,7 @@ def test_workflow_ingest_retrieve(client: TestClient):
 
     with patch(extract_path) as mock_extract, patch(embed_path) as mock_embed:
         # Configure Mocks
-        mock_extract.return_value = (mock_facts, mock_chunks, mock_usage)
+        mock_extract.return_value = (mock_facts, mock_chunks)
         mock_embed.return_value = mock_embeddings
 
         # 2. Ingest Note

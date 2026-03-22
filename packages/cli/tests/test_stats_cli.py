@@ -1,6 +1,5 @@
 from memex_cli.stats import app as stats_app
-from memex_common.schemas import SystemStatsCountsDTO, TokenUsageResponse, TokenUsageStatDTO
-from datetime import datetime, timezone
+from memex_common.schemas import SystemStatsCountsDTO
 
 
 def test_stats_system(runner, mock_api, monkeypatch):
@@ -9,18 +8,8 @@ def test_stats_system(runner, mock_api, monkeypatch):
     )
     monkeypatch.setattr('memex_cli.stats.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(stats_app, ['system'])
+    # With only one command, Typer auto-promotes it (no subcommand needed)
+    result = runner.invoke(stats_app, [])
     assert result.exit_code == 0
     assert '100' in result.stdout
     assert '50' in result.stdout
-
-
-def test_stats_tokens(runner, mock_api, monkeypatch):
-    mock_api.get_token_usage.return_value = TokenUsageResponse(
-        usage=[TokenUsageStatDTO(date=datetime.now(timezone.utc).date(), total_tokens=1500)]
-    )
-    monkeypatch.setattr('memex_cli.stats.get_api_context', lambda config: mock_api)
-
-    result = runner.invoke(stats_app, ['tokens'])
-    assert result.exit_code == 0
-    assert '1,500' in result.stdout

@@ -4,11 +4,8 @@ import time
 from typing import Any, TypeVar
 
 import dspy
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
-from memex_core.context import get_session_id
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.metrics import (
     LLM_CALLS_TOTAL,
     LLM_CALL_DURATION_SECONDS,
@@ -53,28 +50,22 @@ async def run_dspy_operation(
     lm: dspy.LM,
     predictor: dspy.Module,
     input_kwargs: dict[str, Any],
-    session: AsyncSession | None = None,
-    context_metadata: dict | None = None,
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: Any | None = None,
-) -> tuple[Any, TokenUsage]:
+) -> Any:
     """
-    Executes a DSPy predictor, extracts token usage, and optionally logs it to DB.
+    Executes a DSPy predictor with circuit breaker and metrics.
 
-    This wrapper isolates the LM history by copying the LM object, ensuring that
-    token usage can be accurately extracted for a specific call even in concurrent environments.
+    LLM call observability (token usage, latency, prompts) is handled by
+    OpenTelemetry auto-instrumentation of LiteLLM when tracing is enabled.
 
     Args:
         lm: The DSPy LM instance to use.
         predictor: The configured DSPy predictor (or ChainOfThought/Program).
         input_kwargs: Dictionary of arguments to pass to the predictor.
-        session: SQLModel AsyncSession. Required if usage logging is desired.
-        context_metadata: Additional metadata for the log (e.g. {'operation': 'extract'}).
         semaphore: Optional semaphore for concurrency control.
-        vault_id: Optional UUID of the vault to associate with the usage log.
 
     Returns:
-        tuple(result, TokenUsage)
+        The predictor result.
     """
 
     # Check circuit breaker before attempting the LLM call
@@ -94,11 +85,9 @@ async def run_dspy_operation(
 
     async def _execute():
         with dspy.context(lm=lm_):
-            # We use acall if available, or fallback to the predictor itself
             if hasattr(predictor, 'acall'):
                 return await predictor.acall(**input_kwargs)
             else:
-                # Predictors in older dspy might not have acall
                 return await asyncio.to_thread(predictor, **input_kwargs)
 
     try:
@@ -108,7 +97,6 @@ async def run_dspy_operation(
         else:
             result = await asyncio.wait_for(_execute(), timeout=_llm_timeout_seconds)
 
-        # Record success with circuit breaker
         await _circuit_breaker.record_success()
 
         elapsed = time.monotonic() - start
@@ -116,55 +104,11 @@ async def run_dspy_operation(
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
-        # Extract Usage
-        token_usage = TokenUsage()
-        model_name = lm_.model
-        is_cached = False
-
-        if lm_.history:
-            last_run = lm_.history[-1]
-            usage_data = last_run.get('usage', {})
-
-            resp_obj = last_run.get('response')
-            if resp_obj and hasattr(resp_obj, 'cache_hit') and resp_obj.cache_hit:
-                is_cached = True
-
-            # Handle different adapter formats for usage
-            # Preserve None if stats are not reported
-            token_usage = TokenUsage(
-                input_tokens=usage_data.get('prompt_tokens'),
-                output_tokens=usage_data.get('completion_tokens'),
-                total_tokens=usage_data.get('total_tokens'),
-                is_cached=is_cached,
-                models=[model_name] if model_name else [],
-                cost=usage_data.get('cost'),
-            )
-
-            if vault_id:
-                token_usage.vault_id = vault_id
-
-            # Log to DB if session is provided and requested
-            if session is not None:
-                try:
-                    # Reuse the metadata that includes the 'cached' flag
-                    db_metadata = context_metadata or {}
-                    if is_cached and 'cached' not in db_metadata:
-                        db_metadata = db_metadata.copy()
-                        db_metadata['cached'] = True
-
-                    token_usage.session_id = get_session_id()
-                    token_usage.context_metadata = db_metadata
-
-                    session.add(token_usage)
-                    # Note: The caller is expected to commit the session later.
-                except (ValueError, RuntimeError, OSError, KeyError) as db_err:
-                    logger.warning(f'Failed to stage token usage log: {db_err}')
-
         # Clear LM history to prevent memory accumulation
         if hasattr(lm_, 'history'):
             lm_.history.clear()
 
-        return result, token_usage
+        return result
 
     except asyncio.TimeoutError:
         await _circuit_breaker.record_failure()
@@ -180,7 +124,6 @@ async def run_dspy_operation(
         )
 
     except (ValueError, RuntimeError, OSError, KeyError) as e:
-        # Record failure with circuit breaker
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start

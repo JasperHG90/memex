@@ -741,19 +741,6 @@ class SystemStatsCountsDTO(BaseModel):
     reflection_queue: int = Field(description='Number of items in the reflection queue.')
 
 
-class TokenUsageStatDTO(BaseModel):
-    """Token usage for a specific date."""
-
-    date: dt.date
-    total_tokens: int
-
-
-class TokenUsageResponse(BaseModel):
-    """Daily aggregated token usage response."""
-
-    usage: list[TokenUsageStatDTO]
-
-
 class NodeDTO(BaseModel):
     """DTO for a note node (section produced by PageIndex)."""
 

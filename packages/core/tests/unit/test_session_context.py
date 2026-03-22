@@ -3,23 +3,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from memex_core.context import set_session_id
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.extraction import storage
-
-
-@pytest.mark.asyncio
-async def test_token_usage_session_id_default():
-    """Verify TokenUsage uses the current session ID by default."""
-    custom_sid = 'test-session-123'
-    set_session_id(custom_sid)
-
-    usage = TokenUsage(input_tokens=10)
-    assert usage.session_id == custom_sid
-
-    # Reset to global
-    set_session_id('global')
-    usage_global = TokenUsage(input_tokens=5)
-    assert usage_global.session_id == 'global'
 
 
 @pytest.mark.asyncio

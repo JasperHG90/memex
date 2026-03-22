@@ -15,7 +15,6 @@ import pytest
 
 from memex_core.memory.extraction.core import _extract_facts_from_chunk
 from memex_core.memory.extraction.models import ExtractedOutput, RawFact
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.types import FactTypes, FactKindTypes
 
 # ---------------------------------------------------------------------------
@@ -39,14 +38,6 @@ GOLDEN_EXTRACTION = ExtractedOutput(
     extracted_facts=GOLDEN_FACTS,
 )
 
-GOLDEN_USAGE = TokenUsage(
-    input_tokens=150,
-    output_tokens=80,
-    total_tokens=230,
-    is_cached=False,
-    models=['test-model/mock'],
-)
-
 
 def _make_extraction_result(output: ExtractedOutput) -> MagicMock:
     """Wrap an ExtractedOutput in a MagicMock matching run_dspy_operation's return."""
@@ -66,11 +57,11 @@ async def test_extract_facts_returns_golden_output(mock_dspy_lm):
     """Fact extraction returns the golden output when LLM is mocked."""
     mock_dspy_lm.set_responses(
         [
-            (_make_extraction_result(GOLDEN_EXTRACTION), GOLDEN_USAGE),
+            _make_extraction_result(GOLDEN_EXTRACTION),
         ]
     )
 
-    facts, usage = await _extract_facts_from_chunk(
+    facts = await _extract_facts_from_chunk(
         chunk='Python is widely used for data science and scripting.',
         chunk_index=0,
         total_chunks=1,
@@ -84,8 +75,6 @@ async def test_extract_facts_returns_golden_output(mock_dspy_lm):
     assert facts[0].what == 'Python is a popular programming language'
     assert facts[0].fact_type == FactTypes.WORLD
     assert facts[1].fact_type == FactTypes.EVENT
-    assert usage.input_tokens == 150
-    assert usage.total_tokens == 230
     assert mock_dspy_lm.call_count == 1
 
 
@@ -115,12 +104,12 @@ async def test_extract_facts_multiple_chunks(mock_dspy_lm):
 
     mock_dspy_lm.set_responses(
         [
-            (_make_extraction_result(chunk1_output), GOLDEN_USAGE),
-            (_make_extraction_result(chunk2_output), GOLDEN_USAGE),
+            _make_extraction_result(chunk1_output),
+            _make_extraction_result(chunk2_output),
         ]
     )
 
-    facts_1, _ = await _extract_facts_from_chunk(
+    facts_1 = await _extract_facts_from_chunk(
         chunk='chunk one text',
         chunk_index=0,
         total_chunks=2,
@@ -130,7 +119,7 @@ async def test_extract_facts_multiple_chunks(mock_dspy_lm):
         predictor=MagicMock(),
     )
 
-    facts_2, _ = await _extract_facts_from_chunk(
+    facts_2 = await _extract_facts_from_chunk(
         chunk='chunk two text',
         chunk_index=1,
         total_chunks=2,
@@ -162,7 +151,7 @@ async def test_add_response_dynamically(mock_dspy_lm):
     # Add a response after fixture creation
     mock_dspy_lm.add_response(_make_extraction_result(single_fact))
 
-    facts, usage = await _extract_facts_from_chunk(
+    facts = await _extract_facts_from_chunk(
         chunk='some text',
         chunk_index=0,
         total_chunks=1,
@@ -174,5 +163,3 @@ async def test_add_response_dynamically(mock_dspy_lm):
 
     assert len(facts) == 1
     assert facts[0].what == 'Dynamic fact'
-    # Default golden usage is used when no custom usage is provided
-    assert usage.input_tokens == 150

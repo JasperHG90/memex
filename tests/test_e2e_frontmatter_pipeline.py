@@ -19,7 +19,6 @@ from sqlalchemy import text as sql_text
 
 from memex_core.memory.extraction.core import extract_facts_from_frontmatter
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.services.ingestion import _extract_date_from_frontmatter
 
 
@@ -104,7 +103,7 @@ async def test_frontmatter_author_entity_extraction():
         '---\n'
     )
 
-    facts, _ = await extract_facts_from_frontmatter(
+    facts = await extract_facts_from_frontmatter(
         frontmatter_text=frontmatter_block,
         event_date=dt.datetime(2025, 5, 24, tzinfo=dt.timezone.utc),
         lm=lm,
@@ -185,7 +184,6 @@ def test_full_pipeline_frontmatter_to_memory_units(client: TestClient):
             content_index=0,
         )
     ]
-    mock_usage = TokenUsage(total_tokens=150)
     mock_embeddings = [[0.1] * 384] * len(mock_facts)
 
     extract_path = 'memex_core.memory.extraction.engine.ExtractionEngine._extract_facts'
@@ -202,7 +200,7 @@ def test_full_pipeline_frontmatter_to_memory_units(client: TestClient):
             return_value=vault_id,
         ),
     ):
-        mock_extract.return_value = (mock_facts, mock_chunks, mock_usage)
+        mock_extract.return_value = (mock_facts, mock_chunks)
         mock_embed.return_value = mock_embeddings
 
         payload = {

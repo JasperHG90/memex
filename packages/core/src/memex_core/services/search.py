@@ -98,15 +98,11 @@ class SearchService:
 
         predictor = dspy.Predict(SearchSummarySignature)
 
-        async with self.metastore.session() as session:
-            prediction, _ = await run_dspy_operation(
-                lm=self.lm,
-                predictor=predictor,
-                input_kwargs={'query': query, 'search_results': texts},
-                session=session,
-                context_metadata={'operation': 'search_summary'},
-            )
-            await session.commit()
+        prediction = await run_dspy_operation(
+            lm=self.lm,
+            predictor=predictor,
+            input_kwargs={'query': query, 'search_results': texts},
+        )
 
         return prediction.summary
 

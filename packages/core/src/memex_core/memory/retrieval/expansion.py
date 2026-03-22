@@ -1,9 +1,6 @@
 import dspy
 import logging
-from typing import Any
-from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.llm import run_dspy_operation
-from memex_core.memory.sql_models import TokenUsage
 
 logger = logging.getLogger('memex.core.memory.retrieval.expansion')
 
@@ -24,21 +21,16 @@ class QueryExpander:
         self.lm = lm
         self.predictor = dspy.Predict(QueryExpansionSignature)
 
-    async def expand(
-        self, query: str, session: AsyncSession | None = None, vault_id: Any | None = None
-    ) -> tuple[list[str], TokenUsage]:
+    async def expand(self, query: str) -> list[str]:
         """
         Generates expansion variations for the query.
-        Returns (variations, usage).
+        Returns variations.
         """
         try:
-            result, usage = await run_dspy_operation(
+            result = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.predictor,
                 input_kwargs={'query': query},
-                session=session,
-                context_metadata={'operation': 'query_expansion'},
-                vault_id=vault_id,
             )
 
             # Ensure we have a list and it's not empty
@@ -47,7 +39,7 @@ class QueryExpander:
                 variations = [str(variations)]
 
             # Limit to 1-2 variations as per strategy
-            return variations[:2], usage
+            return variations[:2]
         except (ValueError, RuntimeError, OSError, KeyError) as e:
             logger.warning(f'Query expansion failed: {e}. Falling back to original query.')
-            return [], TokenUsage()
+            return []

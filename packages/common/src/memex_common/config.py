@@ -590,11 +590,20 @@ POLICY_PERMISSIONS: dict[Policy, frozenset[Permission]] = {
 
 
 class ApiKeyConfig(BaseModel):
-    """An API key bound to a policy with optional vault scoping."""
+    """An API key bound to a policy with optional vault scoping.
+
+    The ``key`` field supports an ``env:VAR_NAME`` prefix to resolve the
+    secret from an environment variable instead of storing it in the YAML
+    config file.  Example::
+
+        keys:
+          - key: "env:MEMEX_ADMIN_KEY"
+            policy: admin
+    """
 
     key: SecretStr = Field(
         description=(
-            'The API key secret. '
+            'The API key secret, or "env:VAR_NAME" to read from an environment variable. '
             'Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
         ),
     )
@@ -607,6 +616,23 @@ class ApiKeyConfig(BaseModel):
         default=None,
         description='Human-readable label for this key.',
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def resolve_env_key(cls, data: Any) -> Any:
+        """Resolve ``env:VAR_NAME`` references in the key field."""
+        if isinstance(data, dict):
+            raw_key = data.get('key')
+            if isinstance(raw_key, str) and raw_key.startswith('env:'):
+                var_name = raw_key[4:]
+                value = os.environ.get(var_name)
+                if not value:
+                    raise ValueError(
+                        f'Environment variable {var_name!r} is not set '
+                        f'(referenced by key "env:{var_name}").'
+                    )
+                data = {**data, 'key': value}
+        return data
 
 
 class AuthConfig(BaseModel):
@@ -731,6 +757,27 @@ class CircuitBreakerConfig(BaseModel):
         default=60.0,
         description='Seconds to stay open before allowing a probe request.',
         gt=0,
+    )
+
+
+class TracingConfig(BaseModel):
+    """Configuration for OpenTelemetry tracing (e.g. Arize Phoenix, Jaeger, Grafana Tempo)."""
+
+    enabled: bool = Field(
+        default=False,
+        description='Whether OpenTelemetry tracing is enabled.',
+    )
+    endpoint: str = Field(
+        default='http://localhost:6006/v1/traces',
+        description='OTLP HTTP endpoint to send traces to.',
+    )
+    headers: dict[str, str] = Field(
+        default_factory=dict,
+        description='Optional headers for the OTLP exporter (e.g. auth tokens).',
+    )
+    service_name: str = Field(
+        default='memex',
+        description='Service name reported in traces.',
     )
 
 
@@ -880,6 +927,11 @@ class ServerConfig(BaseModel):
     document: DocumentConfig = Field(
         default_factory=DocumentConfig,
         description='Configuration for document search and processing.',
+    )
+
+    tracing: TracingConfig = Field(
+        default_factory=TracingConfig,
+        description='OpenTelemetry tracing configuration. Disabled by default.',
     )
 
     @model_validator(mode='after')
@@ -1082,6 +1134,7 @@ __all__ = [
     'RetrievalConfig',
     'ContradictionConfig',
     'MemoryConfig',
+    'TracingConfig',
     'ServerConfig',
     'DashboardConfig',
     'CHARS_PER_TOKEN',

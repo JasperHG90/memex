@@ -114,7 +114,7 @@ class ContradictionEngine:
         """Single LLM call to identify corrective units."""
         units_json = json.dumps([{'id': str(u.id), 'text': u.text} for u in units])
 
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=self.triage_predictor,
             input_kwargs={'units': units_json},
@@ -219,7 +219,7 @@ class ContradictionEngine:
             ]
         )
 
-        result, _ = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=self.lm,
             predictor=self.classify_predictor,
             input_kwargs={

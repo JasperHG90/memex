@@ -4,7 +4,6 @@ import logging
 import re
 import asyncio
 from typing import cast
-from uuid import UUID
 
 import dspy
 import regex as regex_lib
@@ -47,7 +46,6 @@ from memex_core.memory.extraction.utils import (
     sanitize_text,
     verify_headers,
 )
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.extraction.exceptions import OutputTooLongException
 from memex_core.llm import run_dspy_operation
 
@@ -105,12 +103,11 @@ async def extract_facts_from_frontmatter(
     event_date: dt.datetime,
     lm: dspy.LM,
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: UUID | None = None,
-) -> tuple[list[RawFact], TokenUsage]:
+) -> list[RawFact]:
     """Extract structured metadata facts from YAML frontmatter using LLM."""
     predictor = dspy.ChainOfThought(ExtractFrontmatterMetadata)
     try:
-        result, token_usage = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=lm,
             predictor=predictor,
             input_kwargs={
@@ -119,10 +116,10 @@ async def extract_facts_from_frontmatter(
             },
             semaphore=semaphore,
         )
-        return result.extracted_facts.extracted_facts, token_usage
+        return result.extracted_facts.extracted_facts
     except Exception as e:
         logger.error(f'Frontmatter extraction failed: {e}')
-        return [], TokenUsage()
+        return []
 
 
 async def _extract_facts_from_chunk(
@@ -135,8 +132,7 @@ async def _extract_facts_from_chunk(
     predictor: dspy.Predict,
     agent_name: str | None = None,
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: UUID | None = None,
-) -> tuple[list[RawFact], TokenUsage]:
+) -> list[RawFact]:
     """Extracts facts from a single chunk using DSPy."""
 
     rules = (
@@ -154,7 +150,7 @@ async def _extract_facts_from_chunk(
     )
 
     try:
-        result, token_usage = await run_dspy_operation(
+        result = await run_dspy_operation(
             lm=lm,
             predictor=predictor,
             input_kwargs={
@@ -164,12 +160,10 @@ async def _extract_facts_from_chunk(
                 'memory_context': f'Your name: {agent_name}' if agent_name else '',
                 'special_instructions': rules,
             },
-            # Session not available here
             semaphore=semaphore,
-            vault_id=vault_id,
         )
 
-        return result.extracted_facts.extracted_facts, token_usage
+        return result.extracted_facts.extracted_facts
 
     except OutputTooLongException:
         raise
@@ -184,7 +178,7 @@ async def _extract_facts_from_chunk(
             raise OutputTooLongException() from e
 
         logger.error(f'DSPy Extraction Failed for chunk {chunk_index}: {e}')
-        return [], TokenUsage()
+        return []
 
 
 def content_hash(text: str) -> str:
@@ -709,8 +703,7 @@ async def _extract_facts_with_auto_split(
     predictor: dspy.Predict,
     agent_name: str | None = None,
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: UUID | None = None,
-) -> tuple[list[RawFact], TokenUsage]:
+) -> list[RawFact]:
     """
     Wrapper that handles OutputTooLongError by splitting the chunk.
     """
@@ -725,7 +718,6 @@ async def _extract_facts_with_auto_split(
             predictor=predictor,
             agent_name=agent_name,
             semaphore=semaphore,
-            vault_id=vault_id,
         )
     except OutputTooLongException:
         logger.warning(f'Output too long for chunk {chunk_index + 1}. Splitting...')
@@ -746,7 +738,6 @@ async def _extract_facts_with_auto_split(
                 predictor=predictor,
                 agent_name=agent_name,
                 semaphore=semaphore,
-                vault_id=vault_id,
             ),
             _extract_facts_with_auto_split(
                 second_half,
@@ -758,19 +749,16 @@ async def _extract_facts_with_auto_split(
                 predictor=predictor,
                 agent_name=agent_name,
                 semaphore=semaphore,
-                vault_id=vault_id,
             ),
         ]
 
         sub_results = await asyncio.gather(*sub_tasks)
 
-        all_facts = []
-        total_usage = TokenUsage()
-        for sub_facts, sub_usage in sub_results:
+        all_facts: list[RawFact] = []
+        for sub_facts in sub_results:
             all_facts.extend(sub_facts)
-            total_usage = total_usage + sub_usage
 
-        return all_facts, total_usage
+        return all_facts
 
 
 def _convert_causal_relations(
@@ -800,8 +788,7 @@ async def extract_facts_from_chunks(
     agent_name: str,
     context: str = '',
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: UUID | None = None,
-) -> tuple[list[RawFact], list[tuple[str, int]], TokenUsage]:
+) -> tuple[list[RawFact], list[tuple[str, int]]]:
     """Extract facts from pre-chunked text segments in parallel."""
     tasks = [
         _extract_facts_with_auto_split(
@@ -814,7 +801,6 @@ async def extract_facts_from_chunks(
             predictor=predictor,
             agent_name=agent_name,
             semaphore=semaphore,
-            vault_id=vault_id,
         )
         for i, chunk in enumerate(chunks)
     ]
@@ -823,14 +809,12 @@ async def extract_facts_from_chunks(
 
     all_facts: list[RawFact] = []
     chunk_metadata: list[tuple[str, int]] = []
-    total_usage = TokenUsage()
 
-    for chunk, (chunk_facts, chunk_usage) in zip(chunks, chunk_results):
+    for chunk, chunk_facts in zip(chunks, chunk_results):
         all_facts.extend(chunk_facts)
         chunk_metadata.append((chunk, len(chunk_facts)))
-        total_usage = total_usage + chunk_usage
 
-    return all_facts, chunk_metadata, total_usage
+    return all_facts, chunk_metadata
 
 
 async def extract_facts_from_text(
@@ -843,8 +827,7 @@ async def extract_facts_from_text(
     chunk_overlap: int,
     context: str = '',
     semaphore: asyncio.Semaphore | None = None,
-    vault_id: UUID | None = None,
-) -> tuple[list[RawFact], list[tuple[str, int]], TokenUsage]:
+) -> tuple[list[RawFact], list[tuple[str, int]]]:
     """Backward-compatible: chunks text internally, then extracts."""
     # We prefer stable chunking to ensure consistency with incremental updates.
     # Note: stable_chunk_text ignores chunk_overlap, which is acceptable.
@@ -859,7 +842,6 @@ async def extract_facts_from_text(
         agent_name=agent_name,
         context=context,
         semaphore=semaphore,
-        vault_id=vault_id,
     )
 
 
@@ -879,7 +861,6 @@ class AsyncMarkdownPageIndex(dspy.Module):
     def __init__(self, lm: dspy.LM) -> None:
         super().__init__()
         self.lm = lm
-        self._total_usage = TokenUsage()
         self.scanner = dspy.ChainOfThought(ScanChunk)
         self.architect = dspy.ChainOfThought(OrganizeStructure)
         self.summarizer = dspy.ChainOfThought(SummarizeSection)
@@ -893,7 +874,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
         max_scan_tokens: int = 20_000,
         max_node_length: int = 5000,
         block_size: int = 1000,
-    ) -> tuple[PageIndexOutput, TokenUsage]:
+    ) -> PageIndexOutput:
         doc_length = len(full_text)
         self._logger.info(f'Document length: {doc_length} chars')
 
@@ -909,7 +890,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
             output = await self._llm_path(
                 full_text, regex_headers, quality, max_scan_tokens, max_node_length, block_size
             )
-        return output, self._total_usage
+        return output
 
     async def _fast_path(
         self,
@@ -1077,12 +1058,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
     ) -> list[DetectedHeader]:
         valid_headers: list[DetectedHeader] = []
         try:
-            pred, usage = await run_dspy_operation(
+            pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.scanner,
                 input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
             )
-            self._total_usage += usage
 
             for h in pred.detected_headers:
                 try:
@@ -1164,12 +1144,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
             for h in flat_headers
         ]
         try:
-            pred, usage = await run_dspy_operation(
+            pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.architect,
                 input_kwargs={'flat_headers_json': str(minified_input)},
             )
-            self._total_usage += usage
             max_id = len(flat_headers) - 1
             return filter_valid_nodes(pred.toc_tree, max_id)
         except (ValueError, RuntimeError, OSError, KeyError) as e:
@@ -1269,12 +1248,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
     async def _summarize_single_node(self, node: TOCNode) -> None:
         try:
             safe_content = node.content if node.content else ''
-            pred, usage = await run_dspy_operation(
+            pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.summarizer,
                 input_kwargs={'title': node.title, 'content': safe_content},
             )
-            self._total_usage += usage
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Summary failed for '{node.title}': {e}")
@@ -1289,7 +1267,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     f"[Section header only: '{node.title}']\nChild sections: {children_titles}"
                 )
 
-            pred, usage = await run_dspy_operation(
+            pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.parent_summarizer,
                 input_kwargs={
@@ -1298,7 +1276,6 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     'children_titles': children_titles,
                 },
             )
-            self._total_usage += usage
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Parent summary failed for '{node.title}': {e}")
@@ -1333,12 +1310,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self, block: PageIndexBlock, section_summaries_text: str
     ) -> None:
         try:
-            pred, usage = await run_dspy_operation(
+            pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.block_summarizer,
                 input_kwargs={'section_summaries': section_summaries_text},
             )
-            self._total_usage += usage
             summary = pred.block_summary
             summary.key_points = [kp.rstrip('.;:, ') for kp in summary.key_points]
             block.summary = summary
@@ -1357,7 +1333,7 @@ async def index_document(
     max_node_length: int = 5000,
     block_token_target: int = 1000,
     short_doc_threshold: int = 2000,
-) -> tuple[PageIndexOutput, TokenUsage]:
+) -> PageIndexOutput:
     """Top-level function to index a document using PageIndex.
 
     Handles short-document bypass and delegates to AsyncMarkdownPageIndex
@@ -1372,7 +1348,7 @@ async def index_document(
         short_doc_threshold: Documents below this with no headers bypass PageIndex.
 
     Returns:
-        Tuple of PageIndexOutput and TokenUsage for all LLM calls made.
+        PageIndexOutput with TOC tree, blocks, and coverage information.
     """
     # Short-document bypass
     regex_headers = detect_markdown_headers_regex(full_text)
@@ -1405,7 +1381,7 @@ async def index_document(
             node_to_block_map={node.id: block.id},
             coverage_ratio=1.0,
             path_used='short_doc_bypass',
-        ), TokenUsage()
+        )
 
     # Full PageIndex
     indexer = AsyncMarkdownPageIndex(lm=lm)

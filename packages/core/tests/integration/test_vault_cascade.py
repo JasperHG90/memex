@@ -5,7 +5,6 @@ from memex_core.memory.sql_models import (
     Note,
     MemoryUnit,
     MentalModel,
-    TokenUsage,
     ReflectionQueue,
     Chunk,
     Entity,
@@ -90,18 +89,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     )
     session.add(mental_model)
 
-    # TokenUsage
-    tu_id = uuid.uuid4()
-    token_usage = TokenUsage(
-        id=tu_id,
-        vault_id=vault_id,
-        models=['test-model'],
-        input_tokens=10,
-        output_tokens=10,
-        total_tokens=20,
-    )
-    session.add(token_usage)
-
     # ReflectionQueue (depends on Entity and Vault)
     rq_id = uuid.uuid4()
     reflection_queue = ReflectionQueue(
@@ -121,7 +108,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     assert await session.get(MemoryUnit, unit_id)
     assert await session.get(Entity, entity_id)
     assert await session.get(MentalModel, mm_id)
-    assert await session.get(TokenUsage, tu_id)
     assert await session.get(ReflectionQueue, rq_id)
 
     # 4. Create Global Vault entities (Control group)
@@ -152,7 +138,6 @@ async def test_vault_cascading_delete(session: AsyncSession):
     assert (await session.get(Chunk, chunk_id)) is None
     assert (await session.get(MemoryUnit, unit_id)) is None
     assert (await session.get(MentalModel, mm_id)) is None
-    assert (await session.get(TokenUsage, tu_id)) is None
     assert (await session.get(ReflectionQueue, rq_id)) is None
 
     # 7. Verify Control group remains

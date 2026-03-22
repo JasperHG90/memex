@@ -9,7 +9,6 @@ from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.config import MemexConfig
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.reflect.models import ReflectionRequest
 
 
@@ -47,7 +46,7 @@ def memory_engine(config, mock_extraction_engine, mock_retrieval_engine):
 @pytest.mark.asyncio
 async def test_retain_without_reflection(memory_engine, mock_session, mock_extraction_engine):
     contents = [RetainContent(content='test')]
-    mock_extraction_engine.extract_and_persist.return_value = (['id1'], TokenUsage(), set())
+    mock_extraction_engine.extract_and_persist.return_value = (['id1'], set())
 
     result = await memory_engine.retain(mock_session, contents, reflect_after=False)
 
@@ -59,7 +58,7 @@ async def test_retain_without_reflection(memory_engine, mock_session, mock_extra
 async def test_retain_with_reflection(memory_engine, mock_session, mock_extraction_engine):
     contents = [RetainContent(content='test')]
     entity_id = uuid4()
-    mock_extraction_engine.extract_and_persist.return_value = (['id1'], TokenUsage(), {entity_id})
+    mock_extraction_engine.extract_and_persist.return_value = (['id1'], {entity_id})
 
     with patch('memex_core.memory.engine.ReflectionEngine') as MockReflectionEngine:
         mock_reflector = MockReflectionEngine.return_value

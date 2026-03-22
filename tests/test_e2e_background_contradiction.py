@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
-from memex_core.memory.sql_models import TokenUsage
 
 
 @pytest.mark.asyncio
@@ -45,7 +44,6 @@ async def test_background_upload_awaits_contradiction_task(client: TestClient):
             content_index=0,
         )
     ]
-    mock_usage = TokenUsage(total_tokens=10)
     mock_embeddings = [[0.1] * 384]
 
     # Track whether detect_contradictions was awaited
@@ -63,7 +61,7 @@ async def test_background_upload_awaits_contradiction_task(client: TestClient):
     )
 
     with (
-        patch(extract_path, return_value=(mock_facts, mock_chunks, mock_usage)),
+        patch(extract_path, return_value=(mock_facts, mock_chunks)),
         patch(embed_path, return_value=mock_embeddings),
         patch(date_path, new_callable=AsyncMock, return_value=now),
         patch(contradiction_path, side_effect=spy_detect_contradictions) as mock_detect,

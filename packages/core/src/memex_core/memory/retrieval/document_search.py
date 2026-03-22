@@ -116,10 +116,7 @@ class NoteSearchEngine:
         query_weights = [2.0]
 
         if request.expand_query and self.expander:
-            vault_id = request.vault_ids[0] if request.vault_ids else None
-            variations, _ = await self.expander.expand(
-                request.query, session=session, vault_id=vault_id
-            )
+            variations = await self.expander.expand(request.query)
             for var in variations:
                 queries.append(var)
                 query_weights.append(1.0)

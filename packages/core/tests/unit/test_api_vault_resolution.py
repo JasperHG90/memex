@@ -105,7 +105,7 @@ async def test_ingest_resolves_vault_from_config(api, mock_session):
 
     # Mock MemoryEngine.retain
     api.memory.retain = AsyncMock()
-    api.memory.retain.return_value = {'unit_ids': [], 'usage': {}, 'touched_entities': []}
+    api.memory.retain.return_value = {'unit_ids': [], 'touched_entities': []}
 
     # Mock Transaction context
     txn = MagicMock()

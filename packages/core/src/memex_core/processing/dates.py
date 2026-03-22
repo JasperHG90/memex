@@ -8,12 +8,10 @@ first ~2000 characters of a document (headers, bylines, date references, etc.).
 import logging
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 import dspy
 from dateutil import parser as dateutil_parser
 from pydantic import BaseModel, Field
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.llm import run_dspy_operation
 
@@ -60,16 +58,12 @@ class ExtractNoteDate(dspy.Signature):
 async def extract_document_date(
     text: str,
     lm: dspy.LM,
-    session: AsyncSession | None = None,
-    vault_id: UUID | None = None,
 ) -> datetime | None:
     """Extract the document date from text using a lightweight DSPy LLM call.
 
     Args:
         text: The full document text (only the first ~2000 chars will be used).
         lm: The DSPy language model instance.
-        session: Optional DB session for token usage logging.
-        vault_id: Optional vault ID for token usage logging.
 
     Returns:
         A timezone-aware datetime if a date was extracted with sufficient confidence,
@@ -82,13 +76,10 @@ async def extract_document_date(
     predictor = dspy.ChainOfThought(ExtractNoteDate)
 
     try:
-        prediction, _ = await run_dspy_operation(
+        prediction = await run_dspy_operation(
             lm=lm,
             predictor=predictor,
             input_kwargs={'document_header': header},
-            session=session,
-            context_metadata={'operation': 'date_extraction'},
-            vault_id=vault_id,
         )
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.warning('LLM date extraction failed: %s', e, exc_info=True)

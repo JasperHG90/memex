@@ -64,7 +64,7 @@ class TestTriage:
         mock_result.flagged_ids = []
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._triage(units)
 
         assert result == []
@@ -80,7 +80,7 @@ class TestTriage:
         mock_result.flagged_ids = [str(correction.id)]
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._triage(units)
 
         assert str(correction.id) in result
@@ -95,7 +95,7 @@ class TestTriage:
         mock_result.flagged_ids = json.dumps([str(unit.id)])
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._triage([unit])
 
         assert str(unit.id) in result
@@ -109,7 +109,7 @@ class TestTriage:
         mock_result.flagged_ids = 'not valid json {'
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._triage([unit])
 
         assert result == []
@@ -123,7 +123,7 @@ class TestTriage:
         mock_result.flagged_ids = None
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._triage([unit])
 
         assert result == []
@@ -241,7 +241,7 @@ class TestClassify:
         ]
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._classify(unit, candidates)
 
         assert len(result) == 1
@@ -265,7 +265,7 @@ class TestClassify:
         )
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._classify(unit, candidates)
 
         assert len(result) == 1
@@ -281,7 +281,7 @@ class TestClassify:
         mock_result.relationships = 'not valid json {'
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._classify(unit, candidates)
 
         assert result == []
@@ -301,7 +301,7 @@ class TestClassify:
         ]
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._classify(unit, candidates)
 
         assert len(result) == 3
@@ -318,7 +318,7 @@ class TestClassify:
         mock_result.relationships = None
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = (mock_result, MagicMock())
+            mock_op.return_value = mock_result
             result = await engine._classify(unit, candidates)
 
         assert result == []

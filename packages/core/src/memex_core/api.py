@@ -760,10 +760,6 @@ class MemexAPI:
         """Delete a memory unit. Delegates to StatsService."""
         return await self._stats.delete_memory_unit(unit_id)
 
-    async def get_daily_token_usage(self) -> list[dict[str, Any]]:
-        """Get daily aggregated token usage. Delegates to StatsService."""
-        return await self._stats.get_daily_token_usage()
-
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
         return await self._search.retrieve(request)

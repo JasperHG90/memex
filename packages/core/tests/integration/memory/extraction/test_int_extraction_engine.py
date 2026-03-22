@@ -64,7 +64,7 @@ async def test_extract_and_persist_end_to_end(session: AsyncSession):
     )
 
     # 3. Execute Extraction and Persistence
-    unit_ids, token_usage, _ = await extractor.extract_and_persist(
+    unit_ids, _ = await extractor.extract_and_persist(
         session=session,
         contents=[content],
         agent_name='integration_test_agent',
@@ -76,16 +76,6 @@ async def test_extract_and_persist_end_to_end(session: AsyncSession):
 
     # A. Check returned unit IDs
     assert len(unit_ids) > 0, 'No memory units were returned'
-
-    # Token usage might be 0 depending on the provider/model support in dspy
-    if token_usage.total_tokens == 0:
-        import warnings
-
-        warnings.warn(
-            'Token usage was 0. This might be due to the model provider or dspy adapter not returning usage stats.'
-        )
-    else:
-        assert (token_usage.total_tokens or 0) > 0, 'Token usage should be recorded'
 
     # B. Check Memory Units in DB
     stmt_units = (

@@ -14,7 +14,6 @@ from memex_core.memory.extraction.models import (
     ExtractedOutput,
     SectionSummary,
 )
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.api import MemexAPI
 from memex_core.services.ingestion import IngestionService
 
@@ -111,8 +110,6 @@ async def test_cli_memory_add_url_with_vault_name(db_session: AsyncSession, setu
     mock_extracted.source = url
     mock_extracted.document_date = None
 
-    mock_usage = TokenUsage(total_tokens=10)
-
     with (
         patch('memex_cli.utils.httpx.AsyncClient', side_effect=MockAsyncClientContext),
         patch(
@@ -137,7 +134,7 @@ async def test_cli_memory_add_url_with_vault_name(db_session: AsyncSession, setu
         mock_core_prediction.extracted_facts = ExtractedOutput(extracted_facts=[])
         mock_core_prediction.summary = SectionSummary(what='Mock summary')
         mock_core_prediction.block_summary = BlockSummary(topic='Mock topic', key_points=[])
-        mock_run_dspy_core.return_value = (mock_core_prediction, mock_usage)
+        mock_run_dspy_core.return_value = mock_core_prediction
 
         # Wrap IngestionService.ingest to spy on it
         original_ingest = IngestionService.ingest

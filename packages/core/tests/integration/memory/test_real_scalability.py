@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, func
 
 from memex_core.memory.reflect.reflection import ReflectionEngine
-from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, MentalModel, TokenUsage
+from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, MentalModel
 from memex_core.config import (
     MemexConfig,
     PostgresMetaStoreConfig,
@@ -127,11 +127,6 @@ async def test_real_scalability_concurrent_reflection(session: AsyncSession, pos
         # Verify database persistence
         count = (await session.exec(select(func.count(MentalModel.id)))).one()
         assert count == len(entities)
-
-        # Verify TokenUsage persistence
-        token_usage_count = (await session.exec(select(func.count(TokenUsage.id)))).one()
-        assert token_usage_count > 0, 'Expected TokenUsage entries to be persisted'
-        logger.info(f'Persisted {token_usage_count} token usage logs.')
 
         print(f'REAL SCALABILITY RESULT: {len(entities)} entities processed in {duration:.2f}s')
 

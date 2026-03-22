@@ -1,7 +1,5 @@
 import datetime as dt
 
-
-from memex_core.memory.sql_models import TokenUsage
 from memex_core.memory.extraction.utils import parse_iso_datetime, sanitize_text
 
 
@@ -72,29 +70,3 @@ class TestNormalizeTimestamp:
         aware = dt.datetime(2024, 1, 1, 10, 0, 0, tzinfo=dt.timezone.utc)
         res = normalize_timestamp(aware)
         assert res == aware
-
-
-class TestTokenUsage:
-    """Tests for TokenUsage model."""
-
-    def test_addition(self) -> None:
-        """Test adding two TokenUsage objects."""
-        u1 = TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15)
-        u2 = TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30)
-        u3 = u1 + u2
-
-        assert u3.input_tokens == 30
-        assert u3.output_tokens == 15
-        assert u3.total_tokens == 45
-        # Ensure originals are unchanged
-        assert u1.input_tokens == 10
-
-    def test_inplace_addition(self) -> None:
-        """Test inplace addition."""
-        u1 = TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15)
-        u2 = TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30)
-        u1 += u2
-
-        assert u1.input_tokens == 30
-        assert u1.output_tokens == 15
-        assert u1.total_tokens == 45

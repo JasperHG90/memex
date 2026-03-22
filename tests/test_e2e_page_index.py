@@ -56,7 +56,6 @@ async def test_e2e_page_index_strategy(client: TestClient, db_session):
 
     # Mock the fact extraction from the block content
     from memex_core.memory.extraction.models import RawFact
-    from memex_core.memory.sql_models import TokenUsage
 
     mock_facts = [
         RawFact(
@@ -80,8 +79,8 @@ async def test_e2e_page_index_strategy(client: TestClient, db_session):
             'memex_core.memory.extraction.embedding_processor.generate_embeddings_batch'
         ) as mock_embed,
     ):
-        mock_index_doc.return_value = (mock_output, TokenUsage())
-        mock_extract.return_value = (mock_facts, [('Content of section 1.', 1)], TokenUsage())
+        mock_index_doc.return_value = mock_output
+        mock_extract.return_value = (mock_facts, [('Content of section 1.', 1)])
         mock_embed.return_value = [[0.1] * 384] * 2  # One for block, one for fact
 
         # Force configuration to 'page_index'
