@@ -65,7 +65,7 @@ def _make_lm(model_cfg: 'memex_core.config.ModelConfig') -> dspy.LM:
     """Create a DSPy LM from a ModelConfig."""
     return dspy.LM(
         model=model_cfg.model,
-        api_base=str(model_cfg.base_url).rstrip('/') if model_cfg.base_url else None,
+        api_base=str(model_cfg.base_url) if model_cfg.base_url else None,
         api_key=model_cfg.api_key.get_secret_value() if model_cfg.api_key else None,
         reasoning_effort=model_cfg.reasoning_effort.value
         if model_cfg.reasoning_effort is not None

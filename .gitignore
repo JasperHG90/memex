@@ -181,7 +181,6 @@ gemini-extension.json
 
 # Memex
 .memex.yaml
-docker-compose.override.yaml
 
 # OpenClaw plugin (TypeScript build artifacts)
 packages/openclaw/node_modules/
@@ -201,8 +200,3 @@ recordings/dashboard/.tmp-recordings/
 recordings/cli/.casts/
 
 **/*/__about__.py
-
-# Offline export cache
-memex-local.db
-*.db-wal
-*.db-shm

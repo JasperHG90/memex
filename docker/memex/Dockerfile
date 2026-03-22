@@ -11,9 +11,8 @@ COPY packages/common/pyproject.toml packages/common/pyproject.toml
 COPY packages/core/pyproject.toml   packages/core/pyproject.toml
 COPY packages/cli/pyproject.toml    packages/cli/pyproject.toml
 COPY packages/mcp/pyproject.toml    packages/mcp/pyproject.toml
-COPY packages/eval/pyproject.toml   packages/eval/pyproject.toml
 # dummy READMEs so hatchling doesn't fail
-RUN mkdir -p packages/common packages/core packages/cli packages/mcp packages/eval \
+RUN mkdir -p packages/common packages/core packages/cli packages/mcp \
     && touch packages/common/README.md packages/core/README.md \
              packages/cli/README.md packages/mcp/README.md \
              packages/eval/README.md
