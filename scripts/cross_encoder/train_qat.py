@@ -56,14 +56,26 @@ app = typer.Typer(
 )
 
 
+def _format_date(dt: datetime) -> str:
+    """Format a datetime as 'Month DD, YYYY (YYYY-MM-DD)'."""
+    return f'{dt.strftime("%B %d, %Y")} ({dt.strftime("%Y-%m-%d")})'
+
+
 def format_hindsight_document(doc_data: dict) -> str:
     """
     Transforms the raw data dictionary into the model-ready string.
-    Format: "[Date: Month DD, YYYY (YYYY-MM-DD)] [Type] Context: Narrative Text"
+    Format: "[Start: ...] [End: ongoing|date] [Type] Context: Narrative Text"
+
+    Date range cases:
+    - Start + no end (ongoing): [Start: ...] [End: ongoing]
+    - Start + end (completed):  [Start: ...] [End: ...]
+    - No start + no end:        No date prefix (undated facts not penalized)
+    - No start + end:           [End: ...]
     """
     raw_text = doc_data['text']
     context = doc_data.get('context', '')
     occurred_start_str = doc_data.get('occurred_start')
+    occurred_end_str = doc_data.get('occurred_end')
     fact_type = doc_data.get('type', 'Unknown')
 
     # 1. Base Text
@@ -77,21 +89,27 @@ def format_hindsight_document(doc_data: dict) -> str:
     f_type = fact_type.capitalize()
     final_text = f'[{f_type}] {final_text}'
 
-    # 4. Prepend Temporal Anchor (CRITICAL)
+    # 4. Prepend Date Range
+    date_parts: list[str] = []
     if occurred_start_str:
         try:
-            # Parse ISO string back to datetime object
             dt = datetime.fromisoformat(occurred_start_str)
-
-            # Format: January 14, 2026
-            date_readable = dt.strftime('%B %d, %Y')
-            # Format: 2026-01-14
-            date_iso = dt.strftime('%Y-%m-%d')
-
-            # Exact Hindsight format
-            final_text = f'[Date: {date_readable} ({date_iso})] {final_text}'
+            date_parts.append(f'[Start: {_format_date(dt)}]')
         except ValueError:
-            pass  # Fallback if date is malformed
+            pass
+
+    if occurred_start_str or occurred_end_str:
+        if occurred_end_str:
+            try:
+                dt = datetime.fromisoformat(occurred_end_str)
+                date_parts.append(f'[End: {_format_date(dt)}]')
+            except ValueError:
+                date_parts.append('[End: ongoing]')
+        else:
+            date_parts.append('[End: ongoing]')
+
+    if date_parts:
+        final_text = f'{" ".join(date_parts)} {final_text}'
 
     return final_text
 
