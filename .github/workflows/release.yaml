@@ -144,6 +144,7 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:latest
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -172,6 +173,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+          pattern: '*-dist'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
