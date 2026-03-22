@@ -20,7 +20,8 @@ RUN mkdir -p packages/common packages/core packages/cli packages/mcp \
 # 1b — install third-party deps only (cached until lock changes)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-workspace --no-dev \
-    --package memex-common --package memex-core --package memex-cli
+    --package memex-common --package memex-core --package memex-cli \
+    --extra cloud --extra tracing
 
 # 1c — copy source + install workspace packages (server only)
 COPY packages/common/src packages/common/src
@@ -29,7 +30,8 @@ COPY packages/cli/src    packages/cli/src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev \
-    --package memex-common --package memex-core --package memex-cli
+    --package memex-common --package memex-core --package memex-cli \
+    --extra cloud --extra tracing
 
 # Stage 2 — slim runtime
 FROM python:3.12-slim
