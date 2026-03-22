@@ -19,7 +19,7 @@ from memex_common.config import (
 from memex_core.context import set_session_id
 from memex_core.logging_config import configure_logging
 from memex_core.server.audit import router as audit_router
-from memex_core.server.auth import setup_auth
+from memex_core.server.auth import auth_middleware, setup_auth
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.services.audit import AuditService
 from memex_core.server.kv import router as kv_router
@@ -156,6 +156,10 @@ app.add_middleware(
 )
 
 Instrumentator().instrument(app).expose(app, endpoint='/api/v1/metrics')
+
+# Auth middleware: reads app.state.auth_config (set by setup_auth in lifespan).
+# Registered at module level so it's part of the middleware stack before app starts.
+app.middleware('http')(auth_middleware)
 
 
 @app.middleware('http')

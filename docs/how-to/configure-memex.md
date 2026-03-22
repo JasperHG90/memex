@@ -203,8 +203,9 @@ For production deployments:
 server:
   auth:
     enabled: true
-    api_keys:
-      - "your-secret-key-here"
+    keys:
+      - key: "your-secret-key-here"
+        policy: admin
     exempt_paths:
       - "/api/v1/health"
       - "/api/v1/ready"

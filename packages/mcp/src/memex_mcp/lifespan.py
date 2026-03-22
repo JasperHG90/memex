@@ -26,7 +26,10 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     # In Client mode, we just use the remote server URL from config
     server_url = config.server_url
     base_url = f'{server_url.rstrip("/")}/api/v1/'
-    client = httpx.AsyncClient(base_url=base_url, timeout=120.0)
+    headers: dict[str, str] = {}
+    if config.api_key:
+        headers['X-API-Key'] = config.api_key.get_secret_value()
+    client = httpx.AsyncClient(base_url=base_url, timeout=120.0, headers=headers)
     api = RemoteMemexAPI(client)
 
     app_context = AppContext(config=config)

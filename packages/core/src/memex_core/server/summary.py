@@ -8,11 +8,12 @@ from fastapi import APIRouter, Body, Depends
 from memex_common.exceptions import MemexError
 from memex_common.schemas import SummaryRequest, SummaryResponse
 from memex_core.api import MemexAPI
+from memex_core.server.auth import require_read
 from memex_core.server.common import _handle_error, get_api
 
 logger = logging.getLogger('memex.core.server')
 
-router = APIRouter(prefix='/api/v1')
+router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_read)])
 
 
 @router.post(

@@ -1,6 +1,7 @@
 """Configuration for Memex based on Persona library"""
 
 import logging
+from enum import Enum
 from typing import Literal, Union, Annotated, Any, TypeAlias
 import pathlib as plb
 import os
@@ -565,6 +566,49 @@ class ContradictionConfig(BaseModel):
     )
 
 
+class Permission(str, Enum):
+    """Granular permissions for API key access control."""
+
+    READ = 'read'
+    WRITE = 'write'
+    DELETE = 'delete'
+
+
+class Policy(str, Enum):
+    """Built-in access policies that map to permission sets."""
+
+    READER = 'reader'
+    WRITER = 'writer'
+    ADMIN = 'admin'
+
+
+POLICY_PERMISSIONS: dict[Policy, frozenset[Permission]] = {
+    Policy.READER: frozenset({Permission.READ}),
+    Policy.WRITER: frozenset({Permission.READ, Permission.WRITE}),
+    Policy.ADMIN: frozenset({Permission.READ, Permission.WRITE, Permission.DELETE}),
+}
+
+
+class ApiKeyConfig(BaseModel):
+    """An API key bound to a policy with optional vault scoping."""
+
+    key: SecretStr = Field(
+        description=(
+            'The API key secret. '
+            'Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        ),
+    )
+    policy: Policy = Field(description='Access policy: reader, writer, or admin.')
+    vault_ids: list[str] | None = Field(
+        default=None,
+        description='Vault IDs or names this key is scoped to. None = all vaults.',
+    )
+    description: str | None = Field(
+        default=None,
+        description='Human-readable label for this key.',
+    )
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration for API key-based auth."""
 
@@ -572,11 +616,11 @@ class AuthConfig(BaseModel):
         default=False,
         description='Enable API key authentication. Disabled by default for localhost.',
     )
-    api_keys: list[SecretStr] = Field(
+    keys: list[ApiKeyConfig] = Field(
         default_factory=list,
         description=(
-            'List of valid API keys. '
-            'Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            'API keys with associated policies. '
+            'Generate keys with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
         ),
     )
     exempt_paths: list[str] = Field(
@@ -591,6 +635,21 @@ class AuthConfig(BaseModel):
             'hex(HMAC-SHA256(secret, request_body)).'
         ),
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_legacy_api_keys(cls, data: Any) -> Any:
+        """Reject the old flat api_keys format with a clear migration message."""
+        if isinstance(data, dict) and 'api_keys' in data:
+            raise ValueError(
+                'The "api_keys" field has been replaced by "keys". '
+                'Each key must now specify a policy. Example:\n'
+                '  keys:\n'
+                '    - key: "your-secret-key"\n'
+                '      policy: admin\n'
+                '      description: "My admin key"'
+            )
+        return data
 
 
 class CorsConfig(BaseModel):
@@ -925,6 +984,11 @@ class MemexConfig(BaseSettings):
         default='',
         description='URL of the Memex Core server used by clients (CLI, MCP, Dashboard). '
         'If empty, derived from server.host and server.port.',
+    )
+
+    api_key: SecretStr | None = Field(
+        default=None,
+        description='API key for authenticating with the Memex server. Used by CLI and MCP clients.',
     )
 
     vault: VaultConfig = Field(

@@ -7,6 +7,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_delete,
+    require_read,
+)
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     EntityDTO,
@@ -35,6 +42,7 @@ router = APIRouter(prefix='/api/v1')
     '/entities',
     response_class=StreamingResponse,
     responses=ndjson_openapi(EntityDTO, 'Stream of entities.'),
+    dependencies=[Depends(require_read)],
 )
 async def list_entities(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -48,6 +56,7 @@ async def list_entities(
         None,
         description='Filter by entity type.',
     ),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
     List entities.
@@ -59,6 +68,7 @@ async def list_entities(
     - vault_id: Optional vault ID(s) or name(s) to filter by. Repeat for multiple vaults.
     - entity_type: Optional entity type filter.
     """
+    await check_vault_access(auth, vault_id, api)
     vault_ids = await resolve_vault_ids(api, vault_id)
     if q:
         try:
@@ -88,6 +98,7 @@ async def list_entities(
     '/cooccurrences',
     response_class=StreamingResponse,
     responses=ndjson_openapi(BaseModel, 'Stream of co-occurrence records.'),
+    dependencies=[Depends(require_read)],
 )
 async def get_bulk_cooccurrences(
     ids: str,
@@ -117,6 +128,7 @@ async def get_bulk_cooccurrences(
     '/entities/{id}/mentions',
     response_class=StreamingResponse,
     responses=ndjson_openapi(BaseModel, 'Stream of entity mentions.'),
+    dependencies=[Depends(require_read)],
 )
 async def get_entity_mentions(
     id: UUID,
@@ -144,7 +156,9 @@ class BatchEntityRequest(BaseModel):
     entity_ids: list[UUID]
 
 
-@router.post('/entities/batch', response_model=list[EntityDTO])
+@router.post(
+    '/entities/batch', response_model=list[EntityDTO], dependencies=[Depends(require_read)]
+)
 async def get_entities_batch(
     request: Annotated[BatchEntityRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -161,7 +175,7 @@ async def get_entities_batch(
         raise _handle_error(e, 'Failed to get entities batch')
 
 
-@router.get('/entities/{id}', response_model=EntityDTO)
+@router.get('/entities/{id}', response_model=EntityDTO, dependencies=[Depends(require_read)])
 async def get_entity(
     id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -184,6 +198,7 @@ async def get_entity(
     '/entities/{id}/cooccurrences',
     response_class=StreamingResponse,
     responses=ndjson_openapi(BaseModel, 'Stream of co-occurrence records for an entity.'),
+    dependencies=[Depends(require_read)],
 )
 async def get_entity_cooccurrences(
     id: UUID,
@@ -214,7 +229,9 @@ async def get_entity_cooccurrences(
 
 
 # Deprecated: use GET /lineage/{entity_type}/{id} instead. Remove after 2026-06-01.
-@router.get('/entities/{id}/lineage', response_model=LineageResponse)
+@router.get(
+    '/entities/{id}/lineage', response_model=LineageResponse, dependencies=[Depends(require_read)]
+)
 async def get_entity_lineage(
     id: UUID,
     response: Response,
@@ -248,7 +265,7 @@ async def get_entity_lineage(
         raise _handle_error(e, f'Failed to retrieve lineage for entity {id}')
 
 
-@router.delete('/entities/{entity_id}')
+@router.delete('/entities/{entity_id}', dependencies=[Depends(require_delete)])
 async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete an entity and all associated data (mental models, aliases, links, cooccurrences)."""
     try:
@@ -258,7 +275,7 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
         raise _handle_error(e, 'Entity deletion failed')
 
 
-@router.delete('/entities/{entity_id}/mental-model')
+@router.delete('/entities/{entity_id}/mental-model', dependencies=[Depends(require_delete)])
 async def delete_mental_model(
     entity_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],

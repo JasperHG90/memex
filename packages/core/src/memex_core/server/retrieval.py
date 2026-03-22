@@ -11,6 +11,7 @@ from memex_common.exceptions import MemexError
 from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
 
 from memex_core.api import MemexAPI
+from memex_core.server.auth import AuthContext, check_vault_access, get_auth_context, require_read
 from memex_core.server.common import (
     _handle_error,
     build_memory_unit_dto,
@@ -21,7 +22,7 @@ from memex_core.server.common import (
 
 logger = logging.getLogger('memex.core.server')
 
-router = APIRouter(prefix='/api/v1')
+router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_read)])
 
 
 @router.post(
@@ -33,8 +34,10 @@ async def search_memories(
     request: Annotated[RetrievalRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     try:
+        await check_vault_access(auth, request.vault_ids, api)
         t0 = time.monotonic()
         units, resonance_task = await api.search(
             query=request.query,

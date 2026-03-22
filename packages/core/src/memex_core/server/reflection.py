@@ -7,6 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Qu
 from fastapi.responses import StreamingResponse
 
 from memex_common.config import GLOBAL_VAULT_ID
+from memex_core.server.auth import require_delete, require_write
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     DeadLetterItemDTO,
@@ -28,7 +29,9 @@ from memex_core.server.common import (
 router = APIRouter(prefix='/api/v1')
 
 
-@router.post('/reflections', response_model=ReflectionResultDTO)
+@router.post(
+    '/reflections', response_model=ReflectionResultDTO, dependencies=[Depends(require_write)]
+)
 async def reflect(
     request: Annotated[ReflectionDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -57,6 +60,7 @@ async def reflect(
     '/reflections/batch',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionResultDTO, 'Stream of reflection results.'),
+    dependencies=[Depends(require_write)],
 )
 async def reflect_batch(
     request: Annotated[dict[str, list[ReflectionDTO]], Body()],
@@ -94,6 +98,7 @@ async def reflect_batch(
     '/reflections',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionQueueDTO, 'Stream of reflection queue items.'),
+    dependencies=[Depends(require_write)],
 )
 async def list_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -133,6 +138,7 @@ async def list_reflections(
     '/reflections/claim',
     response_class=StreamingResponse,
     responses=ndjson_openapi(ReflectionQueueDTO, 'Stream of claimed reflection queue items.'),
+    dependencies=[Depends(require_write)],
 )
 async def claim_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -160,7 +166,11 @@ async def claim_reflections(
 # ---------------------------------------------------------------------------
 
 
-@router.get('/admin/reflection/dlq', response_model=list[DeadLetterItemDTO])
+@router.get(
+    '/admin/reflection/dlq',
+    response_model=list[DeadLetterItemDTO],
+    dependencies=[Depends(require_delete)],
+)
 async def list_dead_letter_items(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
@@ -192,7 +202,11 @@ async def list_dead_letter_items(
         raise _handle_error(e, 'Failed to list dead letter items')
 
 
-@router.post('/admin/reflection/dlq/{item_id}/retry', response_model=DeadLetterItemDTO)
+@router.post(
+    '/admin/reflection/dlq/{item_id}/retry',
+    response_model=DeadLetterItemDTO,
+    dependencies=[Depends(require_delete)],
+)
 async def retry_dead_letter_item(
     item_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],

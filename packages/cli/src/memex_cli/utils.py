@@ -54,7 +54,11 @@ async def get_api_context(
     server_url = config.server_url
     base_url = f'{server_url.rstrip("/")}/api/v1/'
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=240.0) as client:
+    headers = {}
+    if config.api_key:
+        headers['X-API-Key'] = config.api_key.get_secret_value()
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=240.0, headers=headers) as client:
         yield RemoteMemexAPI(client)
 
 
