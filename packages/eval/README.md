@@ -128,19 +128,19 @@ The benchmark runs in three decoupled phases, each resumable:
 
 - **Model (answering)**: Claude Opus 4 via Claude Code CLI
 - **Model (judging)**: Gemini 3 Flash
-- **Dataset**: LoCoMo conversation 0 (19 sessions, 60 QA pairs, 3 excluded as image-dependent)
+- **Dataset**: LoCoMo conversation 0 (19 sessions, 50 QA pairs, 3 excluded as image-dependent)
 - **Vault**: Pre-ingested with full extraction + reflection pipeline
 
 ### Scores by category
 
 | Category | Count | Mean Score | Perfect | Wrong |
 |---|---|---|---|---|
-| Single-Hop | 10 | 0.900 | 9 | 1 |
-| Multi-Hop | 14 | 1.000 | 14 | 0 |
+| Single-Hop | 9 | 0.944 | 8 | 0 |
+| Multi-Hop | 9 | 1.000 | 9 | 0 |
 | Open Domain | 3 | 1.000 | 3 | 0 |
-| Temporal | 18 | 1.000 | 18 | 0 |
-| **Non-adversarial** | **45** | **0.978** | **44** | **1** |
-| Adversarial (unweighted) | 12 | 0.667 | 8 | 4 |
+| Temporal | 15 | 1.000 | 15 | 0 |
+| **Non-adversarial** | **36** | **0.986** | **35** | **0** |
+| Adversarial (unweighted) | 11 | 0.727 | 8 | 3 |
 
 Adversarial scores are reported separately and excluded from the weighted overall score. See the [full evaluation report](../../docs/reference/evaluation-report.md) for the rationale, retrieval efficiency analysis, per-question details, and distribution plots.
 
