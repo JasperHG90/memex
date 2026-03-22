@@ -26,11 +26,12 @@ async def get_ner_model() -> 'FastNERModel':
     Returns:
         FastNERModel: NER model instance.
     """
-    path = plb.Path(user_cache_dir('memex')) / 'JasperHG90__distilbert-hindsight-ner'
+    repo_id = 'JasperHG90/distilbert-hindsight-ner'
+    path = plb.Path(user_cache_dir('memex')) / repo_id.replace('/', '__') / 'main'
 
     if not path.exists():
         logger.warning(f'NER model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id='JasperHG90/distilbert-hindsight-ner')
+        downloader = ModelDownloader(repo_id=repo_id)
         await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
     return FastNERModel(model_dir=str(path), model_name='model.onnx')
