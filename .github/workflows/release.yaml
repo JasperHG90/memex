@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 env:
   PYTHON_VERSION: '3.12'
@@ -108,53 +107,9 @@ jobs:
           path: openclaw-dist.tar.gz
           retention-days: 30
 
-  build-docker:
-    name: Build & push Docker image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract version and image name
-        id: meta
-        run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/memex/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.meta.outputs.version }}
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.image }}:latest
-          provenance: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   release:
     name: Create GitHub Release
-    needs: [build-python, build-dashboard, build-openclaw, build-docker]
+    needs: [build-python, build-dashboard, build-openclaw]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
