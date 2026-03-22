@@ -971,14 +971,13 @@ class RetrievalEngine:
         try:
             formatted_texts = []
             for unit in results:
-                # Use event_date, fallback to created_at or now if absolutely necessary
-                dt = unit.event_date or unit.created_at or datetime.now(timezone.utc)
                 formatted_texts.append(
                     format_for_reranking(
                         text=unit.text,
-                        event_date=dt,
                         fact_type=unit.fact_type,
                         context=unit.context,
+                        occurred_start=unit.occurred_start,
+                        occurred_end=unit.occurred_end,
                     )
                 )
 

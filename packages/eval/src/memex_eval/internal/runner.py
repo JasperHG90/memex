@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 import time
@@ -203,21 +204,37 @@ async def _wait_for_extraction(api: RemoteMemexAPI, vault_id: UUID) -> None:
 
 
 async def _trigger_reflections(api: RemoteMemexAPI, vault_id: UUID) -> None:
-    """Trigger reflection on top entities."""
+    """Trigger reflection on top entities and wait for completion."""
     logger.info('  Triggering reflections...')
     entities = await api.get_top_entities(limit=5, vault_id=vault_id)
 
     for entity in entities:
         try:
             request = ReflectionRequest(entity_id=entity.id, vault_id=str(vault_id))
-            result = await api.reflect(request)
-            logger.info(
-                '    Reflected on "%s": %d observations.',
-                entity.name,
-                len(result.new_observations),
-            )
+            await api.reflect(request)
+            logger.info('    Queued reflection for "%s"', entity.name)
         except Exception as e:
             logger.warning('    Reflection failed for "%s": %s', entity.name, e)
+
+    if not entities:
+        return
+
+    # The /reflections endpoint is fire-and-forget (returns immediately).
+    # Poll until mental models are created by searching with the mental_model strategy.
+    logger.info('  Waiting for reflections to complete...')
+    probe_name = entities[0].name
+    for _ in range(40):  # 40 * 3s = 120s max
+        await asyncio.sleep(3)
+        results = await api.search(
+            query=probe_name,
+            limit=1,
+            strategies=['mental_model'],
+            vault_ids=[vault_id],
+        )
+        if results:
+            logger.info('  Reflections completed (found mental model for "%s").', probe_name)
+            return
+    logger.warning('  Reflection timeout — mental models may not be ready.')
 
 
 async def _execute_check(

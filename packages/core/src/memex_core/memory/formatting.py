@@ -25,30 +25,52 @@ def format_for_embedding(text: str, fact_type: str, context: str | None = None) 
         return f'{f_type}: {text}'
 
 
+def _format_date(dt: datetime) -> str:
+    """Format a datetime as 'Month DD, YYYY (YYYY-MM-DD)'."""
+    return f'{dt.strftime("%B %d, %Y")} ({dt.strftime("%Y-%m-%d")})'
+
+
 def format_for_reranking(
-    text: str, event_date: datetime, fact_type: str, context: str | None = None
+    text: str,
+    fact_type: str,
+    context: str | None = None,
+    occurred_start: datetime | None = None,
+    occurred_end: datetime | None = None,
 ) -> str:
     """
     Formats text for cross-encoder reranking to match the model's training distribution.
 
-    Training Format: "[Date: Month DD, YYYY (YYYY-MM-DD)] [Type] Context: Text"
-    Example: "[Date: January 14, 2026 (2026-01-14)] [Experience] Maintenance: I changed the oil."
+    Training Format: "[Start: Month DD, YYYY (YYYY-MM-DD)] [End: ongoing] [Type] Context: Text"
+
+    Date range cases:
+    - Start + no end (ongoing): [Start: ...] [End: ongoing]
+    - Start + end (completed):  [Start: ...] [End: ...]
+    - No start + no end:        No date prefix (undated facts are not penalized)
+    - No start + end:           [End: ...]
 
     Args:
         text: The core narrative text.
-        event_date: The date associated with the memory.
         fact_type: The epistemic type (world, event, observation).
         context: Optional context string.
+        occurred_start: When the fact started being true.
+        occurred_end: When the fact stopped being true (None = ongoing/unknown).
 
     Returns:
         Formatted string for the reranking model.
     """
-    # Format: January 14, 2026
-    date_readable = event_date.strftime('%B %d, %Y')
-    # Format: 2026-01-14
-    date_iso = event_date.strftime('%Y-%m-%d')
-
     f_type = fact_type.capitalize() if fact_type else 'Unknown'
     ctx_prefix = f'{context}: ' if context else ''
 
-    return f'[Date: {date_readable} ({date_iso})] [{f_type}] {ctx_prefix}{text}'
+    # Build date prefix based on available range info
+    date_parts: list[str] = []
+    if occurred_start is not None:
+        date_parts.append(f'[Start: {_format_date(occurred_start)}]')
+    if occurred_start is not None or occurred_end is not None:
+        if occurred_end is not None:
+            date_parts.append(f'[End: {_format_date(occurred_end)}]')
+        else:
+            date_parts.append('[End: ongoing]')
+
+    date_prefix = f'{" ".join(date_parts)} ' if date_parts else ''
+
+    return f'{date_prefix}[{f_type}] {ctx_prefix}{text}'

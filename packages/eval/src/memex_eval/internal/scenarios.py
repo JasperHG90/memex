@@ -1054,8 +1054,8 @@ def _build_scale_docs() -> list[SyntheticDoc]:
 ## Responsibilities
 
 The {dept} department at TechCo Global is responsible for all {dept.lower()}-related
-activities. The team of {headcount} reports to {lead}, who has led the department
-since 2024.
+activities. The team of {headcount} reports to {lead}, who is the current head of
+the department.
 """,
             )
         )
@@ -1064,11 +1064,29 @@ since 2024.
 
 _SCALE_DOCS = _build_scale_docs()
 
+# Historical leadership doc for temporal range testing
+_DOC_ENGINEERING_PREDECESSOR = SyntheticDoc(
+    filename='dept-engineering-history.md',
+    title='Engineering Department Historical Leadership',
+    description='Former leadership of the Engineering department at TechCo Global.',
+    tags=['department', 'engineering', 'techco', 'historical'],
+    content="""\
+# Engineering Department — TechCo Global (Historical Leadership)
+
+**Former Department Head:** Alex Chen
+**Tenure:** January 2020 to December 2023
+
+Alex Chen led the Engineering Department at TechCo Global from 2020 to 2023,
+overseeing the initial cloud migration and establishing the team's core practices.
+Alex built the department from 12 to 35 engineers before handing over to Ruby Martinez.
+""",
+)
+
 GROUP_SCALE = ScenarioGroup(
     name='scale',
     description='Tests retrieval quality with many documents and specific fact lookup.',
     sequential_ingest=True,
-    docs=_SCALE_DOCS,
+    docs=[*_SCALE_DOCS, _DOC_ENGINEERING_PREDECESSOR],
     checks=[
         GroundTruthCheck(
             name='scale_find_engineering_lead',
@@ -1112,6 +1130,22 @@ GROUP_SCALE = ScenarioGroup(
             check_type='keyword_in_results',
             expected=['TechCo'],
             max_duration_ms=30000,
+        ),
+        GroundTruthCheck(
+            name='scale_current_vs_former_lead',
+            description='Current head (ongoing) should rank above former head (ended tenure).',
+            query='Who leads the Engineering department at TechCo Global?',
+            check_type='result_ordering',
+            expected=['Ruby Martinez', 'Alex Chen'],
+            top_k=30,
+        ),
+        GroundTruthCheck(
+            name='scale_former_lead_query',
+            description='Query about former head should surface the predecessor.',
+            query='Who headed the Engineering department at TechCo Global before Ruby Martinez?',
+            check_type='keyword_in_results',
+            expected=['Alex Chen'],
+            top_k=20,
         ),
     ],
 )

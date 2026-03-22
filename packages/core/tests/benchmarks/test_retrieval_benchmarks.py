@@ -73,9 +73,9 @@ def test_format_for_reranking_batch(benchmark):
         for f in facts:
             format_for_reranking(
                 text=f['text'],
-                event_date=f['event_date'],
                 fact_type=f['fact_type'],
                 context=f['context'],
+                occurred_start=f['event_date'],
             )
 
     benchmark(run)
