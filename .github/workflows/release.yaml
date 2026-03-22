@@ -127,9 +127,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Extract version and image name
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -138,10 +140,10 @@ jobs:
           file: docker/memex/Dockerfile
           push: true
           build-args: |
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.version.outputs.version }}
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.meta.outputs.version }}
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
