@@ -66,9 +66,24 @@ Set a sub-config's `model` explicitly to override the default for that subsystem
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
 | `enabled` | bool | `false` | Enable API key authentication. Disabled by default for localhost. |
-| `api_keys` | list[string] | `[]` | List of valid API keys. Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `keys` | list[ApiKeyConfig] | `[]` | API keys with associated policies. See below. |
 | `exempt_paths` | list[string] | `["/api/v1/health", "/api/v1/ready", "/api/v1/metrics"]` | Paths that do not require authentication. |
 | `webhook_secret` | string \| null | `null` | Shared secret for HMAC-SHA256 webhook signature validation. Callers send `X-Webhook-Signature` header with `hex(HMAC-SHA256(secret, body))`. |
+
+Each entry in `keys` is an `ApiKeyConfig`:
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `key` | string | *(required)* | The API key secret. Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `policy` | string | *(required)* | Access policy: `reader` (read only), `writer` (read + write), or `admin` (full access including delete). |
+| `vault_ids` | list[string] \| null | `null` | Vault IDs or names this key is scoped to. `null` = all vaults. |
+| `description` | string \| null | `null` | Human-readable label for this key. |
+
+### Client API Key
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `api_key` | string \| null | `null` | API key for authenticating with the Memex server. Used by CLI and MCP clients. Set via `MEMEX_API_KEY` env var or in config YAML. |
 
 ---
 
@@ -512,9 +527,14 @@ server:
 
   auth:
     enabled: true
-    api_keys:
-      - "key-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-      - "key-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    keys:
+      - key: "key-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        policy: admin
+        description: "CI/CD pipeline"
+      - key: "key-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        policy: reader
+        vault_ids: ["project-alpha"]
+        description: "Dashboard read-only"
     webhook_secret: "whsec-xxxxxxxxxxxxxxxxxxxxxxxx"
 
   rate_limit:

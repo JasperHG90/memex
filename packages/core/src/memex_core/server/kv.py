@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
+from memex_core.server.auth import require_delete, require_read, require_write
 from memex_common.schemas import KVEntryDTO, KVPutRequest, KVSearchRequest
 
 from memex_core.api import MemexAPI
@@ -26,7 +27,7 @@ class EmbedResponse(BaseModel):
     embedding: list[float]
 
 
-@router.post('/embed', response_model=EmbedResponse)
+@router.post('/embed', response_model=EmbedResponse, dependencies=[Depends(require_read)])
 async def embed_text(
     request: Annotated[EmbedRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -39,7 +40,7 @@ async def embed_text(
         raise _handle_error(e, 'Failed to generate embedding')
 
 
-@router.put('/kv', response_model=KVEntryDTO)
+@router.put('/kv', response_model=KVEntryDTO, dependencies=[Depends(require_write)])
 async def kv_put(
     request: Annotated[KVPutRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -56,7 +57,7 @@ async def kv_put(
         raise _handle_error(e, 'Failed to put KV entry')
 
 
-@router.get('/kv/get', response_model=KVEntryDTO)
+@router.get('/kv/get', response_model=KVEntryDTO, dependencies=[Depends(require_read)])
 async def kv_get(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to look up'),
@@ -73,7 +74,7 @@ async def kv_get(
         raise _handle_error(e, 'Failed to get KV entry')
 
 
-@router.post('/kv/search', response_model=list[KVEntryDTO])
+@router.post('/kv/search', response_model=list[KVEntryDTO], dependencies=[Depends(require_read)])
 async def kv_search(
     request: Annotated[KVSearchRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -94,7 +95,7 @@ async def kv_search(
         raise _handle_error(e, 'KV search failed')
 
 
-@router.delete('/kv/delete')
+@router.delete('/kv/delete', dependencies=[Depends(require_delete)])
 async def kv_delete(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to delete'),
@@ -111,7 +112,7 @@ async def kv_delete(
         raise _handle_error(e, 'KV deletion failed')
 
 
-@router.get('/kv', response_model=list[KVEntryDTO])
+@router.get('/kv', response_model=list[KVEntryDTO], dependencies=[Depends(require_read)])
 async def kv_list(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,

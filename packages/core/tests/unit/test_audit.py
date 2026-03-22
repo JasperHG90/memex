@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from memex_common.config import AuthConfig
+from memex_common.config import ApiKeyConfig, AuthConfig, Policy
 from memex_core.memory.sql_models import AuditLog
 from memex_core.services.audit import AuditService
 
@@ -275,17 +275,22 @@ def _import_setup_auth():
     spec = importlib.util.spec_from_file_location('memex_core_server_auth', auth_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # Register in sys.modules so @dataclass can resolve __module__
+    import sys
+
+    sys.modules['memex_core_server_auth'] = module
     spec.loader.exec_module(module)
-    return module.setup_auth
+    return module.setup_auth, module.auth_middleware
 
 
 class TestAuthAuditIntegration:
     """Tests that auth middleware logs audit events."""
 
     def _make_app_with_audit(self, auth_config, audit_service):
-        setup_auth = _import_setup_auth()
+        setup_auth, auth_mw = _import_setup_auth()
 
         app = FastAPI()
+        app.middleware('http')(auth_mw)
         app.state.audit_service = audit_service
         setup_auth(app, auth_config)
 
@@ -302,7 +307,7 @@ class TestAuthAuditIntegration:
     def test_auth_success_logs_audit(self, audit_service):
         config = AuthConfig(
             enabled=True,
-            api_keys=[SecretStr('test-key-123')],
+            keys=[ApiKeyConfig(key=SecretStr('test-key-123'), policy=Policy.ADMIN)],
         )
         app = self._make_app_with_audit(config, audit_service)
         client = TestClient(app)
@@ -317,7 +322,7 @@ class TestAuthAuditIntegration:
     def test_auth_failure_logs_audit(self, audit_service):
         config = AuthConfig(
             enabled=True,
-            api_keys=[SecretStr('test-key-123')],
+            keys=[ApiKeyConfig(key=SecretStr('test-key-123'), policy=Policy.ADMIN)],
         )
         app = self._make_app_with_audit(config, audit_service)
         client = TestClient(app)
@@ -330,7 +335,7 @@ class TestAuthAuditIntegration:
     def test_auth_missing_key_logs_audit(self, audit_service):
         config = AuthConfig(
             enabled=True,
-            api_keys=[SecretStr('test-key-123')],
+            keys=[ApiKeyConfig(key=SecretStr('test-key-123'), policy=Policy.ADMIN)],
         )
         app = self._make_app_with_audit(config, audit_service)
         client = TestClient(app)
@@ -343,7 +348,7 @@ class TestAuthAuditIntegration:
     def test_exempt_path_no_audit(self, audit_service):
         config = AuthConfig(
             enabled=True,
-            api_keys=[SecretStr('test-key-123')],
+            keys=[ApiKeyConfig(key=SecretStr('test-key-123'), policy=Policy.ADMIN)],
         )
         app = self._make_app_with_audit(config, audit_service)
         client = TestClient(app)

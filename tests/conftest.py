@@ -268,6 +268,20 @@ def reset_dependency_overrides():
 
 
 @pytest.fixture(scope='function', autouse=True)
+def reset_auth_state():
+    """
+    Clear auth_config from app.state between tests to prevent
+    auth configuration from leaking across tests (e.g., a test that
+    enables auth should not affect subsequent tests).
+    """
+    if hasattr(app.state, 'auth_config'):
+        del app.state.auth_config
+    yield
+    if hasattr(app.state, 'auth_config'):
+        del app.state.auth_config
+
+
+@pytest.fixture(scope='function', autouse=True)
 def reset_dspy_lm():
     """
     Save and restore dspy.settings.lm around every test.

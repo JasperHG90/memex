@@ -17,6 +17,14 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_delete,
+    require_read,
+    require_write,
+)
 from memex_core.server.common import (
     _handle_error,
     build_note_dto,
@@ -33,6 +41,7 @@ router = APIRouter(prefix='/api/v1')
     '/notes',
     response_class=StreamingResponse,
     responses=ndjson_openapi(NoteDTO, 'Stream of notes.'),
+    dependencies=[Depends(require_read)],
 )
 async def list_notes(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -44,6 +53,7 @@ async def list_notes(
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
     after: str | None = Query(None, description='Only notes on or after this date (ISO 8601).'),
     before: str | None = Query(None, description='Only notes on or before this date (ISO 8601).'),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
     List notes.
@@ -72,6 +82,7 @@ async def list_notes(
         raise HTTPException(status_code=400, detail=f'Invalid "before" date format: {exc}')
 
     try:
+        await check_vault_access(auth, vault_id, api)
         resolved = await resolve_vault_ids(api, vault_id)
         if sort == '-created_at':
             docs = await api.get_recent_notes(
@@ -97,13 +108,16 @@ async def list_notes(
     '/notes/search',
     response_class=StreamingResponse,
     responses=ndjson_openapi(NoteSearchResult, 'Stream of note search results.'),
+    dependencies=[Depends(require_read)],
 )
 async def search_notes(
     request: Annotated[NoteSearchRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Search for notes using multi-query expansion and note-level fusion."""
     try:
+        await check_vault_access(auth, request.vault_ids, api)
         results = await api.search_notes(
             query=request.query,
             limit=request.limit,
@@ -124,15 +138,19 @@ async def search_notes(
         raise _handle_error(e, 'Note search failed')
 
 
-@router.get('/notes/find', response_model=list[FindNoteResult])
+@router.get(
+    '/notes/find', response_model=list[FindNoteResult], dependencies=[Depends(require_read)]
+)
 async def find_notes_by_title(
     api: Annotated[MemexAPI, Depends(get_api)],
     query: str = Query(..., description='Title search query'),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
     limit: Annotated[int, Query(ge=1, le=500, description='Maximum results to return')] = 5,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Fuzzy-search notes by title using trigram similarity."""
     try:
+        await check_vault_access(auth, vault_id, api)
         resolved = await resolve_vault_ids(api, vault_id)
         results = await api.find_notes_by_title(query=query, vault_ids=resolved, limit=limit)
         return [FindNoteResult(**r) for r in results]
@@ -140,7 +158,7 @@ async def find_notes_by_title(
         raise _handle_error(e, 'Failed to find notes by title')
 
 
-@router.get('/notes/{note_id}/page-index')
+@router.get('/notes/{note_id}/page-index', dependencies=[Depends(require_read)])
 async def get_note_page_index(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get the page index (slim tree) for a note."""
     try:
@@ -150,7 +168,7 @@ async def get_note_page_index(note_id: UUID, api: Annotated[MemexAPI, Depends(ge
         raise _handle_error(e, 'Failed to get page index')
 
 
-@router.get('/notes/{note_id}/metadata')
+@router.get('/notes/{note_id}/metadata', dependencies=[Depends(require_read)])
 async def get_note_metadata(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get just the metadata from a note's page index."""
     try:
@@ -160,7 +178,7 @@ async def get_note_metadata(note_id: UUID, api: Annotated[MemexAPI, Depends(get_
         raise _handle_error(e, 'Failed to get note metadata')
 
 
-@router.get('/notes/{note_id}', response_model=NoteDTO)
+@router.get('/notes/{note_id}', response_model=NoteDTO, dependencies=[Depends(require_read)])
 async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get a note by ID."""
     try:
@@ -174,7 +192,7 @@ class BatchNodeRequest(BaseModel):
     node_ids: list[UUID]
 
 
-@router.post('/nodes/batch', response_model=list[NodeDTO])
+@router.post('/nodes/batch', response_model=list[NodeDTO], dependencies=[Depends(require_read)])
 async def get_nodes_batch(
     request: Annotated[BatchNodeRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -190,7 +208,7 @@ class BatchNoteMetadataRequest(BaseModel):
     note_ids: list[UUID]
 
 
-@router.post('/notes/metadata/batch')
+@router.post('/notes/metadata/batch', dependencies=[Depends(require_read)])
 async def get_notes_metadata_batch(
     request: Annotated[BatchNoteMetadataRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -202,7 +220,7 @@ async def get_notes_metadata_batch(
         raise _handle_error(e, 'Failed to get notes metadata batch')
 
 
-@router.get('/nodes/{node_id}', response_model=NodeDTO)
+@router.get('/nodes/{node_id}', response_model=NodeDTO, dependencies=[Depends(require_read)])
 async def get_node(node_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) -> NodeDTO:
     """Get a specific note node by its ID."""
     try:
@@ -221,7 +239,7 @@ class SetNoteStatusRequest(BaseModel):
     linked_note_id: UUID | None = None
 
 
-@router.patch('/notes/{note_id}/status')
+@router.patch('/notes/{note_id}/status', dependencies=[Depends(require_write)])
 async def set_note_status(
     note_id: UUID,
     request: Annotated[SetNoteStatusRequest, Body()],
@@ -239,7 +257,7 @@ class UpdateNoteDateRequest(BaseModel):
     date: str
 
 
-@router.patch('/notes/{note_id}/date')
+@router.patch('/notes/{note_id}/date', dependencies=[Depends(require_write)])
 async def update_note_date(
     note_id: UUID,
     request: Annotated[UpdateNoteDateRequest, Body()],
@@ -264,7 +282,7 @@ class RenameNoteRequest(BaseModel):
     new_title: str
 
 
-@router.patch('/notes/{note_id}/title')
+@router.patch('/notes/{note_id}/title', dependencies=[Depends(require_write)])
 async def rename_note(
     note_id: UUID,
     request: Annotated[RenameNoteRequest, Body()],
@@ -278,7 +296,7 @@ async def rename_note(
         raise _handle_error(e, 'Failed to rename note')
 
 
-@router.delete('/notes/{note_id}')
+@router.delete('/notes/{note_id}', dependencies=[Depends(require_delete)])
 async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a note and all associated data (memory units, chunks, links, assets)."""
     try:
@@ -292,7 +310,7 @@ class MigrateNoteRequest(BaseModel):
     target_vault_id: str
 
 
-@router.post('/notes/{note_id}/migrate')
+@router.post('/notes/{note_id}/migrate', dependencies=[Depends(require_write)])
 async def migrate_note(
     note_id: UUID,
     request: Annotated[MigrateNoteRequest, Body()],

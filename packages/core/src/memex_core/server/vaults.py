@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from memex_common.exceptions import MemexError
+from memex_core.server.auth import require_delete, require_read, require_write
 from memex_common.schemas import CreateVaultRequest, VaultDTO
 
 from memex_core.api import MemexAPI
@@ -27,6 +28,7 @@ router = APIRouter(prefix='/api/v1')
     '/vaults',
     response_class=StreamingResponse,
     responses=ndjson_openapi(VaultDTO, 'Stream of vaults.'),
+    dependencies=[Depends(require_read)],
 )
 async def list_vaults(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -111,7 +113,7 @@ async def list_vaults(
         raise _handle_error(e, 'Failed to list vaults')
 
 
-@router.post('/vaults', response_model=VaultDTO)
+@router.post('/vaults', response_model=VaultDTO, dependencies=[Depends(require_write)])
 async def create_vault(
     request: Annotated[CreateVaultRequest, Body()], api: Annotated[MemexAPI, Depends(get_api)]
 ):
@@ -123,7 +125,9 @@ async def create_vault(
         raise _handle_error(e, 'Failed to create vault')
 
 
-@router.get('/vaults/{identifier}', response_model=dict[str, Any])
+@router.get(
+    '/vaults/{identifier}', response_model=dict[str, Any], dependencies=[Depends(require_read)]
+)
 async def get_or_resolve_vault(identifier: str, api: Annotated[MemexAPI, Depends(get_api)]):
     """
     Get a vault by ID or resolve by name.
@@ -150,7 +154,7 @@ async def get_or_resolve_vault(identifier: str, api: Annotated[MemexAPI, Depends
         raise _handle_error(e, 'Vault lookup failed')
 
 
-@router.delete('/vaults/{vault_id}')
+@router.delete('/vaults/{vault_id}', dependencies=[Depends(require_delete)])
 async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a vault."""
     try:
@@ -162,7 +166,7 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         raise _handle_error(e, 'Vault deletion failed')
 
 
-@router.post('/vaults/{identifier}/set-writer')
+@router.post('/vaults/{identifier}/set-writer', dependencies=[Depends(require_write)])
 async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get_api)]):
     """
     Set the active (writer) vault for the current server session.
@@ -176,7 +180,7 @@ async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get
         raise _handle_error(e, 'Failed to set writer vault')
 
 
-@router.post('/vaults/{identifier}/set-reader')
+@router.post('/vaults/{identifier}/set-reader', dependencies=[Depends(require_write)])
 async def set_reader_vault(
     identifier: str,
     api: Annotated[MemexAPI, Depends(get_api)],
