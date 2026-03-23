@@ -132,7 +132,7 @@ async def _initialize_database(config):
         raise typer.Exit(1)
 
 
-async def _initialize_models():
+async def _initialize_models(cache_dir: str):
     """
     Pre-download ML models before forking workers.
     This prevents race conditions when multiple workers try to download concurrently.
@@ -140,8 +140,9 @@ async def _initialize_models():
     Only downloads files to cache — does NOT load ONNX sessions, since this process
     exits before workers start and the loaded models would be wasted memory.
     """
-    from memex_core.memory.models.base import ModelDownloader, MODEL_REGISTRY
+    from memex_core.memory.models.base import ModelDownloader, MODEL_REGISTRY, configure_cache_dir
 
+    configure_cache_dir(cache_dir)
     console.print('[dim]Ensuring ML models are cached...[/dim]')
     try:
         async with httpx.AsyncClient() as client:
@@ -205,7 +206,7 @@ def start(
     asyncio.run(_initialize_database(conf))
 
     # Pre-download models once to avoid race conditions between workers
-    asyncio.run(_initialize_models())
+    asyncio.run(_initialize_models(conf.server.cache_dir))
 
     if reload:
         # Dev mode: use uvicorn directly (granian reload is less mature)

@@ -37,7 +37,12 @@ from memex_core.server.vaults import router as vaults_router
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
 from memex_core.storage.metastore import get_metastore
-from memex_core.memory.models import get_embedding_model, get_reranking_model, get_ner_model
+from memex_core.memory.models import (
+    get_embedding_model,
+    get_reranking_model,
+    get_ner_model,
+    configure_cache_dir,
+)
 
 logger = logging.getLogger('memex.core.server')
 
@@ -92,6 +97,7 @@ async def lifespan(app: FastAPI):
     create_schema = os.getenv('MEMEX_SKIP_SCHEMA_CHECK', 'false').lower() != 'true'
     await metastore.connect(create_schema=create_schema)
 
+    configure_cache_dir(config.server.cache_dir)
     embedding_model = await get_embedding_model()
     reranking_model = await get_reranking_model()
     ner_model = await get_ner_model()

@@ -3,14 +3,18 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
 import pytest
 
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
+from memex_core.memory.models.base import (
+    BaseOnnxModel,
+    ModelDownloader,
+    configure_cache_dir,
+    get_cache_dir,
+)
 
 
 class TestModelDownloader:
     def test_init(self) -> None:
-        downloader = ModelDownloader('repo/id', app_name='app-name')
+        downloader = ModelDownloader('repo/id')
         assert downloader.repo_id == 'repo/id'
-        assert downloader.app_name == 'app-name'
         assert 'repo__id' in str(downloader.cache_dir)
 
     @pytest.mark.asyncio
@@ -47,6 +51,22 @@ class TestModelDownloader:
         local_path = tmp_path / 'test.txt'
         assert local_path.exists()
         assert local_path.read_bytes() == b'chunk1chunk2'
+
+
+class TestCacheDir:
+    def test_configure_and_get(self, tmp_path) -> None:
+        configure_cache_dir(tmp_path)
+        assert get_cache_dir() == tmp_path
+
+    def test_downloader_uses_configured_dir(self, tmp_path) -> None:
+        configure_cache_dir(tmp_path)
+        downloader = ModelDownloader('repo/id')
+        assert str(downloader.cache_dir).startswith(str(tmp_path))
+
+    def teardown_method(self) -> None:
+        import memex_core.memory.models.base as base_mod
+
+        base_mod._cache_dir = None
 
 
 class TestBaseOnnxModel:

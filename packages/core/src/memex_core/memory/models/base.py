@@ -11,6 +11,19 @@ from platformdirs import user_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.base')
 
+_cache_dir: plb.Path | None = None
+
+
+def configure_cache_dir(path: str | plb.Path) -> None:
+    """Set the cache directory for ML model artifacts."""
+    global _cache_dir
+    _cache_dir = plb.Path(path)
+
+
+def get_cache_dir() -> plb.Path:
+    """Return the configured cache directory, falling back to platformdirs default."""
+    return _cache_dir or plb.Path(user_cache_dir('memex'))
+
 
 class ModelSpec(NamedTuple):
     repo_id: str
@@ -47,17 +60,15 @@ class ModelDownloader:
         self,
         repo_id: str,
         revision: str = 'main',
-        app_name: str = 'memex',
         max_concurrent: int = 5,
     ):
         self.repo_id = repo_id
         self.revision = revision
-        self.app_name = app_name
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.base_url = f'https://huggingface.co/{repo_id}'
         self.api_url = f'https://huggingface.co/api/models/{repo_id}?revision={revision}'
 
-        self.cache_dir = plb.Path(user_cache_dir(app_name)) / repo_id.replace('/', '__') / revision
+        self.cache_dir = get_cache_dir() / repo_id.replace('/', '__') / revision
 
     async def _fetch_file_list(self, client: httpx.AsyncClient) -> list[str]:
         """
