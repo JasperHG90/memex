@@ -114,19 +114,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Update plugin version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          jq --arg v "$VERSION" '.version = $v' packages/claude-code-plugin/.claude-plugin/plugin.json > tmp.json
-          mv tmp.json packages/claude-code-plugin/.claude-plugin/plugin.json
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/claude-code-plugin/.claude-plugin/plugin.json
-          git commit -m "chore(plugin): bump version to ${VERSION}" || true
-          git push origin main
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
