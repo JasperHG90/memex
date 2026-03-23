@@ -1,4 +1,4 @@
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
+from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, ModelSpec, MODEL_REGISTRY
 from memex_core.memory.models.embedding import (
     FastEmbedder,
     get_embedding_model,
@@ -12,6 +12,8 @@ from memex_core.memory.models.ner import get_ner_model, FastNERModel
 __all__ = [
     'BaseOnnxModel',
     'ModelDownloader',
+    'ModelSpec',
+    'MODEL_REGISTRY',
     'FastEmbedder',
     'get_embedding_model',
     'FastReranker',

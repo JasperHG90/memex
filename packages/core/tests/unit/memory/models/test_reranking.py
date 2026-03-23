@@ -22,7 +22,9 @@ async def test_get_reranking_model_defaults(mock_base_onnx_init: MagicMock) -> N
         model = await get_reranking_model()
         assert isinstance(model, FastReranker)
         _, kwargs = mock_base_onnx_init.call_args
-        assert 'ms-marco-minilm-l12-hindsight-reranker' in str(kwargs['model_dir'])
+        model_dir = str(kwargs['model_dir'])
+        assert 'ms-marco-minilm-l12-hindsight-reranker' in model_dir
+        assert model_dir.endswith('/v2')
 
 
 class TestFastReranker:

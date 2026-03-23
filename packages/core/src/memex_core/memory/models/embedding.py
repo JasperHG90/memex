@@ -6,7 +6,7 @@ import httpx
 import numpy as np
 from platformdirs import user_cache_dir
 from async_lru import alru_cache
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
+from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, MODEL_REGISTRY
 
 logger = logging.getLogger('memex.core.memory.models.embedding')
 
@@ -22,12 +22,12 @@ async def get_embedding_model() -> 'FastEmbedder':
     Returns:
         FastEmbedder: Embedding model instance.
     """
-    repo_id = 'JasperHG90/minilm-l12-v2-hindsight-embeddings'
-    path = plb.Path(user_cache_dir('memex')) / repo_id.replace('/', '__') / 'main'
+    _spec = MODEL_REGISTRY['embedding']
+    path = plb.Path(user_cache_dir('memex')) / _spec.repo_id.replace('/', '__') / _spec.revision
 
     if not path.exists():
         logger.warning(f'Embedding model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id=repo_id)
+        downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
         await downloader.download_async(httpx.AsyncClient(), force=False)
 
     return FastEmbedder(model_dir=str(path), model_name='model.onnx')

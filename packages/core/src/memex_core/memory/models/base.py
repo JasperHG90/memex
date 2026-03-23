@@ -2,6 +2,7 @@ import logging
 import asyncio
 import os
 import pathlib as plb
+from typing import NamedTuple
 
 import httpx
 import onnxruntime as ort
@@ -9,6 +10,28 @@ from tokenizers import Tokenizer
 from platformdirs import user_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.base')
+
+
+class ModelSpec(NamedTuple):
+    repo_id: str
+    revision: str
+
+
+MODEL_REGISTRY: dict[str, ModelSpec] = {
+    'embedding': ModelSpec(
+        repo_id='JasperHG90/minilm-l12-v2-hindsight-embeddings',
+        revision='main',
+    ),
+    'reranker': ModelSpec(
+        repo_id='JasperHG90/ms-marco-minilm-l12-hindsight-reranker',
+        revision='v2',
+    ),
+    'ner': ModelSpec(
+        repo_id='JasperHG90/distilbert-hindsight-ner',
+        revision='main',
+    ),
+}
+
 
 # Shared ONNX Runtime options
 options = ort.SessionOptions()  # type: ignore

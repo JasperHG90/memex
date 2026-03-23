@@ -23,7 +23,9 @@ async def test_get_embedding_model_defaults(mock_base_onnx_init: MagicMock) -> N
         assert isinstance(model, FastEmbedder)
         mock_base_onnx_init.assert_called_once()
         _, kwargs = mock_base_onnx_init.call_args
-        assert 'minilm-l12-v2-hindsight-embeddings' in str(kwargs['model_dir'])
+        model_dir = str(kwargs['model_dir'])
+        assert 'minilm-l12-v2-hindsight-embeddings' in model_dir
+        assert model_dir.endswith('/main')
 
 
 class TestFastEmbedder:
