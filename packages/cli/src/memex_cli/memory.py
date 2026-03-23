@@ -13,7 +13,6 @@ import mimetypes
 
 import aiofiles
 
-import dspy
 import typer
 from pydantic import BaseModel, Field
 from rich.console import Console
@@ -52,19 +51,27 @@ class ResponseOutput(BaseModel):
     answer: str = Field(..., description="The final answer to the user's query")
 
 
-class ResponseModel(dspy.Signature):
-    """Answer the user's query based on the provided memory context."""
+def _get_response_model():
+    """Lazily define the DSPy Signature to avoid importing dspy at module level."""
+    import dspy
 
-    query: str = dspy.InputField(desc='User query string')
-    memory: list[str] = dspy.InputField(desc='Relevant memory content')
-    output: ResponseOutput = dspy.OutputField(
-        desc='The response output containing the final answer'
-    )
+    class ResponseModel(dspy.Signature):
+        """Answer the user's query based on the provided memory context."""
+
+        query: str = dspy.InputField(desc='User query string')
+        memory: list[str] = dspy.InputField(desc='Relevant memory content')
+        output: ResponseOutput = dspy.OutputField(
+            desc='The response output containing the final answer'
+        )
+
+    return ResponseModel
 
 
 async def generate_answer(query: str, memory: list[MemoryUnitDTO], model_name: str) -> str:
     """Generate an answer using DSPy."""
+    import dspy
 
+    ResponseModel = _get_response_model()
     lm = dspy.LM(model=model_name)
     predictor = dspy.Predict(ResponseModel)
 
