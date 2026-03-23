@@ -12,7 +12,7 @@ from uuid import UUID
 
 logger = logging.getLogger('memex.common.config')
 
-from platformdirs import user_config_dir, user_data_dir, user_log_dir
+from platformdirs import user_cache_dir, user_config_dir, user_data_dir, user_log_dir
 from pydantic import BaseModel, Field, SecretStr, HttpUrl, field_serializer, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
 
@@ -941,6 +941,11 @@ class ServerConfig(BaseModel):
     tracing: TracingConfig = Field(
         default_factory=TracingConfig,
         description='OpenTelemetry tracing configuration. Disabled by default.',
+    )
+
+    cache_dir: str = Field(
+        default_factory=lambda: user_cache_dir('memex'),
+        description='Directory for caching ML models and other artifacts.',
     )
 
     @model_validator(mode='after')

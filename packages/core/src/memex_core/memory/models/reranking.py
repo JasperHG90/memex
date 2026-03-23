@@ -1,13 +1,16 @@
 import logging
-import pathlib as plb
 from typing import cast
 
 import httpx
 import numpy as np
 
 from async_lru import alru_cache
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, MODEL_REGISTRY
-from platformdirs import user_cache_dir
+from memex_core.memory.models.base import (
+    BaseOnnxModel,
+    ModelDownloader,
+    MODEL_REGISTRY,
+    get_cache_dir,
+)
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
 
@@ -20,7 +23,7 @@ async def get_reranking_model() -> 'FastReranker':
         FastReranker: Reranking model instance.
     """
     _spec = MODEL_REGISTRY['reranker']
-    path = plb.Path(user_cache_dir('memex')) / _spec.repo_id.replace('/', '__') / _spec.revision
+    path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
     if not path.exists():
         logger.warning(f'Reranking model not found at {path}. Downloading from Hugging Face Hub...')

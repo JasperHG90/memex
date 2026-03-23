@@ -1,12 +1,15 @@
 import logging
-import pathlib as plb
 from typing import cast
 
 import httpx
 import numpy as np
-from platformdirs import user_cache_dir
 from async_lru import alru_cache
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, MODEL_REGISTRY
+from memex_core.memory.models.base import (
+    BaseOnnxModel,
+    ModelDownloader,
+    MODEL_REGISTRY,
+    get_cache_dir,
+)
 
 logger = logging.getLogger('memex.core.memory.models.embedding')
 
@@ -23,7 +26,7 @@ async def get_embedding_model() -> 'FastEmbedder':
         FastEmbedder: Embedding model instance.
     """
     _spec = MODEL_REGISTRY['embedding']
-    path = plb.Path(user_cache_dir('memex')) / _spec.repo_id.replace('/', '__') / _spec.revision
+    path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
     if not path.exists():
         logger.warning(f'Embedding model not found at {path}. Downloading from Hugging Face Hub...')

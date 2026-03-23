@@ -6,11 +6,10 @@ import string
 import httpx
 import numpy as np
 import onnxruntime as ort
-from platformdirs import user_cache_dir
 from tokenizers import Tokenizer
 
 from async_lru import alru_cache
-from memex_core.memory.models.base import ModelDownloader, options, MODEL_REGISTRY
+from memex_core.memory.models.base import ModelDownloader, options, MODEL_REGISTRY, get_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.ner')
 
@@ -27,7 +26,7 @@ async def get_ner_model() -> 'FastNERModel':
         FastNERModel: NER model instance.
     """
     _spec = MODEL_REGISTRY['ner']
-    path = plb.Path(user_cache_dir('memex')) / _spec.repo_id.replace('/', '__') / _spec.revision
+    path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
     if not path.exists():
         logger.warning(f'NER model not found at {path}. Downloading from Hugging Face Hub...')

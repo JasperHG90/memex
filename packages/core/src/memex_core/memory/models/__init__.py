@@ -1,4 +1,11 @@
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, ModelSpec, MODEL_REGISTRY
+from memex_core.memory.models.base import (
+    BaseOnnxModel,
+    ModelDownloader,
+    ModelSpec,
+    MODEL_REGISTRY,
+    configure_cache_dir,
+    get_cache_dir,
+)
 from memex_core.memory.models.embedding import (
     FastEmbedder,
     get_embedding_model,
@@ -14,6 +21,8 @@ __all__ = [
     'ModelDownloader',
     'ModelSpec',
     'MODEL_REGISTRY',
+    'configure_cache_dir',
+    'get_cache_dir',
     'FastEmbedder',
     'get_embedding_model',
     'FastReranker',
