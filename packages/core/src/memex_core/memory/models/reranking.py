@@ -6,13 +6,10 @@ import httpx
 import numpy as np
 
 from async_lru import alru_cache
-from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader
+from memex_core.memory.models.base import BaseOnnxModel, ModelDownloader, MODEL_REGISTRY
 from platformdirs import user_cache_dir
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
-
-RERANKER_REPO = 'JasperHG90/ms-marco-minilm-l12-hindsight-reranker'
-RERANKER_REVISION = 'v2'
 
 
 @alru_cache(maxsize=1)
@@ -22,11 +19,12 @@ async def get_reranking_model() -> 'FastReranker':
     Returns:
         FastReranker: Reranking model instance.
     """
-    path = plb.Path(user_cache_dir('memex')) / RERANKER_REPO.replace('/', '__') / RERANKER_REVISION
+    _spec = MODEL_REGISTRY['reranker']
+    path = plb.Path(user_cache_dir('memex')) / _spec.repo_id.replace('/', '__') / _spec.revision
 
     if not path.exists():
         logger.warning(f'Reranking model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id=RERANKER_REPO, revision=RERANKER_REVISION)
+        downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
         await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
     return FastReranker(model_dir=str(path), model_name='model.onnx')

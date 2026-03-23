@@ -140,19 +140,13 @@ async def _initialize_models():
     Only downloads files to cache — does NOT load ONNX sessions, since this process
     exits before workers start and the loaded models would be wasted memory.
     """
-    from memex_core.memory.models.base import ModelDownloader
-
-    repo_ids = [
-        'JasperHG90/minilm-l12-v2-hindsight-embeddings',
-        'JasperHG90/ms-marco-minilm-l12-hindsight-reranker',
-        'JasperHG90/distilbert-hindsight-ner',
-    ]
+    from memex_core.memory.models.base import ModelDownloader, MODEL_REGISTRY
 
     console.print('[dim]Ensuring ML models are cached...[/dim]')
     try:
         async with httpx.AsyncClient() as client:
-            for repo_id in repo_ids:
-                downloader = ModelDownloader(repo_id=repo_id)
+            for spec in MODEL_REGISTRY.values():
+                downloader = ModelDownloader(repo_id=spec.repo_id, revision=spec.revision)
                 await downloader.download_async(client, force=False)
         console.print('[dim]Models ready.[/dim]')
     except Exception as e:
