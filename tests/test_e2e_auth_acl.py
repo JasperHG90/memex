@@ -528,3 +528,140 @@ class TestVaultScopedAccess:
 
         resp = _mock_ingest(client, SCOPED_WRITER_KEY, restricted_id)
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Test Group 9: read_vault_ids — additional read-only vault access
+# ---------------------------------------------------------------------------
+
+CROSS_READ_WRITER_KEY = secrets.token_urlsafe(32)
+
+
+@pytest.mark.integration
+class TestReadVaultIds:
+    """Tests that read_vault_ids grants additional read-only access beyond vault_ids."""
+
+    @pytest.fixture()
+    def cross_read_client(
+        self,
+        postgres_container: PostgresContainer,
+        _truncate_db: None,
+    ):
+        """Create vaults and a writer key with read_vault_ids."""
+        _set_env_vars(postgres_container)
+        os.environ['MEMEX_SERVER__AUTH__ENABLED'] = 'true'
+        os.environ['MEMEX_SERVER__AUTH__KEYS'] = json.dumps(
+            [
+                {'key': ADMIN_KEY, 'policy': 'admin'},
+                {
+                    'key': CROSS_READ_WRITER_KEY,
+                    'policy': 'writer',
+                    'vault_ids': ['write-vault'],
+                    'read_vault_ids': ['read-only-vault'],
+                },
+            ]
+        )
+        with TestClient(app) as client:
+            resp = client.post(
+                '/api/v1/vaults',
+                json={'name': 'write-vault'},
+                headers=_h(ADMIN_KEY),
+            )
+            assert resp.status_code == 200
+            write_vault_id = resp.json()['id']
+
+            resp = client.post(
+                '/api/v1/vaults',
+                json={'name': 'read-only-vault'},
+                headers=_h(ADMIN_KEY),
+            )
+            assert resp.status_code == 200
+            read_vault_id = resp.json()['id']
+
+            resp = client.post(
+                '/api/v1/vaults',
+                json={'name': 'forbidden-vault'},
+                headers=_h(ADMIN_KEY),
+            )
+            assert resp.status_code == 200
+            forbidden_vault_id = resp.json()['id']
+
+            yield client, write_vault_id, read_vault_id, forbidden_vault_id
+
+    def test_writer_can_write_to_vault_ids(self, cross_read_client):
+        """Writer can ingest to write-vault (in vault_ids)."""
+        client, write_vault_id, _, _ = cross_read_client
+        resp = _mock_ingest(client, CROSS_READ_WRITER_KEY, write_vault_id)
+        assert resp.status_code == 200
+
+    def test_writer_can_read_from_vault_ids(self, cross_read_client):
+        """Writer can search write-vault (in vault_ids)."""
+        client, write_vault_id, _, _ = cross_read_client
+        resp = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'vault_ids': [write_vault_id]},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 200
+
+    def test_writer_can_read_from_read_vault_ids(self, cross_read_client):
+        """Writer can search read-only-vault (in read_vault_ids)."""
+        client, _, read_vault_id, _ = cross_read_client
+        resp = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'vault_ids': [read_vault_id]},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 200
+
+    def test_writer_cannot_write_to_read_vault_ids(self, cross_read_client):
+        """Writer CANNOT ingest to read-only-vault (only in read_vault_ids)."""
+        client, _, read_vault_id, _ = cross_read_client
+        resp = _mock_ingest(client, CROSS_READ_WRITER_KEY, read_vault_id)
+        assert resp.status_code == 403
+
+    def test_writer_can_cross_vault_read(self, cross_read_client):
+        """Writer can search across both write-vault and read-only-vault."""
+        client, write_vault_id, read_vault_id, _ = cross_read_client
+        resp = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'vault_ids': [write_vault_id, read_vault_id]},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 200
+
+    def test_writer_blocked_from_forbidden_vault_read(self, cross_read_client):
+        """Writer cannot search forbidden-vault (not in vault_ids or read_vault_ids)."""
+        client, _, _, forbidden_vault_id = cross_read_client
+        resp = client.post(
+            '/api/v1/memories/search',
+            json={'query': 'test', 'vault_ids': [forbidden_vault_id]},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 403
+
+    def test_writer_blocked_from_forbidden_vault_write(self, cross_read_client):
+        """Writer cannot ingest to forbidden-vault."""
+        client, _, _, forbidden_vault_id = cross_read_client
+        resp = _mock_ingest(client, CROSS_READ_WRITER_KEY, forbidden_vault_id)
+        assert resp.status_code == 403
+
+    def test_notes_list_respects_read_vault_ids(self, cross_read_client):
+        """List notes with read-only-vault filter should succeed."""
+        client, _, _, _ = cross_read_client
+        resp = client.get(
+            '/api/v1/notes',
+            params={'vault_id': 'read-only-vault'},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 200
+
+    def test_entities_list_respects_read_vault_ids(self, cross_read_client):
+        """List entities with read-only-vault filter should succeed."""
+        client, _, _, _ = cross_read_client
+        resp = client.get(
+            '/api/v1/entities',
+            params={'vault_id': 'read-only-vault'},
+            headers=_h(CROSS_READ_WRITER_KEY),
+        )
+        assert resp.status_code == 200
