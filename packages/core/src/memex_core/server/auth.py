@@ -39,6 +39,7 @@ class AuthContext:
     policy: Policy
     permissions: frozenset[Permission]
     vault_ids: list[str] | None  # None = all vaults (resolved lazily)
+    read_vault_ids: list[str] | None  # additional read-only vault access
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,7 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         policy=key_config.policy,
         permissions=POLICY_PERMISSIONS[key_config.policy],
         vault_ids=key_config.vault_ids,
+        read_vault_ids=key_config.read_vault_ids,
     )
 
     if audit:
@@ -214,9 +216,14 @@ async def check_vault_access(
     auth: AuthContext | None,
     vault_ids: list[UUID | str] | None,
     api: MemexAPI,
+    *,
+    permission: Permission = Permission.READ,
 ) -> None:
     """Raise 403 if the auth context restricts vault access and the request targets
     disallowed vaults.
+
+    For READ operations the effective allowed set is ``vault_ids ∪ read_vault_ids``.
+    For WRITE/DELETE operations only ``vault_ids`` is considered.
 
     Vault name → UUID resolution uses the existing LRU-cached VaultService.
     """
@@ -232,6 +239,16 @@ async def check_vault_access(
             allowed.add(await api.resolve_vault_identifier(v))
         except Exception:
             logger.warning('Could not resolve allowed vault %r for key %s', v, auth.key_prefix)
+
+    # For read operations, also include read_vault_ids.
+    if permission == Permission.READ and auth.read_vault_ids:
+        for v in auth.read_vault_ids:
+            try:
+                allowed.add(await api.resolve_vault_identifier(v))
+            except Exception:
+                logger.warning(
+                    'Could not resolve read-only vault %r for key %s', v, auth.key_prefix
+                )
 
     # Check each requested vault against the allowed set.
     for vid in vault_ids:

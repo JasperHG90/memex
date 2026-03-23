@@ -2,7 +2,7 @@
 
 import logging
 from enum import Enum
-from typing import Literal, Union, Annotated, Any, TypeAlias
+from typing import Literal, Self, Union, Annotated, Any, TypeAlias
 import pathlib as plb
 import os
 import re
@@ -612,10 +612,30 @@ class ApiKeyConfig(BaseModel):
         default=None,
         description='Vault IDs or names this key is scoped to. None = all vaults.',
     )
+    read_vault_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            'Additional vault IDs or names this key may read from (read-only). '
+            'Effective read scope = vault_ids + read_vault_ids. '
+            'Only valid when vault_ids is set.'
+        ),
+    )
     description: str | None = Field(
         default=None,
         description='Human-readable label for this key.',
     )
+
+    @model_validator(mode='after')
+    def validate_read_vault_ids(self) -> Self:
+        """Reject read_vault_ids when vault_ids is None (unrestricted)."""
+        if self.vault_ids is None and self.read_vault_ids is not None:
+            raise ValueError(
+                'read_vault_ids cannot be set when vault_ids is None '
+                '(key already has unrestricted access to all vaults). '
+                'If you need read-only access to specific vaults, use a '
+                'separate key with policy: reader and vault_ids instead.'
+            )
+        return self
 
     @model_validator(mode='before')
     @classmethod

@@ -41,7 +41,13 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI, NoteInput
-from memex_core.server.auth import AuthContext, check_vault_access, get_auth_context, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    Permission,
+    check_vault_access,
+    get_auth_context,
+    require_write,
+)
 from memex_core.server.common import _handle_error, get_api
 
 logger = logging.getLogger('memex.core.server.ingestion')
@@ -98,7 +104,12 @@ async def ingest_note(
 ) -> IngestResponse | JSONResponse:
     """Ingest a note artifact."""
     try:
-        await check_vault_access(auth, [request.vault_id] if request.vault_id else None, api)
+        await check_vault_access(
+            auth,
+            [request.vault_id] if request.vault_id else None,
+            api,
+            permission=Permission.WRITE,
+        )
         # NoteCreateDTO now uses Base64 encoded bytes for content and files.
         # We MUST decode these to raw bytes for the internal NoteInput object
         # so that they are stored correctly (e.g., as raw images) in the filestore.

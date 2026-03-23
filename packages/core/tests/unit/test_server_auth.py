@@ -129,6 +129,34 @@ class TestAuthConfig:
             with pytest.raises(ValueError, match='NONEXISTENT_KEY.*not set'):
                 ApiKeyConfig(key='env:NONEXISTENT_KEY', policy='admin')
 
+    def test_read_vault_ids_requires_vault_ids(self):
+        """read_vault_ids cannot be set when vault_ids is None."""
+        with pytest.raises(ValueError, match='read_vault_ids cannot be set'):
+            ApiKeyConfig(
+                key=SecretStr('test-key'),
+                policy=Policy.WRITER,
+                vault_ids=None,
+                read_vault_ids=['vault-b'],
+            )
+
+    def test_read_vault_ids_allowed_with_vault_ids(self):
+        """read_vault_ids is valid when vault_ids is set."""
+        config = ApiKeyConfig(
+            key=SecretStr('test-key'),
+            policy=Policy.WRITER,
+            vault_ids=['vault-a'],
+            read_vault_ids=['vault-b'],
+        )
+        assert config.read_vault_ids == ['vault-b']
+
+    def test_read_vault_ids_none_by_default(self):
+        """read_vault_ids defaults to None."""
+        config = ApiKeyConfig(
+            key=SecretStr('test-key'),
+            policy=Policy.WRITER,
+        )
+        assert config.read_vault_ids is None
+
 
 # ---------------------------------------------------------------------------
 # _validate_key tests
@@ -430,6 +458,54 @@ class TestAuthContext:
         assert response.status_code == 200
         auth = captured_context['auth']
         assert auth.vault_ids == ['vault-a', 'vault-b']
+
+    def test_auth_context_has_read_vault_ids(self):
+        """Keys with read_vault_ids should propagate them to AuthContext."""
+        key_config = ApiKeyConfig(
+            key=SecretStr(VALID_KEY),
+            policy=Policy.WRITER,
+            vault_ids=['vault-a'],
+            read_vault_ids=['vault-b', 'vault-c'],
+        )
+        config = AuthConfig(enabled=True, keys=[key_config])
+        app = _make_app(config)
+
+        captured_context: dict = {}
+
+        @app.get('/api/v1/check-context')
+        async def check_context(request: Request):
+            captured_context['auth'] = getattr(request.state, 'auth_context', None)
+            return {'ok': True}
+
+        client = TestClient(app)
+        response = client.get('/api/v1/check-context', headers={'X-API-Key': VALID_KEY})
+        assert response.status_code == 200
+        auth = captured_context['auth']
+        assert auth.vault_ids == ['vault-a']
+        assert auth.read_vault_ids == ['vault-b', 'vault-c']
+
+    def test_auth_context_read_vault_ids_none_by_default(self):
+        """Keys without read_vault_ids should have None in AuthContext."""
+        key_config = ApiKeyConfig(
+            key=SecretStr(VALID_KEY),
+            policy=Policy.WRITER,
+            vault_ids=['vault-a'],
+        )
+        config = AuthConfig(enabled=True, keys=[key_config])
+        app = _make_app(config)
+
+        captured_context: dict = {}
+
+        @app.get('/api/v1/check-context')
+        async def check_context(request: Request):
+            captured_context['auth'] = getattr(request.state, 'auth_context', None)
+            return {'ok': True}
+
+        client = TestClient(app)
+        response = client.get('/api/v1/check-context', headers={'X-API-Key': VALID_KEY})
+        assert response.status_code == 200
+        auth = captured_context['auth']
+        assert auth.read_vault_ids is None
 
 
 # ---------------------------------------------------------------------------
