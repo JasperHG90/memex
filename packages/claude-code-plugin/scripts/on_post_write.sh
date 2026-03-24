@@ -34,5 +34,5 @@ if [ $((count % 10)) -ne 0 ]; then
 fi
 
 cat <<'EOF'
-{"systemMessage": "10+ files written this session. If you completed a meaningful task (feature, fix, refactor), save a summary via `memex_add_note` (background: true, author: 'claude-code')."}
+{"systemMessage": "10+ files written this session. If you completed a meaningful task (feature, fix, refactor), save a summary via `\"${CLAUDE_PLUGIN_ROOT}/bin/mx\" add-note` with background: true."}
 EOF

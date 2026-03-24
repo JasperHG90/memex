@@ -13,7 +13,7 @@ command_field=$(echo "$input" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]
 case "$command_field" in
     git\ commit*)
         cat <<'EOF'
-{"systemMessage": "A git commit was just made. Consider whether this change is worth saving to long-term memory via `memex_add_note` (background: true). Good candidates: bug fixes with non-obvious root causes, new features or architectural changes, configuration decisions. Skip for trivial commits (typos, formatting, minor tweaks)."}
+{"systemMessage": "A git commit was just made. Consider whether this change is worth saving to long-term memory via `\"${CLAUDE_PLUGIN_ROOT}/bin/mx\" add-note` with background: true. Good candidates: bug fixes with non-obvious root causes, new features or architectural changes, configuration decisions. Skip for trivial commits (typos, formatting, minor tweaks)."}
 EOF
         ;;
     *)

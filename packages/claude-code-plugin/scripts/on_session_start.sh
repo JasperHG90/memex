@@ -14,7 +14,7 @@ API="${RESOLVED_URL}/api/v1"
 # --- Health check: verify Memex server is reachable ---
 if ! curl -sf --max-time 3 "${API}/health" >/dev/null 2>&1; then
     cat <<EOF
-{"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
+{"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  memex server start -d\n\nMemex memory tools will not work until the server is running."}
 EOF
     exit 0
 fi
@@ -138,12 +138,12 @@ if [ -n "$project_vault" ]; then
     vault_instruction="
 ### Per-project vault
 
-This project uses vault \`${project_vault}\` (project: \`${project_id}\`). Pass \`vault_id: \"${project_vault}\"\` on all Memex write calls (\`memex_add_note\`). Read calls default to search vaults and generally do not need a vault_id override."
+This project uses vault \`${project_vault}\` (project: \`${project_id}\`). Pass \`\"vault_id\": \"${project_vault}\"\` in the JSON body on all Memex write calls (e.g. \`\"\${CLAUDE_PLUGIN_ROOT}/bin/mx\" add-note\`). Read calls default to search vaults and generally do not need a vault_id override."
 else
     vault_instruction="
 ### Per-project vault
 
-No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_write(key=\"project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
+No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, run: \`\"\${CLAUDE_PLUGIN_ROOT}/bin/mx\" kv-write '{\"key\":\"project:${project_id}:vault\",\"value\":\"<vault_name>\"}'\`. This will take effect on the next session."
 fi
 
 additional_context="${session_context}

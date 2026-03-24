@@ -1,0 +1,26 @@
+# 🛠️ [Technical Implementation Name]
+
+**Stack:** [Language/Framework, e.g., Python 3.11, FastAPI]
+**Complexity:** [Time: O(?), Space: O(?)]
+
+## 🎯 Objective
+[1 sentence: What specific problem does this code/pattern solve?]
+
+## 💻 Implementation
+```[language]
+# [Paste the Refactored/Explained Code Here]
+# Ensure code is heavily commented with "Why" not just "What"
+```
+
+## ⚙️ How it Works
+1.  **Input:** [Describe expected input format]
+2.  **Process:** [Step-by-step logic flow]
+3.  **Output:** [Describe return value or side effect]
+
+## ⚠️ Edge Cases & Constraints
+*   **Limitation:** [e.g., "Not thread-safe" or "Max payload 5MB"]
+*   **Error Handling:** [How does it fail? e.g., "Raises ValueError on empty list"]
+
+## 🔄 Alternative Approach
+*   **Alternative:** [Name of a different way to do this]
+*   **Why this was chosen:** [1 sentence trade-off, e.g., "This approach uses more RAM but is 2x faster"]

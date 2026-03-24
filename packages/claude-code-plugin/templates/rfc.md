@@ -1,0 +1,46 @@
+# 📄 RFC-[000]: [Proposal Title]
+
+## ⚡ Summary
+> [Generate a 2-3 sentence "Elevator Pitch" for this proposal. Focus on the value add.]
+
+## 1. Motivation (The "Why")
+*   **Current State:** [Describe the immediate pain point or limitation.]
+*   **Desired Outcome:** [What does success look like? e.g., "Reduce API latency by 50%"]
+
+## 2. Proposed Design (The "How")
+*This is the core specification. Be specific.*
+
+### 2.1 Architecture Change
+[Describe the high-level system flow.]
+
+### 2.2 Public Interface / API Changes
+*Will this break existing clients?*
+
+```[language]
+# [Generate the proposed API definition, Function Signature, or Protocol Buffer]
+# e.g. POST /api/v1/resource
+{
+  "new_field": "value",
+  "deprecated_field": null
+}
+```
+
+### 2.3 Data Model & Storage
+*   **Schema Change:** [New tables, columns, or Redis keys]
+*   **Migration Strategy:** [Is a backfill required? Yes/No]
+
+## 3. Drawbacks & Risks
+*   **Complexity:** [Does this introduce new dependencies?]
+*   **Security:** [Are there PII or AuthZ implications?]
+*   **Performance:** [Estimated latency impact or resource usage]
+
+## 4. Alternatives Considered
+
+| Approach | Why it was rejected |
+| :--- | :--- |
+| **[Alternative A]** | [e.g., "Too computationally expensive"] |
+| **[Alternative B]** | [e.g., "Requires vendor lock-in"] |
+
+## 5. Unresolved Questions
+*   [ ] [Identify a specific edge case the current design doesn't solve]
+*   [ ] [Identify a dependency constraint (e.g., "Waiting on Team X")]

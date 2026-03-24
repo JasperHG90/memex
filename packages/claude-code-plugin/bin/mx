@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Thin wrapper — invokes memex_api.py with memex-common dependency.
+# Skills call this as: "${CLAUDE_PLUGIN_ROOT}/bin/mx" <command> '<args>'
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+exec uv run --with memex-common python3 "${SCRIPT_DIR}/../lib/memex_api.py" "$@"
