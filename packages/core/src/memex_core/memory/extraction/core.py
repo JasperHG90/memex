@@ -46,7 +46,7 @@ from memex_core.memory.extraction.utils import (
     sanitize_text,
     verify_headers,
 )
-from memex_core.memory.extraction.exceptions import OutputTooLongException
+from memex_core.memory.extraction.exceptions import ExtractionError, OutputTooLongException
 from memex_core.llm import run_dspy_operation
 
 BLOCK_HARD_LIMIT = 50_000  # chars — safety cap for pathological input
@@ -178,7 +178,7 @@ async def _extract_facts_from_chunk(
             raise OutputTooLongException() from e
 
         logger.error(f'DSPy Extraction Failed for chunk {chunk_index}: {e}')
-        return []
+        raise ExtractionError(f'Extraction failed for chunk {chunk_index}: {e}') from e
 
 
 def content_hash(text: str) -> str:
@@ -805,14 +805,30 @@ async def extract_facts_from_chunks(
         for i, chunk in enumerate(chunks)
     ]
 
-    chunk_results = await asyncio.gather(*tasks)
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_facts: list[RawFact] = []
     chunk_metadata: list[tuple[str, int]] = []
+    errors: list[BaseException] = []
 
-    for chunk, chunk_facts in zip(chunks, chunk_results):
-        all_facts.extend(chunk_facts)
-        chunk_metadata.append((chunk, len(chunk_facts)))
+    for chunk, result in zip(chunks, chunk_results):
+        if isinstance(result, BaseException):
+            errors.append(result)
+            chunk_metadata.append((chunk, 0))
+        else:
+            all_facts.extend(result)
+            chunk_metadata.append((chunk, len(result)))
+
+    if errors and not all_facts:
+        raise ExtractionError(
+            f'All {len(errors)}/{len(chunks)} chunk(s) failed extraction. First error: {errors[0]}'
+        ) from errors[0]
+
+    if errors:
+        logger.warning(
+            f'{len(errors)}/{len(chunks)} chunk(s) failed extraction, '
+            f'proceeding with {len(all_facts)} facts from remaining chunks.'
+        )
 
     return all_facts, chunk_metadata
 

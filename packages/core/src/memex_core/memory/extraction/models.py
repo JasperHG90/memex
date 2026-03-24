@@ -10,7 +10,7 @@ from uuid import UUID
 
 import tiktoken
 from sqlmodel import SQLModel, Field
-from pydantic import BaseModel, field_serializer, field_validator
+from pydantic import BaseModel, field_serializer, field_validator, model_validator
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
@@ -498,6 +498,18 @@ class ExtractedOutput(SQLModel):
     extracted_facts: list[RawFact] = Field(
         ..., description='List of extracted facts from the content.'
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def unwrap_list_input(cls, data: Any) -> Any:
+        """Handle DSPy JSON adapter fallback returning a list instead of a dict.
+
+        When the LLM returns {"extracted_facts": [...]}, DSPy extracts the bare
+        list [...] as the field value. Wrap it back into the expected dict shape.
+        """
+        if isinstance(data, list):
+            return {'extracted_facts': data}
+        return data
 
 
 class ExtractedFact(BaseFact):

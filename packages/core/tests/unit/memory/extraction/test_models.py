@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from memex_core.memory.extraction.models import CausalRelation, RawFact
+from memex_core.memory.extraction.models import CausalRelation, ExtractedOutput, RawFact
 from memex_core.types import CausalRelationshipTypes, FactKindTypes, FactTypes
 
 
@@ -154,3 +154,33 @@ class TestBlockSummaryFormatted:
         assert restored.topic == bs.topic
         assert restored.key_points == bs.key_points
         assert restored.tags == bs.tags
+
+
+class TestExtractedOutputListUnwrap:
+    """Tests for ExtractedOutput model_validator that unwraps bare lists."""
+
+    def test_dict_input_unchanged(self) -> None:
+        """Normal dict input still works."""
+        result = ExtractedOutput(
+            extracted_facts=[
+                RawFact(fact_type='world', what='Test fact', entities=[]),
+            ]
+        )
+        assert len(result.extracted_facts) == 1
+
+    def test_list_input_unwrapped(self) -> None:
+        """Bare list input (DSPy JSON adapter fallback) is wrapped into dict."""
+        raw = [{'fact_type': 'world', 'what': 'Test fact', 'entities': []}]
+        result = ExtractedOutput.model_validate(raw)
+        assert len(result.extracted_facts) == 1
+        assert result.extracted_facts[0].what == 'Test fact'
+
+    def test_empty_list_input(self) -> None:
+        """Empty list produces empty extracted_facts."""
+        result = ExtractedOutput.model_validate([])
+        assert result.extracted_facts == []
+
+    def test_invalid_input_still_fails(self) -> None:
+        """Non-list, non-dict input still raises ValidationError."""
+        with pytest.raises(ValidationError):
+            ExtractedOutput.model_validate('not valid')
