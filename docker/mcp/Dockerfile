@@ -42,4 +42,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
 ENTRYPOINT ["memex", "mcp", "run"]
-CMD ["--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["--transport", "http", "--host", "0.0.0.0", "--port", "8000"]
