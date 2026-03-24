@@ -18,10 +18,10 @@ def main():
 @app.command()
 def run(
     transport: str = typer.Option(
-        'stdio', '--transport', '-t', help='Transport mode: stdio or sse'
+        'stdio', '--transport', '-t', help='Transport mode: stdio, http, or sse'
     ),
-    host: str = typer.Option('0.0.0.0', help='Host for SSE'),
-    port: int = typer.Option(8000, help='Port for SSE'),
+    host: str = typer.Option('0.0.0.0', help='Host for network transports'),
+    port: int = typer.Option(8000, help='Port for network transports'),
 ):
     """
     Run the Memex MCP server.
@@ -32,7 +32,7 @@ def run(
         raise ModuleNotFoundError(
             "'memex_mcp' is not installed. Please install 'memex_cli' with the 'mcp' extra"
         )
-    if transport == 'sse':
-        asyncio.run(mcp.run_async(transport='sse', host=host, port=port))
+    if transport in ('http', 'sse'):
+        asyncio.run(mcp.run_async(transport=transport, host=host, port=port))
     else:
         asyncio.run(mcp.run_async(transport='stdio'))
