@@ -3,30 +3,23 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Annotated, Any, List, Literal
+from typing import Annotated, Any, List, Literal
 from uuid import UUID
 
 import ast
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
+from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_common.schemas import TOCNodeDTO
-
-if TYPE_CHECKING:
-    from memex_core.api import MemexAPI
-    from memex_core.storage.filestore import FileStore
-    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
-    from memex_common.client import RemoteMemexAPI
 
 
 class AppContext(BaseModel):
     """Application context for the Memex MCP server."""
 
     config: MemexConfig = Field(..., description='The Memex configuration settings.')
-    _file_store: FileStore = PrivateAttr()
-    _meta_store_engine: AsyncPostgresMetaStoreEngine = PrivateAttr()
-    _api: 'MemexAPI | RemoteMemexAPI' = PrivateAttr()
+    _api: RemoteMemexAPI = PrivateAttr()
 
     model_config = {'arbitrary_types_allowed': True}
 

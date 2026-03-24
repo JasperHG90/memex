@@ -39,10 +39,11 @@ services:
   # mcp:
   #   build:
   #     context: .
-  #     dockerfile: docker/memex/Dockerfile
-  #   command: ["mcp"]
+  #     dockerfile: docker/mcp/Dockerfile
   #   environment:
   #     MEMEX_SERVER_URL: http://api:8000
+  #   ports:
+  #     - "8001:8000"
   #   depends_on:
   #     - api
 

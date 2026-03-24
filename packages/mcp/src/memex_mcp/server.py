@@ -2011,8 +2011,20 @@ async def memex_kv_list(
 
 
 def entrypoint():
-    """Entrypoint for the MCP server."""
-    asyncio.run(mcp.run_async(transport='stdio'))
+    """Entrypoint for the MCP server.
+
+    Configurable via environment variables:
+        MCP_TRANSPORT: 'stdio' (default) or 'sse'
+        MCP_HOST: Host for SSE transport (default '0.0.0.0')
+        MCP_PORT: Port for SSE transport (default 8000)
+    """
+    transport = os.environ.get('MCP_TRANSPORT', 'stdio')
+    host = os.environ.get('MCP_HOST', '0.0.0.0')
+    port = int(os.environ.get('MCP_PORT', '8000'))
+    if transport == 'sse':
+        asyncio.run(mcp.run_async(transport='sse', host=host, port=port))
+    else:
+        asyncio.run(mcp.run_async(transport='stdio'))
 
 
 if __name__ == '__main__':
