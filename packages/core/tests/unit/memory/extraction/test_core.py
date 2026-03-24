@@ -11,9 +11,10 @@ from memex_core.memory.extraction.core import (
     _convert_causal_relations,
     _extract_facts_with_auto_split,
     chunk_text,
+    extract_facts_from_chunks,
     extract_facts_from_text,
 )
-from memex_core.memory.extraction.exceptions import OutputTooLongException
+from memex_core.memory.extraction.exceptions import ExtractionError, OutputTooLongException
 from memex_core.memory.extraction.models import CausalRelation, RawFact
 from memex_core.types import CausalRelationshipTypes
 
@@ -149,20 +150,21 @@ class TestExtractFactsFromChunk:
     async def test_extract_facts_from_chunk_generic_error(
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
-        """Test that generic errors return empty list and do not crash."""
+        """Test that generic DSPy errors propagate as ExtractionError."""
+        from memex_core.memory.extraction.exceptions import ExtractionError
+
         mock_predictor.acall.side_effect = RuntimeError('Some random API error')
 
-        facts = await _extract_facts_from_chunk(
-            chunk='test chunk',
-            chunk_index=0,
-            total_chunks=1,
-            event_date=dt.datetime.now(),
-            context='test context',
-            lm=mock_lm,
-            predictor=mock_predictor,
-        )
-
-        assert facts == []
+        with pytest.raises(ExtractionError, match='Extraction failed for chunk 0'):
+            await _extract_facts_from_chunk(
+                chunk='test chunk',
+                chunk_index=0,
+                total_chunks=1,
+                event_date=dt.datetime.now(),
+                context='test context',
+                lm=mock_lm,
+                predictor=mock_predictor,
+            )
 
 
 class TestExtractFactsFromChunkMalformedOutput:
@@ -199,81 +201,89 @@ class TestExtractFactsFromChunkMalformedOutput:
     async def test_value_error_from_dspy_parsing(
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
-        """DSPy raises ValueError on unparseable JSON -> returns empty list."""
+        """DSPy raises ValueError on unparseable JSON -> raises ExtractionError."""
+        from memex_core.memory.extraction.exceptions import ExtractionError
+
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=ValueError('Could not parse LLM output as JSON'),
         ):
-            facts = await _extract_facts_from_chunk(
-                chunk='test chunk',
-                chunk_index=0,
-                total_chunks=1,
-                event_date=dt.datetime.now(),
-                context='ctx',
-                lm=mock_lm,
-                predictor=mock_predictor,
-            )
-            assert facts == []
+            with pytest.raises(ExtractionError):
+                await _extract_facts_from_chunk(
+                    chunk='test chunk',
+                    chunk_index=0,
+                    total_chunks=1,
+                    event_date=dt.datetime.now(),
+                    context='ctx',
+                    lm=mock_lm,
+                    predictor=mock_predictor,
+                )
 
     @pytest.mark.asyncio
     async def test_key_error_from_malformed_structure(
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
-        """KeyError when expected key missing in response -> returns empty list."""
+        """KeyError when expected key missing in response -> raises ExtractionError."""
+        from memex_core.memory.extraction.exceptions import ExtractionError
+
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=KeyError('extracted_facts'),
         ):
-            facts = await _extract_facts_from_chunk(
-                chunk='test chunk',
-                chunk_index=0,
-                total_chunks=1,
-                event_date=dt.datetime.now(),
-                context='ctx',
-                lm=mock_lm,
-                predictor=mock_predictor,
-            )
-            assert facts == []
+            with pytest.raises(ExtractionError):
+                await _extract_facts_from_chunk(
+                    chunk='test chunk',
+                    chunk_index=0,
+                    total_chunks=1,
+                    event_date=dt.datetime.now(),
+                    context='ctx',
+                    lm=mock_lm,
+                    predictor=mock_predictor,
+                )
 
     @pytest.mark.asyncio
     async def test_os_error_returns_empty(
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
-        """OSError (network issue) -> returns empty list."""
+        """OSError (network issue) -> raises ExtractionError."""
+        from memex_core.memory.extraction.exceptions import ExtractionError
+
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=OSError('Connection refused'),
         ):
-            facts = await _extract_facts_from_chunk(
-                chunk='test chunk',
-                chunk_index=0,
-                total_chunks=1,
-                event_date=dt.datetime.now(),
-                context='ctx',
-                lm=mock_lm,
-                predictor=mock_predictor,
-            )
-            assert facts == []
+            with pytest.raises(ExtractionError):
+                await _extract_facts_from_chunk(
+                    chunk='test chunk',
+                    chunk_index=0,
+                    total_chunks=1,
+                    event_date=dt.datetime.now(),
+                    context='ctx',
+                    lm=mock_lm,
+                    predictor=mock_predictor,
+                )
 
     @pytest.mark.asyncio
     async def test_runtime_error_non_context_returns_empty(
         self, mock_lm: DummyLM, mock_predictor: MagicMock
     ) -> None:
-        """RuntimeError that is NOT a context-length error -> returns empty list."""
+        """RuntimeError that is NOT a context-length error -> raises ExtractionError."""
+        from memex_core.memory.extraction.exceptions import ExtractionError
+
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation',
             side_effect=RuntimeError('unexpected internal error'),
         ):
-            facts = await _extract_facts_from_chunk(
-                chunk='test chunk',
-                chunk_index=0,
-                total_chunks=1,
-                event_date=dt.datetime.now(),
-                context='ctx',
-                lm=mock_lm,
-                predictor=mock_predictor,
-            )
-            assert facts == []
+            with pytest.raises(ExtractionError):
+                await _extract_facts_from_chunk(
+                    chunk='test chunk',
+                    chunk_index=0,
+                    total_chunks=1,
+                    event_date=dt.datetime.now(),
+                    context='ctx',
+                    lm=mock_lm,
+                    predictor=mock_predictor,
+                )
 
     @pytest.mark.asyncio
     async def test_runtime_error_context_length_raises_output_too_long(
@@ -486,3 +496,63 @@ class TestConvertCausalRelations:
         assert len(converted) == 2
         assert converted[0].strength == 0.0
         assert converted[1].strength == 1.0
+
+
+class TestExtractFactsFromChunksErrorHandling:
+    """Tests for partial and total failure in extract_facts_from_chunks."""
+
+    @pytest.mark.asyncio
+    async def test_all_chunks_fail_raises_extraction_error(self) -> None:
+        """When every chunk fails, raise ExtractionError."""
+
+        async def _fail(**kwargs):
+            raise ExtractionError('boom')
+
+        with patch(
+            'memex_core.memory.extraction.core._extract_facts_with_auto_split',
+            side_effect=_fail,
+        ):
+            with pytest.raises(ExtractionError, match='All 2/2 chunk'):
+                await extract_facts_from_chunks(
+                    chunks=['chunk a', 'chunk b'],
+                    event_date=dt.datetime.now(),
+                    lm=DummyLM([]),
+                    predictor=MagicMock(),
+                    agent_name='test',
+                )
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_returns_successful_facts(self) -> None:
+        """When some chunks fail but others succeed, return the successful facts."""
+        good_fact = RawFact(
+            fact_type='world',
+            what='A test fact',
+            entities=[],
+        )
+
+        call_count = 0
+
+        async def _mixed(*args, **kwargs):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            if idx == 0:
+                raise ExtractionError('chunk 0 failed')
+            return [good_fact]
+
+        with patch(
+            'memex_core.memory.extraction.core._extract_facts_with_auto_split',
+            side_effect=_mixed,
+        ):
+            facts, meta = await extract_facts_from_chunks(
+                chunks=['bad chunk', 'good chunk'],
+                event_date=dt.datetime.now(),
+                lm=DummyLM([]),
+                predictor=MagicMock(),
+                agent_name='test',
+            )
+
+        assert len(facts) == 1
+        assert facts[0].what == 'A test fact'
+        assert meta[0] == ('bad chunk', 0)
+        assert meta[1] == ('good chunk', 1)
