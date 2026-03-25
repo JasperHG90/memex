@@ -1,5 +1,27 @@
 import type { VaultDTO, IngestResponse } from '../types';
 
+/**
+ * Route fetch through the background script to bypass CORS restrictions
+ * that Firefox imposes on extension pages (popup/options) for requests
+ * with custom headers like X-API-Key.
+ */
+async function bgFetch(
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<{ ok: boolean; status: number; statusText: string; text: () => string }> {
+  const resp = (await browser.runtime.sendMessage({
+    action: 'proxyFetch',
+    url,
+    init,
+  })) as { ok: boolean; status: number; statusText: string; body: string };
+  return {
+    ok: resp.ok,
+    status: resp.status,
+    statusText: resp.statusText,
+    text: () => resp.body,
+  };
+}
+
 /** Known tracking query parameters to strip for URL canonicalization. */
 const TRACKING_PARAMS = new Set([
   'utm_source',
@@ -59,13 +81,13 @@ function authHeaders(apiKey: string): Record<string, string> {
  * The /vaults endpoint returns NDJSON (one JSON object per line).
  */
 export async function fetchVaults(serverUrl: string, apiKey: string): Promise<VaultDTO[]> {
-  const resp = await fetch(`${serverUrl}/api/v1/vaults`, {
+  const resp = await bgFetch(`${serverUrl}/api/v1/vaults`, {
     headers: authHeaders(apiKey),
   });
   if (!resp.ok) {
     throw new Error(`Failed to fetch vaults: ${resp.status} ${resp.statusText}`);
   }
-  const text = await resp.text();
+  const text = resp.text();
   return text
     .trim()
     .split('\n')
@@ -92,7 +114,7 @@ export async function saveNote(
   },
 ): Promise<IngestResponse> {
   const url = `${serverUrl}/api/v1/ingestions${note.background ? '?background=true' : ''}`;
-  const resp = await fetch(url, {
+  const resp = await bgFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -110,10 +132,10 @@ export async function saveNote(
     }),
   });
   if (!resp.ok) {
-    const body = await resp.text();
+    const body = resp.text();
     throw new Error(`Save failed: ${resp.status} — ${body}`);
   }
-  return (await resp.json()) as IngestResponse;
+  return JSON.parse(resp.text()) as IngestResponse;
 }
 
 /**

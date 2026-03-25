@@ -49,17 +49,23 @@ testBtn.addEventListener('click', async () => {
   statusEl.className = '';
 
   try {
-    const resp = await fetch(`${serverUrl}/api/v1/vaults`, {
-      headers: apiKey ? { 'X-API-Key': apiKey } : {},
-    });
+    const resp = (await browser.runtime.sendMessage({
+      action: 'proxyFetch',
+      url: `${serverUrl}/api/v1/vaults`,
+      init: { headers: apiKey ? { 'X-API-Key': apiKey } : {} },
+    })) as { ok: boolean; status: number };
 
     if (resp.ok) {
       connectionStatus.className = 'indicator connected';
       statusEl.textContent = 'Connected!';
       statusEl.className = 'success';
-    } else {
+    } else if (resp.status > 0) {
       connectionStatus.className = 'indicator failed';
       statusEl.textContent = `Server responded with ${resp.status}`;
+      statusEl.className = 'error';
+    } else {
+      connectionStatus.className = 'indicator failed';
+      statusEl.textContent = 'Could not connect to server.';
       statusEl.className = 'error';
     }
   } catch {
