@@ -495,6 +495,14 @@ class VaultDTO(BaseModel):
         description='Timestamp of the most recently added note in this vault.',
     )
 
+    access: list[str] | None = Field(
+        default=None,
+        description=(
+            'Effective permissions for the current API key on this vault. '
+            'None when auth is disabled. Example: ["read", "write"].'
+        ),
+    )
+
 
 class DefaultVaultsResponse(BaseModel):
     """Response model for the default vaults endpoint."""

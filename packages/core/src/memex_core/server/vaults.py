@@ -7,8 +7,15 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from memex_common.config import Permission
 from memex_common.exceptions import MemexError
-from memex_core.server.auth import require_delete, require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    get_auth_context,
+    require_delete,
+    require_read,
+    require_write,
+)
 from memex_common.schemas import CreateVaultRequest, VaultDTO
 
 from memex_core.api import MemexAPI
@@ -24,6 +31,48 @@ logger = logging.getLogger('memex.core.server.vaults')
 router = APIRouter(prefix='/api/v1')
 
 
+async def _vault_access(
+    vault_id: UUID,
+    auth: AuthContext | None,
+    api: MemexAPI,
+) -> list[str] | None:
+    """Compute effective permissions for a vault given the current auth context.
+
+    Returns None when auth is disabled (no restrictions).
+    """
+    if auth is None:
+        return None
+
+    perms: set[Permission] = set()
+
+    if auth.vault_ids is None:
+        # Key has unrestricted vault access — full policy permissions apply.
+        perms = set(auth.permissions)
+    else:
+        # Resolve allowed vault IDs.
+        write_allowed: set[UUID] = set()
+        for v in auth.vault_ids:
+            try:
+                write_allowed.add(await api.resolve_vault_identifier(v))
+            except Exception:
+                pass
+
+        read_only: set[UUID] = set()
+        if auth.read_vault_ids:
+            for v in auth.read_vault_ids:
+                try:
+                    read_only.add(await api.resolve_vault_identifier(v))
+                except Exception:
+                    pass
+
+        if vault_id in write_allowed:
+            perms = set(auth.permissions)
+        elif vault_id in read_only:
+            perms = {Permission.READ}
+
+    return sorted(p.value for p in perms)
+
+
 @router.get(
     '/vaults',
     response_class=StreamingResponse,
@@ -32,6 +81,7 @@ router = APIRouter(prefix='/api/v1')
 )
 async def list_vaults(
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)],
     state: Literal['active'] | None = Query(
         None, description='Filter by state: "active" for active vault'
     ),
@@ -53,8 +103,13 @@ async def list_vaults(
                     status_code=404,
                     detail=f'Active vault "{active_vault_name}" not found',
                 )
+            access = await _vault_access(vault.id, auth, api)
             return ndjson_response(
-                [VaultDTO(id=vault.id, name=vault.name, description=vault.description)]
+                [
+                    VaultDTO(
+                        id=vault.id, name=vault.name, description=vault.description, access=access
+                    )
+                ]
             )
 
         if is_default:
@@ -66,7 +121,10 @@ async def list_vaults(
                     status_code=404,
                     detail=f'Active vault "{active_vault_name}" not found',
                 )
-            active_dto = VaultDTO(id=active.id, name=active.name, description=active.description)
+            active_access = await _vault_access(active.id, auth, api)
+            active_dto = VaultDTO(
+                id=active.id, name=active.name, description=active.description, access=active_access
+            )
 
             # Resolve default reader vault (if different from active)
             reader_name = api.config.server.default_reader_vault
@@ -75,11 +133,13 @@ async def list_vaults(
                 try:
                     reader = await api.get_vault_by_name(reader_name)
                     if reader:
+                        reader_access = await _vault_access(reader.id, auth, api)
                         dtos.append(
                             VaultDTO(
                                 id=reader.id,
                                 name=reader.name,
                                 description=reader.description,
+                                access=reader_access,
                             )
                         )
                     else:
@@ -96,19 +156,22 @@ async def list_vaults(
         # Default: list all vaults with note counts
         rows = await api.list_vaults_with_counts()
         active_vault_id = await api.resolve_vault_identifier(api.config.server.default_active_vault)
-        return ndjson_response(
-            [
+        dtos_full: list[VaultDTO] = []
+        for row in rows:
+            v = row['vault']
+            access = await _vault_access(v.id, auth, api)
+            dtos_full.append(
                 VaultDTO(
-                    id=row['vault'].id,
-                    name=row['vault'].name,
-                    description=row['vault'].description,
-                    is_active=(row['vault'].id == active_vault_id),
+                    id=v.id,
+                    name=v.name,
+                    description=v.description,
+                    is_active=(v.id == active_vault_id),
                     note_count=row['note_count'],
                     last_note_added_at=row['last_note_added_at'],
+                    access=access,
                 )
-                for row in rows
-            ]
-        )
+            )
+        return ndjson_response(dtos_full)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list vaults')
 
