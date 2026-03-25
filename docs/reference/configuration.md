@@ -16,10 +16,9 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
-| `server_url` | string | `""` (derived) | URL of the Memex Core server used by clients (CLI, MCP, Dashboard). If empty, derived from `server.host` and `server.port`. |
+| `server_url` | string | `""` (derived) | URL of the Memex Core server used by clients (CLI, MCP). If empty, derived from `server.host` and `server.port`. |
 | `server` | object | — | Core API server and storage configuration. See [Server Settings](#server-settings). |
 | `vault` | object | — | Client-side vault overrides. See [Vault Settings](#vault-settings-vault). |
-| `dashboard` | object | — | Dashboard UI configuration. See [Dashboard Settings](#dashboard-settings). |
 
 ---
 
@@ -286,15 +285,6 @@ Note: Document search does not support the `mental_model` strategy.
 
 ---
 
-## Dashboard Settings (`dashboard`)
-
-| Key | Type | Default | Description |
-|:----|:-----|:--------|:------------|
-| `host` | string | `0.0.0.0` | Host to serve the React + Vite dashboard on. |
-| `port` | int | `3001` | Port for the dashboard dev/preview server. |
-
----
-
 ## ModelConfig
 
 Reusable model configuration block used by `default_model`, `extraction.model`, `reflection.model`, `document.model`, and `text_splitting.model`.
@@ -534,7 +524,7 @@ server:
       - key: "key-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         policy: reader
         vault_ids: ["project-alpha"]
-        description: "Dashboard read-only"
+        description: "Read-only access"
     webhook_secret: "whsec-xxxxxxxxxxxxxxxxxxxxxxxx"
 
   rate_limit:
@@ -593,10 +583,6 @@ server:
 
   document:
     mmr_lambda: 0.7
-
-dashboard:
-  host: 0.0.0.0
-  port: 3001
 ```
 
 ### Per-Project (vault override)

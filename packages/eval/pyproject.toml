@@ -6,6 +6,7 @@ authors = [
   {name="Jasper Ginn", email="jasperginn@gmail.com"}
 ]
 requires-python = ">=3.12"
+license = "Apache-2.0"
 dependencies = [
     "memex-common",
     "httpx>=0.27",

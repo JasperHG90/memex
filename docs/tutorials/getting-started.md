@@ -140,7 +140,6 @@ We have successfully installed Memex, configured the database, started the serve
 
 ## Next Steps
 
-* [Using the Dashboard](using-the-dashboard.md) — explore your knowledge visually
 * [Configure Memex](../how-to/configure-memex.md) — customize models, storage backends, and more
 * [Set Up Claude Code Integration](../how-to/setup-claude-code.md) — give Claude Code long-term memory with one command
 * [Organize with Vaults](../how-to/organize-with-vaults.md) — manage multiple knowledge domains

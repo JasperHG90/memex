@@ -13,7 +13,6 @@ Learning-oriented guides that walk you through complete workflows from start to 
 | Guide | Description |
 |:------|:------------|
 | [Getting Started](tutorials/getting-started.md) | Install Memex, configure PostgreSQL, ingest your first document, and run a search. |
-| [Using the Dashboard](tutorials/using-the-dashboard.md) | Explore the web UI: search memories, browse entities, visualize the knowledge graph, and monitor reflection. |
 | [AI Agent Memory](tutorials/ai-agent-memory.md) | Give an AI agent persistent long-term memory using Memex via MCP or the OpenClaw plugin. |
 
 ---
@@ -61,7 +60,6 @@ Understanding-oriented articles that explain how Memex works and why it is desig
 | [Extraction Pipeline](explanation/extraction-pipeline.md) | How documents are chunked, facts are extracted, entities are resolved, and embeddings are generated. |
 | [Retrieval Strategies](explanation/retrieval-strategies.md) | The TEMPR system: five search strategies fused via Reciprocal Rank Fusion. |
 | [Reflection and Mental Models](explanation/reflection-and-mental-models.md) | How the background engine synthesizes observations into evolving mental models. |
-| [Dashboard Architecture](explanation/dashboard-architecture.md) | React + Vite frontend design, data flow, and component structure. |
 | [OpenClaw Plugin](explanation/openclaw-plugin.md) | Plugin architecture, lifecycle hooks, circuit breaker, and prompt injection protection. |
 
 ---
@@ -76,7 +74,9 @@ Each package in the monorepo has its own README with package-specific details.
 | [packages/cli](../packages/cli/README.md) | Typer CLI (`memex` command). |
 | [packages/mcp](../packages/mcp/README.md) | FastMCP server for LLM integration. |
 | [packages/common](../packages/common/README.md) | Shared Pydantic models, configuration, and exceptions. |
-| [packages/dashboard](../packages/dashboard/README.md) | React + Vite web UI. |
+| [packages/eval](../packages/eval/README.md) | LoCoMo evaluation framework and benchmarks. |
+| [packages/claude-code-plugin](../packages/claude-code-plugin/README.md) | Claude Code plugin for cross-project memory integration. |
 | [packages/openclaw](../packages/openclaw/README.md) | Memex memory plugin for OpenClaw agents. |
+| [packages/firefox-extension](../packages/firefox-extension/README.md) | Firefox extension for web content capture. |
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.

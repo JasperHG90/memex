@@ -53,3 +53,9 @@ repos:
         language: system
         files: ^packages/dashboard/.*\.(ts|tsx)$
         pass_filenames: false
+      - id: update-test-badge
+        name: update test count badge
+        entry: bash -c 'COUNT=$(uv run pytest --collect-only -q 2>/dev/null | grep "tests collected" | grep -oP "^\d+") && if [ -n "$COUNT" ]; then FORMATTED=$(printf "%'"'"'d" "$COUNT") && sed -i "s/tests-[0-9,]*%20passing/tests-${FORMATTED}%20passing/" README.md && git add README.md; fi'
+        language: system
+        files: ^(packages/.*/(tests|test)/.*\.py|tests/.*\.py)$
+        pass_filenames: false

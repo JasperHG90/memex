@@ -2,6 +2,7 @@
   "name": "save-to-memex",
   "version": "0.1.0-alpha.5",
   "description": "Firefox extension to save articles to Memex",
+  "license": "Apache-2.0",
   "private": true,
   "scripts": {
     "compile": "node esbuild.mjs",
