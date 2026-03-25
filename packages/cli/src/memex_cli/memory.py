@@ -105,7 +105,18 @@ async def view_memory(
             if len(uuids) == 1:
                 units = [await api.get_memory_unit(uuids[0])]
             else:
-                units = list(await asyncio.gather(*[api.get_memory_unit(uid) for uid in uuids]))
+                raw = await asyncio.gather(
+                    *[api.get_memory_unit(uid) for uid in uuids],
+                    return_exceptions=True,
+                )
+                units = []
+                for uid_str, r in zip(unit_ids, raw):
+                    if isinstance(r, Exception):
+                        console.print(f'[red]Error fetching {uid_str}: {r}[/red]')
+                    else:
+                        units.append(r)
+                if not units:
+                    return
         except Exception as e:
             handle_api_error(e)
             return

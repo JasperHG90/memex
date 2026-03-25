@@ -726,8 +726,18 @@ async def view_page_index(
             if len(uuids) == 1:
                 results = [(note_ids[0], await api.get_note_page_index(uuids[0]))]
             else:
-                raw = await asyncio.gather(*[api.get_note_page_index(uid) for uid in uuids])
-                results = list(zip(note_ids, raw))
+                raw = await asyncio.gather(
+                    *[api.get_note_page_index(uid) for uid in uuids],
+                    return_exceptions=True,
+                )
+                results = []
+                for nid, r in zip(note_ids, raw):
+                    if isinstance(r, Exception):
+                        console.print(f'[red]Error fetching page index for {nid}: {r}[/red]')
+                    else:
+                        results.append((nid, r))
+                if not results:
+                    return
         except Exception as e:
             handle_api_error(e)
             return
@@ -926,8 +936,18 @@ async def get_asset(
             if len(asset_paths) == 1:
                 fetched = [(asset_paths[0], await api.get_resource(asset_paths[0]))]
             else:
-                raw = await asyncio.gather(*[api.get_resource(p) for p in asset_paths])
-                fetched = list(zip(asset_paths, raw))
+                raw = await asyncio.gather(
+                    *[api.get_resource(p) for p in asset_paths],
+                    return_exceptions=True,
+                )
+                fetched = []
+                for path, r in zip(asset_paths, raw):
+                    if isinstance(r, Exception):
+                        console.print(f'[red]Error fetching {path}: {r}[/red]')
+                    else:
+                        fetched.append((path, r))
+                if not fetched:
+                    return
         except Exception as e:
             handle_api_error(e)
             return
