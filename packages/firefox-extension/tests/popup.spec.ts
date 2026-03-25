@@ -85,27 +85,27 @@ async function setupPopupMocks(
           openOptionsPage: function() {},
           sendMessage: async function(msg) {
             if (msg && msg.action === 'downloadImage') return { ok: false };
+            if (msg && msg.action === 'proxyFetch') {
+              var url = msg.url || '';
+              if (url.indexOf('/api/v1/vaults') !== -1) {
+                return { ok: true, status: 200, statusText: 'OK', body: ${JSON.stringify(vaultsNDJSON)} };
+              }
+              if (url.indexOf('/api/v1/ingestions') !== -1) {
+                if (msg.init && msg.init.body) window.__lastSaveBody = JSON.parse(msg.init.body);
+                ${
+                  saveOk
+                    ? `return { ok: true, status: 200, statusText: 'OK', body: JSON.stringify(${JSON.stringify(saveResponse)}) };`
+                    : `return { ok: false, status: 500, statusText: 'Internal Server Error', body: 'Internal Server Error' };`
+                }
+              }
+              return { ok: false, status: 404, statusText: 'Not Found', body: '' };
+            }
             return {};
           },
         },
       };
 
       window.__lastSaveBody = null;
-      var _realFetch = window.fetch;
-      window.fetch = async function(url, opts) {
-        if (typeof url === 'string' && url.indexOf('/api/v1/vaults') !== -1) {
-          return { ok: true, text: async function() { return ${JSON.stringify(vaultsNDJSON)}; } };
-        }
-        if (typeof url === 'string' && url.indexOf('/api/v1/ingestions') !== -1) {
-          if (opts && opts.body) window.__lastSaveBody = JSON.parse(opts.body);
-          ${
-            saveOk
-              ? `return { ok: true, json: async function() { return ${JSON.stringify(saveResponse)}; } };`
-              : `return { ok: false, status: 500, text: async function() { return 'Internal Server Error'; } };`
-          }
-        }
-        return _realFetch(url, opts);
-      };
 
       window.close = function() {};
     </script>
