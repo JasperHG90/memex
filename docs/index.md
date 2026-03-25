@@ -13,7 +13,7 @@ Learning-oriented guides that walk you through complete workflows from start to 
 | Guide | Description |
 |:------|:------------|
 | [Getting Started](tutorials/getting-started.md) | Install Memex, configure PostgreSQL, ingest your first document, and run a search. |
-| [AI Agent Memory](tutorials/ai-agent-memory.md) | Give an AI agent persistent long-term memory using Memex via MCP or the OpenClaw plugin. |
+| [AI Agent Memory](tutorials/ai-agent-memory.md) | Give an AI agent persistent long-term memory using Memex via MCP. |
 
 ---
 
@@ -31,7 +31,6 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 | [Doc Search vs Memory Search](how-to/doc-search-vs-memory-search.md) | Choose between note search (raw documents) and memory search (extracted facts). |
 | [Database Migrations](how-to/database-migrations.md) | Manage PostgreSQL schema migrations with `memex db` (Alembic). |
 | [Delete and Archival](how-to/delete-archival.md) | Delete notes, entities, and memory units; manage data lifecycle. |
-| [OpenClaw Integration](how-to/openclaw-integration.md) | Install and configure the Memex memory plugin for OpenClaw agents. |
 
 ---
 
@@ -60,7 +59,6 @@ Understanding-oriented articles that explain how Memex works and why it is desig
 | [Extraction Pipeline](explanation/extraction-pipeline.md) | How documents are chunked, facts are extracted, entities are resolved, and embeddings are generated. |
 | [Retrieval Strategies](explanation/retrieval-strategies.md) | The TEMPR system: five search strategies fused via Reciprocal Rank Fusion. |
 | [Reflection and Mental Models](explanation/reflection-and-mental-models.md) | How the background engine synthesizes observations into evolving mental models. |
-| [OpenClaw Plugin](explanation/openclaw-plugin.md) | Plugin architecture, lifecycle hooks, circuit breaker, and prompt injection protection. |
 
 ---
 
@@ -76,7 +74,6 @@ Each package in the monorepo has its own README with package-specific details.
 | [packages/common](../packages/common/README.md) | Shared Pydantic models, configuration, and exceptions. |
 | [packages/eval](../packages/eval/README.md) | LoCoMo evaluation framework and benchmarks. |
 | [packages/claude-code-plugin](../packages/claude-code-plugin/README.md) | Claude Code plugin for cross-project memory integration. |
-| [packages/openclaw](../packages/openclaw/README.md) | Memex memory plugin for OpenClaw agents. |
 | [packages/firefox-extension](../packages/firefox-extension/README.md) | Firefox extension for web content capture. |
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue with your system info automatically attached.

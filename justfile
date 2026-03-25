@@ -12,14 +12,10 @@ release version:
     echo "Error: version must be semver (e.g., 0.1.0 or 0.1.0a)" >&2
     exit 1
   fi
-  # Update TypeScript package versions (Python versions are automatic via hatch-vcs)
-  for f in packages/dashboard/package.json packages/openclaw/package.json; do
-    sed -i 's/"version": ".*"/"version": "{{version}}"/' "$f"
-  done
   # Sync lock file
   uv lock
   # Stage, commit, tag
-  git add uv.lock packages/dashboard/package.json packages/openclaw/package.json
+  git add uv.lock
   git commit -m "chore(release): v{{version}}"
   git tag "v{{version}}"
   echo "Tagged v{{version}}. Push with: git push && git push --tags"
@@ -76,26 +72,6 @@ embed_collections:
 # Embed code (update)
 update_collections: embed_collections
   qmd update
-
-# Build OpenClaw memory plugin
-build-openclaw:
-  cd packages/openclaw && npm install --no-bin-links && node node_modules/typescript/lib/tsc.js
-
-# Test OpenClaw memory plugin
-test-openclaw:
-  cd packages/openclaw && npx vitest run
-
-# Start new dashboard in dev mode
-dashboard-dev:
-  cd packages/dashboard && npm run dev
-
-# Build new dashboard for production
-dashboard-build:
-  cd packages/dashboard && npm run build
-
-# Generate API types from OpenAPI spec
-dashboard-generate-api:
-  cd packages/dashboard && npm run generate-api
 
 # Run performance benchmarks
 benchmark:
@@ -191,7 +167,7 @@ recording-setup:
     which agg || echo "Install agg: https://github.com/asciinema/agg/releases"
     @echo "Checking ffmpeg..."
     which ffmpeg || echo "Install ffmpeg: apt install ffmpeg / brew install ffmpeg"
-    cd recordings/dashboard && npm install && npx playwright install chromium
+    @echo "Recording setup complete."
 
 # Seed demo database for recordings (requires running server)
 recording-seed:
@@ -205,13 +181,5 @@ record-cli:
 record-claude-code:
     bash recordings/cli/record-claude-code.sh
 
-# Record dashboard GIFs via Playwright
-record-dashboard:
-    cd recordings/dashboard && npx tsx scripts/record-overview.ts
-    cd recordings/dashboard && npx tsx scripts/record-entity-graph.ts
-    cd recordings/dashboard && npx tsx scripts/record-memory-search.ts
-    cd recordings/dashboard && npx tsx scripts/record-knowledge-flow.ts
-    cd recordings/dashboard && npx tsx scripts/record-lineage.ts
-
-# Record all GIFs (server + dashboard must be running)
-record-all: recording-seed record-cli record-claude-code record-dashboard
+# Record all GIFs (server must be running)
+record-all: recording-seed record-cli record-claude-code

@@ -271,8 +271,7 @@ def test_note_search_result_schema_has_summaries_not_summary():
         f"NoteSearchResult schema must have 'summaries' field. Found: {list(props.keys())}"
     )
     assert 'summary' not in props, (
-        "NoteSearchResult schema must NOT have old 'summary' field (breaking change). "
-        'Update dashboard generated.ts and openclaw types.ts.'
+        "NoteSearchResult schema must NOT have old 'summary' field (breaking change)."
     )
 
 

@@ -36,8 +36,6 @@ body:
         - cli
         - mcp
         - common
-        - dashboard
-        - openclaw
         - cross-cutting
     validations:
       required: true

@@ -3,8 +3,6 @@
 __pycache__
 *.pyc
 node_modules
-packages/dashboard/node_modules
-packages/dashboard/dist
 .devcontainer
 .claude
 tests

@@ -22,8 +22,6 @@ jobs:
     if: github.event_name == 'pull_request'
     outputs:
       python: ${{ steps.filter.outputs.python }}
-      dashboard: ${{ steps.filter.outputs.dashboard }}
-      openclaw: ${{ steps.filter.outputs.openclaw }}
       firefox-extension: ${{ steps.filter.outputs.firefox-extension }}
       docker: ${{ steps.filter.outputs.docker }}
       ci-config: ${{ steps.filter.outputs.ci-config }}
@@ -42,10 +40,6 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.pre-commit-config.yaml'
-            dashboard:
-              - 'packages/dashboard/**'
-            openclaw:
-              - 'packages/openclaw/**'
             firefox-extension:
               - 'packages/firefox-extension/**'
             docker:
@@ -66,7 +60,7 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           prek_version: '0.2.25'
         env:
-          SKIP: dashboard-eslint,dashboard-typecheck
+          SKIP: ""
 
   python-tests:
     needs: changes
@@ -90,51 +84,6 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
-
-  dashboard-lint-test:
-    needs: changes
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.ci-config == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: 'packages/dashboard/package-lock.json'
-      - name: Install dependencies
-        run: npm ci
-        working-directory: packages/dashboard
-      - name: Typecheck
-        run: npx tsc --noEmit -p tsconfig.app.json
-        working-directory: packages/dashboard
-      - name: Lint
-        run: npx eslint --max-warnings=0 src
-        working-directory: packages/dashboard
-      - name: Test
-        run: npx vitest run
-        working-directory: packages/dashboard
-
-  openclaw-lint-test:
-    needs: changes
-    if: always() && (github.event_name == 'push' || needs.changes.outputs.openclaw == 'true' || needs.changes.outputs.ci-config == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: 'packages/openclaw/package-lock.json'
-      - name: Install dependencies
-        run: npm ci
-        working-directory: packages/openclaw
-      - name: Typecheck
-        run: npx tsc --noEmit
-        working-directory: packages/openclaw
-      - name: Test
-        run: npx vitest run
-        working-directory: packages/openclaw
 
   firefox-extension-lint-test:
     needs: changes
@@ -200,54 +149,6 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           package: ${{ matrix.package }}
 
-  build-dashboard:
-    needs: [changes, dashboard-lint-test]
-    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.ci-config == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: 'packages/dashboard/package-lock.json'
-      - name: Install dependencies
-        run: npm ci
-        working-directory: packages/dashboard
-      - name: Build
-        run: npm run build
-        working-directory: packages/dashboard
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dashboard-dist
-          path: packages/dashboard/dist/
-          retention-days: 7
-
-  build-openclaw:
-    needs: [changes, openclaw-lint-test]
-    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.openclaw == 'true' || needs.changes.outputs.ci-config == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: 'packages/openclaw/package-lock.json'
-      - name: Install dependencies
-        run: npm ci
-        working-directory: packages/openclaw
-      - name: Build
-        run: npm run build
-        working-directory: packages/openclaw
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: openclaw-dist
-          path: packages/openclaw/dist/
-          retention-days: 7
-
   docker-build-memex:
     needs: [changes, pre-commit, python-tests]
     if: >-
@@ -264,26 +165,6 @@ jobs:
         with:
           context: .
           file: docker/memex/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  docker-build-dashboard:
-    needs: [changes, dashboard-lint-test]
-    if: >-
-      always() && !failure() && !cancelled() &&
-      (github.event_name == 'push' ||
-       needs.changes.outputs.dashboard == 'true' ||
-       needs.changes.outputs.docker == 'true' ||
-       needs.changes.outputs.ci-config == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/dashboard/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max

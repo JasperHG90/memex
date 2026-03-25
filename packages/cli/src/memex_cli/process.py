@@ -17,7 +17,7 @@ GRACEFUL_TIMEOUT = 10  # seconds before SIGKILL
 
 
 def pid_file_path(service: str) -> Path:
-    """Return path to PID file for a service (e.g. 'server', 'dashboard')."""
+    """Return path to PID file for a service (e.g. 'server')."""
     return CACHE_DIR / f'{service}.pid'
 
 

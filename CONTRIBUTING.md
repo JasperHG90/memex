@@ -22,15 +22,9 @@ Thanks for your interest in contributing to Memex! This guide will help you get 
    just setup
    ```
 
-3. Set up TypeScript packages (if working on dashboard or openclaw):
-   ```bash
-   cd packages/dashboard && npm install
-   cd packages/openclaw && npm install
-   ```
-
 ## Project Structure
 
-Memex is a Python monorepo managed by `uv` with TypeScript packages for the dashboard and OpenClaw plugin.
+Memex is a Python monorepo managed by `uv`.
 
 | Package | Description |
 |---------|-------------|
@@ -38,8 +32,6 @@ Memex is a Python monorepo managed by `uv` with TypeScript packages for the dash
 | `packages/cli` | Typer CLI (`memex` command) |
 | `packages/mcp` | FastMCP server for LLM integration |
 | `packages/common` | Shared Pydantic models, config, exceptions |
-| `packages/dashboard` | React + Vite web UI |
-| `packages/openclaw` | Memex memory plugin for OpenClaw (TypeScript) |
 
 For detailed architecture information, see `CLAUDE.md`.
 
@@ -67,18 +59,6 @@ uv run pytest -m integration                    # integration tests (require Doc
 uv run pytest -m llm                            # LLM tests (require API key)
 ```
 
-### Dashboard
-```bash
-cd packages/dashboard
-npm test
-```
-
-### OpenClaw
-```bash
-cd packages/openclaw
-npm test
-```
-
 ## Pre-commit Hooks
 
 Run linting and formatting checks before committing:
@@ -99,11 +79,11 @@ We use [Conventional Commits](https://www.conventionalcommits.org/). Format:
 
 **Types**: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
-**Scopes** (when relevant): `core`, `cli`, `mcp`, `common`, `dashboard`, `openclaw`
+**Scopes** (when relevant): `core`, `cli`, `mcp`, `common`
 
 **Examples**:
 ```
-feat(dashboard): add entity graph visualization
+feat(core): add entity graph visualization
 fix(core): handle null embeddings in retrieval
 refactor(common): simplify config loading
 test(core): add reflection worker unit tests

@@ -47,15 +47,6 @@ services:
   #   depends_on:
   #     - api
 
-  # dashboard:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/dashboard/Dockerfile
-  #   ports:
-  #     - "5173:80"
-  #   depends_on:
-  #     - api
-
 volumes:
   pgdata:
   memex_data:

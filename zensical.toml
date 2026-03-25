@@ -8,7 +8,6 @@ nav = [
   { "Home" = "index.md" },
   { "Tutorials" = [
     "tutorials/getting-started.md",
-    "tutorials/using-the-dashboard.md",
     "tutorials/ai-agent-memory.md",
   ]},
   { "How-To Guides" = [
@@ -20,7 +19,6 @@ nav = [
     "how-to/doc-search-vs-memory-search.md",
     "how-to/database-migrations.md",
     "how-to/delete-archival.md",
-    "how-to/openclaw-integration.md",
   ]},
   { "Reference" = [
     "reference/cli-commands.md",
@@ -34,7 +32,5 @@ nav = [
     "explanation/extraction-pipeline.md",
     "explanation/retrieval-strategies.md",
     "explanation/reflection-and-mental-models.md",
-    "explanation/dashboard-architecture.md",
-    "explanation/openclaw-plugin.md",
   ]},
 ]
