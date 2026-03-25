@@ -978,19 +978,13 @@ class ServerConfig(BaseModel):
             return self
         pw = self.meta_store.instance.password.get_secret_value()
         is_production = os.getenv('MEMEX_ENV', '').lower() == 'production'
-        if pw == 'postgres':
-            if is_production:
-                raise ValueError(
-                    'Default database password "postgres" is not allowed '
-                    'when MEMEX_ENV=production. Set a secure password via '
-                    'server.meta_store.instance.password or '
-                    'MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD.'
-                )
-            else:
-                logger.warning(
-                    'Using default database password "postgres". '
-                    'Set a secure password for production use.'
-                )
+        if pw == 'postgres' and is_production:
+            raise ValueError(
+                'Default database password "postgres" is not allowed '
+                'when MEMEX_ENV=production. Set a secure password via '
+                'server.meta_store.instance.password or '
+                'MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD.'
+            )
         return self
 
     @model_validator(mode='after')
@@ -1028,19 +1022,6 @@ class VaultConfig(BaseModel):
     )
 
 
-class DashboardConfig(BaseModel):
-    """Configuration for the Memex Dashboard."""
-
-    host: str = Field(
-        default='0.0.0.0',
-        description='Host to serve the dashboard on.',
-    )
-    port: int = Field(
-        default=3001,
-        description='Port to serve the dashboard on.',
-    )
-
-
 class MemexConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix='MEMEX_', env_nested_delimiter='__', extra='forbid'
@@ -1048,7 +1029,7 @@ class MemexConfig(BaseSettings):
 
     server_url: str = Field(
         default='',
-        description='URL of the Memex Core server used by clients (CLI, MCP, Dashboard). '
+        description='URL of the Memex Core server used by clients (CLI, MCP). '
         'If empty, derived from server.host and server.port.',
     )
 
@@ -1065,11 +1046,6 @@ class MemexConfig(BaseSettings):
     server: ServerConfig = Field(
         default_factory=ServerConfig,
         description='Configuration for the API server.',
-    )
-
-    dashboard: DashboardConfig = Field(
-        default_factory=DashboardConfig,
-        description='Configuration for the dashboard.',
     )
 
     @property
@@ -1150,7 +1126,6 @@ __all__ = [
     'MemoryConfig',
     'TracingConfig',
     'ServerConfig',
-    'DashboardConfig',
     'CHARS_PER_TOKEN',
     'MemexConfig',
     'parse_memex_config',
