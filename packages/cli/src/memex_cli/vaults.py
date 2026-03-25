@@ -46,10 +46,17 @@ async def list_vaults(
             except Exception as e:
                 handle_api_error(e)
 
-            lines = [
-                '| Name | Notes | Last Modified | Active | Description |',
-                '|------|-------|---------------|--------|-------------|',
-            ]
+            has_access = any(row['vault'].access is not None for row in rows)
+            if has_access:
+                lines = [
+                    '| Name | Notes | Last Modified | Active | Access | Description |',
+                    '|------|-------|---------------|--------|--------|-------------|',
+                ]
+            else:
+                lines = [
+                    '| Name | Notes | Last Modified | Active | Description |',
+                    '|------|-------|---------------|--------|-------------|',
+                ]
             for row in rows:
                 v = row['vault']
                 count = row['note_count']
@@ -57,7 +64,13 @@ async def list_vaults(
                 last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
                 desc = v.description or ''
-                lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
+                if has_access:
+                    access = ', '.join(v.access) if v.access else '\u2014'
+                    lines.append(
+                        f'| {v.name} | {count} | {last_mod} | {active} | {access} | {desc} |'
+                    )
+                else:
+                    lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
             print('\n'.join(lines))
             return
 
@@ -75,16 +88,23 @@ async def list_vaults(
         console.print_json(json.dumps([v.model_dump() for v in vaults], default=str))
         return
 
+    has_access = any(v.access is not None for v in vaults)
+
     table = Table(title='Available Vaults')
     table.add_column('ID', style='dim')
     table.add_column('Name', style='cyan')
     table.add_column('Description', style='white')
+    if has_access:
+        table.add_column('Access', style='green')
 
     if not vaults:
         console.print('[yellow]No vaults found.[/yellow]')
     else:
         for v in vaults:
-            table.add_row(str(v.id), v.name, v.description or '')
+            row = [str(v.id), v.name, v.description or '']
+            if has_access:
+                row.append(', '.join(v.access) if v.access else '\u2014')
+            table.add_row(*row)
         console.print(table)
 
     # Show active from config
