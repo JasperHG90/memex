@@ -128,6 +128,10 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
     if auth_config is None:
         return await call_next(request)
 
+    # CORS preflight requests never carry credentials; let CORSMiddleware handle them.
+    if request.method == 'OPTIONS':
+        return await call_next(request)
+
     if request.url.path in auth_config.exempt_paths:
         return await call_next(request)
 
