@@ -10,7 +10,6 @@ State machine:
     -> HALF_OPEN (after reset_timeout_seconds, allows one probe)
     -> CLOSED (if probe succeeds) or OPEN (if probe fails)
 
-Mirrors the pattern from packages/openclaw/src/circuit-breaker.ts.
 """
 
 import asyncio

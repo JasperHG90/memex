@@ -11,7 +11,6 @@ permissions:
 env:
   PYTHON_VERSION: '3.12'
   UV_VERSION: '0.10.x'
-  NODE_VERSION: '22'
 
 jobs:
   build-python:
@@ -43,73 +42,9 @@ jobs:
           path: dist/
           retention-days: 30
 
-  build-dashboard:
-    name: Build dashboard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: 'packages/dashboard/package-lock.json'
-
-      - name: Install dependencies
-        working-directory: packages/dashboard
-        run: npm ci
-
-      - name: Build dashboard
-        working-directory: packages/dashboard
-        run: npm run build
-
-      - name: Create archive
-        run: tar -czf dashboard-dist.tar.gz -C packages/dashboard dist/ serve.cjs
-
-      - name: Upload dashboard artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dashboard-dist
-          path: dashboard-dist.tar.gz
-          retention-days: 30
-
-  build-openclaw:
-    name: Build OpenClaw plugin
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: 'packages/openclaw/package-lock.json'
-
-      - name: Install dependencies
-        working-directory: packages/openclaw
-        run: npm ci
-
-      - name: Build OpenClaw
-        working-directory: packages/openclaw
-        run: npm run build
-
-      - name: Create archive
-        run: tar -czf openclaw-dist.tar.gz -C packages/openclaw dist/
-
-      - name: Upload OpenClaw artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: openclaw-dist
-          path: openclaw-dist.tar.gz
-          retention-days: 30
-
   release:
     name: Create GitHub Release
-    needs: [build-python, build-dashboard, build-openclaw]
+    needs: [build-python]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -127,8 +62,6 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/python-dist/*
-            artifacts/dashboard-dist/dashboard-dist.tar.gz
-            artifacts/openclaw-dist/openclaw-dist.tar.gz
 
       - name: Update latest tag
         run: |

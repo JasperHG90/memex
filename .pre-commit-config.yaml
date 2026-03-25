@@ -41,18 +41,6 @@ repos:
 
   - repo: local
     hooks:
-      - id: dashboard-eslint
-        name: eslint (dashboard)
-        entry: bash -c 'cd packages/dashboard && npx eslint --max-warnings=0 src'
-        language: system
-        files: ^packages/dashboard/src/.*\.(ts|tsx)$
-        pass_filenames: false
-      - id: dashboard-typecheck
-        name: tsc (dashboard)
-        entry: bash -c 'cd packages/dashboard && npx tsc --noEmit -p tsconfig.app.json'
-        language: system
-        files: ^packages/dashboard/.*\.(ts|tsx)$
-        pass_filenames: false
       - id: update-test-badge
         name: update test count badge
         entry: bash -c 'COUNT=$(uv run pytest --collect-only -q 2>/dev/null | grep "tests collected" | grep -oP "^\d+") && if [ -n "$COUNT" ]; then FORMATTED=$(printf "%'"'"'d" "$COUNT") && sed -i "s/tests-[0-9,]*%20passing/tests-${FORMATTED}%20passing/" README.md && git add README.md; fi'

@@ -37,7 +37,6 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'server': 'memex_cli.server:app',
     'database': 'memex_cli.db:app',
     'mcp': 'memex_cli.mcp:app',
-    'dashboard': 'memex_cli.dashboard:app',
     'setup': 'memex_cli.setup_claude_code:app',
     'report-bug': 'memex_cli.report_bug:app',
 }
@@ -97,14 +96,6 @@ class LazyTyperGroup(TyperGroup):
                 console.print('[bold red]Error:[/bold red] Missing dependency for MCP.')
                 console.print('Install with: [cyan]uv add memex-cli[mcp][/cyan]')
                 raise typer.Exit(code=1)
-            elif cmd_name == 'dashboard':
-                console.print('[bold red]Error:[/bold red] Dashboard requires Node.js.')
-                console.print(
-                    'Install the dashboard package from: '
-                    '[cyan]https://github.com/JasperHG90/memex/releases[/cyan]'
-                )
-                raise typer.Exit(code=1)
-
             logger.error(f"Failed to load command '{cmd_name}': {e}")
             raise typer.Exit(code=1) from e
 

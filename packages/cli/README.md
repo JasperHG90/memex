@@ -8,7 +8,7 @@ The `memex` CLI allows you to:
 - **Ingest** documents, URLs, and folders into your knowledge base.
 - **Search** memories and notes using semantic and keyword strategies.
 - **Manage** vaults, entities, and memories.
-- **Run** the Memex server, dashboard, and MCP server.
+- **Run** the Memex server and MCP server.
 - **Administer** the database with Alembic migrations.
 
 ## Installation
@@ -42,7 +42,6 @@ memex memory search "What are the key points?"
 | `memex entity` | List, view, delete entities; inspect mentions and related entities. |
 | `memex vault` | Create, list, and delete vaults. |
 | `memex server` | Start, stop, and check status of the API server. |
-| `memex dashboard` | Start, stop, and check status of the React dashboard. |
 | `memex mcp` | Run the MCP server (stdio or SSE transport). |
 | `memex stats` | View system statistics and token usage. |
 | `memex config` | Show current configuration or initialize a config file. |

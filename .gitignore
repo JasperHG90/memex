@@ -17,7 +17,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-!packages/dashboard/src/lib/
 !packages/firefox-extension/src/lib/
 lib64/
 parts/
@@ -182,10 +181,6 @@ gemini-extension.json
 # Memex
 .memex.yaml
 
-# OpenClaw plugin (TypeScript build artifacts)
-packages/openclaw/node_modules/
-packages/openclaw/dist/
-
 .playwright-mcp
 .tmp
 
@@ -194,9 +189,7 @@ packages/openclaw/dist/
 # Benchmark results (machine-specific)
 .benchmarks/
 
-# Recording dependencies and temp files
-recordings/dashboard/node_modules/
-recordings/dashboard/.tmp-recordings/
+# Recording temp files
 recordings/cli/.casts/
 
 **/*/__about__.py

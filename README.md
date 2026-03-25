@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v0.0.39a-green?style=flat-square" alt="v0.0.39a" />
-  <img src="https://img.shields.io/badge/tests-2,271%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-2,244%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 ## Requirements
@@ -238,7 +238,6 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [Batch Ingestion](./docs/how-to/batch-ingestion.md): Import existing documents and notes.
 - [Doc Search vs Memory Search](./docs/how-to/doc-search-vs-memory-search.md): Choose the right retrieval strategy.
 - [Database Migrations](./docs/how-to/database-migrations.md): Manage schema with `memex db`.
-- [OpenClaw Integration](./docs/how-to/openclaw-integration.md): Memex memory plugin for OpenClaw agents.
 - [Delete and Archival](./docs/how-to/delete-archival.md): Manage data lifecycle.
 
 ### Reference
@@ -254,8 +253,6 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Fact extraction and entity resolution.
 - [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): TEMPR — five strategies fused via RRF.
 - [Reflection and Mental Models](./docs/explanation/reflection-and-mental-models.md): Background synthesis of observations.
-- [OpenClaw Plugin](./docs/explanation/openclaw-plugin.md): Plugin lifecycle and circuit breaker.
-
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
 
 ## Releasing
@@ -285,7 +282,7 @@ just release 0.1.0
 git push && git push --tags
 ```
 
-The `release.yaml` GitHub Action automatically builds all artifacts (Python, OpenClaw) and creates a GitHub Release with auto-generated release notes.
+The `release.yaml` GitHub Action automatically builds all artifacts and creates a GitHub Release with auto-generated release notes.
 
 ## Evaluation
 
@@ -325,7 +322,6 @@ Memex is built as a monorepo:
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
 - **`packages/eval`**: The benchmark. LoCoMo evaluation framework and retrieval analysis.
 - **`packages/claude-code-plugin`**: The plugin. Claude Code plugin for cross-project memory integration.
-- **`packages/openclaw`**: The bridge. Memex memory integration for OpenClaw agents.
 - **`packages/firefox-extension`**: The capture. Firefox extension for web content ingestion.
 
 ## Acknowledgements

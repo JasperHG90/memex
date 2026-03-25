@@ -34,8 +34,6 @@ uv run pytest -m integration                # integration tests (require Docker)
 uv run pytest -m llm                        # tests requiring LLM API calls
 uv add --dev <package>                      # add dev dep to root
 uv add <package> --package memex_core       # add dep to specific package
-just dashboard-dev                          # run dashboard dev server
-just dashboard-build                        # build dashboard for production
 ```
 
 Always use `uv`, never `pip`.
@@ -48,10 +46,8 @@ Python monorepo managed by `uv`.
 - `packages/cli` — Typer CLI (`memex` command)
 - `packages/mcp` — FastMCP server for LLM integration
 - `packages/common` — shared Pydantic models, config, exceptions
-- `packages/dashboard` — React + Vite web UI
 - `packages/eval` — LoCoMo evaluation framework and benchmarks
 - `packages/claude-code-plugin` — Claude Code plugin for cross-project memory integration
-- `packages/openclaw` — Memex memory plugin for OpenClaw (TypeScript/Node)
 
 ### Memory model (Hindsight Framework)
 
@@ -77,7 +73,7 @@ Python monorepo managed by `uv`.
 
 - Commit after completing each logical unit of work — do not batch unrelated changes
 - Use conventional commit messages: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
-- Include scope when relevant: `feat(dashboard):`, `fix(core):`
+- Include scope when relevant: `feat(cli):`, `fix(core):`
 - Prefer small, frequent commits over large ones
 
 ## Code style
