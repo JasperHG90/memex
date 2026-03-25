@@ -6,6 +6,7 @@ import base64
 import json
 import mimetypes
 import pathlib
+import sys
 from typing import Annotated, Any
 import aiofiles
 import typer
@@ -824,6 +825,35 @@ async def list_assets(
         table.add_row(path_obj.name, asset_path, mime_type or '-')
 
     console.print(table)
+
+
+@app.command('get-asset')
+@async_command
+async def get_asset(
+    ctx: typer.Context,
+    asset_path: Annotated[str, typer.Argument(help='Asset path (from list-assets).')],
+    output: Annotated[
+        str | None,
+        typer.Option('--output', '-o', help='Output file path. Defaults to stdout.'),
+    ] = None,
+) -> None:
+    """Download an asset from the server."""
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            data = await api.get_resource(asset_path)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if output:
+        out = pathlib.Path(output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        console.print(f'Saved to [cyan]{out}[/cyan] ({len(data)} bytes)')
+    else:
+        sys.stdout.buffer.write(data)
 
 
 @app.command('search')
