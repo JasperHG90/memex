@@ -2,6 +2,7 @@
 Note Management Commands.
 """
 
+import asyncio
 import base64
 import json
 import mimetypes
@@ -13,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
 from rich.tree import Tree
 
@@ -645,33 +647,8 @@ async def view_note(
     console.print(Markdown(original_text))
 
 
-@app.command('metadata')
-@async_command
-async def view_metadata(
-    ctx: typer.Context,
-    note_id: Annotated[str, typer.Argument(help='UUID of note.')],
-    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-) -> None:
-    """View the metadata (title, description, tags, etc.) of a note."""
-    config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(note_id, 'note')
-
-    async with get_api_context(config) as api:
-        try:
-            metadata = await api.get_note_metadata(uuid_obj)
-        except Exception as e:
-            handle_api_error(e)
-            return
-
-    if metadata is None:
-        console.print('[yellow]This note has no metadata.[/yellow]')
-        console.print('[dim]Only notes with a page index have metadata.[/dim]')
-        return
-
-    if json_output:
-        console.print_json(json.dumps(metadata, default=str))
-        return
-
+def _render_metadata_table(metadata: dict[str, Any], note_id: str) -> None:
+    """Render a metadata dict as a Rich table."""
     table = Table(title=f'Note Metadata ({note_id})')
     table.add_column('Field', style='cyan')
     table.add_column('Value', style='white')
@@ -684,67 +661,116 @@ async def view_metadata(
     console.print(table)
 
 
+@app.command('metadata')
+@async_command
+async def view_metadata(
+    ctx: typer.Context,
+    note_ids: Annotated[list[str], typer.Argument(help='One or more note UUIDs.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
+    """View the metadata (title, description, tags, etc.) of one or more notes."""
+    config: MemexConfig = ctx.obj
+    uuids = [parse_uuid(nid, 'note') for nid in note_ids]
+
+    async with get_api_context(config) as api:
+        try:
+            if len(uuids) == 1:
+                metadata_list = [await api.get_note_metadata(uuids[0])]
+            else:
+                metadata_list = await api.get_notes_metadata(uuids)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if len(uuids) == 1:
+        metadata = metadata_list[0] if metadata_list else None
+        if metadata is None:
+            console.print('[yellow]This note has no metadata.[/yellow]')
+            console.print('[dim]Only notes with a page index have metadata.[/dim]')
+            return
+        if json_output:
+            console.print_json(json.dumps(metadata, default=str))
+            return
+        _render_metadata_table(metadata, note_ids[0])
+        return
+
+    # Multiple notes
+    if not metadata_list:
+        console.print('[yellow]No metadata found for any of the provided notes.[/yellow]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps(metadata_list, default=str))
+        return
+
+    for i, metadata in enumerate(metadata_list):
+        if i > 0:
+            console.print(Rule())
+        nid = metadata.get('note_id', note_ids[i] if i < len(note_ids) else '?')
+        _render_metadata_table(metadata, str(nid))
+
+
 @app.command('page-index')
 @async_command
 async def view_page_index(
     ctx: typer.Context,
-    note_id: Annotated[str, typer.Argument(help='UUID of note.')],
+    note_ids: Annotated[list[str], typer.Argument(help='One or more note UUIDs.')],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ) -> None:
-    """View the page index (slim tree) of a note."""
+    """View the page index (slim tree) of one or more notes."""
     config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(note_id, 'note')
+    uuids = [parse_uuid(nid, 'note') for nid in note_ids]
 
     async with get_api_context(config) as api:
         try:
-            page_index = await api.get_note_page_index(uuid_obj)
+            if len(uuids) == 1:
+                results = [(note_ids[0], await api.get_note_page_index(uuids[0]))]
+            else:
+                raw = await asyncio.gather(*[api.get_note_page_index(uid) for uid in uuids])
+                results = list(zip(note_ids, raw))
         except Exception as e:
             handle_api_error(e)
             return
 
-    if page_index is None:
-        console.print('[yellow]This note has no page index.[/yellow]')
-        console.print('[dim]Only notes ingested with page_index strategy have a slim tree.[/dim]')
-        return
-
-    if json_output:
-        console.print_json(json.dumps(page_index, default=str))
-        return
-
-    # page_index may be a list (raw TOC nodes) or a dict with a 'toc' key
-    nodes = page_index if isinstance(page_index, list) else page_index.get('toc', [])
-
-    tree = Tree(f'[bold cyan]Page Index[/bold cyan] [dim]({note_id})[/dim]')
-    _render_toc_nodes(nodes, tree)
-    console.print(tree)
-
-
-@app.command('node')
-@async_command
-async def view_node(
-    ctx: typer.Context,
-    node_id: Annotated[str, typer.Argument(help='UUID of node.')],
-    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-) -> None:
-    """View a specific page-index node (section) by its ID."""
-    config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(node_id, 'node')
-
-    async with get_api_context(config) as api:
-        try:
-            node = await api.get_node(uuid_obj)
-        except Exception as e:
-            handle_api_error(e)
+    if len(results) == 1:
+        nid, page_index = results[0]
+        if page_index is None:
+            console.print('[yellow]This note has no page index.[/yellow]')
+            console.print(
+                '[dim]Only notes ingested with page_index strategy have a slim tree.[/dim]'
+            )
             return
-
-    if node is None:
-        console.print(f'[yellow]Node {node_id} not found.[/yellow]')
+        if json_output:
+            console.print_json(json.dumps(page_index, default=str))
+            return
+        nodes = page_index if isinstance(page_index, list) else page_index.get('toc', [])
+        tree = Tree(f'[bold cyan]Page Index[/bold cyan] [dim]({nid})[/dim]')
+        _render_toc_nodes(nodes, tree)
+        console.print(tree)
         return
 
+    # Multiple notes
     if json_output:
-        console.print_json(json.dumps(node.model_dump(), default=str))
+        out = []
+        for nid, pi in results:
+            out.append({'note_id': nid, 'page_index': pi})
+        console.print_json(json.dumps(out, default=str))
         return
 
+    for i, (nid, page_index) in enumerate(results):
+        if i > 0:
+            console.print(Rule())
+        if page_index is None:
+            console.print(f'[yellow]Note {nid} has no page index.[/yellow]')
+            continue
+        nodes = page_index if isinstance(page_index, list) else page_index.get('toc', [])
+        tree = Tree(f'[bold cyan]Page Index[/bold cyan] [dim]({nid})[/dim]')
+        _render_toc_nodes(nodes, tree)
+        console.print(tree)
+
+
+def _render_node(node: Any) -> None:
+    """Render a single node to the console."""
     title = node.title or '(untitled)'
     heading = '#' * node.level
     console.print(f'\n[bold cyan]{heading} {title}[/bold cyan]')
@@ -757,6 +783,45 @@ async def view_node(
         console.print(Panel(Markdown(node.text), title='Content', border_style='green'))
     else:
         console.print('\n[dim][No text content][/dim]')
+
+
+@app.command('node')
+@async_command
+async def view_node(
+    ctx: typer.Context,
+    node_ids: Annotated[list[str], typer.Argument(help='One or more node UUIDs.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
+    """View one or more page-index nodes (sections) by ID."""
+    config: MemexConfig = ctx.obj
+    uuids = [parse_uuid(nid, 'node') for nid in node_ids]
+
+    async with get_api_context(config) as api:
+        try:
+            if len(uuids) == 1:
+                node = await api.get_node(uuids[0])
+                nodes = [node] if node else []
+            else:
+                nodes = await api.get_nodes(uuids)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if not nodes:
+        console.print('[yellow]No nodes found.[/yellow]')
+        return
+
+    if json_output:
+        if len(uuids) == 1:
+            console.print_json(json.dumps(nodes[0].model_dump(), default=str))
+        else:
+            console.print_json(json.dumps([n.model_dump() for n in nodes], default=str))
+        return
+
+    for i, node in enumerate(nodes):
+        if i > 0:
+            console.print(Rule())
+        _render_node(node)
 
 
 def _render_toc_nodes(nodes: list[dict[str, Any]], parent: Tree) -> None:
@@ -831,29 +896,62 @@ async def list_assets(
 @async_command
 async def get_asset(
     ctx: typer.Context,
-    asset_path: Annotated[str, typer.Argument(help='Asset path (from list-assets).')],
+    asset_paths: Annotated[
+        list[str], typer.Argument(help='One or more asset paths (from list-assets).')
+    ],
     output: Annotated[
         str | None,
-        typer.Option('--output', '-o', help='Output file path. Defaults to stdout.'),
+        typer.Option(
+            '--output', '-o', help='Output file path (single asset only). Defaults to stdout.'
+        ),
+    ] = None,
+    output_dir: Annotated[
+        str | None,
+        typer.Option(
+            '--output-dir', '-d', help='Directory to save files to (for multiple assets).'
+        ),
     ] = None,
 ) -> None:
-    """Download an asset from the server."""
+    """Download one or more assets from the server."""
     config: MemexConfig = ctx.obj
+
+    if len(asset_paths) > 1 and output:
+        console.print(
+            '[red]Error: --output cannot be used with multiple assets. Use --output-dir instead.[/red]'
+        )
+        raise typer.Exit(1)
 
     async with get_api_context(config) as api:
         try:
-            data = await api.get_resource(asset_path)
+            if len(asset_paths) == 1:
+                fetched = [(asset_paths[0], await api.get_resource(asset_paths[0]))]
+            else:
+                raw = await asyncio.gather(*[api.get_resource(p) for p in asset_paths])
+                fetched = list(zip(asset_paths, raw))
         except Exception as e:
             handle_api_error(e)
             return
 
-    if output:
-        out = pathlib.Path(output)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(data)
-        console.print(f'Saved to [cyan]{out}[/cyan] ({len(data)} bytes)')
-    else:
-        sys.stdout.buffer.write(data)
+    if len(fetched) == 1 and not output_dir:
+        # Single asset: preserve original behavior
+        _, data = fetched[0]
+        if output:
+            out = pathlib.Path(output)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(data)
+            console.print(f'Saved to [cyan]{out}[/cyan] ({len(data)} bytes)')
+        else:
+            sys.stdout.buffer.write(data)
+        return
+
+    # Multiple assets (or single with --output-dir): save to directory
+    out_dir = pathlib.Path(output_dir or '.')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for asset_path, data in fetched:
+        filename = pathlib.Path(asset_path).name
+        out_file = out_dir / filename
+        out_file.write_bytes(data)
+        console.print(f'Saved [cyan]{filename}[/cyan] ({len(data)} bytes)')
 
 
 @app.command('search')
@@ -1115,3 +1213,34 @@ async def export_notes(
         f'\n[green]Exported {len(notes)} note(s) and {total_assets} asset(s) '
         f'to {output_dir.resolve()}[/green]'
     )
+
+
+@app.command('template')
+def get_template_cmd(
+    template_type: Annotated[
+        str | None,
+        typer.Argument(
+            help='Template type (e.g. general_note, technical_brief, adr, rfc, quick_note).'
+        ),
+    ] = None,
+    list_types: Annotated[
+        bool, typer.Option('--list', '-l', help='List available template types.')
+    ] = False,
+) -> None:
+    """Get a markdown template for note creation."""
+    from memex_common.templates import NoteTemplateType, get_template, list_template_types
+
+    if list_types or template_type is None:
+        console.print('[bold cyan]Available template types:[/bold cyan]')
+        for t in list_template_types():
+            console.print(f'  - {t}')
+        return
+
+    try:
+        tt = NoteTemplateType(template_type)
+    except ValueError:
+        console.print(f'[red]Unknown template type: {template_type}[/red]')
+        console.print('[dim]Use --list to see available types.[/dim]')
+        raise typer.Exit(1)
+
+    console.print(get_template(tt))
