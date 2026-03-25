@@ -224,9 +224,20 @@ async def view_entity(
             if len(identifiers) == 1:
                 entities = [await _resolve_entity(api, identifiers[0])]
             else:
-                entities = await asyncio.gather(
-                    *[_resolve_entity(api, ident) for ident in identifiers]
+                raw = await asyncio.gather(
+                    *[_resolve_entity(api, ident) for ident in identifiers],
+                    return_exceptions=True,
                 )
+                entities = []
+                for ident, r in zip(identifiers, raw):
+                    if isinstance(r, typer.Exit):
+                        pass  # already printed by _resolve_entity
+                    elif isinstance(r, Exception):
+                        console.print(f'[red]Error resolving "{ident}": {r}[/red]')
+                    else:
+                        entities.append(r)
+                if not entities:
+                    return
         except Exception as e:
             if isinstance(e, typer.Exit):
                 raise

@@ -1,7 +1,8 @@
 from uuid import uuid4
 from memex_cli.notes import app as note_app
-from memex_common.schemas import IngestResponse, NoteCreateDTO, NoteDTO
+from memex_common.schemas import IngestResponse, NoteCreateDTO, NoteDTO, NodeDTO
 from datetime import datetime, timezone
+import json
 
 
 def test_note_list(runner, mock_api, mock_config, monkeypatch):
@@ -199,3 +200,175 @@ def test_add_note_with_key(runner, mock_api, mock_config, monkeypatch):
     note = mock_api.ingest.call_args[0][0]
     assert isinstance(note, NoteCreateDTO)
     assert note.note_key == 'my-stable-key'
+
+
+# ---------------------------------------------------------------------------
+# Batch: note node (multi-ID)
+# ---------------------------------------------------------------------------
+
+
+def _make_node(**overrides):
+    defaults = dict(
+        id=uuid4(),
+        note_id=uuid4(),
+        vault_id=uuid4(),
+        title='Section',
+        text='body',
+        level=1,
+        seq=0,
+        status='active',
+        created_at=datetime.now(timezone.utc),
+    )
+    defaults.update(overrides)
+    return NodeDTO(**defaults)
+
+
+def test_note_node_multi(runner, mock_api, monkeypatch):
+    n1, n2 = _make_node(title='Intro'), _make_node(title='Body')
+    mock_api.get_nodes.return_value = [n1, n2]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['node', str(n1.id), str(n2.id)])
+    assert result.exit_code == 0
+    assert 'Intro' in result.stdout
+    assert 'Body' in result.stdout
+    mock_api.get_nodes.assert_called_once()
+
+
+def test_note_node_multi_json(runner, mock_api, monkeypatch):
+    n1, n2 = _make_node(title='A'), _make_node(title='B')
+    mock_api.get_nodes.return_value = [n1, n2]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['node', str(n1.id), str(n2.id), '--json'])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+
+# ---------------------------------------------------------------------------
+# Batch: note page-index (multi-ID)
+# ---------------------------------------------------------------------------
+
+
+def test_note_page_index_multi(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    toc1 = {'toc': [{'level': 1, 'title': 'Ch1', 'children': []}]}
+    toc2 = {'toc': [{'level': 1, 'title': 'Ch2', 'children': []}]}
+    mock_api.get_note_page_index.side_effect = [toc1, toc2]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['page-index', str(id1), str(id2)])
+    assert result.exit_code == 0
+    assert 'Ch1' in result.stdout
+    assert 'Ch2' in result.stdout
+
+
+def test_note_page_index_multi_partial_none(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    toc1 = {'toc': [{'level': 1, 'title': 'Exists', 'children': []}]}
+    mock_api.get_note_page_index.side_effect = [toc1, None]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['page-index', str(id1), str(id2)])
+    assert result.exit_code == 0
+    assert 'Exists' in result.stdout
+    assert 'no page index' in result.stdout
+
+
+def test_note_page_index_multi_partial_error(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    toc1 = {'toc': [{'level': 1, 'title': 'Good', 'children': []}]}
+    mock_api.get_note_page_index.side_effect = [toc1, RuntimeError('server down')]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['page-index', str(id1), str(id2)])
+    assert result.exit_code == 0
+    assert 'Good' in result.stdout
+    assert 'Error' in result.stdout
+
+
+def test_note_page_index_multi_json(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    toc1 = {'toc': [{'level': 1, 'title': 'A', 'children': []}]}
+    mock_api.get_note_page_index.side_effect = [toc1, None]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['page-index', str(id1), str(id2), '--json'])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+
+
+# ---------------------------------------------------------------------------
+# Batch: note metadata (multi-ID)
+# ---------------------------------------------------------------------------
+
+
+def test_note_metadata_multi(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    mock_api.get_notes_metadata.return_value = [
+        {'note_id': str(id1), 'title': 'Doc A', 'tags': []},
+        {'note_id': str(id2), 'title': 'Doc B', 'tags': ['x']},
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['metadata', str(id1), str(id2)])
+    assert result.exit_code == 0
+    assert 'Doc A' in result.stdout
+    assert 'Doc B' in result.stdout
+    mock_api.get_notes_metadata.assert_called_once()
+
+
+def test_note_metadata_multi_json(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    mock_api.get_notes_metadata.return_value = [
+        {'note_id': str(id1), 'title': 'A'},
+        {'note_id': str(id2), 'title': 'B'},
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['metadata', str(id1), str(id2), '--json'])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+
+def test_note_metadata_multi_empty(runner, mock_api, monkeypatch):
+    id1, id2 = uuid4(), uuid4()
+    mock_api.get_notes_metadata.return_value = []
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['metadata', str(id1), str(id2)])
+    assert result.exit_code == 0
+    assert 'No metadata found' in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Batch: note get-asset (multi-path)
+# ---------------------------------------------------------------------------
+
+
+def test_get_asset_multi_to_dir(runner, mock_api, mock_config, monkeypatch, tmp_path):
+    p1, p2 = 'assets/a/photo.png', 'assets/b/data.csv'
+    mock_api.get_resource.side_effect = [b'PNG_BYTES', b'CSV_BYTES']
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['get-asset', p1, p2, '-d', str(tmp_path)], obj=mock_config)
+    assert result.exit_code == 0
+    assert (tmp_path / 'photo.png').read_bytes() == b'PNG_BYTES'
+    assert (tmp_path / 'data.csv').read_bytes() == b'CSV_BYTES'
+
+
+def test_get_asset_multi_partial_error(runner, mock_api, mock_config, monkeypatch, tmp_path):
+    p1, p2 = 'assets/a/good.png', 'assets/b/bad.csv'
+    mock_api.get_resource.side_effect = [b'GOOD', FileNotFoundError('missing')]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['get-asset', p1, p2, '-d', str(tmp_path)], obj=mock_config)
+    assert result.exit_code == 0
+    assert (tmp_path / 'good.png').read_bytes() == b'GOOD'
+    assert not (tmp_path / 'bad.csv').exists()
+    assert 'Error' in result.stdout
