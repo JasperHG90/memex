@@ -2,6 +2,7 @@
 Entity Management Commands.
 """
 
+import asyncio
 import json
 import logging
 from typing import Annotated, Any
@@ -10,6 +11,7 @@ import typer
 
 logger = logging.getLogger('memex_cli.entities')
 from rich.console import Console
+from rich.rule import Rule
 from rich.table import Table
 
 from memex_common.config import MemexConfig
@@ -196,21 +198,35 @@ async def list_entities(
     console.print(table)
 
 
+def _render_entity(entity: EntityDTO) -> None:
+    """Render a single entity to the console."""
+    console.print(f'[bold cyan]Entity:[/bold cyan] {entity.name}')
+    console.print(f'[dim]ID:[/dim] {entity.id}')
+    if entity.entity_type:
+        console.print(f'[dim]Type:[/dim] {entity.entity_type}')
+    console.print(f'[green]Mentions:[/green] {entity.mention_count}')
+
+
 @app.command('view')
 @async_command
 async def view_entity(
     ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
+    identifiers: Annotated[list[str], typer.Argument(help='One or more entity names or UUIDs.')],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    View details of a specific entity.
+    View details of one or more entities.
     """
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:
         try:
-            entity = await _resolve_entity(api, identifier)
+            if len(identifiers) == 1:
+                entities = [await _resolve_entity(api, identifiers[0])]
+            else:
+                entities = await asyncio.gather(
+                    *[_resolve_entity(api, ident) for ident in identifiers]
+                )
         except Exception as e:
             if isinstance(e, typer.Exit):
                 raise
@@ -218,12 +234,16 @@ async def view_entity(
             return
 
     if json_output:
-        console.print_json(json.dumps(entity.model_dump(), default=str))
+        if len(identifiers) == 1:
+            console.print_json(json.dumps(entities[0].model_dump(), default=str))
+        else:
+            console.print_json(json.dumps([e.model_dump() for e in entities], default=str))
         return
 
-    console.print(f'[bold cyan]Entity:[/bold cyan] {entity.name}')
-    console.print(f'[dim]ID:[/dim] {entity.id}')
-    console.print(f'[green]Mentions:[/green] {entity.mention_count}')
+    for i, entity in enumerate(entities):
+        if i > 0:
+            console.print(Rule())
+        _render_entity(entity)
 
 
 @app.command('mentions')

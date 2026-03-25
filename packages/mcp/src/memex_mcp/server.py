@@ -47,7 +47,7 @@ from memex_mcp.models import (
     McpSupersession,
     McpVault,
 )
-from memex_mcp.types import NoteTemplateType
+from memex_common.templates import NoteTemplateType, get_template as _get_template
 from memex_common.schemas import (
     BatchJobStatus,
     NoteCreateDTO,
@@ -143,8 +143,6 @@ def _default_write_vault(ctx: Context) -> str:
 def _default_read_vaults(ctx: Context) -> list[str]:
     return get_config(ctx).read_vaults
 
-
-prompts_dir = plb.Path(__file__).parent / 'prompts'
 
 configure_logging(level=os.environ.get('MEMEX_MCP_LOG_LEVEL', 'WARNING'))
 
@@ -487,21 +485,7 @@ def memex_get_template(
 ) -> str:
     """Retrieve a markdown template for note creation."""
     try:
-        if type == NoteTemplateType.TECHNICAL_BRIEF:
-            return prompts_dir.joinpath('technical_brief_template.md').read_text()
-        elif type == NoteTemplateType.GENERAL_NOTE:
-            return prompts_dir.joinpath('general_note_template.md').read_text()
-        elif type == NoteTemplateType.ADR:
-            return prompts_dir.joinpath('adr_template.md').read_text()
-        elif type == NoteTemplateType.RFC:
-            return prompts_dir.joinpath('rfc_template.md').read_text()
-        elif type == NoteTemplateType.QUICK_NOTE:
-            return '# Note: [Insert title here]\n\n## Content\n[Content in markdown format]'
-        else:
-            raise ToolError(f'Unknown template type: {type}')
-
-    except ToolError:
-        raise
+        return _get_template(type)
     except Exception as e:
         logging.error(f'Get template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve template: {e}')
@@ -1310,6 +1294,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
                     description=v.description,
                     is_active=v.is_active,
                     last_note_added_at=v.last_note_added_at,
+                    access=v.access,
                 )
                 for v in vaults
             ]

@@ -2,6 +2,7 @@
 Memory Management Commands (Ingest & Retrieval).
 """
 
+import asyncio
 import json
 import logging
 import pathlib as plb
@@ -82,6 +83,61 @@ async def generate_answer(query: str, memory: list[MemoryUnitDTO], model_name: s
         except Exception as e:
             logger.error(f'Error generating answer: {e}')
             return 'Could not generate answer.'
+
+
+@app.command('view')
+@async_command
+async def view_memory(
+    ctx: typer.Context,
+    unit_ids: Annotated[list[str], typer.Argument(help='One or more memory unit UUIDs.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    View one or more memory units by ID.
+    """
+    from rich.rule import Rule
+
+    config: MemexConfig = ctx.obj
+    uuids = [parse_uuid(uid, 'memory unit') for uid in unit_ids]
+
+    async with get_api_context(config) as api:
+        try:
+            if len(uuids) == 1:
+                units = [await api.get_memory_unit(uuids[0])]
+            else:
+                units = list(await asyncio.gather(*[api.get_memory_unit(uid) for uid in uuids]))
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if json_output:
+        if len(uuids) == 1:
+            console.print_json(json.dumps(units[0].model_dump(), default=str))
+        else:
+            console.print_json(json.dumps([u.model_dump() for u in units], default=str))
+        return
+
+    for i, unit in enumerate(units):
+        if i > 0:
+            console.print(Rule())
+        console.print(f'[bold cyan]Memory Unit[/bold cyan] [dim]{unit.id}[/dim]')
+        console.print(f'[dim]Type:[/dim] {unit.fact_type}')
+        console.print(f'[dim]Status:[/dim] {unit.status}')
+        if unit.note_id:
+            console.print(f'[dim]Note ID:[/dim] {unit.note_id}')
+        if unit.mentioned_at:
+            console.print(f'[dim]Mentioned at:[/dim] {unit.mentioned_at}')
+        if unit.occurred_start:
+            date_range = str(unit.occurred_start)
+            if unit.occurred_end:
+                date_range += f' → {unit.occurred_end}'
+            console.print(f'[dim]Occurred:[/dim] {date_range}')
+        console.print()
+        console.print(Panel(Markdown(unit.text), title='Content', border_style='green'))
+        if unit.metadata:
+            source = unit.metadata.get('note_name') or unit.metadata.get('filestore_path')
+            if source:
+                console.print(f'[dim]Source:[/dim] {source}')
 
 
 @app.command('delete')
