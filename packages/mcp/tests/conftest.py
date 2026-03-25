@@ -1,10 +1,13 @@
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 from fastmcp import Client
 from memex_mcp.server import mcp
+from memex_mcp.models import AppContext
+from memex_common.config import MemexConfig
 
 
 def parse_tool_result(result) -> list[dict] | dict | None:
@@ -71,6 +74,34 @@ def mock_config():
     config.server.default_reader_vault = 'global'
     with patch('memex_mcp.server.get_config', return_value=config):
         yield config
+
+
+@pytest.fixture(autouse=True)
+def _disable_config_loading(monkeypatch):
+    """Prevent MemexConfig from loading local/global config files in tests."""
+    monkeypatch.setenv('MEMEX_LOAD_LOCAL_CONFIG', 'false')
+    monkeypatch.setenv('MEMEX_LOAD_GLOBAL_CONFIG', 'false')
+
+
+@asynccontextmanager
+async def _mock_lifespan(_server):
+    """No-op lifespan that skips the HTTP health check."""
+    ctx = AppContext(config=MemexConfig())
+    ctx._api = AsyncMock()
+    yield ctx
+
+
+@pytest.fixture(autouse=True)
+def _mock_mcp_lifespan():
+    """Replace the real MCP lifespan for all tests.
+
+    The real lifespan makes an HTTP call to verify the active vault,
+    blocking for up to 120 s when no server is running.
+    """
+    original = mcp._lifespan
+    mcp._lifespan = _mock_lifespan
+    yield
+    mcp._lifespan = original
 
 
 @pytest.fixture
