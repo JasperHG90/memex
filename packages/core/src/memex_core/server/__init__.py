@@ -159,6 +159,7 @@ app = FastAPI(title='Memex Core API', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_config.origins,
+    allow_origin_regex=_cors_config.allow_origin_regex,
     allow_credentials=_cors_config.allow_credentials,
     allow_methods=_cors_config.allow_methods,
     allow_headers=_cors_config.allow_headers,

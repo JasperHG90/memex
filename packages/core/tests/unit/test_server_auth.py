@@ -644,3 +644,141 @@ class TestAdminAuthWithPolicies:
         client = TestClient(self._make_admin_app(config))
         # No auth config stored on app.state → fail-closed
         assert client.get('/admin/test', headers={'X-API-Key': 'any'}).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# OPTIONS method exemption (CORS preflight)
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsExemption:
+    """OPTIONS requests must pass through auth for CORS preflight to work."""
+
+    def test_options_passes_without_key(self):
+        """OPTIONS to a protected path should pass without an API key."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        response = client.options('/api/v1/notes')
+        # Should not be 401/403 — auth middleware lets it through
+        assert response.status_code != 401
+        assert response.status_code != 403
+
+    def test_options_passes_when_auth_disabled(self):
+        """OPTIONS should also work when auth is disabled."""
+        app = _make_app(AuthConfig(enabled=False))
+        client = TestClient(app)
+        response = client.options('/api/v1/notes')
+        assert response.status_code != 401
+        assert response.status_code != 403
+
+    def test_get_still_requires_key(self):
+        """GET to the same protected path still requires auth."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        assert client.get('/api/v1/notes').status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# CORS integration (CORSMiddleware + auth_middleware)
+# ---------------------------------------------------------------------------
+
+
+class TestCorsIntegration:
+    """Test that CORSMiddleware and auth_middleware work together correctly."""
+
+    @staticmethod
+    def _make_cors_app(
+        auth_config: AuthConfig, origins: list[str] | None = None, origin_regex: str | None = None
+    ) -> FastAPI:
+        """Create a FastAPI app with both CORS and auth middleware."""
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app = FastAPI()
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins or ['http://localhost:3000'],
+            allow_origin_regex=origin_regex,
+            allow_credentials=True,
+            allow_methods=['*'],
+            allow_headers=['*'],
+        )
+        app.middleware('http')(auth_middleware)
+        setup_auth(app, auth_config)
+
+        @app.get('/api/v1/notes')
+        async def notes():
+            return {'notes': []}
+
+        return app
+
+    def test_preflight_from_allowed_origin(self):
+        """Preflight from an allowed origin should get CORS headers."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = self._make_cors_app(config, origins=['http://localhost:3000'])
+        client = TestClient(app)
+        response = client.options(
+            '/api/v1/notes',
+            headers={
+                'Origin': 'http://localhost:3000',
+                'Access-Control-Request-Method': 'GET',
+                'Access-Control-Request-Headers': 'X-API-Key',
+            },
+        )
+        assert response.status_code == 200
+        assert 'access-control-allow-origin' in response.headers
+
+    def test_preflight_from_extension_origin(self):
+        """Preflight from a browser extension origin should work with regex."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = self._make_cors_app(
+            config,
+            origins=[],
+            origin_regex=r'(moz|chrome)-extension://.*',
+        )
+        client = TestClient(app)
+        response = client.options(
+            '/api/v1/notes',
+            headers={
+                'Origin': 'moz-extension://abc-123-def',
+                'Access-Control-Request-Method': 'GET',
+                'Access-Control-Request-Headers': 'X-API-Key',
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get('access-control-allow-origin') == 'moz-extension://abc-123-def'
+
+    def test_preflight_from_disallowed_origin(self):
+        """Preflight from an unrecognised origin should be rejected by CORS."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = self._make_cors_app(config, origins=['http://localhost:3000'])
+        client = TestClient(app)
+        response = client.options(
+            '/api/v1/notes',
+            headers={
+                'Origin': 'https://evil.com',
+                'Access-Control-Request-Method': 'GET',
+                'Access-Control-Request-Headers': 'X-API-Key',
+            },
+        )
+        assert response.status_code == 400
+
+    def test_actual_request_from_extension_with_key(self):
+        """GET from extension origin with valid API key should succeed."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = self._make_cors_app(
+            config,
+            origins=[],
+            origin_regex=r'(moz|chrome)-extension://.*',
+        )
+        client = TestClient(app)
+        response = client.get(
+            '/api/v1/notes',
+            headers={
+                'Origin': 'moz-extension://abc-123-def',
+                'X-API-Key': VALID_KEY,
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get('access-control-allow-origin') == 'moz-extension://abc-123-def'

@@ -717,6 +717,13 @@ class CorsConfig(BaseModel):
         default_factory=lambda: ['*'],
         description='HTTP headers allowed in CORS requests.',
     )
+    allow_origin_regex: str | None = Field(
+        default=r'(moz|chrome)-extension://.*',
+        description=(
+            'Regex pattern for additional allowed CORS origins '
+            '(matched with re.fullmatch). Default allows browser extensions.'
+        ),
+    )
 
 
 class RateLimitConfig(BaseModel):
