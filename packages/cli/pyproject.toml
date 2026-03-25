@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 readme = "README.md"
+license = "Apache-2.0"
 dependencies = [
     "memex-common",
     "typer>=0.12.0",

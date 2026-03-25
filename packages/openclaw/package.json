@@ -2,6 +2,7 @@
   "name": "memory-memex",
   "version": "0.0.21a",
   "description": "Memex memory plugin for OpenClaw — full tool suite with auto-recall, auto-capture, and 9 agent tools",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

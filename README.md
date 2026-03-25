@@ -1,8 +1,28 @@
 <p align="center">
-  <img src="assets/memex-banner.jpg" alt="Memex" width="500">
+  <img src="assets/memex-logo-spacy.png" width="160" alt="Memex Logo" />
 </p>
 
-Memex is a long-term memory system designed to give LLMs persistent, evolving knowledge. It captures unstructured data (notes, docs, chats), extracts structured facts, and synthesizes high-level mental models over time.
+<h1 align="center">Memex</h1>
+<h3 align="center">Long-Term Memory for LLMs</h3>
+
+<p align="center">
+  Persistent, evolving knowledge for AI agents. Extracts facts, builds mental models, and retrieves with five-strategy fusion.<br/>
+  <strong>Ingest anything. Remember everything. Retrieve what matters.</strong>
+</p>
+
+<p align="center">
+  <a href="./docs/index.md">Documentation</a> &bull;
+  <a href="./docs/tutorials/getting-started.md">Quick Start</a> &bull;
+  <a href="#claude-code-plugin">Claude Code Plugin</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/language-Python-blue?style=flat-square" alt="Python" />
+  <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
+  <img src="https://img.shields.io/badge/version-v0.0.39a-green?style=flat-square" alt="v0.0.39a" />
+  <img src="https://img.shields.io/badge/tests-2,271%20passing-brightgreen?style=flat-square" alt="Tests" />
+</p>
 
 ## Requirements
 
@@ -27,8 +47,6 @@ uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90
 ```
 
 It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
-
-> The dashboard is a separate React+Vite application. See [Using the Dashboard](./docs/tutorials/using-the-dashboard.md) for setup instructions.
 
 ### 3. Initialize
 Sets up your local storage and configuration.
@@ -138,31 +156,6 @@ Capture web content directly into your knowledge base.
 
 ![Ingesting a URL into Memex](assets/memex_cli_ingest.gif)
 
-### Dashboard
-Explore your knowledge graph through the web UI.
-
-![Dashboard overview with stats and recent activity](assets/memex_dashboard.gif)
-
-### Entity Graph
-Visualize entity relationships and co-occurrences.
-
-![Interactive entity graph visualization](assets/memex_dashboard_entity_graph.gif)
-
-### Lineage
-Trace the provenance chain from notes to memories, observations, and mental models.
-
-![Entity lineage showing provenance graph](assets/memex_dashboard_lineage.gif)
-
-### Knowledge Flow
-Monitor live ingestion activity across the knowledge pipeline.
-
-![Knowledge flow pipeline with activity columns](assets/memex_dashboard_knowledge_flow.gif)
-
-### Memory Search (Dashboard)
-Search memories with multi-strategy retrieval and AI summaries.
-
-![Dashboard memory search with results](assets/memex_dashboard_memory_search.gif)
-
 ## Features
 
 ### Ingest anything
@@ -229,17 +222,12 @@ First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compati
 
 A full FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
 
-### Dashboard
-
-A React + Vite web UI for exploring your knowledge graph — entity relationships, lineage trees, live ingestion activity, and memory search with AI summaries.
-
 ## 📚 Documentation
 
 Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 
 ### Tutorials
 - [Getting Started](./docs/tutorials/getting-started.md): Install, configure, ingest, and search.
-- [Using the Dashboard](./docs/tutorials/using-the-dashboard.md): Explore the web UI.
 - [AI Agent Memory](./docs/tutorials/ai-agent-memory.md): Build a Python agent with persistent memory.
 
 ### How-To Guides
@@ -266,7 +254,6 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Fact extraction and entity resolution.
 - [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): TEMPR — five strategies fused via RRF.
 - [Reflection and Mental Models](./docs/explanation/reflection-and-mental-models.md): Background synthesis of observations.
-- [Dashboard Architecture](./docs/explanation/dashboard-architecture.md): React+Vite design and data flow.
 - [OpenClaw Plugin](./docs/explanation/openclaw-plugin.md): Plugin lifecycle and circuit breaker.
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
@@ -282,7 +269,7 @@ Look at the conventional commits since the last tag:
 | Commit type | Bump | Example |
 |---|---|---|
 | `fix:` | **patch** (0.0.x) | `fix(core): handle null embeddings` |
-| `feat:` | **minor** (0.x.0) | `feat(dashboard): add entity graph` |
+| `feat:` | **minor** (0.x.0) | `feat(core): add entity graph` |
 | `feat!:` or `BREAKING CHANGE:` | **major** (x.0.0) | `feat!: change API response format` |
 
 ### Release workflow
@@ -298,7 +285,7 @@ just release 0.1.0
 git push && git push --tags
 ```
 
-The `release.yaml` GitHub Action automatically builds all artifacts (Python, dashboard, OpenClaw) and creates a GitHub Release with auto-generated release notes.
+The `release.yaml` GitHub Action automatically builds all artifacts (Python, OpenClaw) and creates a GitHub Release with auto-generated release notes.
 
 ## Evaluation
 
@@ -336,9 +323,10 @@ Memex is built as a monorepo:
 - **`packages/cli`**: The interface. Typer CLI commands.
 - **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
-- **`packages/dashboard`**: The view. React + Vite web UI for exploring your knowledge graph.
+- **`packages/eval`**: The benchmark. LoCoMo evaluation framework and retrieval analysis.
 - **`packages/claude-code-plugin`**: The plugin. Claude Code plugin for cross-project memory integration.
-- **`packages/openclaw`**: The plugin. Memex memory integration for OpenClaw agents.
+- **`packages/openclaw`**: The bridge. Memex memory integration for OpenClaw agents.
+- **`packages/firefox-extension`**: The capture. Firefox extension for web content ingestion.
 
 ## Acknowledgements
 
@@ -349,4 +337,4 @@ Memex builds on ideas and code from these projects:
 
 ## License
 
-[MIT](LICENSE.txt). See [NOTICES](NOTICES) for third-party attributions.
+[Apache 2.0](LICENSE.txt). See [NOTICES](NOTICES) for third-party attributions.
