@@ -42,9 +42,14 @@ memex server start
 # stdio transport (default — for Claude Code, IDE integrations)
 memex mcp run
 
-# SSE transport (for remote/web clients)
+# HTTP transport (for remote/web clients, Docker)
+memex mcp run --transport http --port 8080
+
+# SSE transport (legacy)
 memex mcp run --transport sse --port 8080
 ```
+
+A slim Docker image is available at `docker/mcp/Dockerfile` — it includes only `memex-common`, `memex-mcp`, and `memex-cli` (no core/ML dependencies). Connects to an external Memex API server.
 
 ### Claude Code Integration
 

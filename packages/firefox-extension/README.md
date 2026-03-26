@@ -39,9 +39,19 @@ Click the extension icon → **Settings**, or go to `about:addons` → Save to M
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Server URL | `http://localhost:8000` | Your Memex server address |
-| API Key | *(empty)* | Required if your server has auth enabled |
+| API Key | *(empty)* | Required if your server has auth enabled. Entered as a password field with show/hide toggle. |
+| Remember API key | unchecked | When checked, the key is encrypted and persisted across restarts. When unchecked, the key is stored in session memory only and cleared on Firefox restart. |
 
 Use the **Test Connection** button to verify connectivity.
+
+### Security
+
+API keys are stored using one of two modes depending on the **Remember API key** setting:
+
+- **Session-only** (default): the key is held in `browser.storage.session` and cleared when Firefox restarts. Nothing is written to disk.
+- **Encrypted persistent**: the key is encrypted with AES-256-GCM using a non-exportable `CryptoKey` stored in IndexedDB. A fresh 12-byte IV is generated per encryption. The raw key bytes cannot be read by JavaScript (`extractable: false`).
+
+Legacy plaintext keys (from earlier extension versions) are automatically migrated to session-only storage on first load. If decryption fails (e.g. IndexedDB was cleared), the user is prompted to re-enter the key.
 
 ## Scripts
 
