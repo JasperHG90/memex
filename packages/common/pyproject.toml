@@ -30,5 +30,9 @@ raw-options.git_describe_command = ["git", "describe", "--dirty", "--tags", "--l
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/memex_common"]
+artifacts = ["src/memex_common/prompts/*.toml"]
+
 [tool.hatch.build.hooks.vcs]
 version-file = "src/memex_common/__about__.py"
