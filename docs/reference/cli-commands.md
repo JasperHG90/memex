@@ -210,6 +210,38 @@ Delete a memory unit and all associated data (entity links, memory links).
 
 ---
 
+### `memory view`
+
+```
+memex memory view UNIT_ID [UNIT_ID ...] [OPTIONS]
+```
+
+View one or more memory units by ID. Displays type, status, content, source note, and date information.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `UNIT_ID` | Yes | One or more memory unit UUIDs. |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--json` | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+# View a single memory unit
+memex memory view 550e8400-e29b-41d4-a716-446655440000
+
+# View multiple memory units
+memex memory view 550e8400-e29b-41d4-a716-446655440000 660e8400-e29b-41d4-a716-446655440001
+```
+
+---
+
 ### `memory reflect`
 
 ```
@@ -397,16 +429,16 @@ View the full content and metadata of a note.
 ### `note page-index`
 
 ```
-memex note page-index NOTE_ID [OPTIONS]
+memex note page-index NOTE_ID [NOTE_ID ...] [OPTIONS]
 ```
 
-View the page index (hierarchical table of contents) of a note. Only available for notes ingested with the page-index strategy.
+View the page index (hierarchical table of contents) of one or more notes. Only available for notes ingested with the page-index strategy.
 
 #### Arguments
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `NOTE_ID` | Yes | UUID of the note. |
+| `NOTE_ID` | Yes | One or more note UUIDs. |
 
 #### Options
 
@@ -419,22 +451,54 @@ View the page index (hierarchical table of contents) of a note. Only available f
 ### `note node`
 
 ```
-memex note node NODE_ID [OPTIONS]
+memex note node NODE_ID [NODE_ID ...] [OPTIONS]
 ```
 
-View a specific page-index node (section) by its ID. Node IDs are found in the output of `note page-index` or `note search --reason`.
+View one or more page-index nodes (sections) by ID. Node IDs are found in the output of `note page-index` or `note search --reason`.
 
 #### Arguments
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `NODE_ID` | Yes | UUID of the node. |
+| `NODE_ID` | Yes | One or more node UUIDs. |
 
 #### Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--json` | bool | `False` | Output as JSON. |
+
+---
+
+### `note metadata`
+
+```
+memex note metadata NOTE_ID [NOTE_ID ...] [OPTIONS]
+```
+
+View the metadata (title, description, tags, publish date, etc.) of one or more notes. Only available for notes with a page index.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | One or more note UUIDs. |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--json` | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+# View metadata for a single note
+memex note metadata 550e8400-e29b-41d4-a716-446655440000
+
+# View metadata for multiple notes
+memex note metadata 550e8400-e29b-41d4-a716-446655440000 660e8400-e29b-41d4-a716-446655440001
+```
 
 ---
 
@@ -457,6 +521,241 @@ Delete a note and all associated data (memory units, chunks, links, assets).
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+---
+
+## `note assets`
+
+Manage note assets (images, PDFs, and other files attached to notes).
+
+### `note assets list`
+
+```
+memex note assets list NOTE_ID [OPTIONS]
+```
+
+List file assets attached to a note.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note. |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--json` | bool | `False` | Output as JSON. |
+
+---
+
+### `note assets get`
+
+```
+memex note assets get ASSET_PATH [ASSET_PATH ...] [OPTIONS]
+```
+
+Download one or more assets from the server.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `ASSET_PATH` | Yes | One or more asset paths (from `note assets list`). |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--output` | `-o` | str | Output file path (single asset only). Defaults to stdout. |
+| `--output-dir` | `-d` | str | Directory to save files to (for multiple assets). |
+
+#### Examples
+
+```bash
+# Download a single asset to stdout
+memex note assets get "notes/550e8400/diagram.png" > diagram.png
+
+# Download a single asset to a file
+memex note assets get "notes/550e8400/diagram.png" --output ./diagram.png
+
+# Download multiple assets to a directory
+memex note assets get "notes/550e8400/diagram.png" "notes/550e8400/data.csv" --output-dir ./downloads
+```
+
+> [!NOTE]
+> `--output` cannot be used with multiple assets. Use `--output-dir` instead.
+
+---
+
+### `note assets add`
+
+```
+memex note assets add NOTE_ID --asset PATH [--asset PATH ...]
+```
+
+Add one or more asset files to an existing note. Duplicate filenames are skipped.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to add assets to. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--asset` | `-a` | Path | Path to an asset file to attach. Repeatable for multiple assets. **Required.** |
+
+#### Examples
+
+```bash
+# Add a single asset
+memex note assets add 550e8400-e29b-41d4-a716-446655440000 --asset ./diagram.png
+
+# Add multiple assets
+memex note assets add 550e8400-e29b-41d4-a716-446655440000 -a ./diagram.png -a ./data.csv -a ./photo.jpg
+```
+
+---
+
+### `note assets delete`
+
+```
+memex note assets delete NOTE_ID ASSET_PATH [ASSET_PATH ...]
+```
+
+Delete one or more asset files from an existing note. Non-existent paths are reported but do not cause an error.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to delete assets from. |
+| `ASSET_PATH` | Yes | One or more asset paths to delete (from `note assets list`). |
+
+#### Examples
+
+```bash
+# Delete a single asset
+memex note assets delete 550e8400-e29b-41d4-a716-446655440000 "notes/550e8400/diagram.png"
+
+# Delete multiple assets
+memex note assets delete 550e8400-e29b-41d4-a716-446655440000 "notes/550e8400/diagram.png" "notes/550e8400/data.csv"
+```
+
+---
+
+## `note template`
+
+Manage note templates. Templates are `.toml` files with Markdown scaffolds, discovered across three layers: built-in, global (`{filestore_root}/templates/`), and project-local (`.memex/templates/`). Later layers override earlier ones on slug collision.
+
+### `note template list`
+
+```
+memex note template list
+```
+
+List all available templates with slug, name, description, and source scope.
+
+---
+
+### `note template get`
+
+```
+memex note template get SLUG
+```
+
+Print the Markdown content of a template.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `SLUG` | Yes | Template slug (e.g. `general_note`, `technical_brief`). |
+
+#### Examples
+
+```bash
+# Print the general note template
+memex note template get general_note
+
+# Print an ADR template
+memex note template get architectural_decision_record
+```
+
+---
+
+### `note template register`
+
+```
+memex note template register PATH [OPTIONS]
+```
+
+Register a template by copying a `.toml` file to the templates directory.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `PATH` | Yes | Path to a `.toml` template file. |
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--local` | bool | `False` | Register in project-local scope (`.memex/templates/`) instead of global. |
+
+#### Examples
+
+```bash
+# Register a template globally
+memex note template register ./my-template.toml
+
+# Register a project-local template
+memex note template register ./sprint-review.toml --local
+```
+
+---
+
+### `note template delete`
+
+```
+memex note template delete SLUG [OPTIONS]
+```
+
+Delete a user template. Cannot delete built-in templates.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `SLUG` | Yes | Template slug to delete. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--local` | | bool | `False` | Delete from project-local scope instead of global. |
+| `--yes` | `-y` | bool | `False` | Skip the confirmation prompt. |
+
+---
+
+### `note template dir`
+
+```
+memex note template dir [OPTIONS]
+```
+
+Print the templates directory path.
+
+#### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--local` | bool | `False` | Show the project-local templates directory instead of global. |
 
 ---
 
@@ -495,16 +794,16 @@ memex entity list --query "PostgreSQL"
 ### `entity view`
 
 ```
-memex entity view IDENTIFIER [OPTIONS]
+memex entity view IDENTIFIER [IDENTIFIER ...] [OPTIONS]
 ```
 
-View details of a specific entity. Accepts either a name or UUID.
+View details of one or more entities. Accepts names or UUIDs.
 
 #### Arguments
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `IDENTIFIER` | Yes | Name or UUID of the entity. If the name is ambiguous, displays matching candidates. |
+| `IDENTIFIER` | Yes | One or more entity names or UUIDs. If a name is ambiguous, displays matching candidates. |
 
 #### Options
 
@@ -912,9 +1211,9 @@ Run the Memex MCP server.
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `--transport` | `-t` | str | `stdio` | Transport mode: `stdio` or `sse`. |
-| `--host` | | str | `0.0.0.0` | Host for SSE transport. |
-| `--port` | | int | `8000` | Port for SSE transport. |
+| `--transport` | `-t` | str | `stdio` | Transport mode: `stdio`, `http`, or `sse`. |
+| `--host` | | str | `0.0.0.0` | Host for network transports. |
+| `--port` | | int | `8000` | Port for network transports. |
 
 #### Examples
 
@@ -922,7 +1221,10 @@ Run the Memex MCP server.
 # Run with stdio transport (default, for Claude Code / IDEs)
 memex mcp run
 
-# Run with SSE transport on a custom port
+# Run with HTTP transport (for Docker / remote clients)
+memex mcp run --transport http --port 8080
+
+# Run with SSE transport (legacy)
 memex mcp run --transport sse --port 8080
 ```
 

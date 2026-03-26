@@ -78,7 +78,50 @@ memex memory search "deployment" --vault project-x
 memex note search "architecture" --vault project-x --vault global
 ```
 
-### 5. Delete a Vault
+### 5. Control Access with Policies
+
+When authentication is enabled, each API key is bound to a **policy** that determines what operations it can perform, and optionally scoped to specific vaults.
+
+**Three built-in policies:**
+
+| Policy | Permissions | Can Do |
+|--------|------------|--------|
+| `reader` | read | View notes, search, retrieve metadata |
+| `writer` | read, write | + Create/edit notes, add assets, ingest |
+| `admin` | read, write, delete | + Delete notes, delete vaults |
+
+**Example configuration:**
+
+```yaml
+auth:
+  enabled: true
+  keys:
+    # Admin key for all vaults (unrestricted)
+    - key: "env:MEMEX_ADMIN_KEY"
+      policy: admin
+      description: "Admin — full access"
+
+    # Writer scoped to one vault, with read-only access to a shared vault
+    - key: "env:ANALYTICS_WRITER_KEY"
+      policy: writer
+      vault_ids: ["analytics"]
+      read_vault_ids: ["shared-reference"]
+      description: "Analytics team — write analytics, read shared"
+
+    # Reader scoped to one vault
+    - key: "env:VIEWER_KEY"
+      policy: reader
+      vault_ids: ["analytics"]
+      description: "Viewer — read-only analytics"
+```
+
+Use `env:VAR_NAME` to resolve API key secrets from environment variables instead of storing them in the config file.
+
+**Cross-vault read access:** `read_vault_ids` grants read-only access to additional vaults beyond the key's primary `vault_ids`. The effective read scope is `vault_ids` + `read_vault_ids`. Write and delete operations remain restricted to `vault_ids` only. `read_vault_ids` cannot be set on unrestricted keys (those with no `vault_ids`).
+
+When auth is enabled, `memex vault list` shows an **Access** column displaying the effective permissions for the current API key.
+
+### 6. Delete a Vault
 
 ```bash
 memex vault delete "Project Hindsight"
