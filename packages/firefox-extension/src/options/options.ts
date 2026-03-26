@@ -8,8 +8,16 @@ const serverUrlEl = document.getElementById('server-url') as HTMLInputElement;
 const apiKeyEl = document.getElementById('api-key') as HTMLInputElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const testBtn = document.getElementById('test-btn') as HTMLButtonElement;
+const toggleKeyBtn = document.getElementById('toggle-key') as HTMLButtonElement;
 const connectionStatus = document.getElementById('connection-status')!;
 const statusEl = document.getElementById('status')!;
+
+// Show/hide API key toggle
+toggleKeyBtn.addEventListener('click', () => {
+  const isPassword = apiKeyEl.type === 'password';
+  apiKeyEl.type = isPassword ? 'text' : 'password';
+  toggleKeyBtn.textContent = isPassword ? 'Hide' : 'Show';
+});
 
 // Load saved settings
 browser.storage.local
