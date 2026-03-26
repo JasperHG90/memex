@@ -26,7 +26,7 @@
   },
   "options_ui": {
     "page": "options/options.html",
-    "open_in_tab": true
+    "open_in_tab": false
   },
   "icons": {
     "48": "icons/icon-48.png",
