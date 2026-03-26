@@ -47,45 +47,6 @@ saveBtn.addEventListener('click', async () => {
   }, 2000);
 });
 
-/**
- * Test connection: try direct fetch first (works when server CORS allows
- * moz-extension:// origins), fall back to background script proxy.
- */
-async function testConnection(
-  url: string,
-  headers: Record<string, string>,
-): Promise<{ ok: boolean; status: number; via: string }> {
-  // Strategy 1: direct fetch (preferred — simpler, works if CORS is configured)
-  try {
-    console.log('[memex] Trying direct fetch to', url);
-    const resp = await fetch(url, { headers });
-    console.log('[memex] Direct fetch succeeded:', resp.status);
-    return { ok: resp.ok, status: resp.status, via: 'direct' };
-  } catch (err) {
-    console.warn('[memex] Direct fetch failed:', err);
-  }
-
-  // Strategy 2: background script proxy (for environments where CORS blocks direct)
-  try {
-    console.log('[memex] Trying background script proxy...');
-    const resp = (await browser.runtime.sendMessage({
-      action: 'proxyFetch',
-      url,
-      init: { headers },
-    })) as { ok: boolean; status: number; statusText: string } | undefined;
-
-    if (resp && typeof resp.ok === 'boolean') {
-      console.log('[memex] Proxy fetch succeeded:', resp.status);
-      return { ok: resp.ok, status: resp.status, via: 'proxy' };
-    }
-    console.warn('[memex] Proxy returned unexpected response:', resp);
-  } catch (err) {
-    console.error('[memex] Proxy fetch failed:', err);
-  }
-
-  return { ok: false, status: 0, via: 'none' };
-}
-
 // Test connection
 testBtn.addEventListener('click', async () => {
   const serverUrl = (serverUrlEl.value.trim() || 'http://localhost:8000').replace(/\/$/, '');
@@ -96,20 +57,24 @@ testBtn.addEventListener('click', async () => {
   statusEl.textContent = 'Testing...';
   statusEl.className = '';
 
-  const resp = await testConnection(
-    `${serverUrl}/api/v1/vaults`,
-    apiKey ? { 'X-API-Key': apiKey } : {},
-  );
+  try {
+    console.log('[memex] Testing connection to', serverUrl);
+    const resp = await fetch(`${serverUrl}/api/v1/vaults`, {
+      headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    });
+    console.log('[memex] Response:', resp.status, resp.statusText);
 
-  if (resp.ok) {
-    connectionStatus.className = 'indicator connected';
-    statusEl.textContent = 'Connected!';
-    statusEl.className = 'success';
-  } else if (resp.status > 0) {
-    connectionStatus.className = 'indicator failed';
-    statusEl.textContent = `Server responded with ${resp.status}`;
-    statusEl.className = 'error';
-  } else {
+    if (resp.ok) {
+      connectionStatus.className = 'indicator connected';
+      statusEl.textContent = 'Connected!';
+      statusEl.className = 'success';
+    } else {
+      connectionStatus.className = 'indicator failed';
+      statusEl.textContent = `Server responded with ${resp.status}`;
+      statusEl.className = 'error';
+    }
+  } catch (err) {
+    console.error('[memex] Connection test failed:', err);
     connectionStatus.className = 'indicator failed';
     statusEl.textContent = 'Could not connect to server.';
     statusEl.className = 'error';

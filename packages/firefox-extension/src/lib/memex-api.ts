@@ -1,47 +1,5 @@
 import type { VaultDTO, IngestResponse } from '../types';
 
-/**
- * Make an API request, trying direct fetch first (works when server CORS
- * allows the extension's origin), falling back to background script proxy.
- */
-async function apiFetch(
-  url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
-): Promise<{ ok: boolean; status: number; statusText: string; text: () => string }> {
-  // Strategy 1: direct fetch
-  try {
-    const resp = await fetch(url, init);
-    const body = await resp.text();
-    return {
-      ok: resp.ok,
-      status: resp.status,
-      statusText: resp.statusText,
-      text: () => body,
-    };
-  } catch {
-    // CORS or network error — fall through to proxy
-  }
-
-  // Strategy 2: background script proxy
-  const resp = (await browser.runtime.sendMessage({
-    action: 'proxyFetch',
-    url,
-    init,
-  })) as { ok: boolean; status: number; statusText: string; body: string } | undefined;
-
-  if (resp && typeof resp.ok === 'boolean') {
-    return {
-      ok: resp.ok,
-      status: resp.status,
-      statusText: resp.statusText,
-      text: () => resp.body,
-    };
-  }
-
-  // Both strategies failed
-  throw new Error('Could not reach server (direct fetch and background proxy both failed)');
-}
-
 /** Known tracking query parameters to strip for URL canonicalization. */
 const TRACKING_PARAMS = new Set([
   'utm_source',
@@ -101,13 +59,13 @@ function authHeaders(apiKey: string): Record<string, string> {
  * The /vaults endpoint returns NDJSON (one JSON object per line).
  */
 export async function fetchVaults(serverUrl: string, apiKey: string): Promise<VaultDTO[]> {
-  const resp = await apiFetch(`${serverUrl}/api/v1/vaults`, {
+  const resp = await fetch(`${serverUrl}/api/v1/vaults`, {
     headers: authHeaders(apiKey),
   });
   if (!resp.ok) {
     throw new Error(`Failed to fetch vaults: ${resp.status} ${resp.statusText}`);
   }
-  const text = resp.text();
+  const text = await resp.text();
   return text
     .trim()
     .split('\n')
@@ -134,7 +92,7 @@ export async function saveNote(
   },
 ): Promise<IngestResponse> {
   const url = `${serverUrl}/api/v1/ingestions${note.background ? '?background=true' : ''}`;
-  const resp = await apiFetch(url, {
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -152,10 +110,10 @@ export async function saveNote(
     }),
   });
   if (!resp.ok) {
-    const body = resp.text();
+    const body = await resp.text();
     throw new Error(`Save failed: ${resp.status} — ${body}`);
   }
-  return JSON.parse(resp.text()) as IngestResponse;
+  return (await resp.json()) as IngestResponse;
 }
 
 /**
