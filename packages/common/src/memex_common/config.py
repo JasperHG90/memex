@@ -702,7 +702,7 @@ class CorsConfig(BaseModel):
     """Configuration for CORS (Cross-Origin Resource Sharing)."""
 
     origins: list[str] = Field(
-        default_factory=lambda: ['http://localhost:5173', 'http://localhost:3000'],
+        default_factory=lambda: ['http://localhost:5173', 'http://localhost:3000', 'null'],
         description='Allowed origins for CORS requests.',
     )
     allow_credentials: bool = Field(
