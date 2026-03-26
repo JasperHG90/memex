@@ -198,6 +198,91 @@ class NoteService:
             await session.refresh(doc)
             return doc.model_dump()
 
+    async def add_note_assets(
+        self,
+        note_id: UUID,
+        files: dict[str, bytes],
+    ) -> dict[str, Any]:
+        """Add one or more asset files to an existing note.
+
+        Uses AsyncTransaction for atomicity across metastore + filestore.
+        Skips files whose path already exists in the note's assets list.
+        """
+        from memex_core.memory.sql_models import Note, Vault
+
+        async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
+            note = await txn.db_session.get(Note, note_id)
+            if not note:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            vault = await txn.db_session.get(Vault, note.vault_id)
+            vault_name = vault.name if vault else str(note.vault_id)
+
+            asset_path = f'assets/{vault_name}/{note_id}'
+            existing_assets = set(note.assets or [])
+            added: list[str] = []
+            skipped: list[str] = []
+
+            for filename, content in files.items():
+                full_asset_key = f'{asset_path}/{filename}'
+                if full_asset_key in existing_assets:
+                    skipped.append(filename)
+                    continue
+                await txn.save_file(full_asset_key, content)
+                added.append(full_asset_key)
+
+            if added:
+                # New list assignment for SQLAlchemy ARRAY mutation detection
+                note.assets = (note.assets or []) + added
+                txn.db_session.add(note)
+
+        return {
+            'note_id': str(note_id),
+            'added_assets': added,
+            'skipped': skipped,
+            'asset_count': len(note.assets or []),
+        }
+
+    async def delete_note_assets(
+        self,
+        note_id: UUID,
+        asset_paths: list[str],
+    ) -> dict[str, Any]:
+        """Delete one or more asset files from an existing note.
+
+        Uses AsyncTransaction for atomicity across metastore + filestore.
+        Reports paths not found in the note's assets list.
+        """
+        from memex_core.memory.sql_models import Note
+
+        async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
+            note = await txn.db_session.get(Note, note_id)
+            if not note:
+                raise NoteNotFoundError(f'Note {note_id} not found.')
+
+            existing_assets = set(note.assets or [])
+            deleted: list[str] = []
+            not_found: list[str] = []
+
+            for path in asset_paths:
+                if path not in existing_assets:
+                    not_found.append(path)
+                    continue
+                await txn.delete_file(path)
+                deleted.append(path)
+
+            if deleted:
+                deleted_set = set(deleted)
+                note.assets = [a for a in (note.assets or []) if a not in deleted_set]
+                txn.db_session.add(note)
+
+        return {
+            'note_id': str(note_id),
+            'deleted_assets': deleted,
+            'not_found': not_found,
+            'asset_count': len(note.assets or []),
+        }
+
     async def get_note(self, note_id: UUID) -> dict[str, Any]:
         """Retrieve a single document by ID."""
         from memex_core.memory.sql_models import Note

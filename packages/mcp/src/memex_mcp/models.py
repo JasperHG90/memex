@@ -280,6 +280,20 @@ class McpAsset(BaseModel):
     mime_type: str | None = None
 
 
+class McpAddAssetsResult(BaseModel):
+    note_id: str
+    added_assets: list[McpAsset]
+    skipped: list[str]
+    asset_count: int
+
+
+class McpDeleteAssetsResult(BaseModel):
+    note_id: str
+    deleted: list[str]
+    not_found: list[str]
+    asset_count: int
+
+
 # ── KV store ──
 
 
