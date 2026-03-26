@@ -9,7 +9,13 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 
 from async_lru import alru_cache
-from memex_core.memory.models.base import ModelDownloader, options, MODEL_REGISTRY, get_cache_dir
+from memex_core.memory.models.base import (
+    ModelDownloader,
+    options,
+    MODEL_REGISTRY,
+    get_cache_dir,
+    _get_providers,
+)
 
 logger = logging.getLogger('memex.core.memory.models.ner')
 
@@ -127,7 +133,7 @@ class FastNERModel:
 
         self.session = ort.InferenceSession(
             str(self.model_path / model_name),
-            providers=['CPUExecutionProvider'],
+            providers=_get_providers(),
             sess_options=options,
         )
 
