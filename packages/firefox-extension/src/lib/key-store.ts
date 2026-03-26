@@ -9,6 +9,25 @@
 import type { EncryptedKeyData } from '../types';
 
 // ---------------------------------------------------------------------------
+// Feature detection
+// ---------------------------------------------------------------------------
+
+/** True if browser.storage.session is available (MV3 Firefox 109+). */
+const hasSessionStorage =
+  typeof browser !== 'undefined' &&
+  browser.storage &&
+  typeof browser.storage.session !== 'undefined';
+
+/** True if Web Crypto API is available. */
+const hasCrypto =
+  typeof crypto !== 'undefined' &&
+  crypto.subtle &&
+  typeof crypto.subtle.generateKey === 'function';
+
+/** In-memory fallback when storage.session is unavailable. */
+let _memoryKey = '';
+
+// ---------------------------------------------------------------------------
 // Storage key names
 // ---------------------------------------------------------------------------
 
@@ -144,21 +163,30 @@ async function decryptValue(key: CryptoKey, data: EncryptedKeyData): Promise<str
  *                 If false, store in storage.session (memory only).
  */
 export async function saveApiKey(apiKey: string, remember: boolean): Promise<void> {
-  // Clear both locations first
+  // Clear all locations first
   await browser.storage.local.remove([LEGACY_STORAGE_KEY, STORAGE_ENCRYPTED_KEY]);
-  await browser.storage.session.remove([LEGACY_STORAGE_KEY]);
+  if (hasSessionStorage) {
+    await browser.storage.session.remove([LEGACY_STORAGE_KEY]);
+  }
+  _memoryKey = '';
+
+  // If crypto is unavailable, force session-only mode
+  const effectiveRemember = remember && hasCrypto;
 
   // Persist the remember preference
-  await browser.storage.local.set({ [STORAGE_REMEMBER_KEY]: remember });
+  await browser.storage.local.set({ [STORAGE_REMEMBER_KEY]: effectiveRemember });
 
   if (!apiKey) return;
 
-  if (remember) {
+  if (effectiveRemember) {
     const cryptoKey = await getEncryptionKey();
     const encrypted = await encryptValue(cryptoKey, apiKey);
     await browser.storage.local.set({ [STORAGE_ENCRYPTED_KEY]: encrypted });
-  } else {
+  } else if (hasSessionStorage) {
     await browser.storage.session.set({ [LEGACY_STORAGE_KEY]: apiKey });
+  } else {
+    // Fallback: keep in memory for this page's lifetime
+    _memoryKey = apiKey;
   }
 }
 
@@ -172,7 +200,11 @@ export async function loadApiKey(): Promise<{ apiKey: string; remember: boolean 
   const legacyKey = (legacy as Record<string, string>)[LEGACY_STORAGE_KEY];
   if (legacyKey) {
     // Move to session storage (safe default), delete legacy entry
-    await browser.storage.session.set({ [LEGACY_STORAGE_KEY]: legacyKey });
+    if (hasSessionStorage) {
+      await browser.storage.session.set({ [LEGACY_STORAGE_KEY]: legacyKey });
+    } else {
+      _memoryKey = legacyKey;
+    }
     await browser.storage.local.remove([LEGACY_STORAGE_KEY]);
     return { apiKey: legacyKey, remember: false };
   }
@@ -182,7 +214,7 @@ export async function loadApiKey(): Promise<{ apiKey: string; remember: boolean 
   const remember = (prefs as Record<string, boolean>)[STORAGE_REMEMBER_KEY];
 
   // 3. Encrypted persistent path
-  if (remember) {
+  if (remember && hasCrypto) {
     const stored = await browser.storage.local.get({ [STORAGE_ENCRYPTED_KEY]: null });
     const encData = (stored as Record<string, EncryptedKeyData | null>)[STORAGE_ENCRYPTED_KEY];
     if (encData) {
@@ -199,9 +231,14 @@ export async function loadApiKey(): Promise<{ apiKey: string; remember: boolean 
   }
 
   // 4. Session-only path
-  const session = await browser.storage.session.get({ [LEGACY_STORAGE_KEY]: '' });
-  const sessionKey = (session as Record<string, string>)[LEGACY_STORAGE_KEY];
-  return { apiKey: sessionKey || '', remember: false };
+  if (hasSessionStorage) {
+    const session = await browser.storage.session.get({ [LEGACY_STORAGE_KEY]: '' });
+    const sessionKey = (session as Record<string, string>)[LEGACY_STORAGE_KEY];
+    return { apiKey: sessionKey || '', remember: false };
+  }
+
+  // 5. Memory fallback
+  return { apiKey: _memoryKey, remember: false };
 }
 
 /**
@@ -209,6 +246,9 @@ export async function loadApiKey(): Promise<{ apiKey: string; remember: boolean 
  */
 export async function clearApiKey(): Promise<void> {
   await browser.storage.local.remove([LEGACY_STORAGE_KEY, STORAGE_ENCRYPTED_KEY]);
-  await browser.storage.session.remove([LEGACY_STORAGE_KEY]);
+  if (hasSessionStorage) {
+    await browser.storage.session.remove([LEGACY_STORAGE_KEY]);
+  }
+  _memoryKey = '';
   await deleteEncryptionKey();
 }

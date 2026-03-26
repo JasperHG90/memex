@@ -475,4 +475,81 @@ test.describe('options page', () => {
     await expect(page.getByRole('button', { name: 'Test Connection' })).toBeVisible();
     await expect(page.locator('.indicator')).toBeVisible();
   });
+
+  test('remember checkbox stores encrypted key (real crypto)', async ({ page }) => {
+    await setupOptionsMocks(page, { settings: { memexServerUrl: 'http://localhost:8000', memexApiKey: '' } });
+    await page.goto('/options/options.html');
+
+    // Enter a key and check "Remember"
+    await page.locator('#api-key').fill('encrypt-me-123');
+    await page.locator('#remember-key').check();
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+    await expect(page.locator('#status')).toHaveText('Settings saved.');
+
+    // Verify encrypted data in storage.local (uses real crypto.subtle + IndexedDB)
+    const localData = await page.evaluate(
+      () => (window as any).browser.storage.local._data,
+    );
+    expect(localData.memexRememberKey).toBe(true);
+    expect(localData.memexApiKeyEnc).toBeDefined();
+    expect(localData.memexApiKeyEnc.iv).toBeTruthy();
+    expect(localData.memexApiKeyEnc.ciphertext).toBeTruthy();
+    // Plaintext key should NOT be in local storage
+    expect(localData.memexApiKey).toBeUndefined();
+    // Session should NOT have the key either
+    const sessionData = await page.evaluate(
+      () => (window as any).browser.storage.session._data,
+    );
+    expect(sessionData.memexApiKey).toBeUndefined();
+  });
+
+  test('encrypted key round-trips through save and reload', async ({ page }) => {
+    await setupOptionsMocks(page, { settings: { memexServerUrl: 'http://localhost:8000', memexApiKey: '' } });
+    await page.goto('/options/options.html');
+
+    // Save with remember checked
+    await page.locator('#api-key').fill('round-trip-secret');
+    await page.locator('#remember-key').check();
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+    await expect(page.locator('#status')).toHaveText('Settings saved.');
+
+    // Capture the persisted storage state (encrypted key data)
+    const persistedLocal = await page.evaluate(
+      () => (window as any).browser.storage.local._data,
+    );
+
+    // Reload with the persisted state — IndexedDB CryptoKey survives navigation
+    await setupOptionsMocks(page, { settings: persistedLocal });
+    await page.goto('/options/options.html');
+    await expect(page.locator('#api-key')).toHaveValue('round-trip-secret');
+    await expect(page.locator('#remember-key')).toBeChecked();
+  });
+
+  test('unchecking remember clears encrypted key from storage', async ({ page }) => {
+    await setupOptionsMocks(page, { settings: { memexServerUrl: 'http://localhost:8000', memexApiKey: '' } });
+    await page.goto('/options/options.html');
+
+    // First save with remember
+    await page.locator('#api-key').fill('temp-key');
+    await page.locator('#remember-key').check();
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+    await expect(page.locator('#status')).toHaveText('Settings saved.');
+
+    // Now uncheck and save again
+    await page.locator('#remember-key').uncheck();
+    await page.getByRole('button', { name: 'Save Settings' }).click();
+
+    // Encrypted data should be gone from local storage
+    const localData = await page.evaluate(
+      () => (window as any).browser.storage.local._data,
+    );
+    expect(localData.memexApiKeyEnc).toBeUndefined();
+    expect(localData.memexRememberKey).toBe(false);
+
+    // Key should be in session storage instead
+    const sessionData = await page.evaluate(
+      () => (window as any).browser.storage.session._data,
+    );
+    expect(sessionData.memexApiKey).toBe('temp-key');
+  });
 });
