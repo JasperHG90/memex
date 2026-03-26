@@ -48,6 +48,7 @@ const LEGACY_STORAGE_KEY = 'memexApiKey';
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('IndexedDB open timeout')), 3000);
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -55,8 +56,14 @@ function openDB(): Promise<IDBDatabase> {
         db.createObjectStore(IDB_STORE);
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      clearTimeout(timeout);
+      resolve(req.result);
+    };
+    req.onerror = () => {
+      clearTimeout(timeout);
+      reject(req.error);
+    };
   });
 }
 
