@@ -782,3 +782,19 @@ class TestCorsIntegration:
         )
         assert response.status_code == 200
         assert response.headers.get('access-control-allow-origin') == 'moz-extension://abc-123-def'
+
+    def test_preflight_from_null_origin(self):
+        """Preflight from null origin (sandboxed iframe in about:addons) should work."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = self._make_cors_app(config, origins=['null'])
+        client = TestClient(app)
+        response = client.options(
+            '/api/v1/notes',
+            headers={
+                'Origin': 'null',
+                'Access-Control-Request-Method': 'GET',
+                'Access-Control-Request-Headers': 'X-API-Key',
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get('access-control-allow-origin') == 'null'
