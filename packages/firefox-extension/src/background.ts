@@ -45,6 +45,7 @@ browser.runtime.onMessage.addListener(
       const pfMsg = msg as ProxyFetchMessage;
       return (async (): Promise<ProxyFetchResponse> => {
         try {
+          console.log('[memex:bg] proxyFetch →', pfMsg.url);
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 15_000);
           const resp = await fetch(pfMsg.url, {
@@ -53,8 +54,10 @@ browser.runtime.onMessage.addListener(
           });
           clearTimeout(timeoutId);
           const body = await resp.text();
+          console.log('[memex:bg] proxyFetch ←', resp.status, resp.statusText);
           return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body };
-        } catch {
+        } catch (err) {
+          console.error('[memex:bg] proxyFetch error:', err);
           return { ok: false, status: 0, statusText: 'Network error', body: '' };
         }
       })();
