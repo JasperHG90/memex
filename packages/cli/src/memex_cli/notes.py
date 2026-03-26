@@ -19,6 +19,7 @@ from rich.tree import Tree
 
 from memex_common.config import MemexConfig
 from memex_common.client import RemoteMemexAPI
+from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
     IngestResponse,
@@ -1113,32 +1114,148 @@ async def export_notes(
     )
 
 
-@app.command('template')
-def get_template_cmd(
-    template_type: Annotated[
-        str | None,
-        typer.Argument(
-            help='Template type (e.g. general_note, technical_brief, adr, rfc, quick_note).'
-        ),
-    ] = None,
-    list_types: Annotated[
-        bool, typer.Option('--list', '-l', help='List available template types.')
-    ] = False,
-) -> None:
-    """Get a markdown template for note creation."""
-    from memex_common.templates import NoteTemplateType, get_template, list_template_types
+def _get_template_registry(ctx: typer.Context) -> TemplateRegistry:
+    """Build a TemplateRegistry from the CLI config."""
+    import logging as _log
 
-    if list_types or template_type is None:
-        console.print('[bold cyan]Available template types:[/bold cyan]')
-        for t in list_template_types():
-            console.print(f'  - {t}')
+    config: MemexConfig = ctx.obj
+    dirs: list[tuple[str, pathlib.Path]] = [('builtin', BUILTIN_PROMPTS_DIR)]
+    root = config.server.file_store.root
+    if '://' not in root:
+        dirs.append(('global', pathlib.Path(root) / 'templates'))
+    else:
+        _log.debug('Skipping global templates: remote filestore (%s)', root)
+    dirs.append(('local', pathlib.Path('.memex/templates')))
+    return TemplateRegistry(dirs)
+
+
+template_app = typer.Typer(
+    name='template',
+    help='Manage note templates (list, get, register, delete).',
+    no_args_is_help=True,
+)
+app.add_typer(template_app)
+
+
+@template_app.command('list')
+def template_list(ctx: typer.Context) -> None:
+    """List all available templates with metadata."""
+    registry = _get_template_registry(ctx)
+    templates = registry.list_templates()
+
+    if not templates:
+        console.print('[dim]No templates available.[/dim]')
         return
 
+    table = Table(title='Available Templates')
+    table.add_column('Slug', style='cyan')
+    table.add_column('Name')
+    table.add_column('Description')
+    table.add_column('Source', style='dim')
+
+    for t in templates:
+        table.add_row(t.slug, t.display_name, t.description, t.source)
+
+    console.print(table)
+
+
+@template_app.command('get')
+def template_get(
+    ctx: typer.Context,
+    slug: Annotated[str, typer.Argument(help='Template slug (e.g. general_note).')],
+) -> None:
+    """Print the markdown content of a template."""
+    registry = _get_template_registry(ctx)
     try:
-        tt = NoteTemplateType(template_type)
-    except ValueError:
-        console.print(f'[red]Unknown template type: {template_type}[/red]')
-        console.print('[dim]Use --list to see available types.[/dim]')
+        content = registry.get_template(slug)
+    except KeyError:
+        console.print(f'[red]Unknown template: {slug}[/red]')
+        console.print('[dim]Use "memex note template list" to see available templates.[/dim]')
         raise typer.Exit(1)
 
-    console.print(get_template(tt))
+    console.print(content)
+
+
+@template_app.command('register')
+def template_register(
+    ctx: typer.Context,
+    path: Annotated[
+        pathlib.Path,
+        typer.Argument(
+            help='Path to a .toml template file.',
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    local: Annotated[
+        bool, typer.Option('--local', help='Register in project-local scope instead of global.')
+    ] = False,
+) -> None:
+    """Register a template by copying a .toml file to the templates directory."""
+    if not path.suffix == '.toml':
+        console.print('[red]Template file must be a .toml file.[/red]')
+        raise typer.Exit(1)
+
+    registry = _get_template_registry(ctx)
+    scope = 'local' if local else 'global'
+    try:
+        info = registry.register(path, scope=scope)
+    except ValueError as e:
+        console.print(f'[red]{e}[/red]')
+        raise typer.Exit(1)
+
+    console.print(
+        f'[green]Registered template: {info.slug} ({info.display_name}) '
+        f'in {info.source} scope.[/green]'
+    )
+
+
+@template_app.command('delete')
+def template_delete(
+    ctx: typer.Context,
+    slug: Annotated[str, typer.Argument(help='Template slug to delete.')],
+    local: Annotated[
+        bool, typer.Option('--local', help='Delete from project-local scope instead of global.')
+    ] = False,
+    yes: Annotated[bool, typer.Option('--yes', '-y', help='Skip confirmation prompt.')] = False,
+) -> None:
+    """Delete a user template. Cannot delete built-in templates."""
+    scope = 'local' if local else 'global'
+
+    if not yes:
+        confirm = typer.confirm(
+            f'Delete template "{slug}" from {scope} scope? This cannot be undone.'
+        )
+        if not confirm:
+            console.print('[dim]Cancelled.[/dim]')
+            raise typer.Exit(0)
+
+    registry = _get_template_registry(ctx)
+    try:
+        registry.delete(slug, scope=scope)
+    except ValueError as e:
+        console.print(f'[red]{e}[/red]')
+        raise typer.Exit(1)
+    except KeyError as e:
+        console.print(f'[red]{e}[/red]')
+        raise typer.Exit(1)
+
+    console.print(f'[green]Deleted template: {slug} from {scope} scope.[/green]')
+
+
+@template_app.command('dir')
+def template_dir(
+    ctx: typer.Context,
+    local: Annotated[
+        bool, typer.Option('--local', help='Show project-local templates directory.')
+    ] = False,
+) -> None:
+    """Print the templates directory path."""
+    if local:
+        console.print(str(pathlib.Path('.memex/templates').resolve()))
+    else:
+        config: MemexConfig = ctx.obj
+        console.print(str(pathlib.Path(config.server.file_store.root) / 'templates'))

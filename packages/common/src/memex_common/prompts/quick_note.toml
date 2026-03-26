@@ -1,0 +1,15 @@
+name = "Quick Note"
+description = "Lightweight template for capturing a brief note or thought."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Author name]
+tags: []
+---
+
+# Note: [Insert title here]
+
+## Content
+[Content in markdown format]
+'''

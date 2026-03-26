@@ -49,7 +49,7 @@ from memex_mcp.models import (
     McpSupersession,
     McpVault,
 )
-from memex_common.templates import NoteTemplateType, get_template as _get_template
+from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
     NoteCreateDTO,
@@ -596,25 +596,93 @@ async def memex_delete_assets(
         raise ToolError(f'Delete assets failed: {e}')
 
 
+def _get_template_registry(ctx: Context) -> TemplateRegistry:
+    """Build a TemplateRegistry from the MCP server config."""
+    config = get_config(ctx)
+    dirs: list[tuple[str, plb.Path]] = [('builtin', BUILTIN_PROMPTS_DIR)]
+    root = config.server.file_store.root
+    if '://' not in root:
+        dirs.append(('global', plb.Path(root) / 'templates'))
+    else:
+        logging.debug('Skipping global templates: remote filestore (%s)', root)
+    dirs.append(('local', plb.Path('.memex/templates')))
+    return TemplateRegistry(dirs)
+
+
 @mcp.tool(
     name='memex_get_template',
-    description='Get a markdown template for memex_add_note.',
+    description='Get a markdown template for memex_add_note. Use memex_list_templates to see available templates.',
     annotations={'readOnlyHint': True},
 )
 def memex_get_template(
+    ctx: Context,
     type: Annotated[
-        NoteTemplateType,
+        str,
         Field(
-            description='Template type: technical_brief, general_note, architectural_decision_record, request_for_comments, quick_note.',
+            description='Template slug. Use memex_list_templates to discover available templates.',
         ),
     ],
 ) -> str:
     """Retrieve a markdown template for note creation."""
     try:
-        return _get_template(type)
+        registry = _get_template_registry(ctx)
+        return registry.get_template(type)
+    except KeyError as e:
+        raise ToolError(str(e))
     except Exception as e:
         logging.error(f'Get template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve template: {e}')
+
+
+@mcp.tool(
+    name='memex_list_templates',
+    description='List all available note templates with metadata (slug, name, description, source).',
+    annotations={'readOnlyHint': True},
+)
+def memex_list_templates(ctx: Context) -> str:
+    """List all available templates."""
+    try:
+        registry = _get_template_registry(ctx)
+        templates = registry.list_templates()
+        lines = []
+        for t in templates:
+            source_tag = f'[{t.source}]'
+            lines.append(f'- **{t.slug}** {source_tag} — {t.display_name}: {t.description}')
+        return '\n'.join(lines) if lines else 'No templates available.'
+    except Exception as e:
+        logging.error(f'List templates failed: {e}', exc_info=True)
+        raise ToolError(f'Failed to list templates: {e}')
+
+
+@mcp.tool(
+    name='memex_register_template',
+    description=(
+        'Register a new note template. Creates a template from inline content. '
+        'To delete a template, use the CLI: memex note template delete <slug>'
+    ),
+    annotations={'readOnlyHint': False},
+)
+def memex_register_template(
+    ctx: Context,
+    slug: Annotated[str, Field(description='Template identifier (e.g. sprint_retro).')],
+    template: Annotated[
+        str, Field(description='Markdown template content. Should include YAML frontmatter.')
+    ],
+    name: Annotated[str | None, Field(description='Human-readable template name.')] = None,
+    description: Annotated[
+        str | None, Field(description='Short description of the template.')
+    ] = None,
+) -> str:
+    """Register a new template from inline content."""
+    try:
+        registry = _get_template_registry(ctx)
+        info = registry.register_from_content(
+            slug=slug, template=template, name=name, description=description, scope='global'
+        )
+        return f'Registered template: {info.slug} ({info.display_name}) in {info.source} scope.'
+    except Exception as e:
+        logging.error(f'Register template failed: {e}', exc_info=True)
+        raise ToolError(f'Failed to register template: {e}')
 
 
 @mcp.tool(

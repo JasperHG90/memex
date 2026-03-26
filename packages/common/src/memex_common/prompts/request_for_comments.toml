@@ -1,3 +1,13 @@
+name = "Request for Comments"
+description = "Template for proposing design changes with motivation, specification, and risk analysis."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Author name]
+tags: []
+---
+
 # 📄 RFC-[000]: [Proposal Title]
 
 ## ⚡ Summary
@@ -44,3 +54,4 @@
 ## 5. Unresolved Questions
 *   [ ] [Identify a specific edge case the current design doesn't solve]
 *   [ ] [Identify a dependency constraint (e.g., "Waiting on Team X")]
+'''
