@@ -4,8 +4,9 @@
 
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import type { ExtractResult, Settings } from '../types';
+import type { ExtractResult } from '../types';
 import { fetchVaults, saveNote, uploadFile, canonicalizeUrl } from '../lib/memex-api';
+import { loadApiKey } from '../lib/key-store';
 import { buildNoteContent } from '../lib/frontmatter';
 import { extractArticleImages } from '../lib/images';
 import { extractMetadata } from '../lib/metadata';
@@ -263,13 +264,13 @@ settingsLink.addEventListener('click', (e) => {
 // --- Helpers ---
 
 async function loadSettings(): Promise<{ serverUrl: string; apiKey: string }> {
-  const result = (await browser.storage.local.get({
-    memexServerUrl: 'http://localhost:8000',
-    memexApiKey: '',
-  })) as unknown as Settings;
+  const [urlResult, keyResult] = await Promise.all([
+    browser.storage.local.get({ memexServerUrl: 'http://localhost:8000' }),
+    loadApiKey(),
+  ]);
   return {
-    serverUrl: result.memexServerUrl.replace(/\/$/, ''),
-    apiKey: result.memexApiKey,
+    serverUrl: ((urlResult as Record<string, string>).memexServerUrl).replace(/\/$/, ''),
+    apiKey: keyResult.apiKey,
   };
 }
 

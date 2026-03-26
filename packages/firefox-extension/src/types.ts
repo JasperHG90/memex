@@ -44,8 +44,15 @@ export interface ExtractMessage {
   action: 'extract';
 }
 
-/** Extension settings stored in browser.storage.local. */
+/** Shape of encrypted API key data stored in browser.storage.local. */
+export interface EncryptedKeyData {
+  iv: string;
+  ciphertext: string;
+}
+
+/** Extension settings stored in browser.storage. */
 export interface Settings {
   memexServerUrl: string;
   memexApiKey: string;
+  memexRememberKey: boolean;
 }
