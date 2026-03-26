@@ -1,25 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchVaults, saveNote } from '../src/lib/memex-api';
 
-/**
- * apiFetch tries direct fetch first, then falls back to sendMessage proxy.
- * Mock fetch to always throw (simulating CORS block) so we exercise the proxy path.
- */
-const mockFetch = vi.fn().mockRejectedValue(new TypeError('CORS blocked'));
+const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-const mockSendMessage = vi.fn();
-vi.stubGlobal('browser', { runtime: { sendMessage: mockSendMessage } });
-
 beforeEach(() => {
-  mockFetch.mockRejectedValue(new TypeError('CORS blocked'));
-  mockSendMessage.mockReset();
+  mockFetch.mockReset();
 });
-
-/** Helper: create a proxyFetch response. */
-function proxyResp(ok: boolean, status: number, body: string, statusText = '') {
-  return { ok, status, statusText, body };
-}
 
 describe('fetchVaults', () => {
   it('parses NDJSON response into vault array', async () => {
@@ -28,7 +15,10 @@ describe('fetchVaults', () => {
       '{"id":"bbb","name":"work","description":"Work notes","is_active":false,"note_count":2,"last_note_added_at":null}',
     ].join('\n');
 
-    mockSendMessage.mockResolvedValueOnce(proxyResp(true, 200, ndjson));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(ndjson),
+    });
 
     const vaults = await fetchVaults('http://localhost:8000', '');
     expect(vaults).toHaveLength(2);
@@ -38,13 +28,13 @@ describe('fetchVaults', () => {
   });
 
   it('handles single vault', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(
-        true,
-        200,
-        '{"id":"ccc","name":"solo","description":null,"is_active":true,"note_count":0,"last_note_added_at":null}\n',
-      ),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          '{"id":"ccc","name":"solo","description":null,"is_active":true,"note_count":0,"last_note_added_at":null}\n',
+        ),
+    });
 
     const vaults = await fetchVaults('http://localhost:8000', '');
     expect(vaults).toHaveLength(1);
@@ -52,40 +42,47 @@ describe('fetchVaults', () => {
   });
 
   it('handles empty response', async () => {
-    mockSendMessage.mockResolvedValueOnce(proxyResp(true, 200, ''));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(''),
+    });
 
     const vaults = await fetchVaults('http://localhost:8000', '');
     expect(vaults).toHaveLength(0);
   });
 
   it('sends API key header when provided', async () => {
-    mockSendMessage.mockResolvedValueOnce(proxyResp(true, 200, ''));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(''),
+    });
 
     await fetchVaults('http://localhost:8000', 'my-secret-key');
 
-    expect(mockSendMessage).toHaveBeenCalledWith({
-      action: 'proxyFetch',
-      url: 'http://localhost:8000/api/v1/vaults',
-      init: { headers: { 'X-API-Key': 'my-secret-key' } },
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:8000/api/v1/vaults', {
+      headers: { 'X-API-Key': 'my-secret-key' },
     });
   });
 
   it('sends no API key header when empty', async () => {
-    mockSendMessage.mockResolvedValueOnce(proxyResp(true, 200, ''));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(''),
+    });
 
     await fetchVaults('http://localhost:8000', '');
 
-    expect(mockSendMessage).toHaveBeenCalledWith({
-      action: 'proxyFetch',
-      url: 'http://localhost:8000/api/v1/vaults',
-      init: { headers: {} },
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:8000/api/v1/vaults', {
+      headers: {},
     });
   });
 
   it('throws on non-ok response', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(false, 500, '', 'Internal Server Error'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+    });
 
     await expect(fetchVaults('http://localhost:8000', '')).rejects.toThrow(
       'Failed to fetch vaults: 500 Internal Server Error',
@@ -95,9 +92,10 @@ describe('fetchVaults', () => {
 
 describe('saveNote', () => {
   it('sends correct request shape', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(true, 200, '{"note_id":"note-123"}'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-123' }),
+    });
 
     const result = await saveNote('http://localhost:8000', 'key123', {
       name: 'Test Note',
@@ -109,14 +107,13 @@ describe('saveNote', () => {
 
     expect(result.note_id).toBe('note-123');
 
-    const msg = mockSendMessage.mock.calls[0][0];
-    expect(msg.action).toBe('proxyFetch');
-    expect(msg.url).toBe('http://localhost:8000/api/v1/ingestions');
-    expect(msg.init.method).toBe('POST');
-    expect(msg.init.headers['Content-Type']).toBe('application/json');
-    expect(msg.init.headers['X-API-Key']).toBe('key123');
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:8000/api/v1/ingestions');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['Content-Type']).toBe('application/json');
+    expect(opts.headers['X-API-Key']).toBe('key123');
 
-    const body = JSON.parse(msg.init.body);
+    const body = JSON.parse(opts.body);
     expect(body.name).toBe('Test Note');
     expect(body.description).toBe('A test');
     expect(body.tags).toEqual(['test', 'demo']);
@@ -126,9 +123,10 @@ describe('saveNote', () => {
   });
 
   it('encodes UTF-8 content correctly', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(true, 200, '{"note_id":"note-456"}'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-456' }),
+    });
 
     await saveNote('http://localhost:8000', '', {
       name: 'Unicode Note',
@@ -138,7 +136,7 @@ describe('saveNote', () => {
       vaultId: undefined,
     });
 
-    const body = JSON.parse(mockSendMessage.mock.calls[0][0].init.body);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     // Decode the base64 and verify UTF-8
     const decoded = new TextDecoder().decode(
       Uint8Array.from(atob(body.content), (c) => c.charCodeAt(0)),
@@ -147,9 +145,11 @@ describe('saveNote', () => {
   });
 
   it('throws on non-ok response', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(false, 422, '{"detail":"Validation error"}', 'Unprocessable Entity'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: () => Promise.resolve('{"detail":"Validation error"}'),
+    });
 
     await expect(
       saveNote('http://localhost:8000', '', {
@@ -163,9 +163,10 @@ describe('saveNote', () => {
   });
 
   it('omits API key header when empty', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(true, 200, '{"note_id":"n"}'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'n' }),
+    });
 
     await saveNote('http://localhost:8000', '', {
       name: 'N',
@@ -175,14 +176,15 @@ describe('saveNote', () => {
       vaultId: undefined,
     });
 
-    const headers = mockSendMessage.mock.calls[0][0].init.headers;
+    const headers = mockFetch.mock.calls[0][1].headers;
     expect(headers['X-API-Key']).toBeUndefined();
   });
 
   it('sends files map when images are provided', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(true, 200, '{"note_id":"note-img"}'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-img' }),
+    });
 
     await saveNote('http://localhost:8000', '', {
       name: 'Article with Images',
@@ -193,14 +195,15 @@ describe('saveNote', () => {
       files: { 'image-0.jpg': 'BASE64DATA' },
     });
 
-    const body = JSON.parse(mockSendMessage.mock.calls[0][0].init.body);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.files).toEqual({ 'image-0.jpg': 'BASE64DATA' });
   });
 
   it('sends empty files map when no images provided', async () => {
-    mockSendMessage.mockResolvedValueOnce(
-      proxyResp(true, 200, '{"note_id":"note-no-img"}'),
-    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ note_id: 'note-no-img' }),
+    });
 
     await saveNote('http://localhost:8000', '', {
       name: 'Text Only',
@@ -210,7 +213,7 @@ describe('saveNote', () => {
       vaultId: undefined,
     });
 
-    const body = JSON.parse(mockSendMessage.mock.calls[0][0].init.body);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.files).toEqual({});
   });
 });

@@ -18,51 +18,9 @@ interface DownloadImageResponse {
   contentType?: string;
 }
 
-/** Relay a fetch request from an extension page (popup/options) through the
- *  background script, which has unconditional cross-origin access via
- *  host_permissions. This avoids CORS preflight issues with custom headers
- *  like X-API-Key that Firefox blocks from extension page contexts. */
-interface ProxyFetchMessage {
-  action: 'proxyFetch';
-  url: string;
-  init?: { method?: string; headers?: Record<string, string>; body?: string };
-}
-
-interface ProxyFetchResponse {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  body: string;
-}
-
 browser.runtime.onMessage.addListener(
-  (
-    message: unknown,
-  ): Promise<DownloadImageResponse> | Promise<ProxyFetchResponse> | undefined => {
-    const msg = message as ProxyFetchMessage | DownloadImageMessage;
-
-    if (msg.action === 'proxyFetch') {
-      const pfMsg = msg as ProxyFetchMessage;
-      return (async (): Promise<ProxyFetchResponse> => {
-        try {
-          console.log('[memex:bg] proxyFetch →', pfMsg.url);
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15_000);
-          const resp = await fetch(pfMsg.url, {
-            ...pfMsg.init,
-            signal: controller.signal,
-          });
-          clearTimeout(timeoutId);
-          const body = await resp.text();
-          console.log('[memex:bg] proxyFetch ←', resp.status, resp.statusText);
-          return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body };
-        } catch (err) {
-          console.error('[memex:bg] proxyFetch error:', err);
-          return { ok: false, status: 0, statusText: 'Network error', body: '' };
-        }
-      })();
-    }
-
+  (message: unknown): Promise<DownloadImageResponse> | undefined => {
+    const msg = message as DownloadImageMessage;
     if (msg.action !== 'downloadImage') return undefined;
 
     return (async (): Promise<DownloadImageResponse> => {
