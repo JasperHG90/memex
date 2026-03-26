@@ -1,3 +1,13 @@
+name = "Architectural Decision Record"
+description = "Template for documenting architecture decisions with context, alternatives, and consequences."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Author name]
+tags: []
+---
+
 # ADR-[000]: [Action-Oriented Title]
 
 **Status:** Accepted
@@ -32,3 +42,4 @@ We will **{Action verb: use / implement / deprecate}** {Technology/Pattern}.
 *   **✅ Benefit:** {Primary gain.}
 *   **⚠️ Trade-off:** {The "bad" thing we accept (e.g., "Complexity increases").}
 *   **🛡️ Mitigation:** {How we handle the trade-off.}
+'''

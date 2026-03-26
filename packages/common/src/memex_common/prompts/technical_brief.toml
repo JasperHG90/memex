@@ -1,3 +1,13 @@
+name = "Technical Brief"
+description = "Template for documenting code implementations, patterns, and technical solutions."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Author name]
+tags: []
+---
+
 # 🛠️ [Technical Implementation Name]
 
 **Stack:** [Language/Framework, e.g., Python 3.11, FastAPI]
@@ -24,3 +34,4 @@
 ## 🔄 Alternative Approach
 *   **Alternative:** [Name of a different way to do this]
 *   **Why this was chosen:** [1 sentence trade-off, e.g., "This approach uses more RAM but is 2x faster"]
+'''

@@ -1,3 +1,13 @@
+name = "General Note"
+description = "Template for capturing learning, concepts, and key takeaways from any source."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Author name]
+tags: []
+---
+
 # 📝 [Title: 5-7 words max, descriptive]
 
 **Tags:** #[Category], #[Topic], #[Status]
@@ -22,3 +32,4 @@
 ## ❓ Unanswered Questions / Gaps
 *   [What information was missing or unclear?]
 *   [What should be researched next?]
+'''
