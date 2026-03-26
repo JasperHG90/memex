@@ -1,25 +1,45 @@
 import type { VaultDTO, IngestResponse } from '../types';
 
 /**
- * Route fetch through the background script to bypass CORS restrictions
- * that Firefox imposes on extension pages (popup/options) for requests
- * with custom headers like X-API-Key.
+ * Make an API request, trying direct fetch first (works when server CORS
+ * allows the extension's origin), falling back to background script proxy.
  */
-async function bgFetch(
+async function apiFetch(
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string },
 ): Promise<{ ok: boolean; status: number; statusText: string; text: () => string }> {
+  // Strategy 1: direct fetch
+  try {
+    const resp = await fetch(url, init);
+    const body = await resp.text();
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      statusText: resp.statusText,
+      text: () => body,
+    };
+  } catch {
+    // CORS or network error — fall through to proxy
+  }
+
+  // Strategy 2: background script proxy
   const resp = (await browser.runtime.sendMessage({
     action: 'proxyFetch',
     url,
     init,
-  })) as { ok: boolean; status: number; statusText: string; body: string };
-  return {
-    ok: resp.ok,
-    status: resp.status,
-    statusText: resp.statusText,
-    text: () => resp.body,
-  };
+  })) as { ok: boolean; status: number; statusText: string; body: string } | undefined;
+
+  if (resp && typeof resp.ok === 'boolean') {
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      statusText: resp.statusText,
+      text: () => resp.body,
+    };
+  }
+
+  // Both strategies failed
+  throw new Error('Could not reach server (direct fetch and background proxy both failed)');
 }
 
 /** Known tracking query parameters to strip for URL canonicalization. */
@@ -81,7 +101,7 @@ function authHeaders(apiKey: string): Record<string, string> {
  * The /vaults endpoint returns NDJSON (one JSON object per line).
  */
 export async function fetchVaults(serverUrl: string, apiKey: string): Promise<VaultDTO[]> {
-  const resp = await bgFetch(`${serverUrl}/api/v1/vaults`, {
+  const resp = await apiFetch(`${serverUrl}/api/v1/vaults`, {
     headers: authHeaders(apiKey),
   });
   if (!resp.ok) {
@@ -114,7 +134,7 @@ export async function saveNote(
   },
 ): Promise<IngestResponse> {
   const url = `${serverUrl}/api/v1/ingestions${note.background ? '?background=true' : ''}`;
-  const resp = await bgFetch(url, {
+  const resp = await apiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

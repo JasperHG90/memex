@@ -2,13 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fetchVaults, saveNote } from '../src/lib/memex-api';
 
 /**
- * Mock browser.runtime.sendMessage — the API client now routes fetch calls
- * through the background script via proxyFetch messages.
+ * apiFetch tries direct fetch first, then falls back to sendMessage proxy.
+ * Mock fetch to always throw (simulating CORS block) so we exercise the proxy path.
  */
+const mockFetch = vi.fn().mockRejectedValue(new TypeError('CORS blocked'));
+vi.stubGlobal('fetch', mockFetch);
+
 const mockSendMessage = vi.fn();
 vi.stubGlobal('browser', { runtime: { sendMessage: mockSendMessage } });
 
 beforeEach(() => {
+  mockFetch.mockRejectedValue(new TypeError('CORS blocked'));
   mockSendMessage.mockReset();
 });
 
