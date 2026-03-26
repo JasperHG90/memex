@@ -11,6 +11,9 @@
   },
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; connect-src http: https: ws:;"
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
