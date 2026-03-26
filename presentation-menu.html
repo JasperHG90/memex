@@ -480,6 +480,7 @@
         <h2>How I use Memex</h2>
         <ul>
           <li>Claude Code + MCP: Memex runs as a tool server — Claude reads memories but does <strong>not</strong> automatically write notes</li>
+          <li>Firefox extension: one-click save of articles, PDFs &amp; web pages — encrypted API key storage, automatic Markdown conversion</li>
           <li>Feed it architecture docs, meeting notes, research — it extracts facts, resolves entities, builds a knowledge graph</li>
           <li>Memex accurately date-stamps events relative to the publishing date — temporal queries just work</li>
           <li>Background reflection synthesizes mental models overnight — next morning, Claude knows more than yesterday</li>
@@ -511,7 +512,7 @@
           <div class="feature-card-emoji">&#x1f4e5;</div>
           <div class="feature-card-title">Ingest Anything</div>
         </div>
-        <div class="feature-card-desc">Markdown, PDF, Word, PowerPoint, Excel, Outlook emails, web pages, or entire directories. Conversion via MarkItDown &amp; PyMuPDF. Background and batch modes.</div>
+        <div class="feature-card-desc">Markdown, PDF, Word, PowerPoint, Excel, Outlook emails, web pages, or entire directories. Conversion via MarkItDown &amp; PyMuPDF. Pluggable note templates, asset management, and batch CLI operations.</div>
       </div>
 
       <div class="feature-card">
@@ -559,7 +560,7 @@
           <div class="feature-card-emoji">&#x1f3e6;</div>
           <div class="feature-card-title">Vaults</div>
         </div>
-        <div class="feature-card-desc">Isolate knowledge by project, team, or topic. Attach multiple vaults as read-only for cross-project search, or keep them strictly separate.</div>
+        <div class="feature-card-desc">Isolate knowledge by project, team, or topic. Policy-based ACL (reader/writer/admin) with vault-scoped API keys. Cross-vault read access for shared knowledge without write permissions.</div>
       </div>
 
       <div class="feature-card">
@@ -575,7 +576,7 @@
           <div class="feature-card-emoji">&#x1f916;</div>
           <div class="feature-card-title">AI Agent Integration</div>
         </div>
-        <div class="feature-card-desc">First-class MCP support for Claude Code, Claude Desktop, and Cursor. 26 MCP tools, lifecycle hooks, /remember + /recall slash commands.</div>
+        <div class="feature-card-desc">First-class MCP support for Claude Code, Claude Desktop, and Cursor. 26 MCP tools, streamable HTTP transport, slim Docker image decoupled from core.</div>
       </div>
 
       <div class="feature-card">
@@ -583,7 +584,7 @@
           <div class="feature-card-emoji">&#x1f310;</div>
           <div class="feature-card-title">REST API &amp; Webhooks</div>
         </div>
-        <div class="feature-card-desc">FastAPI server with NDJSON streaming, OpenAPI docs, API key auth, rate limiting, and webhook subscriptions for event-driven integrations.</div>
+        <div class="feature-card-desc">FastAPI server with NDJSON streaming, OpenAPI docs, policy-based auth (reader/writer/admin), vault-scoped API keys, rate limiting, and CORS extension support.</div>
       </div>
 
       <div class="feature-card">
@@ -596,10 +597,10 @@
 
       <div class="feature-card">
         <div class="feature-card-header">
-          <div class="feature-card-emoji">&#x1f4ca;</div>
-          <div class="feature-card-title">Dashboard</div>
+          <div class="feature-card-emoji">&#x1f98a;</div>
+          <div class="feature-card-title">Firefox Extension</div>
         </div>
-        <div class="feature-card-desc">React + Vite web UI &mdash; entity graph, lineage trees, live ingestion activity, memory search with AI summaries, and system stats.</div>
+        <div class="feature-card-desc">One-click save of articles, PDFs &amp; web pages. Readability extraction, Markdown conversion, inline image capture. AES-GCM encrypted API key storage.</div>
       </div>
     </div>
 
@@ -695,7 +696,7 @@
     </div>
 
     <div class="item" data-topic="evolution">
-      <div class="emoji">&#x1F9EC;</div>
+      <div class="emoji">&#x1f98b;</div>
       <div class="content">
         <div class="label">Memory Evolution</div>
         <div class="desc">Phase 6 enrichment pushes mental model understanding back into memory units — old facts gain new tags, become findable for concepts discovered later</div>
@@ -706,7 +707,7 @@
       <div class="emoji">&#x1f3e6;</div>
       <div class="content">
         <div class="label">Multi-Vault Knowledge Isolation</div>
-        <div class="desc">Scoped notes, entities &amp; mental models — attach/detach vaults without reprocessing</div>
+        <div class="desc">Policy-based ACL (reader/writer/admin), vault-scoped API keys, cross-vault read access for shared knowledge</div>
       </div>
     </div>
 
@@ -739,6 +740,14 @@
       <div class="content">
         <div class="label">Atomic Extraction Pipeline</div>
         <div class="desc">FileStore + MetaStore in one transaction — full rollback on any stage failure, zero partial state</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="templates">
+      <div class="emoji">&#x1f4dd;</div>
+      <div class="content">
+        <div class="label">Pluggable Note Templates</div>
+        <div class="desc">Three-layer discovery (builtin &rarr; global &rarr; local) — TOML-based templates with override semantics and frontmatter scaffolding</div>
       </div>
     </div>
   </div>
@@ -865,7 +874,7 @@ const speakerNotes = {
       'Recursive depth control with configurable limits per level \u2014 prevents runaway traversals on densely connected graphs.',
       'Handles <strong>multi-vault mental models</strong>: the same entity can have different perspectives in different vaults, and lineage respects those boundaries.',
       'Practical for <strong>debugging and auditing</strong>: \u201CWhy does my system believe X?\u201D \u2192 click through the chain from mental model back to the exact paragraph in the original document that prompted it.',
-      'Exposed in the dashboard UI as an interactive lineage pane with breadcrumb history navigation.'
+      'Exposed via REST API and MCP tools &mdash; agents can walk the provenance chain programmatically during retrieval.'
     ]
   },
   vault: {
@@ -874,9 +883,10 @@ const speakerNotes = {
     notes: [
       'Vaults scope notes, entities, and mental models into <strong>isolated namespaces</strong>.',
       'All retrieval strategies respect vault boundaries via <code>apply_vault_filters()</code> \u2014 queries only see data from attached vaults.',
-      'Vaults can be <strong>attached/detached</strong> without reprocessing \u2014 just changes which vault IDs are in scope for reads.',
-      'Write operations target a single configured write vault; reads can span multiple vaults.',
-      'Use case: separate personal notes from work knowledge, or isolate client data in consulting contexts.'
+      '<strong>Policy-based ACL</strong>: three roles \u2014 <strong>reader</strong> (read), <strong>writer</strong> (read + write), <strong>admin</strong> (read + write + delete). Each API key is scoped to specific vaults with a policy.',
+      '<strong>Cross-vault read access</strong>: <code>read_vault_ids</code> grants read-only access to additional vaults beyond the key\u2019s primary <code>vault_ids</code>. Effective read scope = <code>vault_ids \u222A read_vault_ids</code>. Write/delete stays restricted to <code>vault_ids</code>.',
+      'Vault listing now shows effective permissions per API key \u2014 see exactly what each key can do in each vault.',
+      'Use case: separate personal notes from work knowledge, grant consulting clients read-only access to shared reference vaults.'
     ]
   },
   hindsight: {
@@ -892,7 +902,7 @@ const speakerNotes = {
     ]
   },
   evolution: {
-    emoji: '\u{1f9ec}',
+    emoji: '\u{1f98b}',
     title: 'Memory Evolution',
     notes: [
       'Inspired by <strong>A-MEM</strong> (Xu et al., NeurIPS) \u2014 the idea that memories should evolve as understanding deepens.',
@@ -934,6 +944,19 @@ const speakerNotes = {
       'Uses <strong>MD5 hashing</strong> for idempotency (re-ingesting identical content is a no-op) and <strong>SHA-256</strong> for block-level content hashing used in incremental diffing.',
       'Two-phase commit for filesystem: files staged with a <code>.stage</code> suffix, DB commits, then files renamed to final paths.',
       'Zero partial state: you never end up with facts in the DB pointing to a note that doesn\u2019t exist on disk, or vice versa.'
+    ]
+  },
+  templates: {
+    emoji: '\u{1f4dd}',
+    title: 'Pluggable Note Templates',
+    notes: [
+      '<strong>Three-layer discovery</strong>: builtin \u2192 global \u2192 local. Later layers override earlier ones on slug collision, so you can customize without forking.',
+      '<strong>Builtin templates</strong> (5): General Note, Technical Brief, ADR (Architectural Decision Record), RFC (Request for Comments), and Quick Note. Shipped in <code>memex_common/prompts/*.toml</code>.',
+      '<strong>Global layer</strong>: user-level templates in <code>{filestore_root}/templates/*.toml</code> \u2014 shared across all instances.',
+      '<strong>Local layer</strong>: project-scoped templates in <code>.memex/templates/*.toml</code> \u2014 override global or builtin for a specific repo or workspace.',
+      '<strong>TOML format</strong>: each template is a <code>.toml</code> file with <code>name</code>, <code>description</code>, and a <code>template</code> field containing the Markdown scaffold (including YAML frontmatter for date, author, tags).',
+      '<strong>TemplateRegistry</strong> manages discovery, registration, and deletion. Built-in templates are protected from deletion. CLI: <code>memex note template --list</code> to browse, <code>memex note template &lt;slug&gt;</code> to fetch.',
+      'Shared across CLI and MCP \u2014 templates were moved to <code>memex_common</code> so both entry points use the same registry.'
     ]
   }
 };
