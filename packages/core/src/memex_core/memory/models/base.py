@@ -55,6 +55,18 @@ options.enable_mem_pattern = True
 options.enable_cpu_mem_arena = False
 
 
+def _get_providers() -> list[str]:
+    """Return ONNX execution providers from env or default to CPU.
+
+    Set MEMEX_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+    to enable GPU inference (e.g. on Jetson Orin Nano with CDI passthrough).
+    """
+    env = os.getenv('MEMEX_ONNX_PROVIDERS')
+    if env:
+        return [p.strip() for p in env.split(',')]
+    return ['CPUExecutionProvider']
+
+
 class ModelDownloader:
     def __init__(
         self,
@@ -153,6 +165,6 @@ class BaseOnnxModel:
 
         self.session = ort.InferenceSession(
             str(self.model_path / model_name),
-            providers=['CPUExecutionProvider'],
+            providers=_get_providers(),
             sess_options=options,
         )

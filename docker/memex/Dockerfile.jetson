@@ -1,0 +1,18 @@
+# Jetson (aarch64/Tegra) variant — layers onnxruntime-gpu on top of the base memex image.
+#
+# Build:
+#   docker build -t memex -f docker/memex/Dockerfile .
+#   docker build -t memex:jetson -f docker/memex/Dockerfile.jetson .
+#
+# CUDA/cuDNN libraries are injected at runtime via nvidia-container-runtime,
+# not baked into the image.
+
+ARG BASE_IMAGE=memex
+FROM ${BASE_IMAGE}
+
+# Replace CPU-only onnxruntime with onnxruntime-gpu.
+# PyPI has no aarch64 GPU wheels — use NVIDIA's Jetson AI Lab index.
+# --no-deps: transitive deps already present from the base image.
+RUN pip install --no-deps --upgrade --target /app/.venv/lib/python3.12/site-packages \
+      onnxruntime-gpu==1.23.0 \
+      --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu129/+simple/
