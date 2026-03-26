@@ -64,6 +64,7 @@ def mock_lifespan_dependencies():
         config_mock.server.logging.level = 'WARNING'
         config_mock.server.logging.json_output = False
 
+        config_mock.server.cache_dir = '/tmp/memex-test-cache'
         config_mock.server.tracing.enabled = False
         config_mock.server.meta_store = MagicMock()
         config_mock.server.file_store = MagicMock()
