@@ -75,10 +75,24 @@ async function setupPopupMocks(
         },
         storage: {
           local: {
+            _data: Object.assign({}, ${JSON.stringify(storageSettings)}),
             get: async function(defaults) {
-              return Object.assign({}, defaults, ${JSON.stringify(storageSettings)});
+              return Object.assign({}, defaults, this._data);
             },
-            set: async function() {},
+            set: async function(items) { Object.assign(this._data, items); },
+            remove: async function(keys) {
+              for (var k of keys) delete this._data[k];
+            },
+          },
+          session: {
+            _data: {},
+            get: async function(defaults) {
+              return Object.assign({}, defaults, this._data);
+            },
+            set: async function(items) { Object.assign(this._data, items); },
+            remove: async function(keys) {
+              for (var k of keys) delete this._data[k];
+            },
           },
         },
         runtime: {
@@ -135,10 +149,35 @@ async function setupOptionsMocks(
       window.browser = {
         storage: {
           local: {
+            _data: Object.assign({}, ${JSON.stringify(settings)}),
             get: async function(defaults) {
-              return Object.assign({}, defaults, ${JSON.stringify(settings)});
+              return Object.assign({}, defaults, this._data);
             },
-            set: async function(data) { window.__savedSettings = data; },
+            set: async function(data) {
+              Object.assign(this._data, data);
+              window.__savedSettings = data;
+            },
+            remove: async function(keys) {
+              for (var k of keys) delete this._data[k];
+            },
+          },
+          session: {
+            _data: {},
+            get: async function(defaults) {
+              return Object.assign({}, defaults, this._data);
+            },
+            set: async function(items) { Object.assign(this._data, items); },
+            remove: async function(keys) {
+              for (var k of keys) delete this._data[k];
+            },
+          },
+        },
+        runtime: {
+          sendMessage: async function(msg) {
+            if (msg && msg.action === 'proxyFetch') {
+              return { ok: true, status: 200, statusText: 'OK', body: '{}' };
+            }
+            return {};
           },
         },
       };
@@ -285,18 +324,30 @@ test.describe('vault loading', () => {
               return [{ result: ${JSON.stringify(buildArticleHTML({ title: 'T' }))} }];
             },
           },
-          storage: { local: { get: async function(d) { return d; }, set: async function() {} } },
-          runtime: {
-          openOptionsPage: function() {},
-          sendMessage: async function(msg) {
-            if (msg && msg.action === 'downloadImage') return { ok: false };
-            return {};
+          storage: {
+            local: {
+              _data: {},
+              get: async function(d) { return Object.assign({}, d, this._data); },
+              set: async function(items) { Object.assign(this._data, items); },
+              remove: async function(keys) { for (var k of keys) delete this._data[k]; },
+            },
+            session: {
+              _data: {},
+              get: async function(d) { return Object.assign({}, d, this._data); },
+              set: async function(items) { Object.assign(this._data, items); },
+              remove: async function(keys) { for (var k of keys) delete this._data[k]; },
+            },
           },
-        },
-        };
-        window.fetch = async function(url) {
-          if (typeof url === 'string' && url.indexOf('/api/v1/vaults') !== -1) throw new Error('Network error');
-          return { ok: true, json: async function() { return {}; } };
+          runtime: {
+            openOptionsPage: function() {},
+            sendMessage: async function(msg) {
+              if (msg && msg.action === 'downloadImage') return { ok: false };
+              if (msg && msg.action === 'proxyFetch') {
+                return { ok: false, status: 0, statusText: 'Network error', body: '' };
+              }
+              return {};
+            },
+          },
         };
         window.close = function() {};
       </script>`;
@@ -390,7 +441,8 @@ test.describe('options page', () => {
 
     await expect(page.getByRole('heading', { name: /Settings/ })).toBeVisible();
     await expect(page.getByRole('textbox', { name: /Server URL/ })).toHaveValue('http://myserver:9000');
-    await expect(page.getByRole('textbox', { name: /API Key/ })).toHaveValue('test-key-123');
+    // Legacy key is migrated to session storage by loadApiKey, still shown in the field
+    await expect(page.locator('#api-key')).toHaveValue('test-key-123');
   });
 
   test('saves settings to storage', async ({ page }) => {
@@ -398,14 +450,22 @@ test.describe('options page', () => {
     await page.goto('/options/options.html');
 
     await page.getByRole('textbox', { name: /Server URL/ }).fill('http://newserver:3000');
-    await page.getByRole('textbox', { name: /API Key/ }).fill('my-new-key');
+    await page.locator('#api-key').fill('my-new-key');
     await page.getByRole('button', { name: 'Save Settings' }).click();
 
     await expect(page.locator('#status')).toHaveText('Settings saved.');
 
-    const saved = await page.evaluate(() => (window as any).__savedSettings);
-    expect(saved.memexServerUrl).toBe('http://newserver:3000');
-    expect(saved.memexApiKey).toBe('my-new-key');
+    // Server URL is saved to storage.local
+    const localData = await page.evaluate(
+      () => (window as any).browser.storage.local._data,
+    );
+    expect(localData.memexServerUrl).toBe('http://newserver:3000');
+
+    // API key is stored in session storage (remember unchecked by default)
+    const sessionData = await page.evaluate(
+      () => (window as any).browser.storage.session._data,
+    );
+    expect(sessionData.memexApiKey).toBe('my-new-key');
   });
 
   test('has test connection button', async ({ page }) => {

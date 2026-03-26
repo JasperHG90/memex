@@ -2,10 +2,11 @@
  * Options page: configure Memex server URL and API key.
  */
 
-import type { Settings } from '../types';
+import { saveApiKey, loadApiKey } from '../lib/key-store';
 
 const serverUrlEl = document.getElementById('server-url') as HTMLInputElement;
 const apiKeyEl = document.getElementById('api-key') as HTMLInputElement;
+const rememberKeyEl = document.getElementById('remember-key') as HTMLInputElement;
 const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
 const testBtn = document.getElementById('test-btn') as HTMLButtonElement;
 const toggleKeyBtn = document.getElementById('toggle-key') as HTMLButtonElement;
@@ -20,23 +21,23 @@ toggleKeyBtn.addEventListener('click', () => {
 });
 
 // Load saved settings
-browser.storage.local
-  .get({ memexServerUrl: 'http://localhost:8000', memexApiKey: '' })
-  .then((result) => {
-    const settings = result as unknown as Settings;
-    serverUrlEl.value = settings.memexServerUrl;
-    apiKeyEl.value = settings.memexApiKey;
-  });
+Promise.all([
+  browser.storage.local.get({ memexServerUrl: 'http://localhost:8000' }),
+  loadApiKey(),
+]).then(([urlResult, keyResult]) => {
+  serverUrlEl.value = (urlResult as Record<string, string>).memexServerUrl;
+  apiKeyEl.value = keyResult.apiKey;
+  rememberKeyEl.checked = keyResult.remember;
+});
 
 // Save settings
 saveBtn.addEventListener('click', async () => {
   const serverUrl = serverUrlEl.value.trim() || 'http://localhost:8000';
   const apiKey = apiKeyEl.value.trim();
+  const remember = rememberKeyEl.checked;
 
-  await browser.storage.local.set({
-    memexServerUrl: serverUrl,
-    memexApiKey: apiKey,
-  });
+  await browser.storage.local.set({ memexServerUrl: serverUrl });
+  await saveApiKey(apiKey, remember);
 
   statusEl.textContent = 'Settings saved.';
   statusEl.className = 'success';

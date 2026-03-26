@@ -77,6 +77,28 @@ input:focus {
   margin-bottom: 16px;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1a1a2e;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #e94560;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
 .button-row {
   display: flex;
   align-items: center;
