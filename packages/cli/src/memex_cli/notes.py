@@ -1138,13 +1138,36 @@ app.add_typer(template_app)
 
 
 @template_app.command('list')
-def template_list(ctx: typer.Context) -> None:
+def template_list(
+    ctx: typer.Context,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+) -> None:
     """List all available templates with metadata."""
     registry = _get_template_registry(ctx)
     templates = registry.list_templates()
 
     if not templates:
-        console.print('[dim]No templates available.[/dim]')
+        if json_output:
+            console.print('[]')
+        else:
+            console.print('[dim]No templates available.[/dim]')
+        return
+
+    if json_output:
+        console.print(
+            json.dumps(
+                [
+                    {
+                        'slug': t.slug,
+                        'name': t.display_name,
+                        'description': t.description,
+                        'source': t.source,
+                    }
+                    for t in templates
+                ],
+                indent=2,
+            )
+        )
         return
 
     table = Table(title='Available Templates')
