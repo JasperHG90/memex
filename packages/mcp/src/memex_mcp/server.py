@@ -22,8 +22,10 @@ from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_config
 from memex_mcp.models import (
+    McpAddAssetsResult,
     McpAddNoteResult,
     McpAsset,
+    McpDeleteAssetsResult,
     McpCitation,
     McpCooccurrence,
     McpEntity,
@@ -468,6 +470,130 @@ async def memex_get_resources(
     except Exception as e:
         logging.error(f'Get resource failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve resources: {e}')
+
+
+@mcp.tool(
+    name='memex_add_assets',
+    description='Add one or more file assets to an existing note. Provide local file paths.',
+    annotations={'readOnlyHint': False},
+    timeout=60.0,
+)
+async def memex_add_assets(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    file_paths: Annotated[
+        list[str],
+        BeforeValidator(_coerce_list),
+        Field(description='Absolute paths to asset files to attach.'),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
+) -> McpAddAssetsResult:
+    """Add asset files to an existing note."""
+    try:
+        api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
+
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        await _resolve_vault_id(api, vault_id)
+
+        files_content: dict[str, bytes] = {}
+        for file_path in file_paths:
+            path = plb.Path(file_path)
+            if not path.exists() or not path.is_file():
+                logging.warning(f'Asset file not found or not a file: {file_path}')
+                continue
+            async with aiofiles.open(path, 'rb') as f:
+                files_content[path.name] = await f.read()
+
+        if not files_content:
+            raise ToolError('No valid asset files found at the given paths.')
+
+        try:
+            result = await api.add_note_assets(uuid_obj, files_content)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Note {note_id} not found.')
+            raise
+
+        added_assets = []
+        for asset_path in result.get('added_assets', []):
+            path_obj = plb.Path(asset_path)
+            mime_type, _ = mimetypes.guess_type(path_obj.name)
+            added_assets.append(
+                McpAsset(filename=path_obj.name, path=asset_path, mime_type=mime_type)
+            )
+
+        return McpAddAssetsResult(
+            note_id=str(uuid_obj),
+            added_assets=added_assets,
+            skipped=result.get('skipped', []),
+            asset_count=result.get('asset_count', 0),
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Add assets failed: {e}', exc_info=True)
+        raise ToolError(f'Add assets failed: {e}')
+
+
+@mcp.tool(
+    name='memex_delete_assets',
+    description='Delete one or more asset files from an existing note. Get paths from memex_list_assets.',
+    annotations={'readOnlyHint': False},
+    timeout=30.0,
+)
+async def memex_delete_assets(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    asset_paths: Annotated[
+        list[str],
+        BeforeValidator(_coerce_list),
+        Field(description='Asset path(s) to delete (from memex_list_assets).'),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
+) -> McpDeleteAssetsResult:
+    """Delete asset files from an existing note."""
+    try:
+        api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
+
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        await _resolve_vault_id(api, vault_id)
+
+        try:
+            result = await api.delete_note_assets(uuid_obj, asset_paths)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Note {note_id} not found.')
+            raise
+
+        return McpDeleteAssetsResult(
+            note_id=str(uuid_obj),
+            deleted=result.get('deleted_assets', []),
+            not_found=result.get('not_found', []),
+            asset_count=result.get('asset_count', 0),
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Delete assets failed: {e}', exc_info=True)
+        raise ToolError(f'Delete assets failed: {e}')
 
 
 @mcp.tool(

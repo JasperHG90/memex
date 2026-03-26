@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
@@ -322,3 +322,41 @@ async def migrate_note(
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note migration failed')
+
+
+@router.post('/notes/{note_id}/assets', dependencies=[Depends(require_write)])
+async def add_note_assets(
+    note_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    files: list[UploadFile] = File(...),
+):
+    """Add one or more asset files to an existing note."""
+    try:
+        file_dict: dict[str, bytes] = {}
+        for upload_file in files:
+            filename = upload_file.filename or 'unnamed'
+            content = await upload_file.read()
+            file_dict[filename] = content
+
+        result = await api.add_note_assets(note_id, file_dict)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to add assets to note')
+
+
+class DeleteNoteAssetsRequest(BaseModel):
+    asset_paths: list[str]
+
+
+@router.delete('/notes/{note_id}/assets', dependencies=[Depends(require_delete)])
+async def delete_note_assets(
+    note_id: UUID,
+    request: Annotated[DeleteNoteAssetsRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Delete one or more asset files from an existing note."""
+    try:
+        result = await api.delete_note_assets(note_id, request.asset_paths)
+        return result
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to delete assets from note')

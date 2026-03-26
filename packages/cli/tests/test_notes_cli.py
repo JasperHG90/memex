@@ -347,16 +347,18 @@ def test_note_metadata_multi_empty(runner, mock_api, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Batch: note get-asset (multi-path)
+# Batch: note assets get (multi-path)
 # ---------------------------------------------------------------------------
 
 
 def test_get_asset_multi_to_dir(runner, mock_api, mock_config, monkeypatch, tmp_path):
     p1, p2 = 'assets/a/photo.png', 'assets/b/data.csv'
     mock_api.get_resource.side_effect = [b'PNG_BYTES', b'CSV_BYTES']
-    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+    monkeypatch.setattr('memex_cli.assets.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(note_app, ['get-asset', p1, p2, '-d', str(tmp_path)], obj=mock_config)
+    result = runner.invoke(
+        note_app, ['assets', 'get', p1, p2, '-d', str(tmp_path)], obj=mock_config
+    )
     assert result.exit_code == 0
     assert (tmp_path / 'photo.png').read_bytes() == b'PNG_BYTES'
     assert (tmp_path / 'data.csv').read_bytes() == b'CSV_BYTES'
@@ -365,9 +367,11 @@ def test_get_asset_multi_to_dir(runner, mock_api, mock_config, monkeypatch, tmp_
 def test_get_asset_multi_partial_error(runner, mock_api, mock_config, monkeypatch, tmp_path):
     p1, p2 = 'assets/a/good.png', 'assets/b/bad.csv'
     mock_api.get_resource.side_effect = [b'GOOD', FileNotFoundError('missing')]
-    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+    monkeypatch.setattr('memex_cli.assets.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(note_app, ['get-asset', p1, p2, '-d', str(tmp_path)], obj=mock_config)
+    result = runner.invoke(
+        note_app, ['assets', 'get', p1, p2, '-d', str(tmp_path)], obj=mock_config
+    )
     assert result.exit_code == 0
     assert (tmp_path / 'good.png').read_bytes() == b'GOOD'
     assert not (tmp_path / 'bad.csv').exists()

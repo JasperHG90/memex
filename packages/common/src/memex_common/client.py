@@ -642,6 +642,21 @@ class RemoteMemexAPI:
         """Update a note's publish_date and cascade delta to memory unit timestamps."""
         return await self._patch(f'notes/{note_id}/date', {'date': new_date.isoformat()})
 
+    async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
+        """Add one or more asset files to an existing note."""
+        upload_files = [('files', (filename, content)) for filename, content in files.items()]
+        response = await self.client.post(f'notes/{note_id}/assets', files=upload_files)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_note_assets(self, note_id: UUID, asset_paths: list[str]) -> dict[str, Any]:
+        """Delete one or more asset files from an existing note."""
+        response = await self.client.request(
+            'DELETE', f'notes/{note_id}/assets', json={'asset_paths': asset_paths}
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_resource(self, path: str) -> bytes:
         """
         Retrieve a raw resource (file) from the server.

@@ -858,6 +858,14 @@ class MemexAPI:
         """Delete a vault. Delegates to VaultService."""
         return await self._vaults.delete_vault(vault_id)
 
+    async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
+        """Add assets to an existing note. Delegates to NoteService."""
+        return await self._notes.add_note_assets(note_id, files)
+
+    async def delete_note_assets(self, note_id: UUID, asset_paths: list[str]) -> dict[str, Any]:
+        """Delete assets from an existing note. Delegates to NoteService."""
+        return await self._notes.delete_note_assets(note_id, asset_paths)
+
     async def delete_note(self, note_id: UUID) -> bool:
         """Delete a document and all associated data. Delegates to NoteService."""
         return await self._notes.delete_note(note_id)
