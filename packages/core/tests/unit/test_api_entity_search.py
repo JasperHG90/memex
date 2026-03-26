@@ -50,6 +50,7 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_config.server.logging.level = 'WARNING'
     mock_config.server.logging.json_output = False
     mock_config.server.host = '127.0.0.1'
+    mock_config.server.cache_dir = '/tmp/memex-test-cache'
     mock_config.server.tracing.enabled = False
 
     # Configure mock_metastore to support lifespan initialization
