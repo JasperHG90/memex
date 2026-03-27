@@ -63,6 +63,16 @@ Python monorepo managed by `uv`.
 - `memex_cli.__init__.app` — Typer CLI app
 - `memex_mcp.server.mcp` — MCP server instance
 
+### Inference model backends
+
+Embedding and reranking models are configurable via `server.embedding_model` and `server.memory.retrieval.reranker`. Both default to built-in ONNX models; set `type: litellm` to use any litellm-supported provider (OpenAI, Gemini, Cohere, Ollama, etc.).
+
+- Protocols: `EmbeddingsModel`, `RerankerModel` in `memex_core.memory.models.protocols`
+- ONNX backends: `FastEmbedder`, `FastReranker` in `memex_core.memory.models`
+- LiteLLM backends: `memex_core.memory.models.backends.litellm_embedder`, `litellm_reranker`
+- Factory functions: `get_embedding_model(config)`, `get_reranking_model(config)` dispatch on config type
+- Reranker logit transform: litellm providers return [0,1] scores; the adapter applies inverse sigmoid so the retrieval engine's sigmoid normalisation (`retrieval/engine.py:987`) recovers the original scores
+
 ### Architectural decisions
 
 - Distributed reflection queue: PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming
