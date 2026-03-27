@@ -15,7 +15,7 @@ from pydantic import BaseModel, field_serializer, field_validator, model_validat
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
 
-DATE_REGEX = r'^\d{4}-\d{2}-\d{2}$'
+DATE_REGEX = r'^-?\d{4,}-\d{2}-\d{2}$'
 
 _ENCODER = tiktoken.get_encoding('cl100k_base')
 
@@ -437,13 +437,13 @@ class RawFact(BaseFact):
     )
     occurred_start: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD). ONLY use if a specific date is present. Otherwise None. '
+        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
         "WHEN the event happened (ISO timestamp). Only for fact_kind='dated'. Leave null for conversations. If a `date "
         "is mentioned in 'when', you **MUST** convert it here.",
     )
     occurred_end: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD). ONLY use if a specific date is present. Otherwise None. '
+        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
         'WHEN the event ended (ISO timestamp). Only for dated events with duration. Leave null for conversations. '
         "If an **end date** is mentioned in 'when', you **MUST** convert it here.",
     )
@@ -470,7 +470,7 @@ class RawFact(BaseFact):
             return None
 
         if not re.match(DATE_REGEX, v):
-            raise ValueError(f"Date '{v}' must be in YYYY-MM-DD format.")
+            raise ValueError(f"Date '{v}' must be in YYYY-MM-DD or -YYYY-MM-DD format.")
 
         return v
 

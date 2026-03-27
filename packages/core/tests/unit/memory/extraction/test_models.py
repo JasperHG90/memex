@@ -72,6 +72,55 @@ class TestRawFact:
         assert fact.formatted_text == expected
 
 
+class TestDateValidation:
+    """Tests for RawFact date format validation."""
+
+    @pytest.mark.parametrize(
+        'date_str',
+        ['2024-03-15', '0001-01-01', '9999-12-31', '-2400-01-01', '-0500-06-15', '10000-01-01'],
+    )
+    def test_valid_dates_accepted(self, date_str: str) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.DATED,
+            occurred_start=date_str,
+        )
+        assert fact.occurred_start == date_str
+
+    @pytest.mark.parametrize('date_str', ['N/A', 'NONE', 'UNKNOWN', 'none'])
+    def test_na_values_become_none(self, date_str: str) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.DATED,
+            occurred_start=date_str,
+        )
+        assert fact.occurred_start is None
+
+    @pytest.mark.parametrize(
+        'date_str',
+        ['not-a-date', '2024/03/15', '03-15-2024', '2024', '2024-3-15', '--2024-01-01'],
+    )
+    def test_invalid_dates_rejected(self, date_str: str) -> None:
+        with pytest.raises(ValidationError):
+            RawFact(
+                what='Test',
+                fact_type=FactTypes.WORLD,
+                fact_kind=FactKindTypes.DATED,
+                occurred_start=date_str,
+            )
+
+    def test_none_date_accepted(self) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.DATED,
+            occurred_start=None,
+        )
+        assert fact.occurred_start is None
+
+
 class TestCausalRelation:
     """Tests for CausalRelation model."""
 
