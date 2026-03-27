@@ -558,6 +558,11 @@ class NoteCreateDTO(BaseModel):
         default=None,
         description='Optional user-provided context or commentary to include in the note.',
     )
+    author: str | None = Field(
+        default=None,
+        description='Author of the note.',
+        examples=['alice'],
+    )
 
     @property
     def content_decoded(self) -> bytes:

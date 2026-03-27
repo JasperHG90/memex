@@ -101,6 +101,7 @@ async def handle_document_tracking(
     content_fingerprint: str | None = None,
     publish_date: datetime | None = None,
     title: str | None = None,
+    description: str | None = None,
 ) -> None:
     """
     Handle document tracking: delete old version (if start) and upsert new metadata.
@@ -116,6 +117,7 @@ async def handle_document_tracking(
         assets: Optional list of asset paths.
         content_fingerprint: Optional explicit content hash. If None, SHA256 of text is used.
         title: Resolved human-readable title for the document.
+        description: Optional description for the document.
     """
     doc_uuid = UUID(note_id)
 
@@ -139,6 +141,9 @@ async def handle_document_tracking(
     if document_tags:
         doc_metadata['tags'] = document_tags
 
+    if retain_params and retain_params.get('author'):
+        doc_metadata['author'] = retain_params['author']
+
     # 2. Upsert Document
     # We define the base insert statement first using the underlying __table__
     # to avoid SQLModel's 'metadata' attribute shadowing.
@@ -156,6 +161,7 @@ async def handle_document_tracking(
         'assets': assets or [],
         'session_id': get_session_id(),
         'publish_date': publish_date,
+        'description': description,
         # created_at/updated_at handled by server_default
     }
 
@@ -174,6 +180,7 @@ async def handle_document_tracking(
         'assets': insert_stmt.excluded.assets,
         'session_id': insert_stmt.excluded.session_id,
         'publish_date': insert_stmt.excluded.publish_date,
+        'description': insert_stmt.excluded.description,
     }
 
     upsert_stmt = insert_stmt.on_conflict_do_update(

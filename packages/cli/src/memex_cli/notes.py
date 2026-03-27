@@ -71,6 +71,26 @@ async def add_note(
         str | None,
         typer.Option('--user-notes', '-n', help='Your own context or commentary about this note.'),
     ] = None,
+    title: Annotated[
+        str | None,
+        typer.Option('--title', '-t', help='Note title (default: "Quick Note" for inline).'),
+    ] = None,
+    description_opt: Annotated[
+        str | None,
+        typer.Option('--description', help='Note description/summary.'),
+    ] = None,
+    author: Annotated[
+        str | None,
+        typer.Option('--author', help='Author name.'),
+    ] = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option('--tag', help='Tag for the note. Can be repeated.'),
+    ] = None,
+    date: Annotated[
+        str | None,
+        typer.Option('--date', '-d', help='Note date in ISO 8601 format (e.g. 2026-03-15).'),
+    ] = None,
 ):
     """
     Add a new note to Memex.
@@ -173,8 +193,8 @@ async def add_note(
             # Handle NoteDTO path (content + assets or file + assets)
             try:
                 note_content = ''
-                note_name = 'Quick Note'
-                note_description = 'Added via CLI'
+                note_name = title or 'Quick Note'
+                note_description = description_opt or 'Added via CLI'
 
                 if file:
                     if file.is_dir():
@@ -186,11 +206,33 @@ async def add_note(
                     console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
                     async with aiofiles.open(file, 'r', encoding='utf-8') as f:
                         note_content = await f.read()
-                    note_name = file.stem
+                    if not title:
+                        note_name = file.stem
                 else:
                     note_content = content or ''
 
-                # Encode content
+                # Build frontmatter for inline content when metadata is provided
+                fm_data: dict[str, Any] = {}
+                if title:
+                    fm_data['title'] = note_name
+                if date:
+                    fm_data['date'] = date
+                if author:
+                    fm_data['author'] = author
+                if description_opt:
+                    fm_data['description'] = note_description
+
+                default_tags = ['cli', 'note-with-assets'] if asset else ['cli', 'quick-note']
+                effective_tags = list(tag or []) + default_tags
+                if tag:
+                    fm_data['tags'] = effective_tags
+
+                if fm_data:
+                    import yaml
+
+                    fm_yaml = yaml.safe_dump(fm_data, sort_keys=False).strip()
+                    note_content = f'---\n{fm_yaml}\n---\n\n{note_content}'
+
                 # Load assets
                 assets_dict = {}
                 if asset:
@@ -210,10 +252,11 @@ async def add_note(
                     description=note_description,
                     content=base64.b64encode(note_content.encode('utf-8')),
                     files=assets_dict,
-                    tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
+                    tags=effective_tags,
                     note_key=key,
                     vault_id=config.write_vault,
                     user_notes=user_notes,
+                    author=author,
                 )
 
                 result = await api.ingest(note, background=background)

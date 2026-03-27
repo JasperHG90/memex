@@ -173,6 +173,60 @@ async def test_handle_document_tracking_subsequent_batch(mock_session):
 
 
 @pytest.mark.asyncio
+async def test_handle_document_tracking_stores_description(mock_session):
+    """Description param is included in the upsert values."""
+    doc_id = str(uuid4())
+    content = 'test content'
+
+    with (
+        patch('memex_core.memory.extraction.storage.delete'),
+        patch('memex_core.memory.extraction.storage.pg_insert') as mock_insert,
+    ):
+        mock_insert_stmt = MagicMock()
+        mock_insert.return_value.values.return_value = mock_insert_stmt
+        mock_insert_stmt.on_conflict_do_update.return_value = MagicMock()
+
+        await storage.handle_document_tracking(
+            mock_session,
+            doc_id,
+            content,
+            is_first_batch=True,
+            description='My description',
+        )
+
+        # Verify values() was called with description
+        values_kwargs = mock_insert.return_value.values.call_args[1]
+        assert values_kwargs['description'] == 'My description'
+
+
+@pytest.mark.asyncio
+async def test_handle_document_tracking_stores_author_in_metadata(mock_session):
+    """Author from retain_params is promoted to top-level doc_metadata."""
+    doc_id = str(uuid4())
+    content = 'test content'
+
+    with (
+        patch('memex_core.memory.extraction.storage.delete'),
+        patch('memex_core.memory.extraction.storage.pg_insert') as mock_insert,
+    ):
+        mock_insert_stmt = MagicMock()
+        mock_insert.return_value.values.return_value = mock_insert_stmt
+        mock_insert_stmt.on_conflict_do_update.return_value = MagicMock()
+
+        await storage.handle_document_tracking(
+            mock_session,
+            doc_id,
+            content,
+            is_first_batch=True,
+            retain_params={'author': 'alice', 'source': 'note'},
+        )
+
+        values_kwargs = mock_insert.return_value.values.call_args[1]
+        metadata = values_kwargs['metadata']
+        assert metadata['author'] == 'alice'
+
+
+@pytest.mark.asyncio
 async def test_store_chunks_batch(mock_session):
     doc_id = str(uuid4())
     chunks = [

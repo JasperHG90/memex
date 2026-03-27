@@ -79,8 +79,11 @@ class NoteInput:
         original_content_hash: str | None = None,
         note_key: str | None = None,
         user_notes: str | None = None,
+        author: str | None = None,
     ):
         self._metadata = NoteMetadata(name=name, description=description)
+        if author:
+            self._metadata.update('author', author)
         self._content = content
 
         if user_notes and user_notes.strip():
@@ -177,6 +180,7 @@ class NoteInput:
             tags=dto.tags,
             note_key=doc_key,
             user_notes=getattr(dto, 'user_notes', None),
+            author=getattr(dto, 'author', None),
         )
         return temp_note.idempotency_key
 
@@ -195,6 +199,7 @@ class NoteInput:
             tags=dto.tags,
             note_key=doc_key,
             user_notes=getattr(dto, 'user_notes', None),
+            author=getattr(dto, 'author', None),
         )
         return temp_note.content_fingerprint
 

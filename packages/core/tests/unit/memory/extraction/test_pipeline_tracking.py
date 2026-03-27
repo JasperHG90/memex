@@ -145,6 +145,27 @@ class TestTrackDocument:
             call_kwargs = mock_storage.call_args[1]
             assert call_kwargs['content_fingerprint'] == 'abc123'
 
+    @pytest.mark.asyncio
+    async def test_passes_description_from_payload(self) -> None:
+        """Verify note_description from payload is forwarded as description kwarg."""
+        session = AsyncMock()
+        note_id = f'note-{uuid4()}'
+        contents = [
+            RetainContent(
+                content='test',
+                payload={'note_description': 'My desc', 'tags': ['t1']},
+            )
+        ]
+
+        with patch(
+            'memex_core.memory.extraction.pipeline.tracking.storage.handle_document_tracking',
+            new_callable=AsyncMock,
+        ) as mock_storage:
+            await track_document(session, note_id, contents, is_first_batch=True)
+
+            call_kwargs = mock_storage.call_args[1]
+            assert call_kwargs['description'] == 'My desc'
+
 
 # ===========================================================================
 # enqueue_for_reflection tests
