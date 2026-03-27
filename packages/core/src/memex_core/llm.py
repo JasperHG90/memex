@@ -18,6 +18,7 @@ logger = logging.getLogger('memex.core.llm')
 # Tracing helpers — no-ops when tracing deps not installed
 try:
     from opentelemetry import trace as _otel_trace
+    from opentelemetry.trace import SpanKind as _SpanKind
     from openinference.instrumentation import using_attributes as _oi_using_attributes
 
     _tracer = _otel_trace.get_tracer('memex.llm')
@@ -87,7 +88,7 @@ async def run_dspy_operation(
 
     async def _execute():
         if _tracer is not None and _oi_using_attributes is not None:
-            with _tracer.start_as_current_span(operation_name):
+            with _tracer.start_as_current_span(operation_name, kind=_SpanKind.INTERNAL):
                 with _oi_using_attributes(metadata={'memex.stage': operation_name}):
                     with dspy.context(lm=lm_):
                         if hasattr(predictor, 'acall'):
