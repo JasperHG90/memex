@@ -264,6 +264,92 @@ class ModelConfig(BaseModel):
             return value.value
 
 
+# ---------------------------------------------------------------------------
+# Inference model backend configs (embedding, reranking)
+# ---------------------------------------------------------------------------
+
+
+class OnnxBackend(BaseModel):
+    """Use the built-in fine-tuned ONNX model (default)."""
+
+    type: Literal['onnx'] = 'onnx'
+
+
+class LitellmEmbeddingBackend(BaseModel):
+    """Use any litellm-supported embedding provider.
+
+    Examples: ``openai/text-embedding-3-small``, ``gemini/text-embedding-004``,
+    ``ollama/nomic-embed-text``, ``cohere/embed-english-v3.0``,
+    ``bedrock/amazon.titan-embed-text-v2:0``.
+    """
+
+    type: Literal['litellm'] = 'litellm'
+    model: str = Field(
+        ...,
+        description=(
+            "LiteLLM model string, e.g. 'openai/text-embedding-3-small', "
+            "'gemini/text-embedding-004', 'ollama/nomic-embed-text'."
+        ),
+    )
+    api_base: HttpUrl | None = Field(
+        default=None,
+        description='API base URL. Required for self-hosted providers (Ollama, TEI, vLLM). '
+        'Omit for cloud providers that use standard endpoints.',
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description='API key. Can also be set via provider env vars '
+        '(OPENAI_API_KEY, GEMINI_API_KEY, etc.).',
+    )
+    dimensions: int | None = Field(
+        default=None,
+        description='Requested output dimensions (for Matryoshka / dimension-reduction models). '
+        'Must match the DB vector column width or a migration is required.',
+    )
+
+
+class LitellmRerankerBackend(BaseModel):
+    """Use any litellm-supported reranking provider.
+
+    Examples: ``cohere/rerank-v3.5``, ``together_ai/Salesforce/Llama-Rank-V1``,
+    ``voyage/rerank-2``.
+    """
+
+    type: Literal['litellm'] = 'litellm'
+    model: str = Field(
+        ...,
+        description=(
+            "LiteLLM rerank model string, e.g. 'cohere/rerank-v3.5', "
+            "'together_ai/Salesforce/Llama-Rank-V1', 'voyage/rerank-2'."
+        ),
+    )
+    api_base: HttpUrl | None = Field(
+        default=None,
+        description='API base URL for self-hosted reranking servers.',
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description='API key for the reranker provider.',
+    )
+
+
+class DisabledBackend(BaseModel):
+    """Explicitly disable this model."""
+
+    type: Literal['disabled'] = 'disabled'
+
+
+EmbeddingBackend: TypeAlias = Annotated[
+    Union[OnnxBackend, LitellmEmbeddingBackend],
+    Field(discriminator='type'),
+]
+
+RerankerBackend: TypeAlias = Annotated[
+    Union[OnnxBackend, LitellmRerankerBackend, DisabledBackend],
+    Field(discriminator='type'),
+]
+
+
 class SearchStrategiesConfig(BaseModel):
     """Default enabled search strategies for memory retrieval."""
 
@@ -514,6 +600,10 @@ class RetrievalConfig(BaseModel):
         default=0.2,
         description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
         '0 = no boost (backward compatible).',
+    )
+    reranker: RerankerBackend = Field(
+        default_factory=OnnxBackend,
+        description='Reranker model backend. Default: built-in ONNX cross-encoder.',
     )
     causal_weight_threshold: float = Field(
         default=0.3,
@@ -886,6 +976,12 @@ class ServerConfig(BaseModel):
     default_model: ModelConfig = Field(
         default_factory=lambda: ModelConfig(model='gemini/gemini-3-flash-preview'),
         description='System-wide default model. Sub-configs with model=None inherit this value.',
+    )
+
+    embedding_model: EmbeddingBackend = Field(
+        default_factory=OnnxBackend,
+        description='Embedding model backend. Default: built-in ONNX model. '
+        'Set type=litellm to use any litellm-supported provider.',
     )
 
     logging: LoggingConfig = Field(

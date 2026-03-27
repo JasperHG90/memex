@@ -8,12 +8,10 @@ from memex_core.memory.models.reranking import get_reranking_model, FastReranker
 
 @pytest.fixture
 async def mock_base_onnx_init() -> AsyncGenerator[MagicMock, None]:
-    get_reranking_model.cache_clear()
     with patch(
         'memex_core.memory.models.base.BaseOnnxModel.__init__', return_value=None
     ) as mock_init:
         yield mock_init
-        get_reranking_model.cache_clear()
 
 
 @pytest.mark.asyncio

@@ -104,9 +104,27 @@ async def lifespan(app: FastAPI):
     await metastore.connect(create_schema=create_schema)
 
     configure_cache_dir(config.server.cache_dir)
-    embedding_model = await get_embedding_model()
-    reranking_model = await get_reranking_model()
+    embedding_model = await get_embedding_model(config.server.embedding_model)
+    reranking_model = await get_reranking_model(config.server.memory.retrieval.reranker)
     ner_model = await get_ner_model()
+
+    # Validate embedding dimensions match the database schema.
+    # Only probe litellm backends (the fine-tuned ONNX model is known-good).
+    from memex_common.config import LitellmEmbeddingBackend
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+
+    if isinstance(config.server.embedding_model, LitellmEmbeddingBackend):
+        probe = await asyncio.to_thread(embedding_model.encode, ['memex embedding dimension probe'])
+        actual_dim = probe.shape[-1] if hasattr(probe, 'shape') else len(probe[0])
+        if actual_dim != EMBEDDING_DIMENSION:
+            raise RuntimeError(
+                f'Embedding model produces {actual_dim}-dimensional vectors, '
+                f'but the database schema expects {EMBEDDING_DIMENSION}. '
+                f'Either use a model that outputs {EMBEDDING_DIMENSION} dimensions, '
+                f'set dimensions={EMBEDDING_DIMENSION} in the embedding config '
+                f'(if the model supports Matryoshka embeddings), '
+                f'or run a database migration to resize the vector columns.'
+            )
 
     api = MemexAPI(
         embedding_model=embedding_model,

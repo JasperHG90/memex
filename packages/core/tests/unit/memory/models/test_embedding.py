@@ -8,12 +8,10 @@ from memex_core.memory.models.embedding import get_embedding_model, FastEmbedder
 
 @pytest.fixture
 async def mock_base_onnx_init() -> AsyncGenerator[MagicMock, None]:
-    get_embedding_model.cache_clear()  # Ensure cache is clear before test
     with patch(
         'memex_core.memory.models.base.BaseOnnxModel.__init__', return_value=None
     ) as mock_init:
         yield mock_init
-        get_embedding_model.cache_clear()  # Clear cache after test too
 
 
 @pytest.mark.asyncio

@@ -6,20 +6,15 @@ Handles augmenting fact texts with temporal information and generating embedding
 
 import asyncio
 import logging
-from typing import Protocol, Any, Sequence
+from typing import Sequence
 
 from memex_core.memory.extraction.models import ExtractedFact, ProcessedFact
+from memex_core.memory.models.protocols import EmbeddingsModel
 
 from memex_core.memory.formatting import format_for_embedding
 
 
 logger = logging.getLogger('memex.core.memory.extraction.embedding_processor')
-
-
-class EmbeddingsModel(Protocol):
-    """Protocol for embedding backend."""
-
-    def encode(self, text: list[str]) -> Any: ...
 
 
 def format_facts_for_embedding(

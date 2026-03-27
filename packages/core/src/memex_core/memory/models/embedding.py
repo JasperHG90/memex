@@ -1,39 +1,56 @@
+from __future__ import annotations
+
 import logging
 from typing import cast
 
 import httpx
 import numpy as np
-from async_lru import alru_cache
+from memex_common.config import EmbeddingBackend
 from memex_core.memory.models.base import (
     BaseOnnxModel,
     ModelDownloader,
     MODEL_REGISTRY,
     get_cache_dir,
 )
+from memex_core.memory.models.protocols import EmbeddingsModel
 
 logger = logging.getLogger('memex.core.memory.models.embedding')
 
 
-@alru_cache(maxsize=1)
-async def get_embedding_model() -> 'FastEmbedder':
-    """Get the embedding model
+async def get_embedding_model(
+    config: EmbeddingBackend | None = None,
+) -> EmbeddingsModel:
+    """Create an embedding model from config.
 
     Args:
-        model_dir (str | plb.Path | None, optional): Location of the model directory. Defaults to None.
-        model_name (str, optional): Name of the model file. Defaults to 'model.onnx'.
+        config: Backend configuration.  ``None`` or ``OnnxBackend`` uses the
+            built-in ONNX model.  ``LitellmEmbeddingBackend`` delegates to
+            the litellm-backed adapter.
 
     Returns:
-        FastEmbedder: Embedding model instance.
+        An object satisfying the ``EmbeddingsModel`` protocol.
     """
-    _spec = MODEL_REGISTRY['embedding']
-    path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
+    from memex_common.config import OnnxBackend, LitellmEmbeddingBackend
 
-    if not path.exists():
-        logger.warning(f'Embedding model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
-        await downloader.download_async(httpx.AsyncClient(), force=False)
+    if config is None or isinstance(config, OnnxBackend):
+        _spec = MODEL_REGISTRY['embedding']
+        path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
-    return FastEmbedder(model_dir=str(path), model_name='model.onnx')
+        if not path.exists():
+            logger.warning(
+                'Embedding model not found at %s. Downloading from Hugging Face Hub...', path
+            )
+            downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
+            await downloader.download_async(httpx.AsyncClient(), force=False)
+
+        return FastEmbedder(model_dir=str(path), model_name='model.onnx')
+
+    if isinstance(config, LitellmEmbeddingBackend):
+        from memex_core.memory.models.backends.litellm_embedder import LiteLLMEmbedder
+
+        return LiteLLMEmbedder(config)
+
+    raise ValueError(f'Unknown embedding backend: {type(config)}')
 
 
 class FastEmbedder(BaseOnnxModel):

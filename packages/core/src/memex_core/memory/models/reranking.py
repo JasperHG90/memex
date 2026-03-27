@@ -1,36 +1,61 @@
+from __future__ import annotations
+
 import logging
 from typing import cast
 
 import httpx
 import numpy as np
 
-from async_lru import alru_cache
+from memex_common.config import RerankerBackend
 from memex_core.memory.models.base import (
     BaseOnnxModel,
     ModelDownloader,
     MODEL_REGISTRY,
     get_cache_dir,
 )
+from memex_core.memory.models.protocols import RerankerModel
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
 
 
-@alru_cache(maxsize=1)
-async def get_reranking_model() -> 'FastReranker':
-    """Get the reranking model.
+async def get_reranking_model(
+    config: RerankerBackend | None = None,
+) -> RerankerModel | None:
+    """Create a reranking model from config.
+
+    Args:
+        config: Backend configuration.  ``None`` or ``OnnxBackend`` uses the
+            built-in ONNX model.  ``LitellmRerankerBackend`` delegates to
+            the litellm-backed adapter.  ``DisabledBackend`` returns ``None``.
 
     Returns:
-        FastReranker: Reranking model instance.
+        An object satisfying the ``RerankerModel`` protocol, or ``None``
+        if reranking is disabled.
     """
-    _spec = MODEL_REGISTRY['reranker']
-    path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
+    from memex_common.config import OnnxBackend, LitellmRerankerBackend, DisabledBackend
 
-    if not path.exists():
-        logger.warning(f'Reranking model not found at {path}. Downloading from Hugging Face Hub...')
-        downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
-        await downloader.download_async(client=httpx.AsyncClient(), force=False)
+    if config is None or isinstance(config, OnnxBackend):
+        _spec = MODEL_REGISTRY['reranker']
+        path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
-    return FastReranker(model_dir=str(path), model_name='model.onnx')
+        if not path.exists():
+            logger.warning(
+                'Reranking model not found at %s. Downloading from Hugging Face Hub...', path
+            )
+            downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
+            await downloader.download_async(client=httpx.AsyncClient(), force=False)
+
+        return FastReranker(model_dir=str(path), model_name='model.onnx')
+
+    if isinstance(config, LitellmRerankerBackend):
+        from memex_core.memory.models.backends.litellm_reranker import LiteLLMReranker
+
+        return LiteLLMReranker(config)
+
+    if isinstance(config, DisabledBackend):
+        return None
+
+    raise ValueError(f'Unknown reranker backend: {type(config)}')
 
 
 class FastReranker(BaseOnnxModel):
