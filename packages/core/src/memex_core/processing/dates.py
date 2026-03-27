@@ -80,6 +80,7 @@ async def extract_document_date(
             lm=lm,
             predictor=predictor,
             input_kwargs={'document_header': header},
+            operation_name='processing.date',
         )
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.warning('LLM date extraction failed: %s', e, exc_info=True)

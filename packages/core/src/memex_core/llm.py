@@ -15,6 +15,16 @@ from memex_core.metrics import (
 
 logger = logging.getLogger('memex.core.llm')
 
+# Tracing helpers — no-ops when tracing deps not installed
+try:
+    from opentelemetry import trace as _otel_trace
+    from openinference.instrumentation import using_attributes as _oi_using_attributes
+
+    _tracer = _otel_trace.get_tracer('memex.llm')
+except ImportError:
+    _tracer = None  # type: ignore[assignment]
+    _oi_using_attributes = None  # type: ignore[assignment]
+
 T = TypeVar('T')
 
 # Module-level circuit breaker instance shared across all LLM calls.
@@ -42,6 +52,7 @@ async def run_dspy_operation(
     predictor: dspy.Module,
     input_kwargs: dict[str, Any],
     semaphore: asyncio.Semaphore | None = None,
+    operation_name: str = 'dspy',
 ) -> Any:
     """
     Executes a DSPy predictor with circuit breaker and metrics.
@@ -75,11 +86,20 @@ async def run_dspy_operation(
     lm_ = lm.copy()
 
     async def _execute():
-        with dspy.context(lm=lm_):
-            if hasattr(predictor, 'acall'):
-                return await predictor.acall(**input_kwargs)
-            else:
-                return await asyncio.to_thread(predictor, **input_kwargs)
+        if _tracer is not None and _oi_using_attributes is not None:
+            with _tracer.start_as_current_span(operation_name):
+                with _oi_using_attributes(metadata={'memex.stage': operation_name}):
+                    with dspy.context(lm=lm_):
+                        if hasattr(predictor, 'acall'):
+                            return await predictor.acall(**input_kwargs)
+                        else:
+                            return await asyncio.to_thread(predictor, **input_kwargs)
+        else:
+            with dspy.context(lm=lm_):
+                if hasattr(predictor, 'acall'):
+                    return await predictor.acall(**input_kwargs)
+                else:
+                    return await asyncio.to_thread(predictor, **input_kwargs)
 
     try:
         if semaphore:

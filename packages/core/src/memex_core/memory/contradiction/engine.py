@@ -118,6 +118,7 @@ class ContradictionEngine:
             lm=self.lm,
             predictor=self.triage_predictor,
             input_kwargs={'units': units_json},
+            operation_name='contradiction.triage',
         )
 
         flagged = result.flagged_ids
@@ -227,6 +228,7 @@ class ContradictionEngine:
                 'new_unit_date': (unit.event_date.isoformat() if unit.event_date else 'unknown'),
                 'candidates': candidates_json,
             },
+            operation_name='contradiction.classify',
         )
 
         relationships = result.relationships

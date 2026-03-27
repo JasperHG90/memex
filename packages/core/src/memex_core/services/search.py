@@ -102,6 +102,7 @@ class SearchService:
             lm=self.lm,
             predictor=predictor,
             input_kwargs={'query': query, 'search_results': texts},
+            operation_name='search',
         )
 
         return prediction.summary
