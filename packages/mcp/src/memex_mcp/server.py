@@ -789,6 +789,13 @@ async def memex_add_note(
             description='Optional user-provided context or commentary to include in the note.',
         ),
     ] = None,
+    date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Note date in ISO 8601 format (e.g. 2026-03-27). Defaults to now.',
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -809,13 +816,15 @@ async def memex_add_note(
                     logging.warning(f'Supporting file not found or not a file: {file_path}')
 
         # Construct frontmatter
-        fm_data = {
+        fm_data: dict[str, Any] = {
             'title': title,
             'description': description,
             'author': author,
             'supporting_files': supporting_files,
             'tags': tags,
         }
+        if date:
+            fm_data['date'] = date
 
         import yaml
 
@@ -842,6 +851,7 @@ async def memex_add_note(
             vault_id=vault_id,
             note_key=effective_note_key,
             user_notes=user_notes,
+            author=author,
         )
 
         result = await api.ingest(note, background=background)

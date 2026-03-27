@@ -1,8 +1,10 @@
+import base64
+import json
+from datetime import datetime, timezone
 from uuid import uuid4
+
 from memex_cli.notes import app as note_app
 from memex_common.schemas import IngestResponse, NoteCreateDTO, NoteDTO, NodeDTO
-from datetime import datetime, timezone
-import json
 
 
 def test_note_list(runner, mock_api, mock_config, monkeypatch):
@@ -200,6 +202,66 @@ def test_add_note_with_key(runner, mock_api, mock_config, monkeypatch):
     note = mock_api.ingest.call_args[0][0]
     assert isinstance(note, NoteCreateDTO)
     assert note.note_key == 'my-stable-key'
+
+
+def test_add_note_with_metadata(runner, mock_api, mock_config, monkeypatch):
+    """All metadata flags populate NoteCreateDTO and inject frontmatter."""
+    mock_api.ingest.return_value = IngestResponse(status='success', note_id='test-uuid')
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        [
+            'add',
+            'Hello world',
+            '--title',
+            'My Title',
+            '--author',
+            'alice',
+            '--tag',
+            'research',
+            '--tag',
+            'ml',
+            '--date',
+            '2026-01-15',
+            '--description',
+            'A test note',
+        ],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0
+
+    mock_api.ingest.assert_called_once()
+    note = mock_api.ingest.call_args[0][0]
+    assert isinstance(note, NoteCreateDTO)
+    assert note.name == 'My Title'
+    assert note.description == 'A test note'
+    assert note.author == 'alice'
+    assert note.tags == ['research', 'ml', 'cli', 'quick-note']
+
+    decoded = base64.b64decode(note.content).decode('utf-8')
+    assert 'Hello world' in decoded
+    assert 'title: My Title' in decoded
+    assert 'date: ' in decoded
+    assert '2026-01-15' in decoded
+    assert 'author: alice' in decoded
+
+
+def test_add_note_metadata_defaults(runner, mock_api, mock_config, monkeypatch):
+    """No metadata flags preserves existing defaults (no frontmatter added)."""
+    mock_api.ingest.return_value = IngestResponse(status='success', note_id='test-uuid')
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['add', 'Hello world'], obj=mock_config)
+    assert result.exit_code == 0
+
+    note = mock_api.ingest.call_args[0][0]
+    assert note.name == 'Quick Note'
+    assert note.description == 'Added via CLI'
+    assert note.author is None
+    assert note.tags == ['cli', 'quick-note']
+    # No frontmatter when no metadata flags
+    assert note.content == b'SGVsbG8gd29ybGQ='
 
 
 # ---------------------------------------------------------------------------

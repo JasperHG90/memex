@@ -73,6 +73,38 @@ async def test_mcp_add_note_background_uuid_job_id(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_add_note_with_date(mock_api, mcp_client):
+    """Passing date includes it in the frontmatter content."""
+    doc_id = str(uuid4())
+    mock_api.ingest.return_value = IngestResponse(note_id=doc_id, status='success', unit_ids=[])
+
+    result = await mcp_client.call_tool(
+        'memex_add_note',
+        {
+            'title': 'Dated Note',
+            'markdown_content': '# Content',
+            'description': 'Short description',
+            'author': 'tester',
+            'tags': ['tag1'],
+            'vault_id': 'test-vault',
+            'date': '2026-01-15',
+        },
+    )
+
+    data = parse_tool_result(result)
+    assert data['status'] == 'success'
+
+    import base64
+
+    args, _ = mock_api.ingest.call_args
+    note = args[0]
+    decoded = base64.b64decode(note.content).decode('utf-8')
+    assert 'date:' in decoded
+    assert '2026-01-15' in decoded
+    assert note.author == 'tester'
+
+
+@pytest.mark.asyncio
 async def test_mcp_search_tool(mock_api, mcp_client):
     """Test the search tool via the MCP Client."""
     unit_id = uuid4()

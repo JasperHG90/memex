@@ -58,6 +58,7 @@ async def track_document(
             assets = first.payload['assets']
 
     publish_date = contents[0].event_date if contents else None
+    description = retain_params.get('note_description') if retain_params else None
 
     await storage.handle_document_tracking(
         session,
@@ -70,6 +71,7 @@ async def track_document(
         assets=assets,
         content_fingerprint=retain_params.get('content_fingerprint'),
         publish_date=publish_date,
+        description=description,
     )
 
 
