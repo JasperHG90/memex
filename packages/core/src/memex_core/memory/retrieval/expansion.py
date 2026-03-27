@@ -31,6 +31,7 @@ class QueryExpander:
                 lm=self.lm,
                 predictor=self.predictor,
                 input_kwargs={'query': query},
+                operation_name='retrieval.expansion',
             )
 
             # Ensure we have a list and it's not empty

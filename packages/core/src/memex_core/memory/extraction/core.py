@@ -115,6 +115,7 @@ async def extract_facts_from_frontmatter(
                 'event_date_ref': event_date.strftime('%A, %B %d, %Y'),
             },
             semaphore=semaphore,
+            operation_name='extraction.frontmatter',
         )
         return result.extracted_facts.extracted_facts
     except Exception as e:
@@ -161,6 +162,7 @@ async def _extract_facts_from_chunk(
                 'special_instructions': rules,
             },
             semaphore=semaphore,
+            operation_name='extraction.facts',
         )
 
         return result.extracted_facts.extracted_facts
@@ -1078,6 +1080,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                 lm=self.lm,
                 predictor=self.scanner,
                 input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
+                operation_name='extraction.header_scan',
             )
 
             for h in pred.detected_headers:
@@ -1164,6 +1167,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                 lm=self.lm,
                 predictor=self.architect,
                 input_kwargs={'flat_headers_json': str(minified_input)},
+                operation_name='extraction.header_architect',
             )
             max_id = len(flat_headers) - 1
             return filter_valid_nodes(pred.toc_tree, max_id)
@@ -1268,6 +1272,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                 lm=self.lm,
                 predictor=self.summarizer,
                 input_kwargs={'title': node.title, 'content': safe_content},
+                operation_name='extraction.summarize',
             )
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
@@ -1291,6 +1296,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     'content': safe_content,
                     'children_titles': children_titles,
                 },
+                operation_name='extraction.summarize_parent',
             )
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
@@ -1330,6 +1336,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                 lm=self.lm,
                 predictor=self.block_summarizer,
                 input_kwargs={'section_summaries': section_summaries_text},
+                operation_name='extraction.summarize_block',
             )
             summary = pred.block_summary
             summary.key_points = [kp.rstrip('.;:, ') for kp in summary.key_points]

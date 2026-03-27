@@ -163,6 +163,7 @@ async def extract_title_via_llm(
             lm=lm,
             predictor=predictor,
             input_kwargs={'content_summary': excerpt},
+            operation_name='processing.title',
         )
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         logger.warning('LLM title extraction failed: %s', e, exc_info=True)

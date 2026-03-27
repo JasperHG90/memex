@@ -403,6 +403,7 @@ class ReflectionEngine:
                 'observations': obs_context,
                 'memories': memory_context,
             },
+            operation_name='reflection.enrich',
         )
 
         if not result or not result.enrichments:
@@ -622,6 +623,7 @@ class ReflectionEngine:
             lm=self.lm,
             predictor=update_predictor,
             input_kwargs={'recent_memories': memory_context, 'existing_observations': obs_context},
+            operation_name='reflection.update',
         )
 
         if not result or not result.updates:
@@ -682,6 +684,7 @@ class ReflectionEngine:
                 'topic': topic,
                 'existing_observations': obs_context,
             },
+            operation_name='reflection.seed',
         )
 
         if result is None:
@@ -828,6 +831,7 @@ class ReflectionEngine:
             lm=self.lm,
             predictor=validate_predictor,
             input_kwargs={'candidates': candidate_observations},
+            operation_name='reflection.validate',
         )
 
         if result is None:
@@ -959,6 +963,7 @@ class ReflectionEngine:
                 'existing_context': existing_ctx,
                 'new_context': new_ctx,
             },
+            operation_name='reflection.compare',
         )
 
         if not result or not result.result or not result.result.observations:
