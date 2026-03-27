@@ -32,6 +32,7 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 | `default_active_vault` | string | `global` | Server default vault for writing new memories. Clients can override via `vault.active`. |
 | `default_reader_vault` | string | `""` | Server default vault for read-only search. Clients can override via `vault.search`. |
 | `default_model` | [ModelConfig](#modelconfig) | `gemini/gemini-3-flash-preview` | System-wide default LLM. Sub-configs with `model: null` inherit this value. |
+| `embedding_model` | [EmbeddingBackend](#embedding-backend-serverembedding_model) | `type: onnx` | Embedding model backend. Default: built-in ONNX model. Set `type: litellm` to use any litellm-supported provider. |
 | `allow_insecure` | bool | `false` | Allow binding to non-localhost addresses without authentication. When `false` (default), the server refuses to start on a non-localhost address unless auth is enabled. |
 | `cors` | object | — | CORS (Cross-Origin Resource Sharing) configuration. See [CORS](#cors-servercors). |
 
@@ -46,6 +47,71 @@ When the server starts, `default_model` is propagated to any sub-config whose `m
 - `server.document.model`
 
 Set a sub-config's `model` explicitly to override the default for that subsystem.
+
+---
+
+### Embedding Backend (`server.embedding_model`)
+
+Controls which embedding model is used for vector search, extraction, reflection, and KV operations. Default: built-in fine-tuned ONNX model (384-dim MiniLM-L12).
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `type` | string | `onnx` | Backend type: `onnx` (built-in) or `litellm` (any litellm-supported provider). |
+
+#### ONNX (default)
+
+```yaml
+server:
+  embedding_model:
+    type: onnx
+```
+
+No additional configuration needed. Uses the fine-tuned `JasperHG90/minilm-l12-v2-hindsight-embeddings` model.
+
+#### LiteLLM
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `type` | string | `litellm` | Must be `litellm`. |
+| `model` | string | **Required** | LiteLLM model string (e.g. `openai/text-embedding-3-small`, `gemini/gemini-embedding-001`, `ollama/nomic-embed-text`, `cohere/embed-english-v3.0`). |
+| `api_base` | string \| null | `null` | API base URL. Required for self-hosted providers (Ollama, TEI, vLLM). Omit for cloud providers. |
+| `api_key` | string \| null | `null` | API key. Can also be set via provider env vars (`OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.). |
+| `dimensions` | int \| null | `null` | Requested output dimensions (for Matryoshka / dimension-reduction models). Must match the DB vector column width (384) or a migration is required. |
+
+**Dimension validation:** When a litellm backend is configured, the server probes the embedding model at startup and fails fast if the output dimension does not match the database schema (`EMBEDDING_DIMENSION = 384`).
+
+**Examples:**
+
+```yaml
+# OpenAI
+server:
+  embedding_model:
+    type: litellm
+    model: openai/text-embedding-3-small
+    dimensions: 384  # Matryoshka: request 384-dim output
+
+# Google Gemini
+server:
+  embedding_model:
+    type: litellm
+    model: gemini/gemini-embedding-001
+
+# Self-hosted Ollama
+server:
+  embedding_model:
+    type: litellm
+    model: ollama/nomic-embed-text
+    api_base: http://localhost:11434
+```
+
+**Environment variables:**
+
+```bash
+export MEMEX_SERVER__EMBEDDING_MODEL__TYPE=litellm
+export MEMEX_SERVER__EMBEDDING_MODEL__MODEL=openai/text-embedding-3-small
+export MEMEX_SERVER__EMBEDDING_MODEL__API_KEY=sk-...
+export MEMEX_SERVER__EMBEDDING_MODEL__DIMENSIONS=384
+```
 
 ---
 
@@ -200,6 +266,56 @@ TEMPR multi-strategy search configuration.
 | `mmr_lambda` | float \| null | `0.9` | MMR (Maximal Marginal Relevance) diversity lambda for memory search. `1.0` = pure relevance, `0.0` = max diversity. `null` disables MMR. `0.9` is conservative — suppresses near-duplicates while preserving distinct results. |
 | `mmr_embedding_weight` | float | `0.6` | Weight of cosine similarity in the MMR hybrid similarity kernel. |
 | `mmr_entity_weight` | float | `0.4` | Weight of entity Jaccard similarity in the MMR hybrid similarity kernel. |
+| `reranker` | [RerankerBackend](#reranker-backend-servermemoryretrievalreranker) | `type: onnx` | Reranker model backend. Default: built-in ONNX cross-encoder. |
+
+##### Reranker Backend (`server.memory.retrieval.reranker`)
+
+Controls which cross-encoder reranking model is used to re-score retrieval candidates. Default: built-in fine-tuned ONNX model (MiniLM-L12 cross-encoder).
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `type` | string | `onnx` | Backend type: `onnx` (built-in), `litellm` (any litellm-supported reranking provider), or `disabled`. |
+
+**ONNX (default):** No additional configuration. Uses `JasperHG90/ms-marco-minilm-l12-hindsight-reranker`.
+
+**Disabled:** Set `type: disabled` to skip reranking entirely. Retrieval results will be ranked by RRF fusion only.
+
+**LiteLLM:**
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `type` | string | `litellm` | Must be `litellm`. |
+| `model` | string | **Required** | LiteLLM rerank model string (e.g. `cohere/rerank-v3.5`, `together_ai/Salesforce/Llama-Rank-V1`, `voyage/rerank-2`). |
+| `api_base` | string \| null | `null` | API base URL for self-hosted reranking servers. |
+| `api_key` | string \| null | `null` | API key for the reranker provider. |
+
+**Examples:**
+
+```yaml
+# Cohere reranker
+server:
+  memory:
+    retrieval:
+      reranker:
+        type: litellm
+        model: cohere/rerank-v3.5
+        api_key: ...
+
+# Disable reranking
+server:
+  memory:
+    retrieval:
+      reranker:
+        type: disabled
+```
+
+**Environment variables:**
+
+```bash
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__TYPE=litellm
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__MODEL=cohere/rerank-v3.5
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__API_KEY=...
+```
 
 ##### Retrieval Strategies (`server.memory.retrieval.retrieval_strategies`)
 
@@ -432,6 +548,17 @@ export MEMEX_SERVER__LOGGING__JSON_OUTPUT=true
 export MEMEX_SERVER__DEFAULT_MODEL__MODEL=openai/gpt-4o
 export MEMEX_SERVER__DEFAULT_MODEL__API_KEY=sk-...
 
+# Embedding model backend
+export MEMEX_SERVER__EMBEDDING_MODEL__TYPE=litellm
+export MEMEX_SERVER__EMBEDDING_MODEL__MODEL=openai/text-embedding-3-small
+export MEMEX_SERVER__EMBEDDING_MODEL__API_KEY=sk-...
+export MEMEX_SERVER__EMBEDDING_MODEL__DIMENSIONS=384
+
+# Reranker backend
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__TYPE=litellm
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__MODEL=cohere/rerank-v3.5
+export MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKER__API_KEY=...
+
 # Retrieval tuning
 export MEMEX_SERVER__MEMORY__RETRIEVAL__TOKEN_BUDGET=4000
 export MEMEX_SERVER__MEMORY__RETRIEVAL__RRF_K=80
@@ -604,6 +731,42 @@ server:
   default_model:
     model: ollama_chat/llama3
     base_url: http://localhost:11434
+
+  embedding_model:
+    type: litellm
+    model: ollama/nomic-embed-text
+    api_base: http://localhost:11434
+
+  memory:
+    retrieval:
+      reranker:
+        type: disabled  # Ollama does not support reranking
+
+  meta_store:
+    instance:
+      host: localhost
+      database: memex
+      user: postgres
+      password: postgres
+```
+
+### Cloud Providers (OpenAI + Cohere)
+
+```yaml
+server:
+  default_model:
+    model: openai/gpt-4o
+
+  embedding_model:
+    type: litellm
+    model: openai/text-embedding-3-small
+    dimensions: 384  # Match DB schema
+
+  memory:
+    retrieval:
+      reranker:
+        type: litellm
+        model: cohere/rerank-v3.5
 
   meta_store:
     instance:
