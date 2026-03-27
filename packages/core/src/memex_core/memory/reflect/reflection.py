@@ -44,7 +44,7 @@ from memex_core.memory.reflect.utils import (
     parse_timestamp,
 )
 from memex_core.memory.reflect.trends import compute_trend
-from memex_core.memory.models.embedding import FastEmbedder
+from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
@@ -53,7 +53,7 @@ logger = logging.getLogger('memex.core.memory.reflect.reflection')
 def get_reflection_engine(
     session: AsyncSession,
     config: MemexConfig,
-    embedder: FastEmbedder,
+    embedder: EmbeddingsModel,
 ) -> 'ReflectionEngine':
     """
     Factory method to create a ReflectionEngine with dependencies.
@@ -75,7 +75,7 @@ class ReflectionEngine:
         self,
         session: AsyncSession,
         config: MemexConfig,
-        embedder: FastEmbedder,
+        embedder: EmbeddingsModel,
     ):
         self.session = session
         self.config = config or MemexConfig()

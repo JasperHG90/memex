@@ -17,7 +17,7 @@ from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.models.embedding import FastEmbedder
+from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_common.config import RetrievalConfig
@@ -87,7 +87,7 @@ class NoteSearchEngine:
 
     def __init__(
         self,
-        embedder: FastEmbedder,
+        embedder: EmbeddingsModel,
         ner_model: FastNERModel | None = None,
         lm: dspy.LM | None = None,
         retrieval_config: RetrievalConfig | None = None,

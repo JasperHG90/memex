@@ -18,7 +18,7 @@ from memex_core.memory.reflect.models import (
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.memory.sql_models import Observation
-from memex_core.memory.models.embedding import FastEmbedder
+from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.reflection')
@@ -39,7 +39,7 @@ class ReflectionService:
         memory: MemoryEngine,
         extraction: ExtractionEngine,
         queue_service: ReflectionQueueService,
-        embedding_model: FastEmbedder,
+        embedding_model: EmbeddingsModel,
     ) -> None:
         self.metastore = metastore
         self.config = config

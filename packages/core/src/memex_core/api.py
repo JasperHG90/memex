@@ -42,8 +42,7 @@ from memex_core.memory.reflect.models import (
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.memory.sql_models import MemoryUnit
-from memex_core.memory.models.embedding import FastEmbedder
-from memex_core.memory.models.reranking import FastReranker
+from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.extraction.core import ExtractSemanticFacts
@@ -313,8 +312,8 @@ class MemexAPI:
 
     def __init__(
         self,
-        embedding_model: FastEmbedder,
-        reranking_model: FastReranker,
+        embedding_model: EmbeddingsModel,
+        reranking_model: RerankerModel | None,
         ner_model: FastNERModel,
         metastore: AsyncBaseMetaStoreEngine,
         filestore: BaseAsyncFileStore,
@@ -458,21 +457,21 @@ class MemexAPI:
         )
 
     @property
-    def embedder(self) -> FastEmbedder:
+    def embedder(self) -> EmbeddingsModel:
         """Alias for embedding_model for backward compatibility."""
         return self.embedding_model
 
     @embedder.setter
-    def embedder(self, value: FastEmbedder):
+    def embedder(self, value: EmbeddingsModel) -> None:
         self.embedding_model = value
 
     @property
-    def reranker(self) -> FastReranker:
+    def reranker(self) -> RerankerModel | None:
         """Alias for reranking_model for backward compatibility."""
         return self.reranking_model
 
     @reranker.setter
-    def reranker(self, value: FastReranker):
+    def reranker(self, value: RerankerModel | None) -> None:
         self.reranking_model = value
 
     async def initialize(self) -> None:

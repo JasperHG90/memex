@@ -6,6 +6,10 @@ from memex_core.memory.models.base import (
     configure_cache_dir,
     get_cache_dir,
 )
+from memex_core.memory.models.protocols import (
+    EmbeddingsModel,
+    RerankerModel,
+)
 from memex_core.memory.models.embedding import (
     FastEmbedder,
     get_embedding_model,
@@ -23,6 +27,8 @@ __all__ = [
     'MODEL_REGISTRY',
     'configure_cache_dir',
     'get_cache_dir',
+    'EmbeddingsModel',
+    'RerankerModel',
     'FastEmbedder',
     'get_embedding_model',
     'FastReranker',

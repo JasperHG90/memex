@@ -18,8 +18,9 @@ from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import RetrievalConfig, ReflectionConfig
-from memex_core.memory.models.embedding import FastEmbedder, get_embedding_model
-from memex_core.memory.models.reranking import FastReranker, get_reranking_model
+from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
+from memex_core.memory.models.embedding import get_embedding_model
+from memex_core.memory.models.reranking import get_reranking_model
 from memex_core.memory.models.ner import FastNERModel, get_ner_model
 from memex_core.memory.retrieval.strategies import (
     KeywordStrategy,
@@ -80,8 +81,8 @@ class DebugContext:
 
 
 async def get_retrieval_engine(
-    embedder: FastEmbedder | None = None,
-    reranker: FastReranker | None = None,
+    embedder: EmbeddingsModel | None = None,
+    reranker: RerankerModel | None = None,
     ner_model: FastNERModel | None = None,
     reflection_config: ReflectionConfig | None = None,
     retrieval_config: RetrievalConfig | None = None,
@@ -123,8 +124,8 @@ class RetrievalEngine:
 
     def __init__(
         self,
-        embedder: FastEmbedder,
-        reranker: FastReranker | None = None,
+        embedder: EmbeddingsModel,
+        reranker: RerankerModel | None = None,
         ner_model: FastNERModel | None = None,
         reflection_config: ReflectionConfig | None = None,
         retrieval_config: RetrievalConfig | None = None,
