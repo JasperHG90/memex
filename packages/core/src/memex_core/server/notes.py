@@ -53,6 +53,9 @@ async def list_notes(
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
     after: str | None = Query(None, description='Only notes on or after this date (ISO 8601).'),
     before: str | None = Query(None, description='Only notes on or before this date (ISO 8601).'),
+    template: str | None = Query(
+        None, description='Filter by template slug (e.g. "general_note").'
+    ),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -90,6 +93,7 @@ async def list_notes(
                 vault_ids=resolved,
                 after=parsed_after,
                 before=parsed_before,
+                template=template,
             )
         else:
             docs = await api.list_notes(
@@ -98,6 +102,7 @@ async def list_notes(
                 vault_ids=resolved,
                 after=parsed_after,
                 before=parsed_before,
+                template=template,
             )
         return ndjson_response([build_note_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

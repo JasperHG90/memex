@@ -435,6 +435,7 @@ class NoteService:
         vault_ids: list[UUID] | None = None,
         after: datetime | None = None,
         before: datetime | None = None,
+        template: str | None = None,
     ) -> list[Any]:
         """
         List ingested documents.
@@ -460,6 +461,8 @@ class NoteService:
             if before is not None:
                 date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
+            if template is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
 
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())
@@ -472,6 +475,7 @@ class NoteService:
         vault_ids: list[UUID] | None = None,
         after: datetime | None = None,
         before: datetime | None = None,
+        template: str | None = None,
     ) -> list[Any]:
         """Get the most recent notes."""
         from sqlalchemy import func
@@ -493,6 +497,8 @@ class NoteService:
             if before is not None:
                 date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
+            if template is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
             stmt = stmt.limit(limit)
             notes = list((await session.exec(stmt)).all())
             return await self._attach_vault_names(session, notes)

@@ -347,6 +347,7 @@ ingested_at: {now}
                     'source_uri': note.source_uri,
                     'content_fingerprint': note.content_fingerprint,
                     'tags': note._metadata.tags or [],
+                    'template': note.template,
                 },
                 vault_id=target_vault_id,
             )

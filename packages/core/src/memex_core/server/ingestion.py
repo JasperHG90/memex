@@ -138,6 +138,7 @@ async def ingest_note(
             note_key=request.note_key,
             user_notes=request.user_notes,
             author=request.author,
+            template=request.template,
         )
         result = await api.ingest(note, vault_id=request.vault_id)
         _schedule_contradiction(background_tasks, result)

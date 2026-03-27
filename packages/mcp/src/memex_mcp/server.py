@@ -796,6 +796,13 @@ async def memex_add_note(
             description='Note date in ISO 8601 format (e.g. 2026-03-27). Defaults to now.',
         ),
     ] = None,
+    template: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Template slug used to create this note (e.g. "general_note").',
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -852,6 +859,7 @@ async def memex_add_note(
             note_key=effective_note_key,
             user_notes=user_notes,
             author=author,
+            template=template,
         )
 
         result = await api.ingest(note, background=background)
@@ -1540,6 +1548,10 @@ async def memex_list_notes(
     limit: Annotated[
         int, BeforeValidator(_coerce_int), Field(description='Max notes to return.')
     ] = 50,
+    template: Annotated[
+        str | None,
+        Field(default=None, description='Filter by template slug (e.g. "general_note").'),
+    ] = None,
 ) -> list[McpNote]:
     """List notes with optional date filters."""
     from datetime import datetime as _dt
@@ -1568,6 +1580,7 @@ async def memex_list_notes(
             vault_id=resolved_vault_id,
             after=parsed_after,
             before=parsed_before,
+            template=template,
         )
 
         return [
@@ -1577,6 +1590,7 @@ async def memex_list_notes(
                 created_at=n.created_at,
                 publish_date=n.publish_date,
                 vault_id=n.vault_id,
+                template=(n.doc_metadata or {}).get('template'),
             )
             for n in notes
         ]
@@ -1621,6 +1635,10 @@ async def memex_recent_notes(
             description='Only notes on/before this date (ISO 8601).',
         ),
     ] = None,
+    template: Annotated[
+        str | None,
+        Field(default=None, description='Filter by template slug (e.g. "general_note").'),
+    ] = None,
 ) -> list[McpNote]:
     """List recent notes."""
     from datetime import datetime as _dt
@@ -1650,6 +1668,7 @@ async def memex_recent_notes(
             vault_ids=resolved_vids,
             after=parsed_after,
             before=parsed_before,
+            template=template,
         )
 
         return [
@@ -1659,6 +1678,7 @@ async def memex_recent_notes(
                 created_at=n.created_at,
                 publish_date=n.publish_date,
                 vault_id=n.vault_id,
+                template=(n.doc_metadata or {}).get('template'),
             )
             for n in notes
         ]

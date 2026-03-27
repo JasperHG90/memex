@@ -91,6 +91,10 @@ async def add_note(
         str | None,
         typer.Option('--date', '-d', help='Note date in ISO 8601 format (e.g. 2026-03-15).'),
     ] = None,
+    template: Annotated[
+        str | None,
+        typer.Option('--template', help='Template slug used to create this note.'),
+    ] = None,
 ):
     """
     Add a new note to Memex.
@@ -257,6 +261,7 @@ async def add_note(
                     vault_id=config.write_vault,
                     user_notes=user_notes,
                     author=author,
+                    template=template,
                 )
 
                 result = await api.ingest(note, background=background)
@@ -300,6 +305,10 @@ async def list_notes(
     compact: Annotated[
         bool, typer.Option('--compact', help='One line per note: title, date, description.')
     ] = False,
+    template: Annotated[
+        str | None,
+        typer.Option('--template', help='Filter by template slug (e.g. "general_note").'),
+    ] = None,
 ):
     """
     List all notes.
@@ -333,6 +342,7 @@ async def list_notes(
                 vault_ids=vault_ids,
                 after=parsed_after,
                 before=parsed_before,
+                template=template,
             )
         except Exception as e:
             handle_api_error(e)
