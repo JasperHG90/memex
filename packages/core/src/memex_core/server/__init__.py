@@ -17,6 +17,12 @@ from memex_common.config import (
     MemexConfig,
 )
 from memex_core.context import set_session_id
+
+# Optional: bridge session IDs to OpenTelemetry spans (for Arize Phoenix sessions)
+try:
+    from openinference.instrumentation import using_session as _oi_using_session
+except ImportError:
+    _oi_using_session = None
 from memex_core.logging_config import configure_logging
 from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import auth_middleware, setup_auth
@@ -179,12 +185,18 @@ async def set_request_session_id(request: Request, call_next):
     If 'X-Session-ID' header is present, uses it.
     Otherwise, generates a new one.
     Binds session_id to structlog contextvars for automatic inclusion in log entries.
+    When openinference is installed, also sets the session on OpenTelemetry spans
+    so that Arize Phoenix (and other OTLP backends) can group traces by session.
     """
     session_id = request.headers.get('X-Session-ID')
     sid = set_session_id(session_id)
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(session_id=sid)
-    response = await call_next(request)
+    if _oi_using_session:
+        with _oi_using_session(sid):
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
     response.headers['X-Session-ID'] = sid
     return response
 

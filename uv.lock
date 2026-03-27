@@ -3049,6 +3049,7 @@ s3 = [
     { name = "s3fs" },
 ]
 tracing = [
+    { name = "openinference-instrumentation" },
     { name = "openinference-instrumentation-litellm" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -3082,6 +3083,7 @@ requires-dist = [
     { name = "metaphone", specifier = ">=0.6" },
     { name = "onnxruntime", specifier = ">=1.23.2" },
     { name = "onnxruntime-gpu", marker = "extra == 'gpu'", specifier = "==1.23.0" },
+    { name = "openinference-instrumentation", marker = "extra == 'tracing'", specifier = ">=0.1.12" },
     { name = "openinference-instrumentation-litellm", marker = "extra == 'tracing'", specifier = ">=0.1.0" },
     { name = "opentelemetry-api", marker = "extra == 'tracing'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'tracing'", specifier = ">=1.20.0" },
