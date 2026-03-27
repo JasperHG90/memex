@@ -99,6 +99,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
             description=_resolve_description(doc),
             assets=doc.get('assets', []),
             doc_metadata=metadata,
+            template=metadata.get('template'),
         )
 
     metadata = doc.doc_metadata or {}
@@ -115,6 +116,7 @@ def build_note_dto(doc: Any) -> NoteDTO:
         description=_resolve_description(doc),
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
+        template=metadata.get('template'),
     )
 
 

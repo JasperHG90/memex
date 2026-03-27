@@ -245,6 +245,7 @@ class McpNote(BaseModel):
     created_at: datetime
     publish_date: datetime | None = None
     vault_id: UUID | None = None
+    template: str | None = None
 
 
 class McpNoteContent(BaseModel):

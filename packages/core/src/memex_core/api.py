@@ -79,7 +79,9 @@ class NoteInput:
         note_key: str | None = None,
         user_notes: str | None = None,
         author: str | None = None,
+        template: str | None = None,
     ):
+        self.template = template
         self._metadata = NoteMetadata(name=name, description=description)
         if author:
             self._metadata.update('author', author)
@@ -677,6 +679,7 @@ class MemexAPI:
         vault_ids: list[UUID] | None = None,
         after: datetime | None = None,
         before: datetime | None = None,
+        template: str | None = None,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
@@ -686,6 +689,7 @@ class MemexAPI:
             vault_ids=vault_ids,
             after=after,
             before=before,
+            template=template,
         )
 
     async def get_stats_counts(
@@ -703,6 +707,7 @@ class MemexAPI:
         vault_ids: list[UUID] | None = None,
         after: datetime | None = None,
         before: datetime | None = None,
+        template: str | None = None,
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
@@ -711,6 +716,7 @@ class MemexAPI:
             vault_ids=vault_ids,
             after=after,
             before=before,
+            template=template,
         )
 
     async def list_entities_ranked(

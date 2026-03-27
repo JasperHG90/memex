@@ -22,6 +22,7 @@ def test_note_list(runner, mock_api, mock_config, monkeypatch):
         vault_ids=mock_config.read_vaults,
         after=None,
         before=None,
+        template=None,
     )
 
 
@@ -39,6 +40,7 @@ def test_note_list_with_vault(runner, mock_api, mock_config, monkeypatch):
         vault_ids=[vault_id],
         after=None,
         before=None,
+        template=None,
     )
 
 

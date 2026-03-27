@@ -144,6 +144,9 @@ async def handle_document_tracking(
     if retain_params and retain_params.get('author'):
         doc_metadata['author'] = retain_params['author']
 
+    if retain_params and retain_params.get('template'):
+        doc_metadata['template'] = retain_params['template']
+
     # 2. Upsert Document
     # We define the base insert statement first using the underlying __table__
     # to avoid SQLModel's 'metadata' attribute shadowing.

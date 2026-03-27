@@ -563,6 +563,11 @@ class NoteCreateDTO(BaseModel):
         description='Author of the note.',
         examples=['alice'],
     )
+    template: str | None = Field(
+        default=None,
+        description='Template slug used to create this note (e.g. "general_note").',
+        examples=['general_note', 'technical_brief'],
+    )
 
     @property
     def content_decoded(self) -> bytes:
@@ -787,6 +792,7 @@ class NoteDTO(BaseModel):
     description: str | None = None
     assets: list[str] = Field(default_factory=list)
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
+    template: str | None = None
 
 
 class BlockSummaryDTO(BaseModel):
