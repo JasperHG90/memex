@@ -1,18 +1,25 @@
 <p align="center">
-  <img src="assets/logo.jpg" width="160" alt="Memex obsidian sync Logo" />
+  <img src="assets/logo.jpg" width="160" alt="Memex Folder Sync" />
 </p>
 
 <h1 align="center">Memex Folder Sync</h1>
-<h3 align="center">Sync folders of markdown files to Memex</h3>
 
 <p align="center">
-  Sync local markdown files to Memex.<br/>
+  Sync local Markdown notes and their assets to Memex.<br/>
+  Works with Obsidian vaults, plain directories, or any folder of <code>.md</code> files.<br/>
   <strong>Ingest anything. Remember everything. Retrieve what matters.</strong>
 </p>
 
-Sync Markdown notes (with referenced assets) from any folder to Memex. Works with Obsidian vaults and plain Markdown directories.
+<p align="center">
+  <a href="#usage">Usage</a> &middot;
+  <a href="#configuration">Configuration</a> &middot;
+  <a href="#handling-deleted-files">Deletes</a> &middot;
+  <a href="#running-watch-mode-as-a-background-service">Watch Mode</a>
+</p>
 
-Supports both Obsidian-style wiki-link embeds (`![[image.png]]`) and standard Markdown images (`![alt](image.png)`).
+---
+
+Scans a folder for Markdown files, detects changes since the last sync, resolves referenced assets (images, PDFs), and ingests everything into Memex via the REST API. Supports both Obsidian-style wiki-link embeds (`![[image.png]]`) and standard Markdown images (`![alt](image.png)`).
 
 ## Usage
 

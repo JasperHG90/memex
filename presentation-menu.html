@@ -602,6 +602,30 @@
         </div>
         <div class="feature-card-desc">One-click save of articles, PDFs &amp; web pages. Readability extraction, Markdown conversion, inline image capture. AES-GCM encrypted API key storage.</div>
       </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1f4c2;</div>
+          <div class="feature-card-title">Folder Sync</div>
+        </div>
+        <div class="feature-card-desc">Sync Obsidian vaults or any Markdown folder to Memex. Asset upload, frontmatter skip markers, SQLite state tracking, watchdog/polling watch modes, archive-on-delete with stale cascading.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1F426;&#x200D;&#x1F525;</div>
+          <div class="feature-card-title">Pluggable Inference Backends</div>
+        </div>
+        <div class="feature-card-desc">Swap built-in ONNX embedding &amp; reranking models for any LiteLLM provider &mdash; OpenAI, Gemini, Cohere, Ollama. Inverse-sigmoid logit transform preserves retrieval scoring.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-card-header">
+          <div class="feature-card-emoji">&#x1F52D;</div>
+          <div class="feature-card-title">OpenTelemetry Observability</div>
+        </div>
+        <div class="feature-card-desc">Distributed tracing with Arize Phoenix &mdash; session IDs on spans, operation names on DSPy LLM calls, background reflection jobs tracked across tracing sessions.</div>
+      </div>
     </div>
 
     <div class="nav-row">
@@ -748,6 +772,22 @@
       <div class="content">
         <div class="label">Pluggable Note Templates</div>
         <div class="desc">Three-layer discovery (builtin &rarr; global &rarr; local) — TOML-based templates with override semantics and frontmatter scaffolding</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="litellm">
+      <div class="emoji">&#x1F426;&#x200D;&#x1F525;</div>
+      <div class="content">
+        <div class="label">Pluggable Inference Backends</div>
+        <div class="desc">Swap ONNX for any LiteLLM provider &mdash; OpenAI, Gemini, Cohere, Ollama. Inverse-sigmoid logit transform keeps retrieval scoring intact</div>
+      </div>
+    </div>
+
+    <div class="item" data-topic="observability">
+      <div class="emoji">&#x1F52D;</div>
+      <div class="content">
+        <div class="label">OpenTelemetry Observability</div>
+        <div class="desc">Distributed tracing with Arize Phoenix &mdash; session propagation, DSPy operation names, background job tracking</div>
       </div>
     </div>
   </div>
@@ -944,6 +984,30 @@ const speakerNotes = {
       'Uses <strong>MD5 hashing</strong> for idempotency (re-ingesting identical content is a no-op) and <strong>SHA-256</strong> for block-level content hashing used in incremental diffing.',
       'Two-phase commit for filesystem: files staged with a <code>.stage</code> suffix, DB commits, then files renamed to final paths.',
       'Zero partial state: you never end up with facts in the DB pointing to a note that doesn\u2019t exist on disk, or vice versa.'
+    ]
+  },
+  litellm: {
+    emoji: '\u{1F426}\u200D\u{1F525}',
+    title: 'Pluggable Inference Backends',
+    notes: [
+      'Embedding and reranking models are no longer hardcoded to built-in ONNX \u2014 both are now <strong>configurable via factory functions</strong> that dispatch on config type.',
+      '<strong>Two backend types</strong>: <code>type: onnx</code> (default \u2014 FastEmbed/FastReranker, runs locally) and <code>type: litellm</code> (proxies to any LiteLLM-supported provider: OpenAI, Gemini, Cohere, Ollama, etc.).',
+      '<strong>Protocol-based design</strong>: <code>EmbeddingsModel</code> and <code>RerankerModel</code> protocols in <code>memex_core.memory.models.protocols</code> \u2014 any backend just needs to implement <code>embed()</code> or <code>rerank()</code>.',
+      '<strong>Logit transform for rerankers</strong>: LiteLLM providers return [0,1] relevance scores. The adapter applies <strong>inverse sigmoid</strong> so the retrieval engine\u2019s existing sigmoid normalization recovers the original scores \u2014 no changes needed downstream.',
+      '<strong>Batched ONNX inference</strong>: the built-in ONNX reranker now batches query\u2013document pairs to control memory usage, configurable via <code>reranker_batch_size</code>.',
+      'Use case: run embeddings locally with ONNX for privacy, but use a cloud reranker for better quality \u2014 or go fully local with Ollama for air-gapped deployments.'
+    ]
+  },
+  observability: {
+    emoji: '\u{1F52D}',
+    title: 'OpenTelemetry Observability',
+    notes: [
+      '<strong>Full distributed tracing</strong> via OpenTelemetry, integrated with <strong>Arize Phoenix</strong> for visualization and debugging.',
+      '<strong>Session ID propagation</strong>: API-level session IDs are propagated as span attributes, so you can filter all traces from a single user session in Phoenix.',
+      '<strong>DSPy LLM call tracing</strong>: every <code>dspy.Predict</code> call gets an <code>operation_name</code> attribute \u2014 see exactly which extraction, reflection, or contradiction step generated each LLM call.',
+      '<strong>Explicit span kinds</strong>: all internal spans use <code>SpanKind.INTERNAL</code> to avoid confusing the trace visualizer with phantom server/client relationships.',
+      '<strong>Background job tracking</strong>: reflection jobs running in the background are associated with the tracing session that triggered them \u2014 no more orphaned spans.',
+      'Practical benefit: when retrieval returns unexpected results, trace the full pipeline \u2014 which strategies fired, what the reranker scored, which LLM calls were made \u2014 all in one Phoenix dashboard.'
     ]
   },
   templates: {
