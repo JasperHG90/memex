@@ -7,6 +7,7 @@ from aioclock.triggers import Every
 from sqlalchemy.engine.url import make_url
 
 from memex_core.config import MemexConfig
+from memex_core.context import background_session
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
@@ -21,30 +22,31 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
     """
     The actual business logic to run periodically.
     """
-    logger.info('Scheduler: Running periodic reflection check...')
-    try:
-        # 1. Claim items
-        queue_items = await api.claim_reflection_queue_batch(limit=batch_size)
-        if not queue_items:
-            return
+    async with background_session('bg-sched-reflect'):
+        logger.info('Scheduler: Running periodic reflection check...')
+        try:
+            # 1. Claim items
+            queue_items = await api.claim_reflection_queue_batch(limit=batch_size)
+            if not queue_items:
+                return
 
-        # 2. Trigger batch reflection
-        from memex_core.memory.reflect.models import ReflectionRequest
+            # 2. Trigger batch reflection
+            from memex_core.memory.reflect.models import ReflectionRequest
 
-        requests = [
-            ReflectionRequest(
-                entity_id=item.entity_id,
-                vault_id=item.vault_id,
-                limit_recent_memories=20,
-            )
-            for item in queue_items
-        ]
+            requests = [
+                ReflectionRequest(
+                    entity_id=item.entity_id,
+                    vault_id=item.vault_id,
+                    limit_recent_memories=20,
+                )
+                for item in queue_items
+            ]
 
-        logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
-        await api.reflect_batch(requests)
+            logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
+            await api.reflect_batch(requests)
 
-    except (OSError, RuntimeError, ValueError) as e:
-        logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
 
 
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
