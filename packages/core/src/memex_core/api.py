@@ -61,6 +61,29 @@ from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 logger = logging.getLogger('memex.core.api')
 
 
+def inject_user_notes(content: str, user_notes: str | None) -> str:
+    """Inject user notes as a ``## User Notes`` markdown section into note content.
+
+    When *content* contains YAML frontmatter (``---`` delimiters), the section
+    is inserted immediately after the closing delimiter.  Otherwise it is
+    prepended to the content.
+
+    Returns *content* unchanged when *user_notes* is ``None`` or whitespace-only.
+    """
+    if not user_notes or not user_notes.strip():
+        return content
+    notes_block = f'## User Notes\n\n{user_notes.strip()}\n\n'
+    try:
+        closing = content.index('---', 3)
+    except ValueError:
+        closing = -1
+    if content.startswith('---') and closing != -1:
+        end = closing + 3
+        return content[:end] + '\n\n' + notes_block + content[end:]
+    else:
+        return notes_block + content
+
+
 class NoteInput:
     """
     Represents a Note artifact (markdown content + assets).
@@ -85,20 +108,8 @@ class NoteInput:
         self._metadata = NoteMetadata(name=name, description=description)
         if author:
             self._metadata.update('author', author)
-        self._content = content
-
-        if user_notes and user_notes.strip():
-            notes_block = f'## User Notes\n\n{user_notes.strip()}\n\n'
-            text = self._content.decode('utf-8')
-            try:
-                closing = text.index('---', 3)
-            except ValueError:
-                closing = -1
-            if text.startswith('---') and closing != -1:
-                end = closing + 3
-                self._content = (text[:end] + '\n\n' + notes_block + text[end:]).encode('utf-8')
-            else:
-                self._content = (notes_block + text).encode('utf-8')
+        text = content.decode('utf-8')
+        self._content = inject_user_notes(text, user_notes).encode('utf-8')
         self._files = files or {}
         self.source_uri = source_uri
         self.original_content_hash = original_content_hash

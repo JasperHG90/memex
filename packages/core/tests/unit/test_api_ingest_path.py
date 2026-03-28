@@ -1,7 +1,9 @@
+import base64
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from memex_core.api import NoteInput
+from memex_core.api import NoteInput, inject_user_notes
 from memex_core.services.ingestion import IngestionService
 from memex_core.processing.titles import _is_meaningful_name
 
@@ -261,3 +263,223 @@ def test_user_notes_with_broken_frontmatter():
     assert text.startswith('## User Notes')
     assert 'My note.' in text
     assert '--- this is not real frontmatter' in text
+
+
+# ---------------------------------------------------------------------------
+# inject_user_notes standalone helper tests
+# ---------------------------------------------------------------------------
+
+
+def test_inject_user_notes_after_frontmatter():
+    """Standalone helper injects after closing --- delimiter."""
+    content = '---\ntitle: Test\n---\nBody text here.'
+    result = inject_user_notes(content, 'Important context.')
+    assert '## User Notes' in result
+    assert 'Important context.' in result
+    fm_end = result.index('---', 3) + 3
+    notes_pos = result.index('## User Notes')
+    body_pos = result.index('Body text here.')
+    assert fm_end < notes_pos < body_pos
+
+
+def test_inject_user_notes_without_frontmatter():
+    """Standalone helper prepends when no frontmatter present."""
+    content = 'Just some plain text.'
+    result = inject_user_notes(content, 'My commentary.')
+    assert result.startswith('## User Notes')
+    assert 'My commentary.' in result
+    assert 'Just some plain text.' in result
+
+
+def test_inject_user_notes_none_returns_unchanged():
+    """None user_notes returns content unchanged."""
+    content = '---\ntitle: Test\n---\nBody.'
+    assert inject_user_notes(content, None) == content
+
+
+def test_inject_user_notes_empty_returns_unchanged():
+    """Empty/whitespace user_notes returns content unchanged."""
+    content = '---\ntitle: Test\n---\nBody.'
+    assert inject_user_notes(content, '') == content
+    assert inject_user_notes(content, '   ') == content
+
+
+def test_noteinput_uses_inject_helper():
+    """NoteInput produces same result as calling inject_user_notes directly."""
+    raw = '---\ntitle: Test\n---\nBody text.'
+    user_notes = 'My commentary on this article.'
+    expected = inject_user_notes(raw, user_notes)
+    note = NoteInput(
+        name='Test',
+        description='desc',
+        content=raw.encode('utf-8'),
+        user_notes=user_notes,
+    )
+    assert note._content.decode('utf-8') == expected
+
+
+# ---------------------------------------------------------------------------
+# Batch ingestion user_notes regression test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_batch_internal_preserves_user_notes(api):
+    """user_notes from NoteCreateDTO must appear in content passed to memory.retain().
+
+    This is the critical regression test: the background ingestion path
+    (ingest_batch_internal) previously bypassed NoteInput and silently dropped
+    user_notes.
+    """
+    from memex_common.schemas import NoteCreateDTO
+
+    note_content = '---\nsource_url: https://example.com\n---\nArticle body.'
+    user_notes_text = 'This is my personal commentary on the article.'
+
+    dto = NoteCreateDTO(
+        name='Test Note',
+        description='Test description',
+        content=base64.b64encode(note_content.encode('utf-8')),
+        tags=['test'],
+        user_notes=user_notes_text,
+    )
+
+    # Track what content is passed to memory.retain()
+    captured_contents = []
+
+    async def capturing_retain(session, contents, note_id, reflect_after=True, agent_name=None):
+        captured_contents.extend(contents)
+        return {'status': 'success'}
+
+    api._ingestion.memory.retain = AsyncMock(side_effect=capturing_retain)
+
+    # Mock vault resolution
+    vault_id = uuid4()
+    with patch.object(
+        api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
+    ) as mock_resolve:
+        mock_resolve.return_value = vault_id
+
+        # Mock session for vault lookup and idempotency check
+        mock_vault = MagicMock()
+        mock_vault.name = 'test-vault'
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_vault)
+        mock_exec_result = MagicMock()
+        mock_exec_result.all.return_value = []  # No existing docs
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        api._ingestion.metastore.session.return_value = ctx
+
+        # Mock AsyncTransaction
+        mock_txn = AsyncMock()
+        mock_txn.db_session = mock_session
+        mock_txn.save_file = AsyncMock()
+
+        with (
+            patch(
+                'memex_core.services.ingestion.AsyncTransaction',
+            ) as mock_txn_cls,
+            patch(
+                'memex_core.services.ingestion.resolve_document_title',
+                new_callable=AsyncMock,
+                return_value='Test Note',
+            ),
+        ):
+            mock_txn_cls.return_value.__aenter__ = AsyncMock(return_value=mock_txn)
+            mock_txn_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            # Consume the async generator
+            async for _result in api._ingestion.ingest_batch_internal(
+                notes=[dto], vault_id=vault_id
+            ):
+                pass
+
+    # Verify user_notes was injected into the content passed to retain()
+    assert len(captured_contents) == 1, 'Expected exactly one RetainContent'
+    retained_content = captured_contents[0].content
+    assert '## User Notes' in retained_content, (
+        'user_notes section missing from batch-ingested content'
+    )
+    assert user_notes_text in retained_content, (
+        'user_notes text missing from batch-ingested content'
+    )
+    # Verify it's positioned correctly (after frontmatter)
+    fm_end = retained_content.index('---', 3) + 3
+    notes_pos = retained_content.index('## User Notes')
+    assert fm_end < notes_pos
+
+
+@pytest.mark.asyncio
+async def test_ingest_batch_internal_no_user_notes_unchanged(api):
+    """When user_notes is None, batch ingestion should not inject anything."""
+    from memex_common.schemas import NoteCreateDTO
+
+    note_content = '---\nsource_url: https://example.com\n---\nArticle body.'
+
+    dto = NoteCreateDTO(
+        name='Test Note',
+        description='Test description',
+        content=base64.b64encode(note_content.encode('utf-8')),
+        tags=['test'],
+        # user_notes deliberately omitted (defaults to None)
+    )
+
+    captured_contents = []
+
+    async def capturing_retain(session, contents, note_id, reflect_after=True, agent_name=None):
+        captured_contents.extend(contents)
+        return {'status': 'success'}
+
+    api._ingestion.memory.retain = AsyncMock(side_effect=capturing_retain)
+
+    vault_id = uuid4()
+    with patch.object(
+        api._vaults, 'resolve_vault_identifier', new_callable=AsyncMock
+    ) as mock_resolve:
+        mock_resolve.return_value = vault_id
+
+        mock_vault = MagicMock()
+        mock_vault.name = 'test-vault'
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_vault)
+        mock_exec_result = MagicMock()
+        mock_exec_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        api._ingestion.metastore.session.return_value = ctx
+
+        mock_txn = AsyncMock()
+        mock_txn.db_session = mock_session
+        mock_txn.save_file = AsyncMock()
+
+        with (
+            patch(
+                'memex_core.services.ingestion.AsyncTransaction',
+            ) as mock_txn_cls,
+            patch(
+                'memex_core.services.ingestion.resolve_document_title',
+                new_callable=AsyncMock,
+                return_value='Test Note',
+            ),
+        ):
+            mock_txn_cls.return_value.__aenter__ = AsyncMock(return_value=mock_txn)
+            mock_txn_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            async for _result in api._ingestion.ingest_batch_internal(
+                notes=[dto], vault_id=vault_id
+            ):
+                pass
+
+    assert len(captured_contents) == 1
+    retained_content = captured_contents[0].content
+    assert '## User Notes' not in retained_content
+    assert retained_content == note_content

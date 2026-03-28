@@ -386,7 +386,7 @@ ingested_at: {now}
         Orchestrates idempotency checks, asset staging, and batched memory retention.
         Yields progress updates.
         """
-        from memex_core.api import NoteInput
+        from memex_core.api import NoteInput, inject_user_notes
         from memex_core.memory.sql_models import Vault, Note
         from sqlmodel import select
 
@@ -445,6 +445,9 @@ ingested_at: {now}
                         asset_files_list = []
 
                         decoded_content = note_dto.content_decoded.decode('utf-8')
+                        decoded_content = inject_user_notes(
+                            decoded_content, getattr(note_dto, 'user_notes', None)
+                        )
 
                         for filename, content in note_dto.files.items():
                             try:
