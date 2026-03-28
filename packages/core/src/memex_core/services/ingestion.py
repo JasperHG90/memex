@@ -504,15 +504,16 @@ ingested_at: {now}
                             await contradiction_task
                         chunk_doc_ids.append(note_uuid)
 
-                    results['processed_count'] += len(chunk)
-                    results['note_ids'].extend([str(uid) for uid in chunk_doc_ids])
+                        # Yield per note for granular progress tracking
+                        results['processed_count'] += 1
+                        results['note_ids'].append(str(note_uuid))
+                        yield results
 
             except Exception as e:
                 logger.error(f'Failed to process ingestion chunk: {e}', exc_info=True)
                 results['failed_count'] += len(chunk)
                 results['errors'].append({'chunk_start': i, 'error': str(e)})
-
-            yield results
+                yield results
 
     async def _detect_overlapping_notes(
         self,

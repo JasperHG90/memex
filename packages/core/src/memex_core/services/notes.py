@@ -58,11 +58,11 @@ class NoteService:
     ) -> dict[str, Any]:
         """Set a note's lifecycle status and optionally link to another note.
 
-        When status is 'superseded', marks all memory units as stale.
+        When status is 'superseded' or 'archived', marks all memory units as stale.
         """
         from memex_core.memory.sql_models import MemoryUnit, Note
 
-        valid_statuses = ('active', 'superseded', 'appended')
+        valid_statuses = ('active', 'superseded', 'appended', 'archived')
         if status not in valid_statuses:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
@@ -75,6 +75,15 @@ class NoteService:
             if status == 'superseded':
                 doc.superseded_by = linked_note_id
                 # Cascade: mark all memory units as stale
+                from sqlmodel import select
+
+                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+                units = (await session.exec(units_stmt)).all()
+                for unit in units:
+                    unit.status = 'stale'
+                    session.add(unit)
+            elif status == 'archived':
+                # Cascade: mark all memory units as stale (same as superseded)
                 from sqlmodel import select
 
                 units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)

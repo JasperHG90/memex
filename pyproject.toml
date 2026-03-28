@@ -21,6 +21,7 @@ memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
 memex_eval = { workspace = true }
+memex_obsidian_sync = { workspace = true }
 
 [tool.uv.workspace]
 members = [
@@ -29,6 +30,7 @@ members = [
     "packages/core",
     "packages/eval",
     "packages/mcp",
+    "packages/obsidian-sync",
 ]
 
 [tool.uv]
