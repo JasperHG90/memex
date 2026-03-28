@@ -78,6 +78,86 @@ async function extractArticle(): Promise<void> {
       return;
     }
 
+    // Resolve blob: image URLs in-page and extract their data separately.
+    // Blob URLs are ephemeral and page-scoped — they can't be fetched from the
+    // background script.  We also can't embed data: URLs in the DOM because
+    // Readability strips them.  Instead we return the image data as a side-channel
+    // keyed by alt text, and merge them after Readability runs.
+    let blobImages: Record<string, string> = {};
+    try {
+      const blobResults = await browser.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          const imgs = document.querySelectorAll<HTMLImageElement>('img[src^="blob:"]');
+          const TIMEOUT = 10_000;
+          const resolved: Record<string, string> = {};
+          // Track keys to disambiguate duplicate alt texts
+          const altCounts: Record<string, number> = {};
+          await Promise.all(
+            Array.from(imgs).map(async (img) => {
+              try {
+                // Wait for the image to finish loading if it hasn't yet
+                if (!img.complete) {
+                  await Promise.race([
+                    new Promise<void>((resolve) => {
+                      img.addEventListener('load', () => resolve(), { once: true });
+                      img.addEventListener('error', () => resolve(), { once: true });
+                    }),
+                    new Promise<void>((resolve) => setTimeout(resolve, TIMEOUT)),
+                  ]);
+                }
+
+                // Try fetch+FileReader first (preserves original bytes).
+                // Fall back to canvas if the blob has been revoked.
+                let dataUrl: string | null = null;
+                try {
+                  const resp = await fetch(img.src);
+                  const blob = await resp.blob();
+                  dataUrl = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.onerror = () => reject(reader.error);
+                    reader.readAsDataURL(blob);
+                  });
+                } catch {
+                  // Blob may have been revoked — fall back to canvas
+                  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                      ctx.drawImage(img, 0, 0);
+                      try {
+                        dataUrl = canvas.toDataURL('image/png');
+                      } catch {
+                        // Canvas tainted by CORS — give up on this image
+                      }
+                    }
+                  }
+                }
+
+                if (!dataUrl) return;
+
+                // Build a unique key: prefer alt text, deduplicate with suffix
+                const baseKey = img.alt || img.dataset.fileid || 'blob-image';
+                const count = altCounts[baseKey] ?? 0;
+                altCounts[baseKey] = count + 1;
+                const key = count === 0 ? baseKey : `${baseKey}__${count}`;
+                resolved[key] = dataUrl;
+              } catch {
+                // Failed to convert — skip this image
+              }
+            }),
+          );
+          return resolved;
+        },
+      });
+      blobImages = (blobResults?.[0]?.result as Record<string, string>) ?? {};
+    } catch {
+      // Non-fatal — blob images will just be missing
+    }
+
     // Grab page HTML via executeScript
     const results = await browser.scripting.executeScript({
       target: { tabId: tab.id },
@@ -133,7 +213,9 @@ async function extractArticle(): Promise<void> {
         const resp = await browser.runtime.sendMessage({ action: 'downloadImage', url });
         return resp as { ok: boolean; base64?: string; contentType?: string };
       };
-      const result = await extractArticleImages(article.content, tab.url ?? '', downloader);
+      const result = await extractArticleImages(
+        article.content, tab.url ?? '', downloader, 30_000, blobImages,
+      );
       images = result.images;
       articleMarkdown = result.markdown;
     } catch {

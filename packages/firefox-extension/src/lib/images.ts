@@ -6,6 +6,13 @@
 
 import TurndownService from 'turndown';
 
+/** Extract MIME type and base64 payload from a data: URL. Returns null if not a valid base64 data URI. */
+export function parseDataUrl(url: string): { mimeType: string; base64: string } | null {
+  const match = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], base64: match[2] };
+}
+
 /**
  * URL patterns that indicate non-content images.
  * Uses path-segment anchors to avoid false positives like "/article-icons-of-design/hero.jpg".
@@ -88,30 +95,65 @@ export interface DownloadResult {
 export type ImageDownloader = (url: string) => Promise<DownloadResult>;
 
 /**
+ * Find the matching key in blobImagesByAlt for a given alt text.
+ * Handles deduplication suffixes (e.g. "diagram.png__1") added by the popup.
+ */
+function findBlobKey(
+  alt: string,
+  blobImagesByAlt: Record<string, string>,
+  alreadyMatched: Set<string>,
+): string | null {
+  // Exact match (most common case)
+  if (alt in blobImagesByAlt && !alreadyMatched.has(alt)) return alt;
+  // Find first unmatched key that starts with the alt (handles __N suffixes)
+  for (const key of Object.keys(blobImagesByAlt)) {
+    if (alreadyMatched.has(key)) continue;
+    if (key === alt || key.startsWith(alt + '__')) return key;
+  }
+  return null;
+}
+
+/**
  * Given Readability's article HTML and the page URL, find all content images,
  * download them via the provided downloader, rewrite URLs to local filenames,
  * and return the final markdown + images map.
+ *
+ * @param blobImagesByAlt - Pre-resolved blob images keyed by alt text.  Readability
+ *   strips data: URIs from src attributes, so blob images that were converted to
+ *   data: URLs in the page context must be passed separately and matched by alt.
  */
 export async function extractArticleImages(
   articleHtml: string,
   pageUrl: string,
   downloadImage: ImageDownloader,
   timeoutMs: number = 30_000,
+  blobImagesByAlt: Record<string, string> = {},
 ): Promise<{ markdown: string; images: Record<string, string> }> {
   const articleDoc = new DOMParser().parseFromString(articleHtml, 'text/html');
 
   const urlToFilename = new Map<string, string>();
+  const dataUrlImages = new Map<string, { base64: string; filename: string }>();
   const seenUrls = new Set<string>();
   let imgIndex = 0;
 
   function registerImage(rawUrl: string): string | null {
+    // Handle data: URLs (e.g. converted from blob: URLs by the in-page resolver)
+    const dataUrl = parseDataUrl(rawUrl.trim());
+    if (dataUrl) {
+      if (seenUrls.has(rawUrl)) return dataUrlImages.get(rawUrl)?.filename ?? null;
+      seenUrls.add(rawUrl);
+      const ext = contentTypeToExtension(dataUrl.mimeType) ?? '.png';
+      const filename = `image-${imgIndex++}${ext}`;
+      dataUrlImages.set(rawUrl, { base64: dataUrl.base64, filename });
+      return filename;
+    }
+
     let absoluteUrl: string;
     try {
       absoluteUrl = new URL(rawUrl.trim(), pageUrl).href;
     } catch {
       return null;
     }
-    if (absoluteUrl.startsWith('data:')) return null;
     if (seenUrls.has(absoluteUrl)) return urlToFilename.get(absoluteUrl) ?? null;
     if (isNonContentImage(absoluteUrl)) return null;
     seenUrls.add(absoluteUrl);
@@ -120,6 +162,10 @@ export async function extractArticleImages(
     urlToFilename.set(absoluteUrl, filename);
     return filename;
   }
+
+  // Track blob images matched by alt text (for src-less imgs left by Readability)
+  const altToFilename = new Map<string, string>();
+  const matchedBlobKeys = new Set<string>();
 
   // Process <img> elements
   const imgEls = articleDoc.querySelectorAll('img');
@@ -134,7 +180,25 @@ export async function extractArticleImages(
     const srcsetUrl = srcset ? bestSrcsetUrl(srcset) : null;
 
     const primaryUrl = srcsetUrl ?? src;
-    if (primaryUrl) registerImage(primaryUrl);
+    if (primaryUrl) {
+      registerImage(primaryUrl);
+    } else {
+      // No src — Readability may have stripped a data: URI.  Try matching
+      // against pre-resolved blob images by alt text (with dedup suffix support).
+      const alt = img.getAttribute('alt') ?? '';
+      const blobKey = findBlobKey(alt, blobImagesByAlt, matchedBlobKeys);
+      if (blobKey) {
+        const dataUrl = blobImagesByAlt[blobKey];
+        const parsed = parseDataUrl(dataUrl);
+        if (parsed) {
+          const ext = contentTypeToExtension(parsed.mimeType) ?? '.png';
+          const filename = `image-${imgIndex++}${ext}`;
+          altToFilename.set(alt, filename);
+          dataUrlImages.set(dataUrl, { base64: parsed.base64, filename });
+          matchedBlobKeys.add(blobKey);
+        }
+      }
+    }
   }
 
   // Process <picture><source> elements
@@ -148,8 +212,13 @@ export async function extractArticleImages(
     if (url) registerImage(url);
   }
 
-  // Download all images in parallel with a global timeout
+  // Add data: URL images directly (no download needed)
   const images: Record<string, string> = {};
+  for (const [, { base64, filename }] of dataUrlImages) {
+    images[filename] = base64;
+  }
+
+  // Download all remote images in parallel with a global timeout
   const downloadPromises = Array.from(urlToFilename.entries()).map(async ([url, filename]) => {
     try {
       const resp = await downloadImage(url);
@@ -185,7 +254,28 @@ export async function extractArticleImages(
     const srcsetUrl = srcset ? bestSrcsetUrl(srcset) : null;
     const primaryUrl = srcsetUrl ?? src;
 
-    if (!primaryUrl) continue;
+    if (!primaryUrl) {
+      // No src — check if this is a blob image matched by alt text
+      const alt = img.getAttribute('alt') ?? '';
+      const blobFilename = altToFilename.get(alt);
+      if (blobFilename && images[blobFilename]) {
+        img.setAttribute('src', blobFilename);
+      }
+      continue;
+    }
+
+    // Check data URL images first (from resolved blob: URLs)
+    const dataEntry = dataUrlImages.get(primaryUrl.trim());
+    if (dataEntry && images[dataEntry.filename]) {
+      img.setAttribute('src', dataEntry.filename);
+      img.removeAttribute('srcset');
+      img.removeAttribute('data-srcset');
+      img.removeAttribute('data-src');
+      img.removeAttribute('data-lazy-src');
+      img.removeAttribute('data-original');
+      continue;
+    }
+
     let absoluteUrl: string;
     try {
       absoluteUrl = new URL(primaryUrl.trim(), pageUrl).href;
@@ -211,6 +301,20 @@ export async function extractArticleImages(
   }
 
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-  const markdown = turndown.turndown(articleDoc.body.innerHTML);
+  let markdown = turndown.turndown(articleDoc.body.innerHTML);
+
+  // Append any blob images that Readability dropped entirely (no <img> tag survived).
+  for (const [key, dataUrl] of Object.entries(blobImagesByAlt)) {
+    if (matchedBlobKeys.has(key)) continue;
+    const parsed = parseDataUrl(dataUrl);
+    if (!parsed) continue;
+    const ext = contentTypeToExtension(parsed.mimeType) ?? '.png';
+    const filename = `image-${imgIndex++}${ext}`;
+    images[filename] = parsed.base64;
+    // Strip the dedup suffix for the alt text
+    const alt = key.replace(/__\d+$/, '');
+    markdown += `\n\n![${alt}](${filename})`;
+  }
+
   return { markdown, images };
 }

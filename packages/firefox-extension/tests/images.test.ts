@@ -5,6 +5,7 @@ import {
   guessImageExtension,
   contentTypeToExtension,
   bestSrcsetUrl,
+  parseDataUrl,
   extractArticleImages,
   type ImageDownloader,
 } from '../src/lib/images';
@@ -117,6 +118,36 @@ describe('bestSrcsetUrl', () => {
 
   it('returns null for empty string', () => {
     expect(bestSrcsetUrl('')).toBeNull();
+  });
+});
+
+// --- parseDataUrl ---
+
+describe('parseDataUrl', () => {
+  it('parses a valid base64 data URI', () => {
+    const result = parseDataUrl('data:image/png;base64,iVBORw0KGgo');
+    expect(result).toEqual({ mimeType: 'image/png', base64: 'iVBORw0KGgo' });
+  });
+
+  it('parses jpeg data URI', () => {
+    const result = parseDataUrl('data:image/jpeg;base64,/9j/4AAQ');
+    expect(result).toEqual({ mimeType: 'image/jpeg', base64: '/9j/4AAQ' });
+  });
+
+  it('returns null for non-base64 data URIs', () => {
+    expect(parseDataUrl('data:image/svg+xml,%3Csvg%3E')).toBeNull();
+  });
+
+  it('returns null for non-image data URIs', () => {
+    expect(parseDataUrl('data:text/plain;base64,SGVsbG8')).toBeNull();
+  });
+
+  it('returns null for regular URLs', () => {
+    expect(parseDataUrl('https://example.com/image.png')).toBeNull();
+  });
+
+  it('returns null for blob URLs', () => {
+    expect(parseDataUrl('blob:https://example.com/abc-123')).toBeNull();
   });
 });
 
@@ -265,20 +296,60 @@ describe('extractArticleImages', () => {
     expect(result.images['image-0.jpg']).toBe('FALL');
   });
 
-  it('skips data: URIs', async () => {
+  it('extracts data: URI images directly without downloading', async () => {
     const html = `
       <div>
-        <img src="data:image/png;base64,iVBORw..." alt="Inline">
+        <img src="data:image/png;base64,iVBORw0KGgo" alt="Inline">
         <img src="https://example.com/real.jpg" alt="Real">
       </div>
     `;
-    const dl = mockDownloader({
-      'https://example.com/real.jpg': { base64: 'REAL', contentType: 'image/jpeg' },
-    });
+    const calls: string[] = [];
+    const dl: ImageDownloader = async (url) => {
+      calls.push(url);
+      if (url.includes('real.jpg')) return { ok: true, base64: 'REAL', contentType: 'image/jpeg' };
+      return { ok: false };
+    };
+
+    const result = await extractArticleImages(html, pageUrl, dl);
+    expect(Object.keys(result.images)).toHaveLength(2);
+    expect(result.images['image-0.png']).toBe('iVBORw0KGgo');
+    expect(result.images['image-1.jpg']).toBe('REAL');
+    // Data URL should NOT be passed to the downloader
+    expect(calls).toEqual(['https://example.com/real.jpg']);
+    expect(result.markdown).toContain('image-0.png');
+    expect(result.markdown).toContain('image-1.jpg');
+  });
+
+  it('handles data: URI with jpeg MIME type', async () => {
+    const html = '<div><img src="data:image/jpeg;base64,/9j/4AAQ" alt="JPEG"></div>';
+    const dl: ImageDownloader = async () => ({ ok: false });
 
     const result = await extractArticleImages(html, pageUrl, dl);
     expect(Object.keys(result.images)).toHaveLength(1);
-    expect(result.images['image-0.jpg']).toBe('REAL');
+    expect(result.images['image-0.jpg']).toBe('/9j/4AAQ');
+  });
+
+  it('skips non-base64 data: URIs', async () => {
+    const html = '<div><img src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" alt="SVG"></div>';
+    const dl: ImageDownloader = async () => ({ ok: false });
+
+    const result = await extractArticleImages(html, pageUrl, dl);
+    expect(Object.keys(result.images)).toHaveLength(0);
+  });
+
+  it('deduplicates identical data: URIs', async () => {
+    const dataUri = 'data:image/png;base64,AAAA';
+    const html = `
+      <div>
+        <img src="${dataUri}" alt="First">
+        <img src="${dataUri}" alt="Second">
+      </div>
+    `;
+    const dl: ImageDownloader = async () => ({ ok: false });
+
+    const result = await extractArticleImages(html, pageUrl, dl);
+    expect(Object.keys(result.images)).toHaveLength(1);
+    expect(result.images['image-0.png']).toBe('AAAA');
   });
 
   it('deduplicates identical image URLs', async () => {
@@ -379,6 +450,103 @@ describe('extractArticleImages', () => {
     const result = await extractArticleImages(html, pageUrl, dl);
     expect(Object.keys(result.images)).toHaveLength(0);
     expect(result.markdown).toContain('Text only article');
+  });
+
+  it('handles Confluence-style blob images via blobImagesByAlt after Readability strips src', async () => {
+    // Confluence renders images via blob: URLs. The popup resolves these in-page
+    // and passes them as blobImagesByAlt. Readability strips data: src attributes
+    // but preserves alt, so we match by alt text.
+    const { Readability } = await import('@mozilla/readability');
+    const confluenceHtml = `<!DOCTYPE html><html><head><title>Design Guidelines</title></head><body>
+      <div class="ak-renderer-wrapper">
+        <div class="ak-renderer-document">
+          <p>These guidelines describe the standard workflow for design reviews across all teams.</p>
+          <p>Please follow the steps below when submitting a new design for review.</p>
+          <h2>Workflow overview:</h2>
+          <div data-node-type="mediaSingle">
+            <div><div>
+              <img src="data:image/png;base64,iVBORw0FAKE" alt="workflow-diagram.png" style="width:100%">
+            </div></div>
+          </div>
+          <p>After the review is complete, update the status in Jira accordingly.</p>
+        </div>
+      </div>
+    </body></html>`;
+
+    const doc = new DOMParser().parseFromString(confluenceHtml, 'text/html');
+    const reader = new Readability(doc);
+    const article = reader.parse();
+    expect(article).not.toBeNull();
+
+    // Readability strips the data: src — verify this is true
+    expect(article!.content).not.toContain('iVBORw0FAKE');
+    // But the alt text survives
+    expect(article!.content).toContain('workflow-diagram.png');
+
+    const dl: ImageDownloader = async () => ({ ok: false });
+    const blobImagesByAlt = {
+      'workflow-diagram.png': 'data:image/png;base64,iVBORw0FAKE',
+    };
+    const result = await extractArticleImages(article!.content, pageUrl, dl, 30_000, blobImagesByAlt);
+
+    expect(Object.keys(result.images)).toHaveLength(1);
+    expect(result.images['image-0.png']).toBe('iVBORw0FAKE');
+    expect(result.markdown).toContain('image-0.png');
+  });
+
+  it('appends blob images that Readability dropped entirely', async () => {
+    // Readability sometimes removes the <img> tag completely (not just the src).
+    // Unmatched blobImagesByAlt entries should be appended to the markdown.
+    const html = '<div><p>Article text only, image was stripped entirely.</p></div>';
+    const dl: ImageDownloader = async () => ({ ok: false });
+    const blobImagesByAlt = {
+      'important-chart.png': 'data:image/jpeg;base64,CHARTDATA',
+    };
+
+    const result = await extractArticleImages(html, pageUrl, dl, 30_000, blobImagesByAlt);
+    expect(Object.keys(result.images)).toHaveLength(1);
+    expect(result.images['image-0.jpg']).toBe('CHARTDATA');
+    expect(result.markdown).toContain('![important-chart.png](image-0.jpg)');
+  });
+
+  it('handles duplicate alt texts with dedup suffixes', async () => {
+    // Two images with same alt text produce keys "photo.png" and "photo.png__1"
+    const html = `<div>
+      <p>Some article text.</p>
+      <img alt="photo.png">
+      <img alt="photo.png">
+    </div>`;
+    const dl: ImageDownloader = async () => ({ ok: false });
+    const blobImagesByAlt = {
+      'photo.png': 'data:image/png;base64,FIRST',
+      'photo.png__1': 'data:image/png;base64,SECOND',
+    };
+
+    const result = await extractArticleImages(html, pageUrl, dl, 30_000, blobImagesByAlt);
+    expect(Object.keys(result.images)).toHaveLength(2);
+    expect(result.images['image-0.png']).toBe('FIRST');
+    expect(result.images['image-1.png']).toBe('SECOND');
+  });
+
+  it('mixes blob images with regular downloaded images', async () => {
+    const html = `<div>
+      <p>Article with mixed image sources.</p>
+      <img src="https://example.com/normal.jpg" alt="Normal">
+      <img alt="blob-converted.png">
+    </div>`;
+    const dl = mockDownloader({
+      'https://example.com/normal.jpg': { base64: 'NORMAL', contentType: 'image/jpeg' },
+    });
+    const blobImagesByAlt = {
+      'blob-converted.png': 'data:image/png;base64,BLOBDATA',
+    };
+
+    const result = await extractArticleImages(html, pageUrl, dl, 30_000, blobImagesByAlt);
+    expect(Object.keys(result.images)).toHaveLength(2);
+    expect(result.images['image-0.jpg']).toBe('NORMAL');
+    expect(result.images['image-1.png']).toBe('BLOBDATA');
+    expect(result.markdown).toContain('image-0.jpg');
+    expect(result.markdown).toContain('image-1.png');
   });
 
   it('respects global timeout', async () => {
