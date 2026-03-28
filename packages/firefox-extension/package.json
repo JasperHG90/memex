@@ -1,6 +1,6 @@
 {
   "name": "save-to-memex",
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.0-alpha.13",
   "description": "Firefox extension to save articles to Memex",
   "license": "Apache-2.0",
   "private": true,
