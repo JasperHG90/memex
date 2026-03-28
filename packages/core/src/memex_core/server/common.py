@@ -16,7 +16,13 @@ from memex_common.exceptions import (
     ResourceNotFoundError,
     VaultNotFoundError,
 )
-from memex_common.schemas import MemoryUnitDTO, NoteDTO, EntityDTO, StrategyDebugInfo
+from memex_common.schemas import (
+    MemoryUnitDTO,
+    NoteDTO,
+    NoteListItemDTO,
+    EntityDTO,
+    StrategyDebugInfo,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
@@ -117,6 +123,26 @@ def build_note_dto(doc: Any) -> NoteDTO:
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
         template=metadata.get('template'),
+    )
+
+
+def build_note_list_item_dto(doc: Any) -> NoteListItemDTO:
+    """Build a NoteListItemDTO from an ORM object — summaries instead of full text."""
+    metadata = getattr(doc, 'doc_metadata', None) or {}
+    doc_title = getattr(doc, 'title', None)
+    return NoteListItemDTO(
+        id=doc.id,
+        title=doc_title,
+        name=doc_title or _resolve_doc_name(metadata),
+        created_at=doc.created_at,
+        publish_date=getattr(doc, 'publish_date', None),
+        vault_id=doc.vault_id,
+        vault_name=getattr(doc, 'vault_name', None),
+        description=_resolve_description(doc),
+        assets=getattr(doc, 'assets', []) or [],
+        doc_metadata=metadata,
+        template=metadata.get('template'),
+        summaries=getattr(doc, 'summaries', []),
     )
 
 

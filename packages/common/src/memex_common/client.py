@@ -37,6 +37,7 @@ from memex_common.schemas import (
     LineageDirection,
     SystemStatsCountsDTO,
     NoteDTO,
+    NoteListItemDTO,
     NoteSearchResult,
     NoteSearchRequest,
     NodeDTO,
@@ -278,7 +279,7 @@ class RemoteMemexAPI:
         vault_ids: list[str | UUID] | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
-    ) -> list[NoteDTO]:
+    ) -> list[NoteListItemDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
         resolved = resolve_vault_list(vault_id, vault_ids)
@@ -289,7 +290,7 @@ class RemoteMemexAPI:
         if before is not None:
             params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
-        return [NoteDTO(**d) for d in result]
+        return [NoteListItemDTO(**d) for d in result]
 
     async def search_notes(
         self,
@@ -426,7 +427,7 @@ class RemoteMemexAPI:
         vault_ids: list[str | UUID] | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
-    ) -> list[NoteDTO]:
+    ) -> list[NoteListItemDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
         resolved = resolve_vault_list(vault_id, vault_ids)
@@ -437,7 +438,7 @@ class RemoteMemexAPI:
         if before is not None:
             params['before'] = before.isoformat()
         result = await self._get('notes', params=params)
-        return [NoteDTO(**d) for d in result]
+        return [NoteListItemDTO(**d) for d in result]
 
     async def search_entities(
         self,
