@@ -59,6 +59,7 @@ class NoteService:
         """Set a note's lifecycle status and optionally link to another note.
 
         When status is 'superseded' or 'archived', marks all memory units as stale.
+        When status is 'active', reactivates all memory units (sets them back to active).
         """
         from memex_core.memory.sql_models import MemoryUnit, Note
 
@@ -96,6 +97,14 @@ class NoteService:
             elif status == 'active':
                 doc.superseded_by = None
                 doc.appended_to = None
+                # Cascade: reactivate all memory units
+                from sqlmodel import select
+
+                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+                units = (await session.exec(units_stmt)).all()
+                for unit in units:
+                    unit.status = 'active'
+                    session.add(unit)
 
             session.add(doc)
             await session.commit()
