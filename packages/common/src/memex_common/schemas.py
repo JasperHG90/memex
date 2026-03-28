@@ -802,6 +802,25 @@ class BlockSummaryDTO(BaseModel):
     key_points: list[str] = Field(default_factory=list)
 
 
+class NoteListItemDTO(BaseModel):
+    """Lightweight DTO for note listing — summaries instead of full text."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str | None = None
+    name: str | None = None
+    created_at: dt.datetime
+    publish_date: dt.datetime | None = None
+    vault_id: UUID
+    vault_name: str | None = None
+    description: str | None = None
+    assets: list[str] = Field(default_factory=list)
+    doc_metadata: dict[str, Any] = Field(default_factory=dict)
+    template: str | None = None
+    summaries: list[BlockSummaryDTO] = Field(default_factory=list)
+
+
 class NoteSearchResult(BaseModel):
     """Result of a note search."""
 

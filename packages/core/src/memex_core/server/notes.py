@@ -11,6 +11,7 @@ from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     FindNoteResult,
     NoteDTO,
+    NoteListItemDTO,
     NoteSearchRequest,
     NoteSearchResult,
     NodeDTO,
@@ -28,6 +29,7 @@ from memex_core.server.auth import (
 from memex_core.server.common import (
     _handle_error,
     build_note_dto,
+    build_note_list_item_dto,
     get_api,
     ndjson_openapi,
     ndjson_response,
@@ -40,7 +42,7 @@ router = APIRouter(prefix='/api/v1')
 @router.get(
     '/notes',
     response_class=StreamingResponse,
-    responses=ndjson_openapi(NoteDTO, 'Stream of notes.'),
+    responses=ndjson_openapi(NoteListItemDTO, 'Stream of notes with summaries.'),
     dependencies=[Depends(require_read)],
 )
 async def list_notes(
@@ -104,7 +106,7 @@ async def list_notes(
                 before=parsed_before,
                 template=template,
             )
-        return ndjson_response([build_note_dto(d) for d in docs])
+        return ndjson_response([build_note_list_item_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list notes')
 

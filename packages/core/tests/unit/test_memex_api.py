@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -92,13 +93,19 @@ async def test_list_documents(api, mock_session):
     # list_notes delegates to NoteService which runs a single session.exec
     mock_note1 = MagicMock()
     mock_note1.vault_id = None
+    mock_note1.id = uuid4()
     mock_note2 = MagicMock()
     mock_note2.vault_id = None
+    mock_note2.id = uuid4()
 
     mock_docs_res = MagicMock()
     mock_docs_res.all.return_value = [mock_note1, mock_note2]
 
-    mock_session.exec.side_effect = [mock_docs_res]
+    # Second result is for _attach_summaries chunk query
+    mock_summaries_res = MagicMock()
+    mock_summaries_res.all.return_value = []
+
+    mock_session.exec.side_effect = [mock_docs_res, mock_summaries_res]
 
     result = await api.list_notes()
 

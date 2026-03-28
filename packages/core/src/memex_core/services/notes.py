@@ -12,7 +12,7 @@ from sqlmodel import col
 from sqlalchemy import text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
-from memex_common.schemas import NodeDTO, filter_toc
+from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 
 from memex_core.config import MemexConfig
 from memex_core.services.vaults import VaultService
@@ -466,7 +466,8 @@ class NoteService:
 
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())
-            return await self._attach_vault_names(session, notes)
+            notes = await self._attach_vault_names(session, notes)
+            return await self._attach_summaries(session, notes)
 
     async def get_recent_notes(
         self,
@@ -501,7 +502,8 @@ class NoteService:
                 stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
             stmt = stmt.limit(limit)
             notes = list((await session.exec(stmt)).all())
-            return await self._attach_vault_names(session, notes)
+            notes = await self._attach_vault_names(session, notes)
+            return await self._attach_summaries(session, notes)
 
     @staticmethod
     async def _attach_vault_names(session: Any, notes: list[Any]) -> list[Any]:
@@ -518,6 +520,31 @@ class NoteService:
             vault_map = {v.id: v.name for v in vaults}
         for note in notes:
             object.__setattr__(note, 'vault_name', vault_map.get(note.vault_id))
+        return notes
+
+    @staticmethod
+    async def _attach_summaries(session: Any, notes: list[Any]) -> list[Any]:
+        """Batch-fetch block summaries from chunks and attach them to Note objects."""
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Chunk
+
+        note_ids = [n.id for n in notes]
+        if not note_ids:
+            return notes
+
+        stmt = (
+            select(Chunk.note_id, Chunk.summary, Chunk.chunk_index)
+            .where(col(Chunk.note_id).in_(note_ids), col(Chunk.status) == 'active')
+            .order_by(col(Chunk.note_id), col(Chunk.chunk_index))
+        )
+        result = await session.exec(stmt)
+        summaries_map: dict[UUID, list[BlockSummaryDTO]] = {}
+        for note_id, summary_blob, _idx in result.all():
+            if summary_blob and isinstance(summary_blob, dict):
+                summaries_map.setdefault(note_id, []).append(BlockSummaryDTO(**summary_blob))
+        for note in notes:
+            object.__setattr__(note, 'summaries', summaries_map.get(note.id, []))
         return notes
 
     async def find_notes_by_title(

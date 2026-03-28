@@ -39,6 +39,7 @@ from memex_mcp.models import (
     McpNode,
     McpNote,
     McpNoteContent,
+    McpNoteSummary,
     McpNoteMetadata,
     McpNoteSearchResult,
     McpObservation,
@@ -1591,6 +1592,10 @@ async def memex_list_notes(
                 publish_date=n.publish_date,
                 vault_id=n.vault_id,
                 template=(n.doc_metadata or {}).get('template'),
+                summaries=[
+                    McpNoteSummary(topic=s.topic, key_points=s.key_points)
+                    for s in (getattr(n, 'summaries', None) or [])
+                ],
             )
             for n in notes
         ]
@@ -1679,6 +1684,10 @@ async def memex_recent_notes(
                 publish_date=n.publish_date,
                 vault_id=n.vault_id,
                 template=(n.doc_metadata or {}).get('template'),
+                summaries=[
+                    McpNoteSummary(topic=s.topic, key_points=s.key_points)
+                    for s in (getattr(n, 'summaries', None) or [])
+                ],
             )
             for n in notes
         ]
@@ -1686,8 +1695,8 @@ async def memex_recent_notes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'List notes failed: {e}', exc_info=True)
-        raise ToolError(f'List notes failed: {e}')
+        logging.error(f'Recent notes failed: {e}', exc_info=True)
+        raise ToolError(f'Recent notes failed: {e}')
 
 
 @mcp.tool(

@@ -239,6 +239,13 @@ class McpNode(BaseModel):
 # ── Note listing ──
 
 
+class McpNoteSummary(BaseModel):
+    """Block-level summary for note listings."""
+
+    topic: str
+    key_points: list[str] = Field(default_factory=list)
+
+
 class McpNote(BaseModel):
     id: UUID
     title: str
@@ -246,6 +253,7 @@ class McpNote(BaseModel):
     publish_date: datetime | None = None
     vault_id: UUID | None = None
     template: str | None = None
+    summaries: list[McpNoteSummary] = Field(default_factory=list)
 
 
 class McpNoteContent(BaseModel):
