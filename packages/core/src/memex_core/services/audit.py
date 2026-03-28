@@ -94,5 +94,5 @@ class AuditService:
         stmt = stmt.order_by(desc(AuditLog.timestamp)).limit(limit).offset(offset)
 
         async with self._metastore.session() as session:
-            result = await session.execute(stmt)
-            return list(result.scalars().all())
+            result = await session.exec(stmt)  # type: ignore[call-overload]
+            return list(result.all())

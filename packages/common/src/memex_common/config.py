@@ -605,6 +605,11 @@ class RetrievalConfig(BaseModel):
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',
     )
+    reranker_batch_size: int = Field(
+        default=0,
+        description='Max documents per ONNX reranker inference call. '
+        '0 = all at once (no batching). Lower values reduce peak GPU memory.',
+    )
     causal_weight_threshold: float = Field(
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',

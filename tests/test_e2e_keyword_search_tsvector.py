@@ -64,7 +64,7 @@ async def _insert(session: AsyncSession, *units: MemoryUnit) -> None:
 @pytest.mark.asyncio
 async def test_search_tsvector_column_exists(db_session: AsyncSession) -> None:
     """The memory_units table has a search_tsvector column of type tsvector."""
-    result = await db_session.execute(
+    result = await (await db_session.connection()).execute(
         text(
             'SELECT data_type FROM information_schema.columns '
             "WHERE table_name = 'memory_units' AND column_name = 'search_tsvector'"
@@ -78,7 +78,7 @@ async def test_search_tsvector_column_exists(db_session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_search_tsvector_is_generated(db_session: AsyncSession) -> None:
     """search_tsvector is a GENERATED ALWAYS (stored) column."""
-    result = await db_session.execute(
+    result = await (await db_session.connection()).execute(
         text(
             'SELECT is_generated FROM information_schema.columns '
             "WHERE table_name = 'memory_units' AND column_name = 'search_tsvector'"
@@ -92,7 +92,7 @@ async def test_search_tsvector_is_generated(db_session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_gin_index_exists(db_session: AsyncSession) -> None:
     """A GIN index on search_tsvector exists."""
-    result = await db_session.execute(
+    result = await (await db_session.connection()).execute(
         text(
             'SELECT indexname, indexdef FROM pg_indexes '
             "WHERE tablename = 'memory_units' AND indexname = 'idx_memory_units_search_tsvector'"
@@ -114,7 +114,7 @@ async def test_tsvector_populated_on_insert(db_session: AsyncSession) -> None:
     unit = _make_unit(f'The quick brown fox jumps over the lazy dog {uuid4()}')
     await _insert(db_session, unit)
 
-    row = await db_session.execute(
+    row = await (await db_session.connection()).execute(
         text(
             'SELECT search_tsvector IS NOT NULL, search_tsvector::text '
             'FROM memory_units WHERE id = :id'
@@ -136,7 +136,7 @@ async def test_tsvector_includes_tags(db_session: AsyncSession) -> None:
     )
     await _insert(db_session, unit)
 
-    row = await db_session.execute(
+    row = await (await db_session.connection()).execute(
         text('SELECT search_tsvector::text FROM memory_units WHERE id = :id'),
         {'id': str(unit.id)},
     )
@@ -154,7 +154,7 @@ async def test_tsvector_includes_enriched_tags(db_session: AsyncSession) -> None
     )
     await _insert(db_session, unit)
 
-    row = await db_session.execute(
+    row = await (await db_session.connection()).execute(
         text('SELECT search_tsvector::text FROM memory_units WHERE id = :id'),
         {'id': str(unit.id)},
     )
@@ -173,7 +173,7 @@ async def test_tsvector_includes_enriched_keywords(db_session: AsyncSession) -> 
     )
     await _insert(db_session, unit)
 
-    row = await db_session.execute(
+    row = await (await db_session.connection()).execute(
         text('SELECT search_tsvector::text FROM memory_units WHERE id = :id'),
         {'id': str(unit.id)},
     )
@@ -203,7 +203,7 @@ async def test_keyword_search_matches_text(db_session: AsyncSession) -> None:
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('kubernetes orchestration', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     found_ids = [r[0] for r in rows]
@@ -225,7 +225,7 @@ async def test_keyword_search_matches_tags(db_session: AsyncSession) -> None:
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('photosynthesis', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     found_ids = [r[0] for r in rows]
@@ -245,7 +245,7 @@ async def test_keyword_search_matches_enriched_tags(db_session: AsyncSession) ->
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('mitochondria', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     found_ids = [r[0] for r in rows]
@@ -265,7 +265,7 @@ async def test_keyword_search_matches_enriched_keywords(db_session: AsyncSession
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('thermodynamics', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     found_ids = [r[0] for r in rows]
@@ -289,19 +289,19 @@ async def test_keyword_search_combined_metadata(db_session: AsyncSession) -> Non
 
     # Search for a term only in enriched_keywords
     stmt = strategy.get_statement('catalysis', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
     assert unit.id in [r[0] for r in rows], 'Should match enriched_keywords in combined tsvector'
 
     # Search for a term only in enriched_tags
     stmt = strategy.get_statement('biochemistry', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
     assert unit.id in [r[0] for r in rows], 'Should match enriched_tags in combined tsvector'
 
     # Search for a term only in tags
     stmt = strategy.get_statement('biology', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
     assert unit.id in [r[0] for r in rows], 'Should match tags in combined tsvector'
 
@@ -316,7 +316,7 @@ async def test_keyword_search_no_match_returns_empty(db_session: AsyncSession) -
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('xylophone', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     assert len(rows) == 0
@@ -340,10 +340,10 @@ async def test_keyword_query_uses_gin_index(db_session: AsyncSession) -> None:
     await _insert(db_session, *units)
 
     # Force the planner to use the index by disabling seq scan
-    await db_session.execute(text('SET enable_seqscan = off'))
+    await (await db_session.connection()).execute(text('SET enable_seqscan = off'))
 
     # Use raw SQL equivalent of what KeywordStrategy generates
-    explain_result = await db_session.execute(
+    explain_result = await (await db_session.connection()).execute(
         text(
             'EXPLAIN SELECT id FROM memory_units '
             "WHERE search_tsvector @@ to_tsquery('english', 'astrophysics') "
@@ -355,7 +355,7 @@ async def test_keyword_query_uses_gin_index(db_session: AsyncSession) -> None:
     plan_text = '\n'.join(plan_lines)
 
     # Re-enable seq scan for other tests
-    await db_session.execute(text('SET enable_seqscan = on'))
+    await (await db_session.connection()).execute(text('SET enable_seqscan = on'))
 
     assert 'idx_memory_units_search_tsvector' in plan_text or 'Bitmap Index Scan' in plan_text, (
         f'Expected GIN index usage in query plan, got:\n{plan_text}'

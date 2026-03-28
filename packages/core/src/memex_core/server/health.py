@@ -30,7 +30,8 @@ async def ready(request: Request) -> JSONResponse:
 
     try:
         async with api.metastore.session() as session:
-            await session.execute(text('SELECT 1'))
+            conn = await session.connection()
+            await conn.execute(text('SELECT 1'))
         checks['database'] = 'ok'
     except Exception as e:
         logger.warning('Readiness: database unreachable: %s', e, exc_info=True)

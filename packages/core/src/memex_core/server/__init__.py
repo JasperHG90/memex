@@ -105,7 +105,10 @@ async def lifespan(app: FastAPI):
 
     configure_cache_dir(config.server.cache_dir)
     embedding_model = await get_embedding_model(config.server.embedding_model)
-    reranking_model = await get_reranking_model(config.server.memory.retrieval.reranker)
+    reranking_model = await get_reranking_model(
+        config.server.memory.retrieval.reranker,
+        batch_size=config.server.memory.retrieval.reranker_batch_size,
+    )
     ner_model = await get_ner_model()
 
     # Validate embedding dimensions match the database schema.
@@ -175,6 +178,14 @@ async def lifespan(app: FastAPI):
         pass
 
     await metastore.close()
+
+    # Release ONNX model memory eagerly — InferenceSession holds native
+    # buffers that Python's GC may not reclaim before the next test starts
+    # a fresh lifespan, leading to OOM under repeated TestClient usage.
+    del embedding_model, reranking_model, ner_model, api
+    import gc
+
+    gc.collect()
 
 
 app = FastAPI(title='Memex Core API', lifespan=lifespan)

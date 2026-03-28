@@ -202,8 +202,9 @@ async def _truncate_db(postgres_url: str) -> AsyncGenerator[None, None]:
     session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     async with session_maker() as session:
+        conn = await session.connection()
         for table in reversed(SQLModel.metadata.sorted_tables):
-            await session.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
+            await conn.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
         await session.commit()
 
         vault = Vault(id=GLOBAL_VAULT_ID, name=GLOBAL_VAULT_NAME, description='Test Global Vault')

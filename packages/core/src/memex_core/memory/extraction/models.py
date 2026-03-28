@@ -469,6 +469,11 @@ class RawFact(BaseFact):
         if v.upper() in ['N/A', 'NONE', 'UNKNOWN']:
             return None
 
+        # LLMs sometimes return full ISO timestamps (e.g. '2025-05-24T13:41:48Z');
+        # truncate to the date portion before validating.
+        if 'T' in v:
+            v = v.split('T')[0]
+
         if not re.match(DATE_REGEX, v):
             raise ValueError(f"Date '{v}' must be in YYYY-MM-DD or -YYYY-MM-DD format.")
 
