@@ -190,7 +190,7 @@ async def test_where_in_memory_unit_searchable_via_keyword(db_session: AsyncSess
 
     strategy = KeywordStrategy()
     stmt = strategy.get_statement('Reykjavik', None, limit=10)
-    result = await db_session.execute(stmt)
+    result = await (await db_session.connection()).execute(stmt)
     rows = result.all()
 
     found_ids = [r[0] for r in rows]

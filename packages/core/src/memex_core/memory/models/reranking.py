@@ -20,6 +20,7 @@ logger = logging.getLogger('memex.core.memory.models.reranking')
 
 async def get_reranking_model(
     config: RerankerBackend | None = None,
+    batch_size: int = 0,
 ) -> RerankerModel | None:
     """Create a reranking model from config.
 
@@ -45,7 +46,7 @@ async def get_reranking_model(
             downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
             await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
-        return FastReranker(model_dir=str(path), model_name='model.onnx')
+        return FastReranker(model_dir=str(path), model_name='model.onnx', batch_size=batch_size)
 
     if isinstance(config, LitellmRerankerBackend):
         from memex_core.memory.models.backends.litellm_reranker import LiteLLMReranker
@@ -59,6 +60,15 @@ async def get_reranking_model(
 
 
 class FastReranker(BaseOnnxModel):
+    def __init__(
+        self,
+        model_dir: str,
+        model_name: str = 'model.onnx',
+        batch_size: int = 0,
+    ) -> None:
+        super().__init__(model_dir=model_dir, model_name=model_name)
+        self.batch_size = batch_size
+
     def score(
         self,
         query: str,
@@ -80,22 +90,29 @@ class FastReranker(BaseOnnxModel):
         # We pair the query with every text: [(Q, T1), (Q, T2), ...]
         pairs = list(zip([query] * len(texts), texts))
 
-        # The tokenizer handles the [CLS] Q [SEP] D [SEP] construction
-        encodings = self.tokenizer.encode_batch(pairs)
+        chunk_size = self.batch_size if self.batch_size > 0 else len(pairs)
+        all_scores: list[np.ndarray] = []
 
-        input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
-        attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
-        token_type_ids = np.array([e.type_ids for e in encodings], dtype=np.int64)
+        for i in range(0, len(pairs), chunk_size):
+            batch = pairs[i : i + chunk_size]
 
-        inputs = {
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'token_type_ids': token_type_ids,
-        }
+            # The tokenizer handles the [CLS] Q [SEP] D [SEP] construction
+            encodings = self.tokenizer.encode_batch(batch)
 
-        outputs = cast(list[np.ndarray], self.session.run(None, inputs))
+            input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+            attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+            token_type_ids = np.array([e.type_ids for e in encodings], dtype=np.int64)
 
-        return outputs[0].flatten()
+            inputs = {
+                'input_ids': input_ids,
+                'attention_mask': attention_mask,
+                'token_type_ids': token_type_ids,
+            }
+
+            outputs = cast(list[np.ndarray], self.session.run(None, inputs))
+            all_scores.append(outputs[0].flatten())
+
+        return np.concatenate(all_scores)
 
     def rerank(
         self, query: str, texts: list[str], doc_ids: list[str]

@@ -95,7 +95,10 @@ async def get_retrieval_engine(
         embedder = await get_embedding_model()
     if reranker is None:
         try:
-            reranker = await get_reranking_model()
+            _retrieval_cfg = retrieval_config or RetrievalConfig()
+            reranker = await get_reranking_model(
+                batch_size=_retrieval_cfg.reranker_batch_size,
+            )
         except (ImportError, ValueError, RuntimeError, OSError) as e:
             logger.debug('Reranking model unavailable, skipping: %s', e)
             reranker = None
@@ -1049,7 +1052,8 @@ class RetrievalEngine:
             CROSS JOIN reps b
             WHERE a.id < b.id
         """)
-        result = await session.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
+        conn = await session.connection()
+        result = await conn.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
         matrix: dict[tuple[UUID, UUID], float] = {}
         for row in result:
             key = (row.id_a, row.id_b)
