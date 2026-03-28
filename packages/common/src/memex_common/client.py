@@ -279,6 +279,7 @@ class RemoteMemexAPI:
         vault_ids: list[str | UUID] | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
+        template: str | None = None,
     ) -> list[NoteListItemDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
@@ -289,6 +290,8 @@ class RemoteMemexAPI:
             params['after'] = after.isoformat()
         if before is not None:
             params['before'] = before.isoformat()
+        if template is not None:
+            params['template'] = template
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
@@ -427,6 +430,7 @@ class RemoteMemexAPI:
         vault_ids: list[str | UUID] | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
+        template: str | None = None,
     ) -> list[NoteListItemDTO]:
         """Get the most recent notes."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
@@ -437,6 +441,8 @@ class RemoteMemexAPI:
             params['after'] = after.isoformat()
         if before is not None:
             params['before'] = before.isoformat()
+        if template is not None:
+            params['template'] = template
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
