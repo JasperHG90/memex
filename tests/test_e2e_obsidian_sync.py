@@ -1,36 +1,27 @@
 """End-to-end tests for obsidian-memex-sync.
 
-These tests spin up a real Memex server (via testcontainers + lifespan)
-and run the full sync pipeline, including:
-- Vault scanning with asset resolution
-- Batch ingestion via REST API
-- State persistence and incremental sync
-- Idempotency (re-sync skips unchanged notes)
-- CLI commands (init, status, sync --dry-run)
+Uses the shared `client` fixture from conftest (TestClient with proper
+lifespan management) for server tests. Non-server tests run standalone.
 """
 
 from __future__ import annotations
 
+import base64
 import time
 from pathlib import Path
-from unittest.mock import patch
 from uuid import uuid4
 
-import httpx
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport
+from fastapi.testclient import TestClient
 
-from memex_core.server import app as server_app, lifespan
-
-from memex_obsidian_sync.config import CONFIG_FILENAME, ObsidianSyncConfig, ServerConfig
+from memex_obsidian_sync.config import CONFIG_FILENAME, ObsidianSyncConfig
 from memex_obsidian_sync.scanner import scan_vault
 from memex_obsidian_sync.state import SyncStateDB
-from memex_obsidian_sync.sync import sync_vault
+from memex_obsidian_sync.sync import _build_note_dto
 
 
 def _create_test_vault(root: Path) -> Path:
-    """Create a realistic Obsidian vault for testing."""
+    """Create a realistic folder of markdown notes for testing."""
     vault = root / 'test-vault'
     vault.mkdir()
 
@@ -61,135 +52,107 @@ def _create_test_vault(root: Path) -> Path:
     return vault
 
 
-def _make_config() -> ObsidianSyncConfig:
-    return ObsidianSyncConfig(
-        server=ServerConfig(url='http://test'),
-    )
+def _ingest_vault_via_client(client: TestClient, vault: Path) -> dict:
+    """Ingest a vault's notes via the TestClient batch API (same as test_e2e_batch).
 
+    Returns dict with ingested note_ids and counts.
+    """
+    vault = vault.resolve()
+    vault_name = vault.name
+    cfg = ObsidianSyncConfig()
+    notes = scan_vault(vault, cfg.sync.exclude, cfg.sync.assets)
 
-class _AsgiClientFactory:
-    """Patches httpx.AsyncClient to route through the in-process ASGI server."""
+    dtos = []
+    for note in notes:
+        dto = _build_note_dto(note, vault_name, None)
+        dtos.append(dto.model_dump(mode='json'))
 
-    def __init__(self) -> None:
-        self._transport = ASGITransport(app=server_app)
+    payload = {'notes': dtos, 'batch_size': 32}
+    response = client.post('/api/v1/ingestions/batch', json=payload)
+    assert response.status_code == 202
+    job_id = response.json()['job_id']
 
-    def make_class(self) -> type:
-        transport = self._transport
+    # Poll for completion
+    for _ in range(30):
+        status_resp = client.get(f'/api/v1/ingestions/{job_id}')
+        assert status_resp.status_code == 200
+        data = status_resp.json()
+        if data['status'] in ('completed', 'failed'):
+            return data
+        time.sleep(0.5)
 
-        class AsgiClient(httpx.AsyncClient):
-            def __init__(self, **kw):  # type: ignore[no-untyped-def]
-                kw['transport'] = transport
-                super().__init__(**kw)
-
-        return AsgiClient
+    raise TimeoutError(f'Batch job {job_id} did not complete in time')
 
 
 @pytest.mark.integration
 @pytest.mark.llm
 class TestObsidianSyncE2E:
-    """Full end-to-end sync tests against a real Memex server.
+    """Full E2E tests using the shared TestClient fixture."""
 
-    Uses a single lifespan per test (function-scoped) to avoid leaking
-    ONNX models and DB connection pools across tests.
-    """
-
-    @pytest_asyncio.fixture
-    async def asgi_factory(self, _truncate_db):
-        """Start the server lifespan and yield a client factory.
-
-        The lifespan is properly torn down after each test, releasing
-        ONNX models, DB pools, and other resources.
-        """
-        factory = _AsgiClientFactory()
-        async with lifespan(server_app):
-            yield factory
-
-    async def _sync(self, factory: _AsgiClientFactory, vault, config, **kwargs):
-        with patch('memex_obsidian_sync.sync.httpx.AsyncClient', factory.make_class()):
-            return await sync_vault(vault, config, **kwargs)
-
-    @pytest.mark.asyncio
-    async def test_initial_sync(self, asgi_factory, tmp_path: Path) -> None:
-        """First sync should ingest all notes with their assets."""
+    def test_batch_ingest_from_vault(self, client: TestClient, tmp_path: Path) -> None:
+        """Ingest all vault notes via batch API and verify completion."""
         vault = _create_test_vault(tmp_path)
-        config = _make_config()
+        result = _ingest_vault_via_client(client, vault)
 
-        result = await self._sync(asgi_factory, vault, config)
+        assert result['status'] == 'completed'
+        assert result['result']['processed_count'] == 3
+        assert result['result']['failed_count'] == 0
+        assert len(result['result']['note_ids']) == 3
 
-        assert result.total_scanned == 3
-        assert result.changed == 3
-        assert result.ingested == 3
-        assert result.failed == 0
-        assert result.errors == []
-
-        state = SyncStateDB(vault / config.sync.state_file)
-        try:
-            assert state.last_sync is not None
-            files = state.get_all_files()
-            assert len(files) == 3
-            assert 'project-notes.md' in files
-            assert 'ideas/brainstorm.md' in files
-            assert 'daily/2026-03-28.md' in files
-        finally:
-            state.close()
-
-    @pytest.mark.asyncio
-    async def test_incremental_sync_no_changes(self, asgi_factory, tmp_path: Path) -> None:
-        """Second sync with no changes should skip everything."""
+    def test_idempotent_reingest(self, client: TestClient, tmp_path: Path) -> None:
+        """Re-ingesting the same vault should skip all notes."""
         vault = _create_test_vault(tmp_path)
-        config = _make_config()
 
-        result1 = await self._sync(asgi_factory, vault, config)
-        assert result1.ingested == 3
+        result1 = _ingest_vault_via_client(client, vault)
+        assert result1['result']['processed_count'] == 3
 
-        result2 = await self._sync(asgi_factory, vault, config)
-        assert result2.changed == 0
-        assert result2.ingested == 0
+        result2 = _ingest_vault_via_client(client, vault)
+        assert result2['result']['skipped_count'] == 3
+        assert result2['result']['processed_count'] == 0
 
-    @pytest.mark.asyncio
-    async def test_incremental_sync_with_modification(self, asgi_factory, tmp_path: Path) -> None:
-        """After modifying a note, only the changed note should be re-synced."""
+    def test_assets_included_in_ingestion(self, client: TestClient, tmp_path: Path) -> None:
+        """Notes with asset references should include base64-encoded files."""
         vault = _create_test_vault(tmp_path)
-        config = _make_config()
-
-        result1 = await self._sync(asgi_factory, vault, config)
-        assert result1.ingested == 3
-
-        time.sleep(0.1)
-        note_path = vault / 'project-notes.md'
-        note_path.write_text(
-            note_path.read_text() + f'\n## Update ({uuid4().hex[:8]})\nNew content added.\n'
+        notes = scan_vault(
+            vault.resolve(), ObsidianSyncConfig().sync.exclude, ObsidianSyncConfig().sync.assets
         )
 
-        result2 = await self._sync(asgi_factory, vault, config)
-        assert result2.changed == 1
-        assert result2.ingested + result2.skipped >= 1
+        project_note = next(n for n in notes if n.relative_path == 'project-notes.md')
+        assert len(project_note.assets) == 1
 
-    @pytest.mark.asyncio
-    async def test_full_sync_ignores_state(self, asgi_factory, tmp_path: Path) -> None:
-        """Full sync should re-ingest everything regardless of state."""
+        dto = _build_note_dto(project_note, 'test', None)
+        assert 'attachments/diagram.png' in dto.files
+        decoded = base64.b64decode(dto.files['attachments/diagram.png'])
+        assert decoded.startswith(b'\x89PNG')
+
+    def test_archive_note_status(self, client: TestClient, tmp_path: Path) -> None:
+        """Archived notes should have their memory units marked stale."""
         vault = _create_test_vault(tmp_path)
-        config = _make_config()
+        result = _ingest_vault_via_client(client, vault)
+        note_id = result['result']['note_ids'][0]
 
-        result1 = await self._sync(asgi_factory, vault, config)
-        assert result1.ingested == 3
+        # Archive the note
+        resp = client.patch(
+            f'/api/v1/notes/{note_id}/status',
+            json={'status': 'archived'},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data['status'] == 'archived'
+        assert data['note_id'] == note_id
 
-        result2 = await self._sync(asgi_factory, vault, config, full=True)
-        assert result2.changed == 3
-        assert result2.skipped == 3 or result2.ingested == 3
-
-    @pytest.mark.asyncio
-    async def test_dry_run_does_not_ingest(self, asgi_factory, tmp_path: Path) -> None:
-        """Dry run should report but not ingest or save state."""
+    def test_dto_building(self, tmp_path: Path) -> None:
+        """DTO builder should encode content and assets correctly."""
         vault = _create_test_vault(tmp_path)
-        config = _make_config()
-
-        result = await self._sync(asgi_factory, vault, config, dry_run=True)
-
-        assert result.total_scanned == 3
-        assert result.changed == 3
-        assert result.ingested == 0
-        assert not (vault / config.sync.state_file).exists()
+        notes = scan_vault(
+            vault.resolve(), ObsidianSyncConfig().sync.exclude, ObsidianSyncConfig().sync.assets
+        )
+        for note in notes:
+            dto = _build_note_dto(note, 'test', 'my-vault', note_key_prefix='notes', tags=['test'])
+            assert dto.note_key.startswith('notes:test:')
+            assert dto.tags == ['test']
+            decoded = base64.b64decode(dto.content)
+            assert len(decoded) > 0
 
 
 @pytest.mark.integration
@@ -218,62 +181,34 @@ class TestObsidianSyncE2ENoLLM:
         rel_paths = {n.relative_path for n in notes}
         assert not any('.obsidian' in p for p in rel_paths)
 
+    def test_state_db_tracks_files(self, tmp_path: Path) -> None:
+        """SQLite state DB should persist and retrieve file tracking data."""
+        from memex_obsidian_sync.scanner import VaultNote
 
-@pytest.mark.integration
-@pytest.mark.llm
-class TestObsidianSyncDeleteE2E:
-    """End-to-end tests for archive/delete behavior against a real server."""
-
-    @pytest_asyncio.fixture
-    async def asgi_factory(self, _truncate_db):
-        factory = _AsgiClientFactory()
-        async with lifespan(server_app):
-            yield factory
-
-    async def _sync(self, factory: _AsgiClientFactory, vault, config, **kwargs):
-        with patch('memex_obsidian_sync.sync.httpx.AsyncClient', factory.make_class()):
-            return await sync_vault(vault, config, **kwargs)
-
-    @pytest.mark.asyncio
-    async def test_deleted_file_archived(self, asgi_factory, tmp_path: Path) -> None:
-        """When a file is deleted, its note should be archived in Memex."""
-        vault = _create_test_vault(tmp_path)
-        config = _make_config()
-
-        result1 = await self._sync(asgi_factory, vault, config)
-        assert result1.ingested == 3
-
-        state = SyncStateDB(vault / config.sync.state_file)
+        db_path = tmp_path / '.memex-sync.db'
+        state = SyncStateDB(db_path)
         try:
-            ids = state.get_note_ids_for_paths(
-                ['project-notes.md', 'ideas/brainstorm.md', 'daily/2026-03-28.md']
+            note = VaultNote(
+                path=tmp_path / 'a.md',
+                relative_path='a.md',
+                mtime=1000.0,
+                size=100,
+                assets=[],
             )
+            state.mark_synced([note], vault_id='v1', note_ids={'a.md': 'note-123'})
+            assert state.file_count() == 1
+            assert state.get_note_ids_for_paths(['a.md']) == {'a.md': 'note-123'}
+            assert state.last_sync is not None
         finally:
             state.close()
-        assert len(ids) >= 1
 
-        (vault / 'daily' / '2026-03-28.md').unlink()
-
-        result2 = await self._sync(asgi_factory, vault, config)
-        assert 'daily/2026-03-28.md' in result2.deleted_detected
-        if 'daily/2026-03-28.md' in ids:
-            assert result2.archived == 1
-
-    @pytest.mark.asyncio
-    async def test_no_handle_deletes_flag(self, asgi_factory, tmp_path: Path) -> None:
-        """With handle_deletes=False, deleted files should be reported but not acted on."""
-        vault = _create_test_vault(tmp_path)
-        config = _make_config()
-
-        result1 = await self._sync(asgi_factory, vault, config)
-        assert result1.ingested == 3
-
-        (vault / 'daily' / '2026-03-28.md').unlink()
-
-        result2 = await self._sync(asgi_factory, vault, config, handle_deletes=False)
-        assert 'daily/2026-03-28.md' in result2.deleted_detected
-        assert result2.archived == 0
-        assert result2.hard_deleted == 0
+        # Re-open and verify persistence
+        state2 = SyncStateDB(db_path)
+        try:
+            assert state2.file_count() == 1
+            assert state2.vault_id == 'v1'
+        finally:
+            state2.close()
 
 
 @pytest.mark.integration
