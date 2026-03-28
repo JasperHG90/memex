@@ -66,11 +66,14 @@ class TestReadyEndpoint:
         assert data['filestore'] == 'ok'
 
     def test_ready_returns_503_when_db_unreachable(self, client):
-        # Make the session's execute raise an exception
+        # Make the connection's execute raise an exception
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(side_effect=ConnectionError('DB down'))
+
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.execute = AsyncMock(side_effect=ConnectionError('DB down'))
+        mock_session.connection = AsyncMock(return_value=mock_conn)
 
         app.state.api.metastore.session = MagicMock(return_value=mock_session)
 
