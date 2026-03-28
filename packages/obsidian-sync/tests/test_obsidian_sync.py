@@ -5,7 +5,7 @@ import base64
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -433,6 +433,137 @@ class TestDeleteHandling:
         assert result.archived == 0
         assert result.hard_deleted == 0
         mock_api.set_note_status.assert_not_called()
+
+
+class TestUnarchiveOnReturn:
+    def test_unarchive_returning_note(self, vault: Path, config: ObsidianSyncConfig) -> None:
+        """When a previously-archived note reappears, it should be unarchived and re-ingested."""
+        from memex_obsidian_sync.scanner import VaultNote
+
+        note_id = str(uuid4())
+
+        # Pre-populate state: note was synced then archived (simulates skip tag flow)
+        state = SyncStateDB(vault / config.sync.state_file)
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=vault / 'hello.md',
+                    relative_path='hello.md',
+                    mtime=500.0,
+                    size=100,
+                    assets=[],
+                )
+            ],
+            note_ids={'hello.md': note_id},
+        )
+        state.archive_files(['hello.md'])
+        state.close()
+
+        mock_response = IngestResponse(
+            status='success',
+            note_id=note_id,
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        with patch('httpx.AsyncClient') as MockClient:
+            mock_client = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            mock_api = AsyncMock()
+            mock_api.set_note_status.return_value = {'status': 'active'}
+            mock_api.ingest.return_value = mock_response
+            # Batch ingest for the other note (sub/deep.md)
+            mock_batch = BatchJobStatus(
+                job_id=uuid4(),
+                status='completed',
+                progress=None,
+                result=BatchIngestResponse(
+                    processed_count=1,
+                    skipped_count=0,
+                    failed_count=0,
+                    note_ids=[],
+                    errors=[],
+                ),
+            )
+            mock_api.ingest_batch.return_value = mock_batch
+            mock_api.get_job_status.return_value = mock_batch
+
+            with patch('memex_obsidian_sync.sync.RemoteMemexAPI', return_value=mock_api):
+                result = asyncio.run(sync_vault(vault, config))
+
+        # The archived note should have been unarchived
+        assert result.unarchived == 1
+        # set_note_status called with 'active' for the returning note
+        mock_api.set_note_status.assert_any_call(UUID(note_id), 'active')
+        # The returning note was re-ingested (along with sub/deep.md as a new note)
+        ingest_keys = [c.args[0].note_key for c in mock_api.ingest.call_args_list]
+        assert any('hello.md' in k for k in ingest_keys)
+
+        # State should show the note as unarchived
+        state = SyncStateDB(vault / config.sync.state_file)
+        assert state.get_archived_files() == {}
+        assert 'hello.md' in state.get_all_files()
+        state.close()
+
+    def test_archive_preserves_state_for_unarchive(
+        self, vault: Path, config: ObsidianSyncConfig
+    ) -> None:
+        """After archiving, state entry is preserved (not deleted) so unarchive works."""
+        from memex_obsidian_sync.scanner import VaultNote
+
+        note_id = str(uuid4())
+
+        # Sync a note, then simulate it being "deleted" (skip tag added)
+        state = SyncStateDB(vault / config.sync.state_file)
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=vault / 'gone.md',
+                    relative_path='gone.md',
+                    mtime=1000.0,
+                    size=100,
+                    assets=[],
+                )
+            ],
+            note_ids={'gone.md': note_id},
+        )
+        state.close()
+
+        with patch('httpx.AsyncClient') as MockClient:
+            mock_client = AsyncMock()
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            mock_api = AsyncMock()
+            mock_api.set_note_status.return_value = {'status': 'archived'}
+            mock_batch = BatchJobStatus(
+                job_id=uuid4(),
+                status='completed',
+                progress=None,
+                result=BatchIngestResponse(
+                    processed_count=2,
+                    skipped_count=0,
+                    failed_count=0,
+                    note_ids=[],
+                    errors=[],
+                ),
+            )
+            mock_api.ingest_batch.return_value = mock_batch
+            mock_api.get_job_status.return_value = mock_batch
+
+            with patch('memex_obsidian_sync.sync.RemoteMemexAPI', return_value=mock_api):
+                result = asyncio.run(sync_vault(vault, config, handle_deletes=True))
+
+        assert result.archived == 1
+
+        # State entry should be preserved as archived (not deleted)
+        state = SyncStateDB(vault / config.sync.state_file)
+        archived = state.get_archived_files()
+        assert archived.get('gone.md') == note_id
+        state.close()
 
 
 class TestSyncVaultConfig:

@@ -37,6 +37,10 @@ class SyncResult(BaseModel):
         default=0,
         description='Number of deleted notes permanently removed from Memex.',
     )
+    unarchived: int = Field(
+        default=0,
+        description='Number of previously archived notes reactivated in Memex.',
+    )
     errors: list[str] = Field(default_factory=list, description='Error messages for failed notes.')
     deleted_detected: list[str] = Field(
         default_factory=list,
@@ -143,10 +147,14 @@ async def _handle_deletes(
             errors.append(f'{path}: {e}')
             logger.error('Failed to handle deleted note', path=path, error=str(e))
 
-    # Remove successfully handled files from state
+    # Update state for successfully handled files
     handled = [p for p, _ in paths_with_ids if p not in {e.split(':')[0] for e in errors}]
     if handled:
-        state.remove_files(handled)
+        if hard_delete:
+            state.remove_files(handled)
+        else:
+            # Soft-delete: mark as archived so we can unarchive if the note returns
+            state.archive_files(handled)
 
     # Also remove files without note_ids from state (can't do anything with them)
     if paths_without_ids:
@@ -204,8 +212,9 @@ async def sync_vault(
         if full:
             changed = list(all_notes)
             deleted: list[str] = []
+            returning: list[VaultNote] = []
         else:
-            changed, deleted = diff(state, all_notes)
+            changed, deleted, returning = diff(state, all_notes)
         result.deleted_detected = deleted
 
         if notes_filter is not None:
@@ -214,7 +223,7 @@ async def sync_vault(
 
         result.changed = len(changed)
 
-        if not changed and not deleted:
+        if not changed and not deleted and not returning:
             return result
 
         if dry_run:
@@ -334,6 +343,70 @@ async def sync_vault(
                 result.archived = arc
                 result.hard_deleted = hd
                 result.errors.extend(del_errors)
+
+            # 3c. Handle returning archived notes (unarchive + re-ingest)
+            if returning:
+                archived_map = state.get_archived_files()
+                for note in returning:
+                    note_id_str = archived_map.get(note.relative_path)
+                    if not note_id_str:
+                        # Archived without a note_id — can't unarchive, ingest as new
+                        logger.warning(
+                            'Returning archived file has no note_id, ingesting as new',
+                            path=note.relative_path,
+                        )
+                        try:
+                            dto = _build_note_dto(
+                                note,
+                                vault_name,
+                                config.server.vault_id,
+                                note_key_prefix=config.sync.note_key_prefix,
+                                tags=list(config.sync.default_tags),
+                            )
+                            resp = await api.ingest(dto, background=False)
+                            if resp.status == 'success':
+                                result.ingested += 1
+                                nids = {}
+                                if resp.note_id:
+                                    nids[note.relative_path] = resp.note_id
+                                state.mark_synced([note], note_ids=nids)
+                            elif resp.status == 'skipped':
+                                result.skipped += 1
+                                state.mark_synced([note])
+                        except Exception as e:
+                            result.errors.append(f'{note.relative_path}: ingest failed: {e}')
+                        continue
+                    try:
+                        note_uuid = UUID(note_id_str)
+                        await api.set_note_status(note_uuid, 'active')
+                        state.unarchive_file(note.relative_path, note.mtime)
+                        result.unarchived += 1
+                        logger.info(
+                            'Unarchived note',
+                            path=note.relative_path,
+                            note_id=note_id_str,
+                        )
+
+                        # Re-ingest to pick up any content changes while skipped
+                        dto = _build_note_dto(
+                            note,
+                            vault_name,
+                            config.server.vault_id,
+                            note_key_prefix=config.sync.note_key_prefix,
+                            tags=list(config.sync.default_tags),
+                        )
+                        resp = await api.ingest(dto, background=False)
+                        if resp.status == 'success':
+                            result.ingested += 1
+                        elif resp.status == 'skipped':
+                            result.skipped += 1
+                    except Exception as e:
+                        result.errors.append(f'{note.relative_path}: unarchive failed: {e}')
+                        logger.error(
+                            'Failed to unarchive note',
+                            path=note.relative_path,
+                            error=str(e),
+                        )
 
         if on_progress:
             on_progress('done', result.ingested, result.changed, 'Sync complete')

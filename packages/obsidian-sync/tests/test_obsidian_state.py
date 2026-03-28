@@ -146,33 +146,93 @@ class TestSyncStateDB:
         assert state2.last_sync is not None
         state2.close()
 
+    def test_mark_synced_clears_archived_flag(self, db: SyncStateDB) -> None:
+        """mark_synced should clear the archived flag on existing entries."""
+        db.mark_synced([_make_note('a.md', 1000.0)], note_ids={'a.md': 'id-a'})
+        db.archive_files(['a.md'])
+        assert 'a.md' not in db.get_all_files()
+
+        # Re-syncing should clear the archived flag
+        db.mark_synced([_make_note('a.md', 2000.0)], note_ids={'a.md': 'id-a-new'})
+        assert 'a.md' in db.get_all_files()
+        f = db.get_file('a.md')
+        assert f is not None
+        assert f.archived is False
+        assert f.note_id == 'id-a-new'
+
+
+class TestArchiveFiles:
+    def test_archive_files(self, db: SyncStateDB) -> None:
+        db.mark_synced(
+            [_make_note('a.md'), _make_note('b.md')],
+            note_ids={'a.md': 'id-a', 'b.md': 'id-b'},
+        )
+        db.archive_files(['a.md'])
+
+        # Archived file excluded from get_all_files
+        assert 'a.md' not in db.get_all_files()
+        assert 'b.md' in db.get_all_files()
+
+        # Archived file appears in get_archived_files
+        archived = db.get_archived_files()
+        assert archived == {'a.md': 'id-a'}
+
+    def test_get_archived_files_excludes_no_note_id(self, db: SyncStateDB) -> None:
+        db.mark_synced([_make_note('no-id.md')])
+        db.archive_files(['no-id.md'])
+
+        assert db.get_archived_files() == {}
+
+    def test_unarchive_file(self, db: SyncStateDB) -> None:
+        db.mark_synced([_make_note('a.md', 1000.0)], note_ids={'a.md': 'id-a'})
+        db.archive_files(['a.md'])
+        assert 'a.md' not in db.get_all_files()
+
+        db.unarchive_file('a.md', 2000.0)
+        assert 'a.md' in db.get_all_files()
+        assert db.get_all_files()['a.md'] == 2000.0
+        assert db.get_archived_files() == {}
+
+        # note_id preserved
+        f = db.get_file('a.md')
+        assert f is not None
+        assert f.note_id == 'id-a'
+
+    def test_archive_nonexistent_is_noop(self, db: SyncStateDB) -> None:
+        db.archive_files(['does-not-exist.md'])
+        assert db.get_archived_files() == {}
+
 
 class TestDiff:
     def test_all_new(self, db: SyncStateDB) -> None:
         notes = [_make_note('a.md'), _make_note('b.md')]
-        changed, deleted = diff(db, notes)
+        changed, deleted, returning = diff(db, notes)
         assert len(changed) == 2
         assert deleted == []
+        assert returning == []
 
     def test_unchanged(self, db: SyncStateDB) -> None:
         db.mark_synced([_make_note('a.md', 1000.0)])
         notes = [_make_note('a.md', mtime=1000.0)]
-        changed, deleted = diff(db, notes)
+        changed, deleted, returning = diff(db, notes)
         assert changed == []
         assert deleted == []
+        assert returning == []
 
     def test_modified(self, db: SyncStateDB) -> None:
         db.mark_synced([_make_note('a.md', 1000.0)])
         notes = [_make_note('a.md', mtime=2000.0)]
-        changed, deleted = diff(db, notes)
+        changed, deleted, returning = diff(db, notes)
         assert len(changed) == 1
         assert changed[0].relative_path == 'a.md'
+        assert returning == []
 
     def test_deleted(self, db: SyncStateDB) -> None:
         db.mark_synced([_make_note('gone.md', 1000.0)])
-        changed, deleted = diff(db, [])
+        changed, deleted, returning = diff(db, [])
         assert changed == []
         assert deleted == ['gone.md']
+        assert returning == []
 
     def test_mixed(self, db: SyncStateDB) -> None:
         db.mark_synced(
@@ -187,7 +247,37 @@ class TestDiff:
             _make_note('modified.md', mtime=2000.0),
             _make_note('new.md', mtime=3000.0),
         ]
-        changed, deleted = diff(db, notes)
+        changed, deleted, returning = diff(db, notes)
         changed_paths = {n.relative_path for n in changed}
         assert changed_paths == {'modified.md', 'new.md'}
         assert deleted == ['deleted.md']
+        assert returning == []
+
+    def test_returning_archived(self, db: SyncStateDB) -> None:
+        """Archived notes reappearing in the vault appear in returning, not changed."""
+        db.mark_synced(
+            [_make_note('skipped.md', 1000.0)],
+            note_ids={'skipped.md': 'note-id-123'},
+        )
+        db.archive_files(['skipped.md'])
+
+        notes = [_make_note('skipped.md', mtime=2000.0)]
+        changed, deleted, returning = diff(db, notes)
+
+        assert changed == []
+        assert deleted == []
+        assert len(returning) == 1
+        assert returning[0].relative_path == 'skipped.md'
+
+    def test_archived_not_in_deleted(self, db: SyncStateDB) -> None:
+        """Archived files should not appear as deleted (they're already handled)."""
+        db.mark_synced(
+            [_make_note('archived.md', 1000.0)],
+            note_ids={'archived.md': 'note-id'},
+        )
+        db.archive_files(['archived.md'])
+
+        # Note is NOT in vault scan
+        changed, deleted, returning = diff(db, [])
+        assert deleted == []
+        assert returning == []

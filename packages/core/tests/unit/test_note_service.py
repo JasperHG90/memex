@@ -1,4 +1,4 @@
-"""Tests for NoteService.get_note_metadata and _filter_toc."""
+"""Tests for NoteService."""
 
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -398,3 +398,101 @@ async def test_get_note_metadata_returns_none_for_legacy_list_format(note_servic
 
     result = await note_service.get_note_metadata(note_id)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# set_note_status — memory unit cascade tests
+# ---------------------------------------------------------------------------
+
+
+class TestSetNoteStatusCascade:
+    """Verify that set_note_status cascades status changes to memory units."""
+
+    @pytest.fixture
+    def service(self):
+        metastore = MagicMock()
+        filestore = MagicMock()
+        config = MagicMock()
+        vaults = MagicMock()
+        return NoteService(metastore=metastore, filestore=filestore, config=config, vaults=vaults)
+
+    def _make_mock_unit(self, status: str = 'active') -> MagicMock:
+        unit = MagicMock()
+        unit.status = status
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_archived_marks_units_stale(self, service: NoteService) -> None:
+        note_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'active'
+
+        units = [self._make_mock_unit('active'), self._make_mock_unit('active')]
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.all.return_value = units
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await service.set_note_status(note_id, 'archived')
+
+        for unit in units:
+            assert unit.status == 'stale'
+
+    @pytest.mark.asyncio
+    async def test_active_reactivates_stale_units(self, service: NoteService) -> None:
+        """Setting status to 'active' should reactivate all stale memory units."""
+        note_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'archived'
+
+        units = [self._make_mock_unit('stale'), self._make_mock_unit('stale')]
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.all.return_value = units
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await service.set_note_status(note_id, 'active')
+
+        for unit in units:
+            assert unit.status == 'active'
+        assert mock_note.superseded_by is None
+        assert mock_note.appended_to is None
+
+    @pytest.mark.asyncio
+    async def test_active_after_archived_round_trip(self, service: NoteService) -> None:
+        """Full round-trip: active -> archived (stale) -> active (reactivated)."""
+        note_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'active'
+
+        units = [self._make_mock_unit('active')]
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.all.return_value = units
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        # Archive: units -> stale
+        await service.set_note_status(note_id, 'archived')
+        assert units[0].status == 'stale'
+
+        # Reactivate: units -> active
+        await service.set_note_status(note_id, 'active')
+        assert units[0].status == 'active'

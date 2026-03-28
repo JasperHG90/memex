@@ -185,7 +185,7 @@ def status(
     try:
         all_notes = scan_vault(vault_path, cfg.sync.exclude, cfg.sync.assets)
         tracked = state.get_all_files()
-        changed, deleted = diff(state, all_notes)
+        changed, deleted, returning = diff(state, all_notes)
 
         table = Table(title='Sync Status')
         table.add_column('Metric', style='bold')
@@ -197,6 +197,7 @@ def status(
         table.add_row('Tracked', str(len(tracked)))
         table.add_row('Changed / new', str(len(changed)))
         table.add_row('Deleted from folder', str(len(deleted)))
+        table.add_row('Returning (unarchive)', str(len(returning)))
         table.add_row('Memex vault', state.vault_id or cfg.server.vault_id or '(default)')
 
         console.print(table)
