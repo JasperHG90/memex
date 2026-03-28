@@ -10,6 +10,7 @@ from uuid import UUID
 import dspy
 
 from memex_core.config import MemexConfig
+from memex_core.context import background_session
 from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.reflect.models import (
@@ -52,30 +53,34 @@ class ReflectionService:
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
         """Run reflection in the background, ensuring serialization via lock."""
-        async with self._reflection_lock:
-            try:
-                logger.info(f'Starting background reflection for entity {request.entity_id}')
-                await self.reflect(request)
-                logger.info(f'Completed background reflection for entity {request.entity_id}')
-            except Exception as e:
-                logger.error(
-                    f'Error during background reflection for entity {request.entity_id}: {e}',
-                    exc_info=True,
-                )
+        async with background_session('bg-reflect'):
+            async with self._reflection_lock:
+                try:
+                    logger.info(f'Starting background reflection for entity {request.entity_id}')
+                    await self.reflect(request)
+                    logger.info(f'Completed background reflection for entity {request.entity_id}')
+                except Exception as e:
+                    logger.error(
+                        f'Error during background reflection for entity {request.entity_id}: {e}',
+                        exc_info=True,
+                    )
 
     async def background_reflect_batch(self, requests: list[ReflectionRequest]) -> None:
         """Run batch reflection in the background, ensuring serialization via lock."""
         if not requests:
             return
 
-        async with self._reflection_lock:
-            try:
-                entity_ids = [str(r.entity_id) for r in requests]
-                logger.info(f'Starting background batch reflection for entities: {entity_ids}')
-                await self.reflect_batch(requests)
-                logger.info(f'Completed background batch reflection for {len(requests)} entities')
-            except Exception as e:
-                logger.error(f'Error during background batch reflection: {e}', exc_info=True)
+        async with background_session('bg-reflect'):
+            async with self._reflection_lock:
+                try:
+                    entity_ids = [str(r.entity_id) for r in requests]
+                    logger.info(f'Starting background batch reflection for entities: {entity_ids}')
+                    await self.reflect_batch(requests)
+                    logger.info(
+                        f'Completed background batch reflection for {len(requests)} entities'
+                    )
+                except Exception as e:
+                    logger.error(f'Error during background batch reflection: {e}', exc_info=True)
 
     async def reflect(self, request: ReflectionRequest) -> ReflectionResult:
         """Reflect on a single entity to update its Mental Model."""
