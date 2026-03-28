@@ -1,6 +1,25 @@
-# Save to Memex — Firefox Extension
+<p align="center">
+  <img src="assets/logo.jpg" width="160" alt="Save to Memex" />
+</p>
 
-Browser extension that captures articles and PDFs directly from Firefox and saves them to your Memex knowledge base. Bypasses the limitations of server-side scraping (JS-heavy pages, bot detection, paywalls) by extracting content from the already-rendered page.
+<h1 align="center">Save to Memex</h1>
+
+<p align="center">
+  Capture articles and PDFs from Firefox directly into your Memex knowledge base.<br/>
+  No server-side scraping needed &mdash; content is extracted from the rendered page.<br/>
+  <strong>Ingest anything. Remember everything. Retrieve what matters.</strong>
+</p>
+
+<p align="center">
+  <a href="#install-from-github-release-recommended">Install</a> &middot;
+  <a href="#configure">Configure</a> &middot;
+  <a href="#scripts">Development</a> &middot;
+  <a href="#cicd">CI/CD</a>
+</p>
+
+---
+
+Bypasses the limitations of server-side scraping (JS-heavy pages, bot detection, paywalls) by extracting content from the already-rendered page using [Readability.js](https://github.com/mozilla/readability) and [Turndown](https://github.com/mixmark-io/turndown).
 
 ## How it works
 
