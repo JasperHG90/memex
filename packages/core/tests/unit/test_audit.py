@@ -118,19 +118,19 @@ class TestAuditServiceQuery:
     async def test_query_executes(self, audit_service, mock_metastore):
         _, mock_session = mock_metastore
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
 
         result = await audit_service.query(action='auth.success')
         assert result == []
-        mock_session.execute.assert_awaited_once()
+        mock_session.exec.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_query_with_all_filters(self, audit_service, mock_metastore):
         _, mock_session = mock_metastore
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
 
         now = datetime.now(timezone.utc)
         result = await audit_service.query(
@@ -221,8 +221,8 @@ class TestAuditEndpoint:
     def test_list_audit_empty(self, client, mock_metastore):
         _, mock_session = mock_metastore
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
 
         response = client.get('/api/v1/admin/audit')
         assert response.status_code == 200
@@ -236,8 +236,8 @@ class TestAuditEndpoint:
             details={'path': '/api/v1/notes'},
         )
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [entry]
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_result.all.return_value = [entry]
+        mock_session.exec = AsyncMock(return_value=mock_result)
 
         response = client.get('/api/v1/admin/audit')
         assert response.status_code == 200
@@ -249,8 +249,8 @@ class TestAuditEndpoint:
     def test_list_audit_with_filters(self, client, mock_metastore):
         _, mock_session = mock_metastore
         mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
 
         response = client.get(
             '/api/v1/admin/audit',

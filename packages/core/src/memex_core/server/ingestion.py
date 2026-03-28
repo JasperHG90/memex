@@ -57,7 +57,10 @@ router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_write)])
 
 async def _run_contradiction(coro):
     """Await the contradiction detection coroutine."""
-    await coro
+    from memex_core.context import background_session
+
+    async with background_session('bg-contradiction'):
+        await coro
 
 
 def _schedule_contradiction(background_tasks: BackgroundTasks, result: dict) -> None:

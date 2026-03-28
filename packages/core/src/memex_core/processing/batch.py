@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
+from memex_core.context import background_session
 from memex_core.memory.sql_models import BatchJob, BatchJobStatus
 
 if TYPE_CHECKING:
@@ -201,69 +202,70 @@ class JobManager:
         self, job_id: UUID, notes: list[Any], vault_id: UUID, batch_size: int = 32
     ) -> None:
         """Internal background task for job execution."""
-        logger.info(f'Starting batch job {job_id} ({len(notes)} notes)')
+        async with background_session('bg-batch'):
+            logger.info(f'Starting batch job {job_id} ({len(notes)} notes)')
 
-        try:
-            # 1. Update status to PROCESSING
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if not job:
-                    logger.error(f'Job {job_id} not found in database.')
-                    return
-                job.status = BatchJobStatus.PROCESSING
-                job.started_at = datetime.now(timezone.utc)
-                await session.commit()
+            try:
+                # 1. Update status to PROCESSING
+                async with self.api.metastore.session() as session:
+                    job = await self._get_job_for_update(session, job_id)
+                    if not job:
+                        logger.error(f'Job {job_id} not found in database.')
+                        return
+                    job.status = BatchJobStatus.PROCESSING
+                    job.started_at = datetime.now(timezone.utc)
+                    await session.commit()
 
-            # 2. Execute Ingestion (Consuming Generator)
-            # We iterate over chunks and update DB in real-time
-            final_results = {}
-            total_notes = len(notes)
+                # 2. Execute Ingestion (Consuming Generator)
+                # We iterate over chunks and update DB in real-time
+                final_results = {}
+                total_notes = len(notes)
 
-            async for results in self.api.ingest_batch_internal(
-                notes=notes, vault_id=vault_id, batch_size=batch_size
-            ):
-                final_results = results
-                processed = results.get('processed_count', 0)
-                failed = results.get('failed_count', 0)
-                skipped = results.get('skipped_count', 0)
-                total_done = processed + failed + skipped
+                async for results in self.api.ingest_batch_internal(
+                    notes=notes, vault_id=vault_id, batch_size=batch_size
+                ):
+                    final_results = results
+                    processed = results.get('processed_count', 0)
+                    failed = results.get('failed_count', 0)
+                    skipped = results.get('skipped_count', 0)
+                    total_done = processed + failed + skipped
 
+                    async with self.api.metastore.session() as session:
+                        job = await self._get_job_for_update(session, job_id)
+                        if job:
+                            job.processed_count = processed
+                            job.failed_count = failed
+                            job.skipped_count = skipped
+                            job.progress = f'Processed {total_done}/{total_notes} notes'
+                            await session.commit()
+
+                # 3. Finalize Job Status
+                async with self.api.metastore.session() as session:
+                    job = await self._get_job_for_update(session, job_id)
+                    if not job:
+                        return
+
+                    job.status = BatchJobStatus.COMPLETED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.processed_count = final_results.get('processed_count', 0)
+                    job.skipped_count = final_results.get('skipped_count', 0)
+                    job.failed_count = final_results.get('failed_count', 0)
+                    job.note_ids = final_results.get('note_ids', [])
+                    job.error_info = final_results.get('errors')
+                    job.progress = f'Completed: {total_notes}/{total_notes} processed'
+
+                    await session.commit()
+                    logger.info(f'Batch job {job_id} completed successfully.')
+
+            except Exception as e:
+                logger.error(f'Batch job {job_id} failed: {e}', exc_info=True)
                 async with self.api.metastore.session() as session:
                     job = await self._get_job_for_update(session, job_id)
                     if job:
-                        job.processed_count = processed
-                        job.failed_count = failed
-                        job.skipped_count = skipped
-                        job.progress = f'Processed {total_done}/{total_notes} notes'
+                        job.status = BatchJobStatus.FAILED
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.error_info = str(e)
                         await session.commit()
-
-            # 3. Finalize Job Status
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if not job:
-                    return
-
-                job.status = BatchJobStatus.COMPLETED
-                job.completed_at = datetime.now(timezone.utc)
-                job.processed_count = final_results.get('processed_count', 0)
-                job.skipped_count = final_results.get('skipped_count', 0)
-                job.failed_count = final_results.get('failed_count', 0)
-                job.note_ids = final_results.get('note_ids', [])
-                job.error_info = final_results.get('errors')
-                job.progress = f'Completed: {total_notes}/{total_notes} processed'
-
-                await session.commit()
-                logger.info(f'Batch job {job_id} completed successfully.')
-
-        except Exception as e:
-            logger.error(f'Batch job {job_id} failed: {e}', exc_info=True)
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if job:
-                    job.status = BatchJobStatus.FAILED
-                    job.completed_at = datetime.now(timezone.utc)
-                    job.error_info = str(e)
-                    await session.commit()
 
     async def _run_single_job(
         self,
@@ -272,46 +274,47 @@ class JobManager:
         **kwargs: Any,
     ) -> None:
         """Execute a single ingestion coroutine with job lifecycle tracking."""
-        logger.info(f'Starting single job {job_id}')
+        async with background_session('bg-ingest'):
+            logger.info(f'Starting single job {job_id}')
 
-        try:
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if not job:
-                    logger.error(f'Job {job_id} not found in database.')
-                    return
-                job.status = BatchJobStatus.PROCESSING
-                job.started_at = datetime.now(timezone.utc)
-                await session.commit()
-
-            result = await coro_fn(**kwargs)
-
-            # Run contradiction detection inline (no BackgroundTasks available)
-            contradiction_task = result.pop('contradiction_task', None)
-            if contradiction_task is not None:
-                await contradiction_task
-
-            note_id = result.get('note_id')
-
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if not job:
-                    return
-                job.status = BatchJobStatus.COMPLETED
-                job.completed_at = datetime.now(timezone.utc)
-                job.processed_count = 1
-                job.note_ids = [note_id] if note_id else []
-                job.progress = 'Completed: 1/1 processed'
-                await session.commit()
-                logger.info(f'Single job {job_id} completed successfully.')
-
-        except Exception as e:
-            logger.error(f'Single job {job_id} failed: {e}', exc_info=True)
-            async with self.api.metastore.session() as session:
-                job = await self._get_job_for_update(session, job_id)
-                if job:
-                    job.status = BatchJobStatus.FAILED
-                    job.completed_at = datetime.now(timezone.utc)
-                    job.failed_count = 1
-                    job.error_info = str(e)
+            try:
+                async with self.api.metastore.session() as session:
+                    job = await self._get_job_for_update(session, job_id)
+                    if not job:
+                        logger.error(f'Job {job_id} not found in database.')
+                        return
+                    job.status = BatchJobStatus.PROCESSING
+                    job.started_at = datetime.now(timezone.utc)
                     await session.commit()
+
+                result = await coro_fn(**kwargs)
+
+                # Run contradiction detection inline (no BackgroundTasks available)
+                contradiction_task = result.pop('contradiction_task', None)
+                if contradiction_task is not None:
+                    await contradiction_task
+
+                note_id = result.get('note_id')
+
+                async with self.api.metastore.session() as session:
+                    job = await self._get_job_for_update(session, job_id)
+                    if not job:
+                        return
+                    job.status = BatchJobStatus.COMPLETED
+                    job.completed_at = datetime.now(timezone.utc)
+                    job.processed_count = 1
+                    job.note_ids = [note_id] if note_id else []
+                    job.progress = 'Completed: 1/1 processed'
+                    await session.commit()
+                    logger.info(f'Single job {job_id} completed successfully.')
+
+            except Exception as e:
+                logger.error(f'Single job {job_id} failed: {e}', exc_info=True)
+                async with self.api.metastore.session() as session:
+                    job = await self._get_job_for_update(session, job_id)
+                    if job:
+                        job.status = BatchJobStatus.FAILED
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.failed_count = 1
+                        job.error_info = str(e)
+                        await session.commit()
