@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "npx playwright test",
+    "test:e2e:connection": "npx playwright test tests/connection.spec.ts",
     "test:all": "vitest run --config vitest.config.ts && npx playwright test",
     "test:watch": "vitest"
   },
