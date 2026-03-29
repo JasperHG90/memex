@@ -36,6 +36,7 @@ from memex_mcp.models import (
     McpKVEntry,
     McpKVWriteResult,
     _scope_from_key,
+    McpLineageNode,
     McpNode,
     McpNote,
     McpNoteContent,
@@ -53,6 +54,8 @@ from memex_mcp.models import (
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
+    LineageDirection,
+    LineageResponse,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
@@ -1956,6 +1959,89 @@ async def memex_get_entity_cooccurrences(
     except Exception as e:
         logging.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
         raise ToolError(f'Get entity cooccurrences failed: {e}')
+
+
+_LINEAGE_ENTITY_TYPES = frozenset({'mental_model', 'observation', 'memory_unit', 'note'})
+
+
+def _lineage_to_mcp(resp: LineageResponse) -> McpLineageNode:
+    """Recursively convert a LineageResponse to an McpLineageNode."""
+    return McpLineageNode(
+        entity_type=resp.entity_type,
+        entity=resp.entity,
+        derived_from=[_lineage_to_mcp(child) for child in resp.derived_from],
+    )
+
+
+@mcp.tool(
+    name='memex_get_lineage',
+    description=(
+        'Trace the provenance chain of an entity. '
+        'Upstream: mental_model → observation → memory_unit → note. '
+        'Downstream: note → memory_unit → observation → mental_model.'
+    ),
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_lineage(
+    ctx: Context,
+    entity_type: Annotated[
+        str,
+        Field(description='Entity type: mental_model, observation, memory_unit, or note.'),
+    ],
+    entity_id: Annotated[str, Field(description='UUID of the entity.')],
+    direction: Annotated[
+        str,
+        Field(description='Traversal direction: upstream (default), downstream, or both.'),
+    ] = 'upstream',
+    depth: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(description='Max recursion depth.'),
+    ] = 3,
+    limit: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(description='Max children per node.'),
+    ] = 5,
+) -> McpLineageNode:
+    """Get the lineage (provenance chain) of an entity."""
+    try:
+        if entity_type not in _LINEAGE_ENTITY_TYPES:
+            raise ToolError(
+                f'Invalid entity_type: {entity_type}. '
+                f'Must be one of: {", ".join(sorted(_LINEAGE_ENTITY_TYPES))}'
+            )
+
+        try:
+            uuid_obj = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid UUID: {entity_id}')
+
+        try:
+            dir_enum = LineageDirection(direction)
+        except ValueError:
+            raise ToolError(
+                f'Invalid direction: {direction}. Must be upstream, downstream, or both.'
+            )
+
+        api = get_api(ctx)
+
+        response = await api.get_lineage(
+            entity_type=entity_type,
+            entity_id=uuid_obj,
+            direction=dir_enum,
+            depth=depth,
+            limit=limit,
+        )
+
+        return _lineage_to_mcp(response)
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logging.error(f'Get lineage failed: {e}', exc_info=True)
+        raise ToolError(f'Get lineage failed: {e}')
 
 
 @mcp.tool(

@@ -351,3 +351,17 @@ class McpAddNoteResult(BaseModel):
     status: str
     job_id: str | None = None
     overlapping_notes: list[McpOverlap] = []
+
+
+# ── Lineage ──
+
+
+class McpLineageNode(BaseModel):
+    """Recursive lineage node tracing provenance between entities."""
+
+    entity_type: str
+    entity: dict[str, Any]
+    derived_from: list['McpLineageNode'] = []
+
+
+McpLineageNode.model_rebuild()
