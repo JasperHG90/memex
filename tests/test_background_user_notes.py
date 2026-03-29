@@ -5,11 +5,15 @@ Regression test for the bug where ``ingest_batch_internal`` bypassed
 """
 
 import base64
+import re
 import time
 import uuid
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
+
+_FM_RE = re.compile(r'\A---[ \t]*\n(.*?\n)---[ \t]*\n', re.DOTALL)
 
 
 @pytest.mark.integration
@@ -53,18 +57,14 @@ def test_background_ingestion_preserves_user_notes(client: TestClient):
     note_data = note_resp.json()
 
     original_text = note_data['original_text']
-    assert '## User Notes' in original_text, (
-        f'User Notes section missing from original_text: {original_text[:200]}'
+    m = _FM_RE.match(original_text)
+    assert m, f'No frontmatter found in original_text: {original_text[:200]}'
+    fm = yaml.safe_load(m.group(1))
+    # YAML block scalar (|) appends a trailing newline; strip for comparison
+    assert fm.get('user_notes', '').rstrip('\n') == user_notes_text, (
+        f'user_notes field missing or wrong in frontmatter: {fm}'
     )
-    assert user_notes_text in original_text, (
-        f'User notes text not found in original_text: {original_text[:200]}'
-    )
-
-    # Verify positioning: user notes after frontmatter, before body
-    fm_end = original_text.index('---', 3) + 3
-    notes_pos = original_text.index('## User Notes')
-    body_pos = original_text.index('Article body')
-    assert fm_end < notes_pos < body_pos
+    assert 'Article body' in original_text
 
 
 @pytest.mark.integration
@@ -90,14 +90,16 @@ def test_foreground_ingestion_preserves_user_notes(client: TestClient):
     assert note_resp.status_code == 200
     original_text = note_resp.json()['original_text']
 
-    assert '## User Notes' in original_text
-    assert user_notes_text in original_text
+    m = _FM_RE.match(original_text)
+    assert m, f'No frontmatter found in original_text: {original_text[:200]}'
+    fm = yaml.safe_load(m.group(1))
+    assert fm.get('user_notes', '').rstrip('\n') == user_notes_text
 
 
 @pytest.mark.integration
 @pytest.mark.llm
 def test_background_ingestion_without_user_notes(client: TestClient):
-    """When user_notes is omitted, no ## User Notes section should appear."""
+    """When user_notes is omitted, no user_notes field should appear in frontmatter."""
     note_content = f'---\ntitle: No Notes\n---\nPlain body {uuid.uuid4()}'
 
     note = {
@@ -127,4 +129,8 @@ def test_background_ingestion_without_user_notes(client: TestClient):
     assert note_resp.status_code == 200
     original_text = note_resp.json()['original_text']
 
-    assert '## User Notes' not in original_text
+    m = _FM_RE.match(original_text)
+    if m:
+        fm = yaml.safe_load(m.group(1)) or {}
+        assert 'user_notes' not in fm
+    assert 'user_notes' not in original_text

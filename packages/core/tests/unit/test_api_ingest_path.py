@@ -1,11 +1,28 @@
 import base64
+import re
 
 import pytest
+import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 from memex_core.api import NoteInput, inject_user_notes
 from memex_core.services.ingestion import IngestionService
 from memex_core.processing.titles import _is_meaningful_name
+
+_FM_RE = re.compile(r'\A---[ \t]*\n(.*?\n)---[ \t]*\n', re.DOTALL)
+
+
+def _parse_frontmatter(text: str) -> dict:
+    """Extract and parse YAML frontmatter from text."""
+    m = _FM_RE.match(text)
+    assert m, f'No frontmatter found in: {text[:200]}'
+    data = yaml.safe_load(m.group(1)) or {}
+    # YAML block scalars (|) always append a trailing newline; strip it for
+    # easier assertions.
+    for k, v in data.items():
+        if isinstance(v, str) and v.endswith('\n'):
+            data[k] = v.rstrip('\n')
+    return data
 
 
 @pytest.mark.asyncio
@@ -203,7 +220,7 @@ async def test_ingest_from_file_skips_llm_title_when_metadata_title_present(api,
 
 
 def test_user_notes_injected_after_frontmatter():
-    """User notes should appear as a ## User Notes section after frontmatter."""
+    """User notes should appear as a user_notes field in YAML frontmatter."""
     content = b'---\ntitle: Test\n---\nBody text here.'
     note = NoteInput(
         name='Test',
@@ -212,17 +229,15 @@ def test_user_notes_injected_after_frontmatter():
         user_notes='This is important context.',
     )
     text = note._content.decode('utf-8')
-    assert '## User Notes' in text
-    assert 'This is important context.' in text
-    # User notes should come after frontmatter but before body
-    fm_end = text.index('---', 3) + 3
-    notes_pos = text.index('## User Notes')
-    body_pos = text.index('Body text here.')
-    assert fm_end < notes_pos < body_pos
+    fm = _parse_frontmatter(text)
+    assert fm['user_notes'] == 'This is important context.'
+    assert fm['title'] == 'Test'
+    # Body should appear after frontmatter
+    assert 'Body text here.' in text
 
 
 def test_user_notes_injected_without_frontmatter():
-    """User notes should be prepended when there is no frontmatter."""
+    """User notes should create frontmatter when none exists."""
     content = b'Just some plain text.'
     note = NoteInput(
         name='Test',
@@ -231,8 +246,8 @@ def test_user_notes_injected_without_frontmatter():
         user_notes='My commentary.',
     )
     text = note._content.decode('utf-8')
-    assert text.startswith('## User Notes')
-    assert 'My commentary.' in text
+    fm = _parse_frontmatter(text)
+    assert fm['user_notes'] == 'My commentary.'
     assert 'Just some plain text.' in text
 
 
@@ -260,8 +275,8 @@ def test_user_notes_with_broken_frontmatter():
         user_notes='My note.',
     )
     text = note._content.decode('utf-8')
-    assert text.startswith('## User Notes')
-    assert 'My note.' in text
+    fm = _parse_frontmatter(text)
+    assert fm['user_notes'] == 'My note.'
     assert '--- this is not real frontmatter' in text
 
 
@@ -271,23 +286,21 @@ def test_user_notes_with_broken_frontmatter():
 
 
 def test_inject_user_notes_after_frontmatter():
-    """Standalone helper injects after closing --- delimiter."""
+    """Standalone helper adds user_notes field to existing frontmatter."""
     content = '---\ntitle: Test\n---\nBody text here.'
     result = inject_user_notes(content, 'Important context.')
-    assert '## User Notes' in result
-    assert 'Important context.' in result
-    fm_end = result.index('---', 3) + 3
-    notes_pos = result.index('## User Notes')
-    body_pos = result.index('Body text here.')
-    assert fm_end < notes_pos < body_pos
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'Important context.'
+    assert fm['title'] == 'Test'
+    assert 'Body text here.' in result
 
 
 def test_inject_user_notes_without_frontmatter():
-    """Standalone helper prepends when no frontmatter present."""
+    """Standalone helper creates frontmatter when none present."""
     content = 'Just some plain text.'
     result = inject_user_notes(content, 'My commentary.')
-    assert result.startswith('## User Notes')
-    assert 'My commentary.' in result
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'My commentary.'
     assert 'Just some plain text.' in result
 
 
@@ -399,19 +412,16 @@ async def test_ingest_batch_internal_preserves_user_notes(api):
             ):
                 pass
 
-    # Verify user_notes was injected into the content passed to retain()
+    # Verify user_notes was injected into frontmatter
     assert len(captured_contents) == 1, 'Expected exactly one RetainContent'
     retained_content = captured_contents[0].content
-    assert '## User Notes' in retained_content, (
-        'user_notes section missing from batch-ingested content'
+    fm = _parse_frontmatter(retained_content)
+    assert fm.get('user_notes') == user_notes_text, (
+        'user_notes field missing from batch-ingested frontmatter'
     )
-    assert user_notes_text in retained_content, (
-        'user_notes text missing from batch-ingested content'
+    assert fm.get('source_url') == 'https://example.com', (
+        'existing frontmatter fields should be preserved'
     )
-    # Verify it's positioned correctly (after frontmatter)
-    fm_end = retained_content.index('---', 3) + 3
-    notes_pos = retained_content.index('## User Notes')
-    assert fm_end < notes_pos
 
 
 @pytest.mark.asyncio
@@ -481,5 +491,59 @@ async def test_ingest_batch_internal_no_user_notes_unchanged(api):
 
     assert len(captured_contents) == 1
     retained_content = captured_contents[0].content
-    assert '## User Notes' not in retained_content
+    assert 'user_notes' not in retained_content
     assert retained_content == note_content
+
+
+# ---------------------------------------------------------------------------
+# inject_user_notes edge-case tests
+# ---------------------------------------------------------------------------
+
+
+def test_inject_user_notes_preserves_existing_fields_exactly():
+    """Existing frontmatter fields must not be modified (no YAML round-trip)."""
+    content = '---\ntitle: Test\nauthor: \nsource_url: https://example.com\n---\nBody.'
+    result = inject_user_notes(content, 'My note.')
+    # Original fields preserved verbatim (no null substitution)
+    assert 'title: Test\n' in result
+    assert 'author: \n' in result
+    assert 'source_url: https://example.com\n' in result
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'My note.'
+
+
+def test_inject_user_notes_multiline():
+    """Multi-line user notes produce a valid YAML block scalar."""
+    content = '---\ntitle: Test\n---\nBody.'
+    result = inject_user_notes(content, 'Line one\nLine two\nLine three')
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'Line one\nLine two\nLine three'
+    assert 'user_notes: |\n' in result
+
+
+def test_inject_user_notes_special_characters():
+    """User notes with YAML-special characters are safe inside block scalar."""
+    content = '---\ntitle: Test\n---\nBody.'
+    notes = 'Key: value with "quotes" and \'apostrophes\'\n---\nMore text'
+    result = inject_user_notes(content, notes)
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == notes
+    assert 'Body.' in result
+
+
+def test_inject_user_notes_replaces_existing():
+    """When frontmatter already has user_notes, the new value replaces it."""
+    content = '---\ntitle: Test\nuser_notes: |\n  Old note.\n---\nBody.'
+    result = inject_user_notes(content, 'New note.')
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'New note.'
+    assert 'Old note.' not in result
+
+
+def test_inject_user_notes_empty_lines_preserved():
+    """Empty lines within user notes are preserved."""
+    content = '---\ntitle: Test\n---\nBody.'
+    notes = 'Para one\n\nPara two'
+    result = inject_user_notes(content, notes)
+    fm = _parse_frontmatter(result)
+    assert fm['user_notes'] == 'Para one\n\nPara two'

@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import pathlib as plb
 import logging
+import re
 from uuid import UUID
 from functools import cached_property
 from datetime import datetime
@@ -61,27 +62,34 @@ from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 logger = logging.getLogger('memex.core.api')
 
 
-def inject_user_notes(content: str, user_notes: str | None) -> str:
-    """Inject user notes as a ``## User Notes`` markdown section into note content.
+_FRONTMATTER_RE = re.compile(r'\A---[ \t]*\n(.*?\n)---[ \t]*\n', re.DOTALL)
+_USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
 
-    When *content* contains YAML frontmatter (``---`` delimiters), the section
-    is inserted immediately after the closing delimiter.  Otherwise it is
-    prepended to the content.
+
+def inject_user_notes(content: str, user_notes: str | None) -> str:
+    """Inject user notes into YAML frontmatter as a ``user_notes`` field.
+
+    When *content* contains YAML frontmatter, the ``user_notes`` key is
+    added (or replaced) using a literal block scalar (``|``).  When no
+    frontmatter exists, a new frontmatter block is created containing
+    just the ``user_notes`` field.
 
     Returns *content* unchanged when *user_notes* is ``None`` or whitespace-only.
     """
     if not user_notes or not user_notes.strip():
         return content
-    notes_block = f'## User Notes\n\n{user_notes.strip()}\n\n'
-    try:
-        closing = content.index('---', 3)
-    except ValueError:
-        closing = -1
-    if content.startswith('---') and closing != -1:
-        end = closing + 3
-        return content[:end] + '\n\n' + notes_block + content[end:]
+
+    stripped = user_notes.strip()
+    indented = '\n'.join(('  ' + line if line else '') for line in stripped.split('\n'))
+    notes_field = f'user_notes: |\n{indented}\n'
+
+    match = _FRONTMATTER_RE.match(content)
+    if match:
+        fm_body = match.group(1)
+        fm_body = _USER_NOTES_FIELD_RE.sub('', fm_body)
+        return f'---\n{fm_body}{notes_field}---\n{content[match.end() :]}'
     else:
-        return notes_block + content
+        return f'---\n{notes_field}---\n\n{content}'
 
 
 class NoteInput:
