@@ -222,6 +222,20 @@ First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compati
 
 A full FastAPI server with NDJSON streaming, OpenAPI docs, policy-based auth (reader/writer/admin) with vault-scoped API keys, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
 
+### Note templates
+
+Pluggable note templates provide consistent structure for different note types. Templates are `.toml` files discovered across three layers — built-in, global (`{filestore_root}/templates/`), and project-local (`.memex/templates/`) — with later layers overriding on slug collision. Built-in templates include `technical_brief`, `general_note`, `architectural_decision_record`, `request_for_comments`, and `quick_note`. Manage templates via `memex note template` CLI commands or the `memex_list_templates` / `memex_register_template` MCP tools.
+
+### Folder sync
+
+Sync a folder of Markdown notes (and PDFs, Word docs, Excel, PowerPoint, Outlook emails, and more) to Memex with `memex note sync`. Incremental sync tracks state locally — only changed files are re-processed. Deleted files are archived by default (preserving data, excluding from retrieval). Background batch mode, continuous watch mode (event-driven or polling), and a layered TOML config (`note-sync.toml`) make it easy to keep an Obsidian vault or any notes folder in sync.
+
+```bash
+memex note sync init ~/notes          # create default config
+memex note sync run ~/notes           # sync changed files
+memex note sync watch ~/notes         # continuous sync
+```
+
 ### Firefox extension
 
 A [Firefox extension](./packages/firefox-extension/) for one-click capture of articles, PDFs, and web pages directly into your Memex vaults. Content is extracted client-side via Mozilla Readability and converted to Markdown — bypassing bot detection and paywalled content that server-side scraping can't reach. API keys are encrypted at rest with AES-GCM.
@@ -243,6 +257,9 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [Doc Search vs Memory Search](./docs/how-to/doc-search-vs-memory-search.md): Choose the right retrieval strategy.
 - [Database Migrations](./docs/how-to/database-migrations.md): Manage schema with `memex db`.
 - [Delete and Archival](./docs/how-to/delete-archival.md): Manage data lifecycle.
+- [Note Templates](./docs/how-to/note-templates.md): Create and use note templates.
+- [Sync Notes](./docs/how-to/sync-notes.md): Sync a folder of notes to Memex.
+- [Firefox Extension](./docs/how-to/firefox-extension.md): Capture web content from Firefox.
 
 ### Reference
 - [CLI Commands](./docs/reference/cli-commands.md)
