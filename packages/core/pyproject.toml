@@ -77,13 +77,9 @@ raw-options.git_describe_command = ["git", "describe", "--dirty", "--tags", "--l
 
 [tool.uv.sources]
 memex-common = { workspace = true }
-litellm = { url = "https://files.pythonhosted.org/packages/53/4d/73fdb12223bdb01889134eb75525fcc768b1724255f2b87072dd6743c6e1/litellm-1.80.16-py3-none-any.whl" }
 
 [dependency-groups]
 dev = []
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/memex_core/__about__.py"
