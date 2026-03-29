@@ -216,7 +216,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 26 MCP tools cover the full API surface. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 31 MCP tools cover the full API surface. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
 
 ### REST API and webhooks
 
@@ -321,7 +321,7 @@ Memex retrieval adds minimal overhead to agent workflows. Across the 47-question
 
 Memex is built as a monorepo:
 - **`packages/core`**: The brain. Extraction, Retrieval (TEMPR), Reflection, services, FastAPI server.
-- **`packages/cli`**: The interface. Typer CLI commands.
+- **`packages/cli`**: The interface. Typer CLI commands, including `memex note sync` for folder-based note synchronization.
 - **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
 - **`packages/eval`**: The benchmark. LoCoMo evaluation framework and retrieval analysis.
