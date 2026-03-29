@@ -16,6 +16,7 @@ def mock_dependencies():
         patch('memex_cli.server.check_port_available', return_value=True),
     ):
         # Setup mock config
+        mock_conf.return_value.server.port = 8000
         mock_conf.return_value.meta_store.instance.host = 'localhost'
         mock_conf.return_value.meta_store.instance.port = 5432
 
