@@ -1,6 +1,7 @@
 """E2E tests for the `memex note template` CLI sub-group."""
 
 import pathlib
+from unittest.mock import patch
 
 import tomli_w
 import pytest
@@ -233,3 +234,159 @@ class TestRemoteFilestoreGuard:
         mock_config.server.file_store.root = root
         result = runner.invoke(app, ['template', 'dir', '--local'], obj=mock_config)
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# template register --github-url
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateRegisterGithub:
+    def test_register_from_github_url(
+        self, runner: CliRunner, mock_config, tmp_path: pathlib.Path
+    ) -> None:
+        """Register a template from a GitHub repo URL."""
+        # Separate repo dir from the registration target dir
+        repo_dir = tmp_path / 'repo'
+        template_file = _write_toml_template(
+            repo_dir / 'templates', 'remote_tmpl', name='Remote Template'
+        )
+        dest_dir = tmp_path / 'dest'
+        dest_dir.mkdir()
+        mock_config.server.file_store.root = str(dest_dir)
+
+        with (
+            patch(
+                'memex_common.github_cache.download_and_cache_github_repo',
+                return_value=repo_dir,
+            ) as mock_download,
+            patch(
+                'memex_common.github_cache.resolve_template_in_repo',
+                return_value=template_file,
+            ) as mock_resolve,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    'template',
+                    'register',
+                    'templates/remote_tmpl.toml',
+                    '--github-url',
+                    'https://github.com/user/repo',
+                ],
+                obj=mock_config,
+            )
+
+        assert result.exit_code == 0, result.stdout
+        assert 'Registered' in result.stdout
+        mock_download.assert_called_once_with('https://github.com/user/repo')
+        mock_resolve.assert_called_once_with(repo_dir, 'templates/remote_tmpl.toml')
+
+    def test_register_github_download_error(self, runner: CliRunner, mock_config) -> None:
+        """Invalid GitHub URL produces a clear error."""
+        with patch(
+            'memex_common.github_cache.download_and_cache_github_repo',
+            side_effect=ValueError('Invalid GitHub URL'),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    'template',
+                    'register',
+                    'templates/test.toml',
+                    '--github-url',
+                    'https://not-github.com/bad',
+                ],
+                obj=mock_config,
+            )
+
+        assert result.exit_code == 1
+        assert 'Invalid GitHub URL' in result.stdout
+
+    def test_register_github_file_not_found(
+        self, runner: CliRunner, mock_config, tmp_path: pathlib.Path
+    ) -> None:
+        """Missing template file in repo produces a clear error."""
+        with (
+            patch(
+                'memex_common.github_cache.download_and_cache_github_repo',
+                return_value=tmp_path,
+            ),
+            patch(
+                'memex_common.github_cache.resolve_template_in_repo',
+                side_effect=FileNotFoundError('Template not found: missing.toml'),
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    'template',
+                    'register',
+                    'missing.toml',
+                    '--github-url',
+                    'https://github.com/user/repo',
+                ],
+                obj=mock_config,
+            )
+
+        assert result.exit_code == 1
+        assert 'Template not found' in result.stdout
+
+    def test_register_github_http_error(
+        self, runner: CliRunner, mock_config, tmp_path: pathlib.Path
+    ) -> None:
+        """HTTP download failure produces a clear error."""
+        import httpx
+        from unittest.mock import MagicMock
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 404
+        http_err = httpx.HTTPStatusError(
+            '404 Not Found',
+            request=MagicMock(spec=httpx.Request),
+            response=mock_response,
+        )
+        with patch(
+            'memex_common.github_cache.download_and_cache_github_repo',
+            side_effect=http_err,
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    'template',
+                    'register',
+                    'templates/test.toml',
+                    '--github-url',
+                    'https://github.com/user/repo',
+                ],
+                obj=mock_config,
+            )
+
+        assert result.exit_code == 1
+        assert 'Failed to download repository' in result.stdout
+
+    def test_register_local_path_not_found(self, runner: CliRunner, mock_config) -> None:
+        """Non-existent local path produces a clear error."""
+        result = runner.invoke(
+            app,
+            ['template', 'register', '/nonexistent/path/template.toml'],
+            obj=mock_config,
+        )
+        assert result.exit_code == 1
+        assert 'File not found' in result.stdout
+
+    def test_existing_local_register_still_works(
+        self, runner: CliRunner, mock_config, tmp_path: pathlib.Path
+    ) -> None:
+        """Existing local-path registration still works after path type change."""
+        source_dir = tmp_path / 'source'
+        source_path = _write_toml_template(
+            source_dir, 'standup', name='Standup', description='Daily standup'
+        )
+        mock_config.server.file_store.root = str(tmp_path)
+
+        result = runner.invoke(app, ['template', 'register', str(source_path)], obj=mock_config)
+        assert result.exit_code == 0
+        assert 'Registered' in result.stdout
+        assert 'standup' in result.stdout
+        assert (tmp_path / 'templates' / 'standup.toml').exists()
