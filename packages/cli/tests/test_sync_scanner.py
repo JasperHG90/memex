@@ -272,3 +272,81 @@ class TestIgnoreFolders:
         note.write_text('# test')
         exclude = ExcludeConfig(ignore_folders=['private'])
         assert _is_excluded(note, tmp_path, exclude) is True
+
+
+class TestMultiFormatScanning:
+    """Tests for scanning non-markdown file types (AC-005, AC-008)."""
+
+    def test_scanner_finds_multiple_extensions(self, tmp_path: Path) -> None:
+        """AC-005: vault with .md + .pdf + .pptx files, scanner finds all."""
+        (tmp_path / 'note.md').write_text('# Markdown note')
+        (tmp_path / 'report.pdf').write_bytes(b'%PDF-1.4 fake pdf content')
+        (tmp_path / 'slides.pptx').write_bytes(b'PK\x03\x04 fake pptx')
+        (tmp_path / 'ignored.docx').write_bytes(b'PK\x03\x04 fake docx')
+
+        exclude = ExcludeConfig()
+        assets = AssetConfig()
+        notes = scan_vault(
+            tmp_path,
+            exclude,
+            assets,
+            include_extensions=['.md', '.pdf', '.pptx'],
+        )
+        paths = {n.relative_path for n in notes}
+        assert 'note.md' in paths
+        assert 'report.pdf' in paths
+        assert 'slides.pptx' in paths
+        # .docx not in include_extensions, should be excluded
+        assert 'ignored.docx' not in paths
+
+    def test_non_md_files_have_no_assets(self, tmp_path: Path) -> None:
+        """AC-008: non-md files should not get asset resolution."""
+        (tmp_path / 'report.pdf').write_bytes(b'%PDF-1.4 fake pdf')
+        (tmp_path / 'image.png').write_bytes(b'\x89PNG fake image')
+
+        exclude = ExcludeConfig()
+        assets = AssetConfig()
+        notes = scan_vault(
+            tmp_path,
+            exclude,
+            assets,
+            include_extensions=['.pdf'],
+        )
+        assert len(notes) == 1
+        assert notes[0].relative_path == 'report.pdf'
+        assert notes[0].assets == []
+
+    def test_non_md_files_skip_resolve_assets(self, tmp_path: Path) -> None:
+        """AC-008: resolve_assets should NOT be called for non-md files."""
+        from unittest.mock import patch
+
+        (tmp_path / 'report.pdf').write_bytes(b'%PDF-1.4 fake pdf')
+
+        exclude = ExcludeConfig()
+        assets = AssetConfig()
+        with patch('memex_cli.sync.scanner.resolve_assets') as mock_resolve:
+            notes = scan_vault(
+                tmp_path,
+                exclude,
+                assets,
+                include_extensions=['.pdf'],
+            )
+        mock_resolve.assert_not_called()
+        assert len(notes) == 1
+        assert notes[0].assets == []
+
+    def test_non_md_files_skip_frontmatter_check(self, tmp_path: Path) -> None:
+        """Non-md files should not be checked for frontmatter skip markers."""
+        # A PDF that happens to start with bytes looking like frontmatter
+        (tmp_path / 'tricky.pdf').write_bytes(b'---\nagents: skip\n---\nfake pdf')
+
+        exclude = ExcludeConfig()
+        assets = AssetConfig()
+        notes = scan_vault(
+            tmp_path,
+            exclude,
+            assets,
+            include_extensions=['.pdf'],
+        )
+        # Should NOT be skipped — frontmatter check only applies to .md
+        assert len(notes) == 1

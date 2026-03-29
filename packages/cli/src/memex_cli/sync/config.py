@@ -105,6 +105,23 @@ class SyncConfig(BaseModel):
         default_factory=AssetConfig,
         description='Asset upload settings.',
     )
+    include_extensions: list[str] = Field(
+        default_factory=lambda: [
+            '.md',
+            '.pdf',
+            '.docx',
+            '.pptx',
+            '.xlsx',
+            '.csv',
+            '.json',
+            '.xml',
+            '.html',
+            '.msg',
+            '.eml',
+        ],
+        description='File extensions to include in sync. '
+        'Files with extensions not in this list are ignored.',
+    )
     note_key_prefix: str = Field(
         default='obsidian',
         description='Prefix for the note_key used for idempotent ingestion. '
@@ -300,6 +317,8 @@ state_file = ".memex-sync.db"
 batch_size = 32
 note_key_prefix = "obsidian"
 default_tags = ["obsidian"]
+# File extensions to include in sync (non-.md files are converted server-side)
+include_extensions = [".md", ".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".json", ".xml", ".html", ".msg", ".eml"]
 
 [sync.exclude]
 base = [".obsidian", ".trash", ".git", "node_modules"]

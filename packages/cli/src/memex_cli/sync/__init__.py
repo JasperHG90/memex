@@ -197,7 +197,12 @@ def status(
     db_path = vault_path / cfg.sync.state_file
     state = SyncStateDB(db_path)
     try:
-        all_notes = scan_vault(vault_path, cfg.sync.exclude, cfg.sync.assets)
+        all_notes = scan_vault(
+            vault_path,
+            cfg.sync.exclude,
+            cfg.sync.assets,
+            cfg.sync.include_extensions,
+        )
         tracked = state.get_all_files()
         changed, deleted, returning = diff(state, all_notes)
 

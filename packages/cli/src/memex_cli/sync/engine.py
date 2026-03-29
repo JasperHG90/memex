@@ -70,6 +70,11 @@ def _build_note_dto(
         asset_bytes = asset.path.read_bytes()
         files_dict[asset.relative_path] = base64.b64encode(asset_bytes)
 
+    # Set filename for non-markdown files so the server can detect the format
+    # and convert via FileContentProcessor
+    is_markdown = note.path.suffix.lower() == '.md'
+    filename = None if is_markdown else note.path.name
+
     return NoteCreateDTO(
         name=name,
         description='',
@@ -78,6 +83,7 @@ def _build_note_dto(
         tags=tags or [],
         note_key=note_key,
         vault_id=vault_id,
+        filename=filename,
     )
 
 
@@ -198,7 +204,12 @@ async def sync_vault(
     # 1. Scan
     if on_progress:
         on_progress('scanning', 0, 0, 'Scanning for notes...')
-    all_notes = scan_vault(vault_path, sync_config.exclude, sync_config.assets)
+    all_notes = scan_vault(
+        vault_path,
+        sync_config.exclude,
+        sync_config.assets,
+        sync_config.include_extensions,
+    )
     result.total_scanned = len(all_notes)
     if on_progress:
         on_progress(

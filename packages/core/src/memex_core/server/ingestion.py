@@ -41,6 +41,11 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI, NoteInput
+from memex_core.services.ingestion import (
+    _convert_to_markdown,
+    _needs_conversion,
+    _wrap_extracted_content,
+)
 from memex_core.server.auth import (
     AuthContext,
     Permission,
@@ -131,6 +136,19 @@ async def ingest_note(
         except binascii.Error:
             raise HTTPException(status_code=400, detail='Invalid Base64 encoding in note content')
         decoded_files = _decode_base64_dict(request.files, 'files')
+
+        # Convert non-markdown content to markdown before constructing NoteInput
+        if _needs_conversion(request):
+            extracted = await _convert_to_markdown(
+                decoded_content,
+                request.filename,
+                api._file_processor,
+            )
+            md_content = _wrap_extracted_content(extracted, request.filename)
+            decoded_content = md_content.encode('utf-8')
+            # Merge extracted images into files
+            for img_name, img_bytes in extracted.images.items():
+                decoded_files[img_name] = img_bytes
 
         note = NoteInput(
             name=request.name,

@@ -110,3 +110,30 @@ def test_note_search_result_default_summaries():
     result = NoteSearchResult(note_id=uuid4(), metadata={})
     assert result.summaries == []
     assert result.score == 0.0
+
+
+def test_note_dto_binary_content_serialization():
+    """NoteCreateDTO with filename and binary content serializes without crashing."""
+    import base64
+
+    # Arbitrary binary bytes (not valid UTF-8)
+    binary_content = bytes(range(256))
+    b64_content = base64.b64encode(binary_content).decode('ascii')
+
+    dto = NoteCreateDTO.model_validate(
+        {
+            'name': 'report.pdf',
+            'description': 'A PDF report',
+            'content': b64_content,
+            'filename': 'report.pdf',
+            'tags': ['test'],
+        }
+    )
+
+    assert dto.filename == 'report.pdf'
+    assert dto.content_decoded == binary_content
+
+    # Serialization must not crash
+    dumped = dto.model_dump(mode='json')
+    assert dumped['filename'] == 'report.pdf'
+    assert isinstance(dumped['content'], str)
