@@ -1,32 +1,22 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from uuid import UUID
 
-import httpx
 import structlog
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from memex_common.client import RemoteMemexAPI
-
-import warnings
-
-warnings.warn(
-    'obsidian-memex-sync is deprecated. Use `memex note sync` instead. '
-    'Install with: pip install memex-cli[sync]',
-    DeprecationWarning,
-    stacklevel=2,
-)
+from memex_common.config import MemexConfig
+from memex_cli.utils import get_api_context, async_command
 
 from .config import DEFAULT_CONFIG_TOML, CONFIG_FILENAME, WatchMode, load_config
 from .scanner import scan_vault
 from .state import SyncStateDB, diff
-from .sync import sync_vault
+from .engine import sync_vault
 from .watcher import run_watcher
 
 structlog.configure(
@@ -42,12 +32,13 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
+console = Console()
+
 app = typer.Typer(
-    name='obsidian-memex-sync',
-    help='Sync Markdown notes to Memex.',
+    name='sync',
+    help='Sync a folder of Markdown notes to Memex.',
     no_args_is_help=True,
 )
-console = Console()
 
 
 def _make_progress() -> Progress:
@@ -63,8 +54,10 @@ def _make_progress() -> Progress:
     )
 
 
-@app.command(no_args_is_help=True)
-def sync(
+@app.command('run', no_args_is_help=True)
+@async_command
+async def run_sync(
+    ctx: typer.Context,
     vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
     config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
     full: bool = typer.Option(False, '--full', help='Ignore last sync, re-sync all'),
@@ -104,22 +97,8 @@ def sync(
         raise typer.Exit(1)
 
     cfg = load_config(vault_path, config)
-
-    if dry_run:
-        result = asyncio.run(sync_vault(vault_path, cfg, full=full, dry_run=True))
-        console.print(f'[bold]Scanned:[/bold] {result.total_scanned} notes')
-        console.print(f'[bold]Changed:[/bold] {result.changed} notes would be synced')
-        if result.deleted_detected:
-            console.print(
-                f'[yellow]Deleted from folder:[/yellow] {len(result.deleted_detected)} notes'
-            )
-            if no_handle_deletes:
-                console.print('  (--no-handle-deletes: no action will be taken)')
-            elif hard_delete:
-                console.print('  (--hard-delete: would be permanently deleted from Memex)')
-            else:
-                console.print('  (would be archived in Memex)')
-        return
+    memex_config: MemexConfig = ctx.obj
+    vault_id = cfg.vault_id or memex_config.write_vault
 
     progress = _make_progress()
     task_ids: dict[str, int] = {}
@@ -138,23 +117,47 @@ def sync(
         tid = task_ids[phase]
         progress.update(tid, completed=current, total=total or None, detail=detail)
 
-    with progress:
-        result = asyncio.run(
-            sync_vault(
+    async with get_api_context(memex_config) as api:
+        if dry_run:
+            result = await sync_vault(
                 vault_path,
-                cfg,
+                api,
+                cfg.sync,
+                vault_id=vault_id,
+                dry_run=True,
+                full=full,
+            )
+            console.print(f'[bold]Scanned:[/bold] {result.total_scanned} notes')
+            console.print(f'[bold]Changed:[/bold] {result.changed} notes would be synced')
+            if result.deleted_detected:
+                console.print(
+                    f'[yellow]Deleted from folder:[/yellow] {len(result.deleted_detected)} notes'
+                )
+                if no_handle_deletes:
+                    console.print('  (--no-handle-deletes: no action will be taken)')
+                elif hard_delete:
+                    console.print('  (--hard-delete: would be permanently deleted from Memex)')
+                else:
+                    console.print('  (would be archived in Memex)')
+            return
+
+        with progress:
+            result = await sync_vault(
+                vault_path,
+                api,
+                cfg.sync,
+                vault_id=vault_id,
                 full=full,
                 background=background,
                 handle_deletes=not no_handle_deletes,
                 hard_delete=hard_delete,
                 on_progress=on_progress,
             )
-        )
 
     if background and result.job_id:
         console.print(f'[green]Batch job submitted:[/green] {result.job_id}')
         console.print(f'  {result.changed} note(s) queued for ingestion')
-        console.print(f'  Check status: obsidian-memex-sync job-status {result.job_id}')
+        console.print(f'  Check status: memex note sync job {result.job_id}')
         return
 
     if result.changed == 0 and not result.deleted_detected:
@@ -182,12 +185,14 @@ def sync(
 
 @app.command(no_args_is_help=True)
 def status(
+    ctx: typer.Context,
     vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
     config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
 ) -> None:
     """Show sync state and pending changes."""
     vault_path = vault_path.resolve()
     cfg = load_config(vault_path, config)
+    memex_config: MemexConfig = ctx.obj
 
     db_path = vault_path / cfg.sync.state_file
     state = SyncStateDB(db_path)
@@ -207,7 +212,10 @@ def status(
         table.add_row('Changed / new', str(len(changed)))
         table.add_row('Deleted from folder', str(len(deleted)))
         table.add_row('Returning (unarchive)', str(len(returning)))
-        table.add_row('Memex vault', state.vault_id or cfg.server.vault_id or '(default)')
+        table.add_row(
+            'Memex vault',
+            state.vault_id or cfg.vault_id or memex_config.write_vault or '(default)',
+        )
 
         console.print(table)
 
@@ -231,54 +239,39 @@ def status(
         state.close()
 
 
-@app.command('job-status', no_args_is_help=True)
-def job_status(
+@app.command('job', no_args_is_help=True)
+@async_command
+async def job_status(
+    ctx: typer.Context,
     job_id: str = typer.Argument(..., help='Batch job ID returned by sync --background'),
-    server_url: str = typer.Option(
-        'http://localhost:8321',
-        envvar='OBSIDIAN_SYNC_SERVER__URL',
-        help='Memex server URL',
-    ),
-    api_key: str | None = typer.Option(
-        None,
-        envvar='OBSIDIAN_SYNC_SERVER__API_KEY',
-        help='Memex API key',
-    ),
 ) -> None:
     """Check the status of a background batch ingestion job."""
+    memex_config: MemexConfig = ctx.obj
+    async with get_api_context(memex_config) as api:
+        job = await api.get_job_status(UUID(job_id))
 
-    async def _check() -> None:
-        base_url = f'{server_url.rstrip("/")}/api/v1/'
-        headers: dict[str, str] = {}
-        if api_key:
-            headers['X-API-Key'] = api_key
+    table = Table(title='Batch Job Status')
+    table.add_column('Field', style='bold')
+    table.add_column('Value')
 
-        async with httpx.AsyncClient(base_url=base_url, timeout=30.0, headers=headers) as client:
-            api = RemoteMemexAPI(client)
-            status = await api.get_job_status(UUID(job_id))
+    table.add_row('Job ID', str(job.job_id))
+    table.add_row('Status', job.status)
+    if job.progress:
+        table.add_row('Progress', job.progress)
+    if job.result:
+        table.add_row('Processed', str(job.result.processed_count))
+        table.add_row('Skipped', str(job.result.skipped_count))
+        table.add_row('Failed', str(job.result.failed_count))
+        if job.result.errors:
+            table.add_row('Errors', str(len(job.result.errors)))
 
-        table = Table(title='Batch Job Status')
-        table.add_column('Field', style='bold')
-        table.add_column('Value')
-
-        table.add_row('Job ID', str(status.job_id))
-        table.add_row('Status', status.status)
-        if status.progress:
-            table.add_row('Progress', status.progress)
-        if status.result:
-            table.add_row('Processed', str(status.result.processed_count))
-            table.add_row('Skipped', str(status.result.skipped_count))
-            table.add_row('Failed', str(status.result.failed_count))
-            if status.result.errors:
-                table.add_row('Errors', str(len(status.result.errors)))
-
-        console.print(table)
-
-    asyncio.run(_check())
+    console.print(table)
 
 
 @app.command(no_args_is_help=True)
-def watch(
+@async_command
+async def watch(
+    ctx: typer.Context,
     vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
     config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
     mode: str | None = typer.Option(None, help='Override watch mode: events|poll'),
@@ -293,17 +286,26 @@ def watch(
     if mode:
         cfg.watch.mode = WatchMode(mode)
 
-    console.print(f'[bold]Watching[/bold] {vault_path} (mode={cfg.watch.mode})')
-    console.print('Press Ctrl+C to stop.\n')
+    memex_config: MemexConfig = ctx.obj
+    vault_id = cfg.vault_id or memex_config.write_vault
+    api_key_str = memex_config.api_key.get_secret_value() if memex_config.api_key else None
 
-    asyncio.run(run_watcher(vault_path, cfg))
+    console.print(f'Watch mode: [cyan]{cfg.watch.mode.value}[/cyan]')
+    await run_watcher(
+        vault_path,
+        sync_config=cfg.sync,
+        watch_config=cfg.watch,
+        server_url=memex_config.server_url,
+        api_key=api_key_str,
+        vault_id=vault_id,
+    )
 
 
 @app.command(no_args_is_help=True)
 def init(
     vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
 ) -> None:
-    """Create a default obsidian-sync.toml in the folder."""
+    """Create a default note-sync.toml in the folder."""
     vault_path = vault_path.resolve()
     config_path = vault_path / CONFIG_FILENAME
     if config_path.exists():
@@ -312,4 +314,4 @@ def init(
 
     config_path.write_text(DEFAULT_CONFIG_TOML)
     console.print(f'[green]Created {config_path}[/green]')
-    console.print('Edit the file to configure your Memex server and sync settings.')
+    console.print('Edit the file to configure your sync settings.')
