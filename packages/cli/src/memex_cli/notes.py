@@ -40,6 +40,27 @@ app = typer.Typer(
 )
 app.add_typer(assets_app)
 
+try:
+    from memex_cli.sync import app as sync_app
+
+    app.add_typer(sync_app)
+except ImportError:
+    _sync_stub = typer.Typer(
+        name='sync',
+        help='Sync a folder of Markdown notes to Memex. (requires: pip install memex-cli[sync])',
+        invoke_without_command=True,
+    )
+
+    @_sync_stub.callback(invoke_without_command=True)
+    def _sync_not_installed(ctx: typer.Context) -> None:
+        console.print(
+            '[bold red]Error:[/bold red] Missing dependencies for note sync.\n'
+            'Install with: [cyan]pip install memex-cli\\[sync][/cyan]'
+        )
+        raise typer.Exit(1)
+
+    app.add_typer(_sync_stub)
+
 
 @app.command('add')
 @async_command
@@ -1269,6 +1290,10 @@ def template_register(
     local: Annotated[
         bool, typer.Option('--local', help='Register in project-local scope instead of global.')
     ] = False,
+    name: Annotated[
+        str | None,
+        typer.Option('--name', '-n', help='Override the display name for the template.'),
+    ] = None,
 ) -> None:
     """Register a template by copying a .toml file to the templates directory."""
     if not path.suffix == '.toml':
@@ -1278,7 +1303,7 @@ def template_register(
     registry = _get_template_registry(ctx)
     scope = 'local' if local else 'global'
     try:
-        info = registry.register(path, scope=scope)
+        info = registry.register(path, name=name, scope=scope)
     except ValueError as e:
         console.print(f'[red]{e}[/red]')
         raise typer.Exit(1)

@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 server = ["memex-core"]
 mcp = ["memex-mcp"]
+sync = ["watchdog>=4.0.0", "sqlmodel>=0.0.22", "structlog>=25.0.0"]
 
 [tool.uv.sources]
 memex-common = { workspace = true }
