@@ -23,6 +23,8 @@ from memex_core.memory.extraction.models import (
     ProcessedFact,
     PageIndexOutput,
 )
+import yaml
+
 from memex_core.memory.extraction.core import (
     extract_facts_from_text,
     extract_facts_from_chunks,
@@ -30,6 +32,7 @@ from memex_core.memory.extraction.core import (
     _convert_causal_relations,
     _detect_frontmatter,
     ExtractSemanticFacts,
+    FRONTMATTER_PATTERN,
     stable_chunk_text,
     content_hash,
     index_document,
@@ -59,6 +62,34 @@ from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.processing.titles import resolve_title_from_page_index
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
+
+_USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
+
+
+def _separate_user_notes_from_frontmatter(
+    fm_text: str,
+) -> tuple[str | None, str | None]:
+    """Strip ``user_notes`` from frontmatter for separate semantic extraction.
+
+    Returns ``(cleaned_frontmatter_or_None, user_notes_text_or_None)``.
+    *cleaned_frontmatter* is ``None`` when the frontmatter contained **only**
+    the ``user_notes`` field.
+    """
+    match = FRONTMATTER_PATTERN.match(fm_text)
+    if not match:
+        return fm_text, None
+    yaml_body = match.group('yaml')
+    try:
+        data = yaml.safe_load(yaml_body)
+    except yaml.YAMLError:
+        return fm_text, None
+    if not isinstance(data, dict) or 'user_notes' not in data:
+        return fm_text, None
+
+    user_notes_text = str(data['user_notes'])
+    cleaned = _USER_NOTES_FIELD_RE.sub('', yaml_body + '\n').strip()
+    cleaned_fm = f'---\n{cleaned}\n---\n' if cleaned else None
+    return cleaned_fm, user_notes_text
 
 
 def _make_lm(model_cfg: 'memex_core.config.ModelConfig') -> dspy.LM:
@@ -429,32 +460,70 @@ class ExtractionEngine:
             # Frontmatter is at the start, so assign to chunk 0.
             fm_text, _ = _detect_frontmatter(combined_text)
             if fm_text:
-                fm_facts = await extract_facts_from_frontmatter(
-                    frontmatter_text=fm_text,
-                    event_date=event_date or contents[0].event_date,
-                    lm=self.lm,
-                    semaphore=self.semaphore,
-                )
-                for f in fm_facts:
-                    ef = ExtractedFact(
-                        fact_text=f.formatted_text,
-                        fact_type=f.fact_type,
-                        entities=f.entities,
-                        occurred_start=parse_iso_datetime(f.occurred_start)
-                        if f.occurred_start
-                        else None,
-                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
-                        causal_relations=[],
-                        content_index=0,
-                        chunk_index=0,
-                        context='frontmatter',
-                        mentioned_at=event_date or contents[0].event_date,
-                        payload=contents[0].payload or {},
-                        who=f.who,
-                        where=f.where,
-                        vault_id=vault_id,
+                cleaned_fm, user_notes_text = _separate_user_notes_from_frontmatter(fm_text)
+                if cleaned_fm:
+                    fm_facts = await extract_facts_from_frontmatter(
+                        frontmatter_text=cleaned_fm,
+                        event_date=event_date or contents[0].event_date,
+                        lm=self.lm,
+                        semaphore=self.semaphore,
                     )
-                    all_extracted_facts.append(ef)
+                    for f in fm_facts:
+                        ef = ExtractedFact(
+                            fact_text=f.formatted_text,
+                            fact_type=f.fact_type,
+                            entities=f.entities,
+                            occurred_start=parse_iso_datetime(f.occurred_start)
+                            if f.occurred_start
+                            else None,
+                            occurred_end=parse_iso_datetime(f.occurred_end)
+                            if f.occurred_end
+                            else None,
+                            causal_relations=[],
+                            content_index=0,
+                            chunk_index=0,
+                            context='frontmatter',
+                            mentioned_at=event_date or contents[0].event_date,
+                            payload=contents[0].payload or {},
+                            who=f.who,
+                            where=f.where,
+                            vault_id=vault_id,
+                        )
+                        all_extracted_facts.append(ef)
+                if user_notes_text:
+                    un_facts, _ = await extract_facts_from_text(
+                        text=user_notes_text,
+                        event_date=event_date or contents[0].event_date,
+                        lm=self.lm,
+                        predictor=self.predictor,
+                        agent_name=agent_name,
+                        chunk_max_chars=4000,
+                        chunk_overlap=200,
+                        context='user_notes',
+                        semaphore=self.semaphore,
+                    )
+                    for f in un_facts:
+                        ef = ExtractedFact(
+                            fact_text=f.formatted_text,
+                            fact_type=f.fact_type,
+                            entities=f.entities,
+                            occurred_start=parse_iso_datetime(f.occurred_start)
+                            if f.occurred_start
+                            else None,
+                            occurred_end=parse_iso_datetime(f.occurred_end)
+                            if f.occurred_end
+                            else None,
+                            causal_relations=[],
+                            content_index=0,
+                            chunk_index=0,
+                            context='user_notes',
+                            mentioned_at=event_date or contents[0].event_date,
+                            payload=contents[0].payload or {},
+                            who=f.who,
+                            where=f.where,
+                            vault_id=vault_id,
+                        )
+                        all_extracted_facts.append(ef)
 
             if all_extracted_facts:
                 add_temporal_offsets(all_extracted_facts, self.SECONDS_PER_FACT)
@@ -959,33 +1028,68 @@ class ExtractionEngine:
         fm_text, _ = _detect_frontmatter(combined_text)
         if fm_text and contents:
             first_block_seq = page_index_output.blocks[0].seq if page_index_output.blocks else 0
-            fm_facts = await extract_facts_from_frontmatter(
-                frontmatter_text=fm_text,
-                event_date=event_date or contents[0].event_date,
-                lm=self.lm,
-                semaphore=self.semaphore,
-            )
-            for f in fm_facts:
-                ef = ExtractedFact(
-                    fact_text=f.formatted_text,
-                    fact_type=f.fact_type,
-                    entities=f.entities,
-                    occurred_start=parse_iso_datetime(f.occurred_start)
-                    if f.occurred_start
-                    else None,
-                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
-                    causal_relations=[],
-                    content_index=0,
-                    chunk_index=first_block_seq,
-                    context='frontmatter',
-                    mentioned_at=event_date or contents[0].event_date,
-                    payload=contents[0].payload or {},
-                    who=f.who,
-                    where=f.where,
-                    vault_id=vault_id,
+            cleaned_fm, user_notes_text = _separate_user_notes_from_frontmatter(fm_text)
+            if cleaned_fm:
+                fm_facts = await extract_facts_from_frontmatter(
+                    frontmatter_text=cleaned_fm,
+                    event_date=event_date or contents[0].event_date,
+                    lm=self.lm,
+                    semaphore=self.semaphore,
                 )
-                extracted_facts.append(ef)
-                global_fact_idx += 1
+                for f in fm_facts:
+                    ef = ExtractedFact(
+                        fact_text=f.formatted_text,
+                        fact_type=f.fact_type,
+                        entities=f.entities,
+                        occurred_start=parse_iso_datetime(f.occurred_start)
+                        if f.occurred_start
+                        else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
+                        causal_relations=[],
+                        content_index=0,
+                        chunk_index=first_block_seq,
+                        context='frontmatter',
+                        mentioned_at=event_date or contents[0].event_date,
+                        payload=contents[0].payload or {},
+                        who=f.who,
+                        where=f.where,
+                        vault_id=vault_id,
+                    )
+                    extracted_facts.append(ef)
+                    global_fact_idx += 1
+            if user_notes_text:
+                un_facts, _ = await extract_facts_from_text(
+                    text=user_notes_text,
+                    event_date=event_date or contents[0].event_date,
+                    lm=self.lm,
+                    predictor=self.predictor,
+                    agent_name=agent_name,
+                    chunk_max_chars=4000,
+                    chunk_overlap=200,
+                    context='user_notes',
+                    semaphore=self.semaphore,
+                )
+                for f in un_facts:
+                    ef = ExtractedFact(
+                        fact_text=f.formatted_text,
+                        fact_type=f.fact_type,
+                        entities=f.entities,
+                        occurred_start=parse_iso_datetime(f.occurred_start)
+                        if f.occurred_start
+                        else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
+                        causal_relations=[],
+                        content_index=0,
+                        chunk_index=first_block_seq,
+                        context='user_notes',
+                        mentioned_at=event_date or contents[0].event_date,
+                        payload=contents[0].payload or {},
+                        who=f.who,
+                        where=f.where,
+                        vault_id=vault_id,
+                    )
+                    extracted_facts.append(ef)
+                    global_fact_idx += 1
 
         if not raw_facts and not extracted_facts:
             return [], set()
@@ -1213,32 +1317,66 @@ class ExtractionEngine:
         fm_text, _ = _detect_frontmatter(combined_text)
         if fm_text and contents:
             event_date = contents[0].event_date
-            fm_facts = await extract_facts_from_frontmatter(
-                frontmatter_text=fm_text,
-                event_date=event_date,
-                lm=self.lm,
-                semaphore=self.semaphore,
-            )
-            for f in fm_facts:
-                ef = ExtractedFact(
-                    fact_text=f.formatted_text,
-                    fact_type=f.fact_type,
-                    entities=f.entities,
-                    occurred_start=parse_iso_datetime(f.occurred_start)
-                    if f.occurred_start
-                    else None,
-                    occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
-                    causal_relations=[],
-                    content_index=0,
-                    chunk_index=0,
-                    context='frontmatter',
-                    mentioned_at=event_date,
-                    payload=contents[0].payload or {},
-                    who=f.who,
-                    where=f.where,
-                    vault_id=contents[0].vault_id,
+            cleaned_fm, user_notes_text = _separate_user_notes_from_frontmatter(fm_text)
+            if cleaned_fm:
+                fm_facts = await extract_facts_from_frontmatter(
+                    frontmatter_text=cleaned_fm,
+                    event_date=event_date,
+                    lm=self.lm,
+                    semaphore=self.semaphore,
                 )
-                extracted_facts.append(ef)
+                for f in fm_facts:
+                    ef = ExtractedFact(
+                        fact_text=f.formatted_text,
+                        fact_type=f.fact_type,
+                        entities=f.entities,
+                        occurred_start=parse_iso_datetime(f.occurred_start)
+                        if f.occurred_start
+                        else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
+                        causal_relations=[],
+                        content_index=0,
+                        chunk_index=0,
+                        context='frontmatter',
+                        mentioned_at=event_date,
+                        payload=contents[0].payload or {},
+                        who=f.who,
+                        where=f.where,
+                        vault_id=contents[0].vault_id,
+                    )
+                    extracted_facts.append(ef)
+            if user_notes_text:
+                un_facts, _ = await extract_facts_from_text(
+                    text=user_notes_text,
+                    event_date=event_date,
+                    lm=self.lm,
+                    predictor=self.predictor,
+                    agent_name=agent_name,
+                    chunk_max_chars=chunk_max,
+                    chunk_overlap=chunk_overlap,
+                    context='user_notes',
+                    semaphore=self.semaphore,
+                )
+                for f in un_facts:
+                    ef = ExtractedFact(
+                        fact_text=f.formatted_text,
+                        fact_type=f.fact_type,
+                        entities=f.entities,
+                        occurred_start=parse_iso_datetime(f.occurred_start)
+                        if f.occurred_start
+                        else None,
+                        occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
+                        causal_relations=[],
+                        content_index=0,
+                        chunk_index=0,
+                        context='user_notes',
+                        mentioned_at=event_date,
+                        payload=contents[0].payload or {},
+                        who=f.who,
+                        where=f.where,
+                        vault_id=contents[0].vault_id,
+                    )
+                    extracted_facts.append(ef)
                 global_fact_idx += 1
 
         add_temporal_offsets(extracted_facts, self.SECONDS_PER_FACT)
