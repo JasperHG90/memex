@@ -198,4 +198,4 @@ recordings/cli/.casts/
 # Test artifacts from mocked cache_dir paths
 MagicMock/
 
-.dev.team-artifacts
+.dev-team-artifacts
