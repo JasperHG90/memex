@@ -759,6 +759,145 @@ Print the templates directory path.
 
 ---
 
+## `note sync`
+
+> **Optional dependency.** Sync requires extra packages. Install with:
+> ```bash
+> uv tool install "memex-cli[sync,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
+> ```
+
+Sync a folder of Markdown notes (and other supported formats) to Memex. Tracks state locally in a SQLite database and only re-syncs changed files.
+
+### `note sync init`
+
+```
+memex note sync init VAULT_PATH
+```
+
+Create a default `note-sync.toml` config in the folder.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VAULT_PATH` | Yes | Path to the notes folder. |
+
+---
+
+### `note sync run`
+
+```
+memex note sync run VAULT_PATH [OPTIONS]
+```
+
+Sync changed notes to Memex. By default, deleted local files are archived in Memex (marked stale, excluded from retrieval). Data is preserved and can be restored.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VAULT_PATH` | Yes | Path to the notes folder. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--config` | `-c` | Path | - | Path to a TOML config file. |
+| `--full` | | bool | `False` | Ignore last sync state and re-sync all files. |
+| `--dry-run` | | bool | `False` | Show what would be synced without making changes. |
+| `--background` | `-b` | bool | `False` | Submit a batch job and return immediately. |
+| `--no-handle-deletes` | | bool | `False` | Skip archiving/deleting notes when local files are removed. |
+| `--hard-delete` | | bool | `False` | Permanently delete notes from Memex when local files are removed (irreversible). |
+
+#### Examples
+
+```bash
+# First sync of an Obsidian vault
+memex note sync run ~/Documents/ObsidianVault
+
+# Preview changes without syncing
+memex note sync run ~/notes --dry-run
+
+# Full re-sync, ignoring previous state
+memex note sync run ~/notes --full
+
+# Background batch ingestion
+memex note sync run ~/notes --background
+```
+
+---
+
+### `note sync status`
+
+```
+memex note sync status VAULT_PATH [OPTIONS]
+```
+
+Show sync state and pending changes.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VAULT_PATH` | Yes | Path to the notes folder. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--config` | `-c` | Path | Path to a TOML config file. |
+
+---
+
+### `note sync job`
+
+```
+memex note sync job JOB_ID
+```
+
+Check the status of a background batch ingestion job.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `JOB_ID` | Yes | Batch job ID returned by `sync run --background`. |
+
+---
+
+### `note sync watch`
+
+```
+memex note sync watch VAULT_PATH [OPTIONS]
+```
+
+Watch a folder for changes and sync continuously. Supports event-driven mode (via watchdog) or periodic polling.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `VAULT_PATH` | Yes | Path to the notes folder. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--config` | `-c` | Path | - | Path to a TOML config file. |
+| `--mode` | | str | from config | Override watch mode: `events` (watchdog) or `poll` (periodic scan). |
+
+#### Examples
+
+```bash
+# Watch with default settings (event-driven)
+memex note sync watch ~/notes
+
+# Watch with polling mode
+memex note sync watch ~/notes --mode poll
+```
+
+---
+
 ## `entity`
 
 Explore and manage extracted entities (people, organizations, concepts).

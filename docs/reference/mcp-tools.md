@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 26 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 31 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Running the MCP Server
 
@@ -198,11 +198,36 @@ Rename a note. Updates title in metadata, page index, and doc_metadata.
 
 ### `memex_get_template`
 
-Retrieve a markdown template for note creation. Use the returned template as the structure for `memex_add_note`.
+Retrieve a markdown template for note creation. Use the returned template as the structure for `memex_add_note`. Use `memex_list_templates` to discover available templates.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `type` | string | Yes | Template type: `technical_brief`, `general_note`, `architectural_decision_record`, `request_for_comments`, `quick_note`. |
+| `type` | string | Yes | Template slug. Use `memex_list_templates` to discover available templates. Built-in types include: `technical_brief`, `general_note`, `architectural_decision_record`, `request_for_comments`, `quick_note`. |
+
+---
+
+### `memex_list_templates`
+
+List all available note templates with metadata (slug, name, description, source scope). Templates are discovered across three layers: built-in, global (`{filestore_root}/templates/`), and project-local (`.memex/templates/`).
+
+No parameters.
+
+Returns a formatted list of templates with slug, source scope, display name, and description.
+
+---
+
+### `memex_register_template`
+
+Register a new note template from inline content. Creates a template in the global scope. To delete a template, use the CLI: `memex note template delete <slug>`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `slug` | string | Yes | - | Template identifier (e.g. `sprint_retro`). |
+| `template` | string | Yes | - | Markdown template content. Should include YAML frontmatter. |
+| `name` | string | No | - | Human-readable template name. |
+| `description` | string | No | - | Short description of the template. |
+
+Returns confirmation with the registered slug, display name, and scope.
 
 ---
 
@@ -397,3 +422,21 @@ Browse recent notes. Defaults to all vaults. Filter by vault names/UUIDs and opt
 | `vault_ids` | string[] | No | - | Vault UUIDs or names. Omit for all vaults. |
 | `after` | string | No | - | Only notes on/after this date (ISO 8601). |
 | `before` | string | No | - | Only notes on/before this date (ISO 8601). |
+
+---
+
+## Lineage Tools
+
+### `memex_get_lineage`
+
+Trace the provenance chain of an entity. Upstream: mental_model → observation → memory_unit → note. Downstream: note → memory_unit → observation → mental_model.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `entity_type` | string | Yes | - | Entity type: `mental_model`, `observation`, `memory_unit`, or `note`. |
+| `entity_id` | string | Yes | - | UUID of the entity. |
+| `direction` | string | No | `upstream` | Traversal direction: `upstream`, `downstream`, or `both`. |
+| `depth` | int | No | `3` | Max recursion depth. |
+| `limit` | int | No | `5` | Max children per node. |
+
+Returns a tree structure showing the provenance chain with entity types, IDs, labels, and children at each level.

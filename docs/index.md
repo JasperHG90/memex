@@ -31,6 +31,9 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 | [Doc Search vs Memory Search](how-to/doc-search-vs-memory-search.md) | Choose between note search (raw documents) and memory search (extracted facts). |
 | [Database Migrations](how-to/database-migrations.md) | Manage PostgreSQL schema migrations with `memex db` (Alembic). |
 | [Delete and Archival](how-to/delete-archival.md) | Delete notes, entities, and memory units; manage data lifecycle. |
+| [Note Templates](how-to/note-templates.md) | Create, register, and use note templates for consistent structure. |
+| [Sync Notes](how-to/sync-notes.md) | Sync a folder of Markdown notes to Memex with incremental updates. |
+| [Firefox Extension](how-to/firefox-extension.md) | Capture articles and PDFs from Firefox directly into Memex. |
 
 ---
 
@@ -42,7 +45,7 @@ Technical descriptions of every interface, command, endpoint, and configuration 
 |:----------|:------------|
 | [CLI Commands](reference/cli-commands.md) | Complete reference for all `memex` CLI commands, flags, and arguments. |
 | [REST API](reference/rest-api.md) | All HTTP endpoints, request/response schemas, status codes, and authentication. |
-| [MCP Tools](reference/mcp-tools.md) | All 26 MCP tools with parameter tables and usage workflow. |
+| [MCP Tools](reference/mcp-tools.md) | All 31 MCP tools with parameter tables and usage workflow. |
 | [MemexAPI](reference/memexapi-reference.md) | Python API class — 60+ public methods for programmatic access. |
 | [Configuration](reference/configuration.md) | Every configuration key, type, default, and environment variable mapping. |
 | [Evaluation Report](reference/evaluation-report.md) | LoCoMo benchmark results with retrieval efficiency analysis and distribution plots. |
