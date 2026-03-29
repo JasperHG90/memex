@@ -159,7 +159,7 @@ async def _initialize_models(cache_dir: str):
 def start(
     ctx: typer.Context,
     host: str = typer.Option('0.0.0.0', envvar='MEMEX_HOST', help='Host to bind the server to'),
-    port: int = typer.Option(8000, envvar='MEMEX_PORT', help='Port to bind the server to'),
+    port: int | None = typer.Option(None, envvar='MEMEX_PORT', help='Port to bind the server to'),
     workers: int = typer.Option(
         None, '--workers', '-w', envvar='MEMEX_WORKERS', help='Number of worker processes'
     ),
@@ -185,16 +185,20 @@ def start(
         console.print('Use [cyan]memex server stop[/cyan] to stop it first.')
         raise typer.Exit(0)
 
-    # Check port availability
-    if not check_port_available(host, port):
-        console.print(f'[bold red]Error:[/bold red] Port {port} is already in use.')
-        raise typer.Exit(1)
-
     if config:
         os.environ['MEMEX_CONFIG_PATH'] = config
 
     # Load config and check DB
     conf = parse_memex_config()
+
+    # Resolve port: CLI flag / MEMEX_PORT > MEMEX_SERVER__PORT > default (8000)
+    if port is None:
+        port = conf.server.port
+
+    # Check port availability
+    if not check_port_available(host, port):
+        console.print(f'[bold red]Error:[/bold red] Port {port} is already in use.')
+        raise typer.Exit(1)
     db_ready = asyncio.run(_readiness_check(conf.server.meta_store.instance))
     if not db_ready:
         console.print(
