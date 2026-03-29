@@ -27,6 +27,8 @@ from memex_common.schemas import (
     NoteDTO,
     IngestURLRequest,
 )
+import httpx
+
 from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
 
 console = Console()
@@ -1277,14 +1279,9 @@ def template_get(
 def template_register(
     ctx: typer.Context,
     path: Annotated[
-        pathlib.Path,
+        str,
         typer.Argument(
-            help='Path to a .toml template file.',
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            readable=True,
-            resolve_path=True,
+            help='Path to a .toml template file, or relative path within a --github-url repo.',
         ),
     ],
     local: Annotated[
@@ -1294,16 +1291,49 @@ def template_register(
         str | None,
         typer.Option('--name', '-n', help='Override the display name for the template.'),
     ] = None,
+    github_url: Annotated[
+        str | None,
+        typer.Option(
+            '--github-url',
+            '-g',
+            help='GitHub repo URL (https://github.com/USER/REPO/tree/BRANCH). '
+            'When set, path is relative to the repo root.',
+        ),
+    ] = None,
 ) -> None:
     """Register a template by copying a .toml file to the templates directory."""
-    if not path.suffix == '.toml':
+    if github_url is not None:
+        from memex_common.github_cache import (
+            download_and_cache_github_repo,
+            resolve_template_in_repo,
+        )
+
+        try:
+            repo_dir = download_and_cache_github_repo(github_url)
+            resolved = resolve_template_in_repo(repo_dir, path)
+        except (ValueError, FileNotFoundError) as e:
+            console.print(f'[red]{e}[/red]')
+            raise typer.Exit(1)
+        except httpx.HTTPStatusError as e:
+            console.print(f'[red]Failed to download repository: {e}[/red]')
+            raise typer.Exit(1)
+    else:
+        resolved = pathlib.Path(path).resolve()
+        if not resolved.exists():
+            console.print(f'[red]File not found: {path}[/red]')
+            raise typer.Exit(1)
+        if not resolved.is_file():
+            console.print(f'[red]Not a file: {path}[/red]')
+            raise typer.Exit(1)
+
+    if resolved.suffix != '.toml':
         console.print('[red]Template file must be a .toml file.[/red]')
         raise typer.Exit(1)
 
     registry = _get_template_registry(ctx)
     scope = 'local' if local else 'global'
     try:
-        info = registry.register(path, name=name, scope=scope)
+        info = registry.register(resolved, scope=scope)
     except ValueError as e:
         console.print(f'[red]{e}[/red]')
         raise typer.Exit(1)

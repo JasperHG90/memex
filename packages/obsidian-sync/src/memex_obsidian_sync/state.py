@@ -19,6 +19,7 @@ class SyncedFile(SQLModel, table=True):  # type: ignore[call-arg]
     """A file that has been synced to Memex."""
 
     __tablename__ = 'synced_files'
+    __table_args__ = {'extend_existing': True}
 
     relative_path: str = Field(primary_key=True, description='Path relative to the vault root.')
     mtime: float = Field(description='File modification time at last sync (Unix timestamp).')
@@ -37,6 +38,7 @@ class SyncMeta(SQLModel, table=True):  # type: ignore[call-arg]
     """Global sync metadata (singleton row)."""
 
     __tablename__ = 'sync_meta'
+    __table_args__ = {'extend_existing': True}
 
     id: int = Field(default=1, primary_key=True)
     last_sync: str | None = Field(
