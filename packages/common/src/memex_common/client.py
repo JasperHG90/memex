@@ -676,6 +676,23 @@ class RemoteMemexAPI:
         return response.content
 
     # --- Lineage ---
+    async def get_lineage(
+        self,
+        entity_type: str,
+        entity_id: UUID,
+        direction: LineageDirection = LineageDirection.UPSTREAM,
+        depth: int = 3,
+        limit: int = 10,
+    ) -> LineageResponse:
+        """Retrieve lineage of any entity type via ``/lineage/{entity_type}/{id}``."""
+        params = {
+            'direction': direction.value,
+            'depth': depth,
+            'limit': limit,
+        }
+        result = await self._get(f'lineage/{entity_type}/{entity_id}', params=params)
+        return LineageResponse(**result)
+
     async def get_entity_lineage(
         self,
         entity_id: UUID,
@@ -683,7 +700,10 @@ class RemoteMemexAPI:
         depth: int = 3,
         limit: int = 10,
     ) -> LineageResponse:
-        """Retrieve lineage of an entity."""
+        """Retrieve lineage of an entity.
+
+        .. deprecated:: Use :meth:`get_lineage` instead.
+        """
         params = {
             'direction': direction.value,
             'depth': depth,
@@ -699,7 +719,10 @@ class RemoteMemexAPI:
         depth: int = 3,
         limit: int = 10,
     ) -> LineageResponse:
-        """Retrieve lineage of a note."""
+        """Retrieve lineage of a note.
+
+        .. deprecated:: Use :meth:`get_lineage` instead.
+        """
         params = {
             'direction': direction.value,
             'depth': depth,
