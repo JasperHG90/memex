@@ -568,6 +568,13 @@ class NoteCreateDTO(BaseModel):
         description='Template slug used to create this note (e.g. "general_note").',
         examples=['general_note', 'technical_brief'],
     )
+    filename: str | None = Field(
+        default=None,
+        description='Original filename of the content (e.g. "report.pdf"). '
+        'When present and the extension is not .md, the server converts '
+        'the content to Markdown before ingestion using FileContentProcessor.',
+        examples=['report.pdf', 'slides.pptx', 'meeting-notes.md'],
+    )
 
     @property
     def content_decoded(self) -> bytes:
@@ -581,11 +588,20 @@ class NoteCreateDTO(BaseModel):
 
     @field_serializer('content')
     def serialize_content(self, content: bytes) -> str:
-        return content.decode('utf-8')
+        try:
+            return content.decode('utf-8')
+        except UnicodeDecodeError:
+            return base64.b64encode(content).decode('ascii')
 
     @field_serializer('files')
     def serialize_files(self, files: dict[str, bytes]) -> dict[str, str]:
-        return {k: v.decode('utf-8') for k, v in files.items()}
+        result: dict[str, str] = {}
+        for k, v in files.items():
+            try:
+                result[k] = v.decode('utf-8')
+            except UnicodeDecodeError:
+                result[k] = base64.b64encode(v).decode('ascii')
+        return result
 
 
 class OverlappingNote(BaseModel):

@@ -174,29 +174,53 @@ def scan_vault(
     vault_path: Path,
     exclude: ExcludeConfig,
     asset_config: AssetConfig,
+    include_extensions: list[str] | None = None,
 ) -> list[VaultNote]:
-    """Scan an Obsidian vault for .md files with resolved asset references."""
+    """Scan a vault for notes matching configured file extensions.
+
+    Args:
+        vault_path: Root directory to scan.
+        exclude: Exclusion rules (patterns, frontmatter skip).
+        asset_config: Asset resolution settings (only used for .md files).
+        include_extensions: File extensions to include (e.g. ['.md', '.pdf']).
+            Defaults to ['.md'] when not provided.
+    """
     vault_path = vault_path.resolve()
     if not vault_path.is_dir():
         raise FileNotFoundError(f'Vault path does not exist: {vault_path}')
 
+    if include_extensions is None:
+        include_extensions = ['.md']
+    ext_set = {ext.lower() for ext in include_extensions}
+
+    # Collect matching files across all extensions
+    matched_files: set[Path] = set()
+    for ext in ext_set:
+        pattern = f'*{ext}'
+        matched_files.update(vault_path.rglob(pattern))
+
     notes: list[VaultNote] = []
-    for md_file in sorted(vault_path.rglob('*.md')):
-        if _is_excluded(md_file, vault_path, exclude):
+    for file_path in sorted(matched_files):
+        if _is_excluded(file_path, vault_path, exclude):
             continue
 
-        # Check frontmatter skip marker
-        content = md_file.read_text(encoding='utf-8', errors='replace')
-        if _should_skip_frontmatter(content, exclude):
-            continue
+        is_markdown = file_path.suffix.lower() == '.md'
 
-        stat = md_file.stat()
-        rel_path = str(md_file.relative_to(vault_path))
-        assets = resolve_assets(md_file, vault_path, asset_config)
+        # Check frontmatter skip marker (only for markdown files)
+        if is_markdown:
+            content = file_path.read_text(encoding='utf-8', errors='replace')
+            if _should_skip_frontmatter(content, exclude):
+                continue
+
+        stat = file_path.stat()
+        rel_path = str(file_path.relative_to(vault_path))
+
+        # Only resolve assets for markdown files (binary files have no wiki-links)
+        assets = resolve_assets(file_path, vault_path, asset_config) if is_markdown else []
 
         notes.append(
             VaultNote(
-                path=md_file,
+                path=file_path,
                 relative_path=rel_path,
                 mtime=stat.st_mtime,
                 size=stat.st_size,

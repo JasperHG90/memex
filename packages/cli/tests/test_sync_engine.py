@@ -98,6 +98,37 @@ class TestBuildNoteDto:
         decoded_asset = base64.b64decode(dto.files['photo.png'])
         assert decoded_asset.startswith(b'\x89PNG')
 
+    def test_pdf_note_sets_filename(self, vault: Path) -> None:
+        """AC-006: _build_note_dto for a .pdf file includes filename."""
+        from memex_cli.sync.scanner import VaultNote
+
+        pdf_path = vault / 'report.pdf'
+        pdf_path.write_bytes(b'%PDF-1.4 fake pdf content')
+
+        note = VaultNote(
+            path=pdf_path,
+            relative_path='report.pdf',
+            mtime=1000.0,
+            size=25,
+            assets=[],
+        )
+        dto = _build_note_dto(note, 'my-vault', 'test-vault')
+        assert dto.filename == 'report.pdf'
+
+    def test_md_note_has_no_filename(self, vault: Path) -> None:
+        """AC-006: _build_note_dto for a .md file has filename=None."""
+        from memex_cli.sync.scanner import VaultNote
+
+        note = VaultNote(
+            path=vault / 'hello.md',
+            relative_path='hello.md',
+            mtime=1000.0,
+            size=13,
+            assets=[],
+        )
+        dto = _build_note_dto(note, 'my-vault', 'test-vault')
+        assert dto.filename is None
+
 
 class TestSyncVault:
     def test_dry_run_does_not_ingest(

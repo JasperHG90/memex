@@ -116,8 +116,13 @@ class NoteInput:
         self._metadata = NoteMetadata(name=name, description=description)
         if author:
             self._metadata.update('author', author)
-        text = content.decode('utf-8')
-        self._content = inject_user_notes(text, user_notes).encode('utf-8')
+        try:
+            text = content.decode('utf-8')
+            self._content = inject_user_notes(text, user_notes).encode('utf-8')
+        except UnicodeDecodeError:
+            # Binary content (PDF, DOCX, etc.) — store raw bytes for fingerprinting.
+            # The actual markdown conversion happens later in the ingestion pipeline.
+            self._content = content
         self._files = files or {}
         self.source_uri = source_uri
         self.original_content_hash = original_content_hash

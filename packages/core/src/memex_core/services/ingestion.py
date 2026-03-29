@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import pathlib as plb
 import re
+import tempfile
 from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
@@ -21,6 +23,7 @@ from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.extraction.models import RetainContent
 from memex_core.processing.dates import extract_document_date
 from memex_core.processing.files import FileContentProcessor
+from memex_core.processing.models import ExtractedContent
 from memex_core.processing.titles import (
     _is_meaningful_name,
     extract_title_via_llm,
@@ -82,6 +85,73 @@ def _extract_date_from_frontmatter(content: str) -> datetime | None:
             if parsed is not None:
                 return parsed
     return None
+
+
+# Extensions that FileContentProcessor can handle (non-markdown).
+_CONVERTIBLE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        '.pdf',
+        '.docx',
+        '.xlsx',
+        '.pptx',
+        '.csv',
+        '.json',
+        '.xml',
+        '.html',
+        '.htm',
+        '.msg',
+        '.eml',
+    }
+)
+
+
+def _needs_conversion(dto: Any) -> bool:
+    """Check if a NoteCreateDTO requires file-format conversion.
+
+    Returns True when the DTO has a filename whose extension is not
+    markdown and is in the set of convertible formats.
+    """
+    filename = getattr(dto, 'filename', None)
+    if not filename:
+        return False
+    suffix = plb.Path(filename).suffix.lower()
+    return suffix in _CONVERTIBLE_EXTENSIONS
+
+
+async def _convert_to_markdown(
+    raw_bytes: bytes,
+    filename: str,
+    file_processor: FileContentProcessor,
+) -> ExtractedContent:
+    """Convert binary file content to Markdown via FileContentProcessor.
+
+    Writes raw_bytes to a temp file with the correct suffix so the
+    processor can dispatch on extension. Returns the ExtractedContent
+    with .content (markdown str) and .images (dict[str, bytes]).
+    """
+    suffix = plb.Path(filename).suffix
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    try:
+        os.write(fd, raw_bytes)
+        os.close(fd)
+        return await file_processor.extract(plb.Path(tmp_path))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _wrap_extracted_content(extracted: ExtractedContent, filename: str) -> str:
+    """Wrap FileContentProcessor output in YAML frontmatter (matches ingest_from_file pattern)."""
+    now = datetime.now().isoformat()
+    extra_fm = ''
+    if extracted.metadata.get('author'):
+        extra_fm += f'\nauthor: {extracted.metadata["author"]}'
+    if extracted.metadata.get('creation_date'):
+        extra_fm += f'\ncreated_date: {extracted.metadata["creation_date"].isoformat()}'
+    return (
+        f'---\nsource_file: {filename}\ntype: {extracted.content_type}'
+        f'{extra_fm}\ningested_at: {now}\n---\n{extracted.content}\n'
+    )
 
 
 class IngestionService:
@@ -444,7 +514,23 @@ ingested_at: {now}
                         asset_path = f'assets/{vault_name}/{note_uuid}'
                         asset_files_list = []
 
-                        decoded_content = note_dto.content_decoded.decode('utf-8')
+                        # --- Format conversion for non-markdown content ---
+                        if _needs_conversion(note_dto):
+                            raw_bytes = note_dto.content_decoded
+                            extracted = await _convert_to_markdown(
+                                raw_bytes,
+                                note_dto.filename,
+                                self._file_processor,
+                            )
+                            decoded_content = _wrap_extracted_content(
+                                extracted,
+                                note_dto.filename,
+                            )
+                            extracted_images = extracted.images
+                        else:
+                            decoded_content = note_dto.content_decoded.decode('utf-8')
+                            extracted_images = {}
+
                         decoded_content = inject_user_notes(
                             decoded_content, getattr(note_dto, 'user_notes', None)
                         )
@@ -462,6 +548,12 @@ ingested_at: {now}
 
                             full_asset_key = f'{asset_path}/{filename}'
                             await txn.save_file(full_asset_key, raw_content)
+                            asset_files_list.append(full_asset_key)
+
+                        # Stage extracted images (from PDF conversion, etc.)
+                        for img_name, img_bytes in extracted_images.items():
+                            full_asset_key = f'{asset_path}/{img_name}'
+                            await txn.save_file(full_asset_key, img_bytes)
                             asset_files_list.append(full_asset_key)
 
                         resolved_title = await resolve_document_title(
