@@ -8,11 +8,11 @@
 # Dependencies: curl, jq, git (optional)
 set -euo pipefail
 
-RESOLVED_URL="${MEMEX_SERVER_URL:-http://127.0.0.1:8000}"
-API="${RESOLVED_URL}/api/v1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/resolve_config.sh"
 
 # --- Health check: verify Memex server is reachable ---
-if ! curl -sf --max-time 3 "${API}/health" >/dev/null 2>&1; then
+if ! curl -sf --max-time 3 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/health" >/dev/null 2>&1; then
     cat <<EOF
 {"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
 EOF
@@ -50,9 +50,9 @@ else
     encoded_ns=$(jq -rn --arg ns "global,user,app:claude-code" '$ns | @uri')
 fi
 
-curl -sf --max-time 5 "${API}/vaults" > "$tmp_vaults" 2>/dev/null &
-curl -sf --max-time 5 "${API}/notes?sort=-created_at&limit=10" > "$tmp_notes" 2>/dev/null &
-curl -sf --max-time 5 "${API}/kv?namespaces=${encoded_ns}" > "$tmp_kv" 2>/dev/null &
+curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/vaults" > "$tmp_vaults" 2>/dev/null &
+curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/notes?sort=-created_at&limit=10" > "$tmp_notes" 2>/dev/null &
+curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/kv?namespaces=${encoded_ns}" > "$tmp_kv" 2>/dev/null &
 wait
 
 # --- Resolve per-project vault from KV ---
@@ -64,7 +64,6 @@ if [ -s "$tmp_kv" ]; then
 fi
 
 # --- Resolve the instructions file path (next to this script) ---
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTRUCTIONS_FILE="${SCRIPT_DIR}/instructions.md"
 
 # --- Format vaults table (NDJSON → markdown) ---
