@@ -1,7 +1,8 @@
 """
-Memex ASCII art banner with gradient coloring.
+Memex ASCII art banner with gradient coloring and status display.
 
-Displays the MEMEX logo text styled with a purple-to-cyan gradient using Rich.
+Displays the MEMEX logo text styled with a coral-to-orange gradient,
+followed by status lines showing config, server, and vault info.
 """
 
 from __future__ import annotations
@@ -21,11 +22,11 @@ BANNER_LINES: tuple[str, ...] = (
 
 TAGLINE = 'Long-term memory for LLMs'
 
-# Multi-stop gradient: Purple -> Blurple -> Cyan
+# Brand palette: Coral/Rose -> Orange/Amber (matches the Memex brain logo)
 GRADIENT_STOPS: tuple[tuple[int, int, int], ...] = (
-    (138, 43, 226),  # Purple
-    (88, 101, 242),  # Blurple
-    (0, 191, 255),  # Cyan
+    (224, 90, 109),  # Coral / rose pink
+    (235, 130, 80),  # Mid coral-orange
+    (245, 166, 35),  # Orange / amber
 )
 
 
@@ -65,8 +66,6 @@ def _gradient_color(
 
 def build_banner(*, show_version: bool = True) -> Text:
     """Build a Rich Text object containing the banner with gradient styling."""
-    version = _get_version() if show_version else None
-
     max_width = max(len(line) for line in BANNER_LINES)
 
     text = Text()
@@ -81,21 +80,48 @@ def build_banner(*, show_version: bool = True) -> Text:
                 color = _gradient_color(t)
                 text.append(char, style=f'bold {color}')
 
-    # Tagline
-    text.append('\n')
-    tagline = f'{TAGLINE}  v{version}' if version else TAGLINE
-    # Center tagline under the banner
-    padding = max((max_width - len(tagline)) // 2, 0)
-    text.append(' ' * padding)
-    text.append(tagline, style='dim')
-
     return text
 
 
-def print_banner(console: Console) -> None:
-    """Print the banner if the console is attached to a terminal."""
+def print_banner(
+    console: Console,
+    *,
+    config_path: str | None = None,
+    server_url: str | None = None,
+    server_connected: bool | None = None,
+    vault: str | None = None,
+    vault_source: str | None = None,
+) -> None:
+    """Print the banner and optional status lines if the console is a terminal."""
     if not console.is_terminal:
         return
-    banner = build_banner()
+
+    banner = build_banner(show_version=False)
     console.print(banner)
+
+    # Subtitle directly below the logo
+    console.print(f'[dim]{TAGLINE}[/dim]')
+
+    # Status block with border
+    version = _get_version()
+    status_lines: list[str] = []
+    status_lines.append(f'  Version: [dim]v{version}[/dim]')
+    if config_path:
+        status_lines.append(f'  Config:  [dim]{config_path}[/dim]')
+    if server_url is not None:
+        if server_connected is True:
+            status = f'[green]\u25cf[/green] {server_url}'
+        elif server_connected is False:
+            status = f'[red]\u25cf[/red] {server_url} [dim](offline)[/dim]'
+        else:
+            status = f'[dim]{server_url}[/dim]'
+        status_lines.append(f'  Server:  {status}')
+    if vault:
+        source_hint = f' [dim]({vault_source})[/dim]' if vault_source else ''
+        status_lines.append(f'  Vault:   [bold]{vault}[/bold]{source_hint}')
+
+    from rich.panel import Panel
+
+    console.print(Panel('\n'.join(status_lines), border_style='dim', expand=False))
+
     console.print()
