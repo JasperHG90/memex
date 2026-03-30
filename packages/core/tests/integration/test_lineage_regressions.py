@@ -77,12 +77,26 @@ async def test_reproduce_observation_lineage_failure(api, metastore):
         except Exception as e:
             pytest.fail(f'Lineage fetch failed with: {e}')
 
-        # 3. Verify
+        # 3. Verify structure
         assert lineage.entity_type == 'observation'
         assert lineage.entity['id'] == str(obs_id)
         assert len(lineage.derived_from) == 1
         assert lineage.derived_from[0].entity_type == 'memory_unit'
         assert str(lineage.derived_from[0].entity['id']) == str(mem_unit_id)
+
+        # 4. Verify heavy fields are excluded
+        # Observation: only id, title, trend
+        assert 'content' not in lineage.entity
+        assert 'evidence' not in lineage.entity
+        # MemoryUnit: no embedding, context, search_tsvector
+        mu_entity = lineage.derived_from[0].entity
+        assert 'embedding' not in mu_entity
+        assert 'context' not in mu_entity
+        assert 'search_tsvector' not in mu_entity
+        # Note (leaf): no original_text, page_index
+        note_entity = lineage.derived_from[0].derived_from[0].entity
+        assert 'original_text' not in note_entity
+        assert 'page_index' not in note_entity
 
 
 @pytest.mark.asyncio

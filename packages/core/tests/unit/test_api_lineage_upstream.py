@@ -14,29 +14,32 @@ async def test_get_lineage_upstream_observation_to_document(api, mock_session):
     mm_id = uuid4()
 
     # Mock Entities
-    # Observation is now a dict inside MentalModel
-    obs_data = {'id': str(obs_id), 'content': 'Test Obs', 'evidence': [{'memory_id': str(unit_id)}]}
+    obs_data = {
+        'id': str(obs_id),
+        'title': 'Test Obs',
+        'content': 'Test Obs Detail',
+        'evidence': [{'memory_id': str(unit_id)}],
+    }
 
     mm = MentalModel(id=mm_id, entity_id=uuid4(), vault_id=uuid4(), observations=[obs_data])
 
     unit = MemoryUnit(id=unit_id, text='Test Unit', fact_type='event', note_id=doc_id)
-    doc = Note(id=doc_id, content='Test Doc', vault_id=uuid4())
+    doc = Note(id=doc_id, vault_id=uuid4())
 
-    # Mock session.exec for MentalModel lookup (for Observation)
-    # and session.get for MemoryUnit and Document
+    mock_mm_result = MagicMock()
+    mock_mm_result.first.return_value = mm
 
-    mock_result = MagicMock()
-    mock_result.first.return_value = mm
-    mock_session.exec.return_value = mock_result
+    mock_unit_result = MagicMock()
+    mock_unit_result.first.return_value = unit
 
-    async def mock_get(model, id):
-        if model == MemoryUnit and str(id) == str(unit_id):
-            return unit
-        if model == Note and str(id) == str(doc_id):
-            return doc
-        return None
+    mock_doc_result = MagicMock()
+    mock_doc_result.first.return_value = doc
 
-    mock_session.get.side_effect = mock_get
+    mock_session.exec.side_effect = [
+        mock_mm_result,  # select(MentalModel) for observation lookup
+        mock_unit_result,  # select(MemoryUnit) for evidence -> unit
+        mock_doc_result,  # select(Note) for unit -> doc
+    ]
 
     # Execute
     result = await api.get_lineage(
@@ -67,7 +70,7 @@ async def test_get_lineage_upstream_mental_model(api, mock_session):
     entity_id = uuid4()
     obs_id = uuid4()
 
-    obs_data = {'id': str(obs_id), 'content': 'Test Obs'}
+    obs_data = {'id': str(obs_id), 'title': 'Test Obs', 'content': 'Test Obs Detail'}
 
     mm = MentalModel(id=mm_id, entity_id=entity_id, vault_id=uuid4(), observations=[obs_data])
 
@@ -80,7 +83,7 @@ async def test_get_lineage_upstream_mental_model(api, mock_session):
     # Execute
     result = await api.get_lineage(
         entity_type='mental_model',
-        entity_id=entity_id,  # Keyed by entity_id
+        entity_id=entity_id,
         direction=LineageDirection.UPSTREAM,
         depth=3,
     )
@@ -90,3 +93,83 @@ async def test_get_lineage_upstream_mental_model(api, mock_session):
     assert len(result.derived_from) == 1
     assert result.derived_from[0].entity_type == 'observation'
     assert str(result.derived_from[0].entity['id']) == str(obs_id)
+
+
+@pytest.mark.asyncio
+async def test_lineage_upstream_excludes_heavy_fields(api, mock_session):
+    """Verify that upstream lineage excludes heavy fields from all entity types."""
+    obs_id = uuid4()
+    unit_id = uuid4()
+    doc_id = uuid4()
+    mm_id = uuid4()
+
+    obs_data = {
+        'id': str(obs_id),
+        'title': 'Test Obs',
+        'content': 'Detailed observation content',
+        'trend': 'new',
+        'evidence': [{'memory_id': str(unit_id), 'quote': 'some quote'}],
+    }
+
+    mm = MentalModel(
+        id=mm_id,
+        entity_id=uuid4(),
+        vault_id=uuid4(),
+        observations=[obs_data],
+        embedding=[0.1] * 384,
+    )
+
+    unit = MemoryUnit(
+        id=unit_id,
+        text='Test fact',
+        fact_type='world',
+        note_id=doc_id,
+        embedding=[0.1] * 384,
+        context='Long context...',
+    )
+    doc = Note(
+        id=doc_id,
+        vault_id=uuid4(),
+        title='Source Doc',
+        original_text='Full original text...',
+        page_index={'nodes': []},
+    )
+
+    mock_mm_result = MagicMock()
+    mock_mm_result.first.return_value = mm
+
+    mock_unit_result = MagicMock()
+    mock_unit_result.first.return_value = unit
+
+    mock_doc_result = MagicMock()
+    mock_doc_result.first.return_value = doc
+
+    mock_session.exec.side_effect = [
+        mock_mm_result,  # select(MentalModel) for observation
+        mock_unit_result,  # select(MemoryUnit) for evidence
+        mock_doc_result,  # select(Note) for unit -> doc
+    ]
+
+    result = await api.get_lineage(
+        entity_type='observation',
+        entity_id=obs_id,
+        direction=LineageDirection.UPSTREAM,
+        depth=3,
+    )
+
+    # Observation should only have id, title, trend
+    obs_entity = result.entity
+    assert 'content' not in obs_entity
+    assert 'evidence' not in obs_entity
+    assert obs_entity['title'] == 'Test Obs'
+    assert obs_entity['trend'] == 'new'
+
+    # MemoryUnit
+    unit_entity = result.derived_from[0].entity
+    assert 'embedding' not in unit_entity
+    assert 'context' not in unit_entity
+
+    # Note
+    note_entity = result.derived_from[0].derived_from[0].entity
+    assert 'original_text' not in note_entity
+    assert 'page_index' not in note_entity

@@ -42,4 +42,3 @@ async def test_get_lineage_mental_model_stub_from_entity(api, mock_session):
     assert str(result.entity['entity_id']) == str(entity_id)
     # The name should be populated from entity
     assert result.entity['name'] == 'Test Entity'
-    # And it should not crash accessing vault_id
