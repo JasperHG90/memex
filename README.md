@@ -169,6 +169,12 @@ memex note add --url https://example.com/article
 memex note add --file report.md --asset diagram.png --background
 ```
 
+#### Firefox extension
+
+A [Firefox extension](./packages/firefox-extension/) for one-click capture of articles, PDFs, and web pages directly into your Memex vaults. Content is extracted client-side via Mozilla Readability and converted to Markdown — bypassing bot detection and paywalled content that server-side scraping can't reach. API keys are encrypted at rest with AES-GCM.
+
+![firefox](./assets/firefox-extension.png)
+
 ### Five-strategy retrieval (TEMPR)
 
 Every search runs five independent retrieval strategies in parallel and fuses them with Reciprocal Rank Fusion — no single strategy has to be "right":
@@ -222,6 +228,10 @@ First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compati
 
 A full FastAPI server with NDJSON streaming, OpenAPI docs, policy-based auth (reader/writer/admin) with vault-scoped API keys, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
 
+### Tight integration with MCP
+
+The MCP server allows any agent to retrieve information from and add notes to Memex.
+
 ### Note templates
 
 Pluggable note templates provide consistent structure for different note types. Templates are `.toml` files discovered across three layers — built-in, global (`{filestore_root}/templates/`), and project-local (`.memex/templates/`) — with later layers overriding on slug collision. Built-in templates include `technical_brief`, `general_note`, `architectural_decision_record`, `request_for_comments`, and `quick_note`. Manage templates via `memex note template` CLI commands or the `memex_list_templates` / `memex_register_template` MCP tools.
@@ -235,10 +245,6 @@ memex note sync init ~/notes          # create default config
 memex note sync run ~/notes           # sync changed files
 memex note sync watch ~/notes         # continuous sync
 ```
-
-### Firefox extension
-
-A [Firefox extension](./packages/firefox-extension/) for one-click capture of articles, PDFs, and web pages directly into your Memex vaults. Content is extracted client-side via Mozilla Readability and converted to Markdown — bypassing bot detection and paywalled content that server-side scraping can't reach. API keys are encrypted at rest with AES-GCM.
 
 ## 📚 Documentation
 

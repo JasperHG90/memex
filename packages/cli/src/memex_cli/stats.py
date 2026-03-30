@@ -16,8 +16,8 @@ from memex_cli.utils import get_api_context, async_command, handle_api_error
 console = Console()
 
 app = typer.Typer(
-    name='stats',
-    help='View system statistics and usage.',
+    name='system',
+    help='Show overview of system counts (memories, entities, queue).',
     no_args_is_help=True,
 )
 
