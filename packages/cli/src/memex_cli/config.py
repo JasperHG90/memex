@@ -97,6 +97,29 @@ def show_config(
         console.print(Syntax(output, 'yaml'))
 
 
+@app.command('env')
+def env_config(
+    ctx: typer.Context,
+):
+    """
+    Output resolved config as shell-sourceable environment variables.
+
+    Prints MEMEX_RESOLVED_URL and MEMEX_RESOLVED_API_KEY for use by hook
+    scripts. Writes to stdout with no Rich formatting so the output can
+    be eval'd directly by a shell.
+    """
+    import shlex
+
+    config: MemexConfig = ctx.obj
+    if not config:
+        raise typer.Exit(1)
+    print(f'MEMEX_RESOLVED_URL={shlex.quote(config.server_url)}')
+    if config.api_key:
+        print(f'MEMEX_RESOLVED_API_KEY={shlex.quote(config.api_key.get_secret_value())}')
+    else:
+        print("MEMEX_RESOLVED_API_KEY=''")
+
+
 @app.command()
 def init(
     ctx: typer.Context,
