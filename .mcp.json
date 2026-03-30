@@ -16,14 +16,11 @@
       "command": "uvx",
       "args": [
         "--from",
-        "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@main#subdirectory=packages/cli",
+        "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli",
         "memex",
         "mcp",
         "run"
-      ],
-      "env": {
-        "MEMEX_SERVER_URL": "http://host.docker.internal:8000"
-      }
+      ]
     }
   }
 }
