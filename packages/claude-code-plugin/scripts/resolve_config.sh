@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # resolve_config.sh — source this file to populate RESOLVED_URL, API, and AUTH_HEADER.
 #
-# Resolves Memex config (server_url, api_key) via the Python config system.
-# Tries multiple strategies to find a Python env with memex_common installed,
-# then falls back to MEMEX_SERVER_URL env var + no auth.
+# Resolves Memex config (server_url, api_key) via the CLI's `memex config env`
+# command, which respects the full config resolution chain:
+#   env vars -> local .memex.yaml -> global ~/.config/memex/config.yaml -> defaults
+#
+# Tries multiple strategies to invoke the CLI, then falls back to
+# MEMEX_SERVER_URL env var + no auth.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -23,15 +26,17 @@ _with_timeout() {
 _try_resolve() {
     local output
 
-    # Strategy 1: direct python3 — works if memex_common is on sys.path
-    # (user has a venv active, or did pip install memex-common, etc.)
-    output=$(_with_timeout 5 python3 "$SCRIPT_DIR/resolve_config.py" 2>/dev/null) && {
-        eval "$output"
-        return 0
-    }
+    # Strategy 1: memex CLI directly — works if installed via `uv tool install`,
+    # `pip install`, or available in the current virtualenv.
+    if command -v memex >/dev/null 2>&1; then
+        output=$(_with_timeout 5 memex config env 2>/dev/null) && {
+            eval "$output"
+            return 0
+        }
+    fi
 
-    # Strategy 2: uvx with package spec from .mcp.json — works for uv tool installs
-    # and ephemeral uvx usage; reuses the same cached venv as the MCP server.
+    # Strategy 2: uvx with package spec from .mcp.json — works for ephemeral uvx
+    # usage; reuses the same cached venv as the MCP server.
     if command -v uvx >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
         local pkg_spec
         pkg_spec=$(jq -r '
@@ -41,7 +46,7 @@ _try_resolve() {
         ' "$PLUGIN_ROOT/.mcp.json" 2>/dev/null) || true
 
         if [ -n "${pkg_spec:-}" ] && [ "$pkg_spec" != "null" ]; then
-            output=$(_with_timeout 10 uvx --quiet --from "$pkg_spec" python "$SCRIPT_DIR/resolve_config.py" 2>/dev/null) && {
+            output=$(_with_timeout 10 uvx --quiet --from "$pkg_spec" memex config env 2>/dev/null) && {
                 eval "$output"
                 return 0
             }
