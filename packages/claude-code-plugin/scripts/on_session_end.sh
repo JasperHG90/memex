@@ -6,9 +6,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
 
-# Quick health check — skip if server is down
-curl -sf --max-time 2 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/health" >/dev/null 2>&1 || exit 0
-
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 COMPACT_FILE="$STATE_DIR/compact_pending.json"
 
@@ -19,10 +16,9 @@ if [ -f "$COMPACT_FILE" ]; then
     rm -f "$COMPACT_FILE"
 fi
 
-# Add session marker note via API
-curl -sf --max-time 3 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} -X POST "${API}/notes" \
-    -H "Content-Type: application/json" \
-    -d "{\"content\":\"Session ended${compact_note}.\",\"tags\":[\"session-marker\"],\"author\":\"claude-code\"}" \
+# Add session marker note via CLI (fails silently if server is unreachable)
+memex note add "Session ended${compact_note}." \
+    --tag session-marker --author claude-code \
     >/dev/null 2>&1 || true
 
 exit 0

@@ -1,27 +1,16 @@
 #!/usr/bin/env bash
 # Memex Claude Code Plugin — SessionStart
-# 1. Checks that the Memex server is reachable (warns if not).
-# 2. Loads vault context, KV facts, recent notes via direct HTTP calls.
-# 3. Resolves per-project vault from KV store.
-# 4. Injects behavioral instructions via additionalContext.
+# 1. Fetches vault context, KV facts, recent notes via the memex CLI.
+# 2. Resolves per-project vault from KV store.
+# 3. Injects behavioral instructions via additionalContext.
 #
-# Dependencies: curl, jq, git (optional)
+# Dependencies: uvx (uv), jq, git (optional)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
 
-# --- Health check: verify Memex server is reachable ---
-if ! curl -sf --max-time 3 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/health" >/dev/null 2>&1; then
-    cat <<EOF
-{"systemMessage": "⚠️ Memex server is not reachable at ${RESOLVED_URL}. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
-EOF
-    exit 0
-fi
-
 # --- Derive portable project identifier ---
-# Git-based: stripped remote URL (e.g. github.com/user/repo)
-# Non-git:   path relative to $HOME (e.g. projects/myapp)
 project_id=""
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     remote_url=$(git remote get-url origin 2>/dev/null) || true
@@ -30,59 +19,48 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
     fi
 fi
 if [ -z "$project_id" ]; then
-    # Use path relative to $HOME for a stable, collision-resistant identifier
     case "$PWD" in
         "$HOME"/*) project_id="${PWD#"$HOME"/}" ;;
         *)         project_id="$PWD" ;;
     esac
 fi
 
-# --- Fetch vaults, recent notes, and namespace-filtered KV (parallel) ---
+# --- Fetch vaults, recent notes, KV facts, and project vault (parallel) ---
 tmp_vaults=$(mktemp)
 tmp_notes=$(mktemp)
 tmp_kv=$(mktemp)
-trap 'rm -f "$tmp_vaults" "$tmp_notes" "$tmp_kv"' EXIT
+tmp_project_vault=$(mktemp)
+trap 'rm -f "$tmp_vaults" "$tmp_notes" "$tmp_kv" "$tmp_project_vault"' EXIT
 
-# Build namespace filter: always global + user + app:claude-code, plus project if available
+# Build namespace filter args for KV list
+kv_ns_args=(-n global -n user -n "app:claude-code")
+[ -n "$project_id" ] && kv_ns_args+=(-n "project:${project_id}")
+
+memex vault list --compact > "$tmp_vaults" 2>/dev/null &
+memex note recent --compact > "$tmp_notes" 2>/dev/null &
+memex kv list --json "${kv_ns_args[@]}" > "$tmp_kv" 2>/dev/null &
 if [ -n "$project_id" ]; then
-    encoded_ns=$(jq -rn --arg ns "global,user,app:claude-code,project:${project_id}" '$ns | @uri')
-else
-    encoded_ns=$(jq -rn --arg ns "global,user,app:claude-code" '$ns | @uri')
+    memex kv get "project:${project_id}:vault" --value-only > "$tmp_project_vault" 2>/dev/null &
 fi
-
-curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/vaults" > "$tmp_vaults" 2>/dev/null &
-curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/notes?sort=-created_at&limit=10" > "$tmp_notes" 2>/dev/null &
-curl -sf --max-time 5 ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} "${API}/kv?namespaces=${encoded_ns}" > "$tmp_kv" 2>/dev/null &
 wait
 
-# --- Resolve per-project vault from KV ---
+# --- Implicit health check: vaults always has >= 1 entry ---
+if [ ! -s "$tmp_vaults" ]; then
+    cat <<'EOF'
+{"systemMessage": "⚠️ Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
+EOF
+    exit 0
+fi
+
+# --- Read project vault ---
 project_vault=""
-project_vault_key="project:${project_id}:vault"
-if [ -s "$tmp_kv" ]; then
-    project_vault=$(jq -r --arg k "$project_vault_key" \
-        '.[] | select(.key == $k) | .value // empty' "$tmp_kv" 2>/dev/null) || true
-fi
+[ -s "$tmp_project_vault" ] && project_vault=$(cat "$tmp_project_vault")
 
-# --- Resolve the instructions file path (next to this script) ---
-INSTRUCTIONS_FILE="${SCRIPT_DIR}/instructions.md"
+# --- Build session context ---
+vaults_md="## Memex Vaults
 
-# --- Format vaults table (NDJSON → markdown) ---
-vaults_md=""
-if [ -s "$tmp_vaults" ]; then
-    vaults_md=$(jq -rs '
-        if length == 0 then "" else
-        "## Memex Vaults\n\n| Name | Notes | Last Modified | Active | Description |\n|------|-------|---------------|--------|-------------|\n"
-        + (map(
-            "| " + (.name // "") + " | " + (.note_count // 0 | tostring) + " | "
-            + ((.last_note_added_at // "—") | .[:10]) + " | "
-            + (if .is_active then "yes" else "" end) + " | "
-            + (.description // "") + " |"
-        ) | join("\n"))
-        end
-    ' "$tmp_vaults" 2>/dev/null) || true
-fi
+$(cat "$tmp_vaults")"
 
-# --- Format KV facts ---
 kv_md=""
 if [ -s "$tmp_kv" ]; then
     kv_count=$(jq 'length' "$tmp_kv" 2>/dev/null) || kv_count=0
@@ -96,24 +74,12 @@ ${kv_body}"
     fi
 fi
 
-# --- Format recent notes table (NDJSON → markdown) ---
 notes_md=""
-if [ -s "$tmp_notes" ]; then
-    notes_md=$(jq -rs '
-        if length == 0 then "" else
-        "## Recent Memex Notes\n\n| Title | Description | Vault | Created | Note ID |\n|-------|-------------|-------|---------|----------|\n"
-        + (map(
-            "| " + (.title // .name // "(untitled)") + " | "
-            + ((.description // "") | .[:80]) + " | "
-            + ((.vault_id // "") | .[:8]) + " | "
-            + ((.created_at // "") | .[:10]) + " | "
-            + (.id // "") + " |"
-        ) | join("\n"))
-        end
-    ' "$tmp_notes" 2>/dev/null) || true
-fi
+[ -s "$tmp_notes" ] && notes_md="## Recent Memex Notes
 
-# --- Build session context (all data + instructions, injected silently) ---
+$(cat "$tmp_notes")"
+
+# --- Assemble context parts ---
 session_context=""
 for part in "$vaults_md" "$kv_md" "$notes_md"; do
     if [ -n "$part" ]; then
@@ -127,11 +93,10 @@ ${part}"
     fi
 done
 
-# Append instructions
+# --- Append instructions ---
+INSTRUCTIONS_FILE="${SCRIPT_DIR}/instructions.md"
 instructions=""
-if [ -f "$INSTRUCTIONS_FILE" ]; then
-    instructions=$(cat "$INSTRUCTIONS_FILE")
-fi
+[ -f "$INSTRUCTIONS_FILE" ] && instructions=$(cat "$INSTRUCTIONS_FILE")
 
 if [ -n "$project_vault" ]; then
     vault_instruction="
@@ -150,13 +115,12 @@ additional_context="${session_context}
 ${instructions}${vault_instruction}"
 
 # --- Build compact status summary ---
-vault_count=$([ -s "$tmp_vaults" ] && jq -rs 'length' "$tmp_vaults" 2>/dev/null || echo "0")
-note_count=$([ -s "$tmp_notes" ] && jq -rs 'length' "$tmp_notes" 2>/dev/null || echo "0")
+vault_count=$(wc -l < "$tmp_vaults" | tr -d ' ')
+vault_count=$((vault_count - 2))  # subtract header rows
+note_count=$(grep -c '^- ' "$tmp_notes" 2>/dev/null || echo "0")
 kv_count=$([ -s "$tmp_kv" ] && jq 'length' "$tmp_kv" 2>/dev/null || echo "0")
 status="🧠 Memex connected — ${vault_count} vaults, ${note_count} recent notes, ${kv_count} KV facts loaded"
-if [ -n "$project_vault" ]; then
-    status="${status} (vault: ${project_vault})"
-fi
+[ -n "$project_vault" ] && status="${status} (vault: ${project_vault})"
 
 # --- Output JSON ---
 jq -n \
