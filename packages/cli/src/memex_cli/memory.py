@@ -663,25 +663,16 @@ async def get_lineage(
             name = (
                 node.entity.get('name')
                 or node.entity.get('canonical_name')
-                or node.entity.get('content')
+                or node.entity.get('title')
                 or node.entity.get('text')
                 or ''
             )
             if len(name) > 50:
                 name = name[:47] + '...'
 
-            # Check for assets (Notes only)
-            assets_info = ''
-            if node.entity_type == 'note':
-                assets = node.entity.get('assets') or []
-                if assets:
-                    assets_info = f' ({len(assets)} assets)'
-
             label = f'[bold cyan]{e_type}[/bold cyan] [dim]{e_id}[/dim]'
             if name:
                 label += f': {name}'
-            if assets_info:
-                label += f'[yellow]{assets_info}[/yellow]'
 
             if tree is None:
                 tree = Tree(label)

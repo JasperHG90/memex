@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, cast as sa_cast
+from sqlalchemy.orm import defer
 from sqlalchemy.types import UserDefinedType
 
 from memex_common.exceptions import ResourceNotFoundError
@@ -16,6 +17,44 @@ from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.lineage')
 
+# Fields to include in lineage response per entity type.
+# Lineage returns only identification, metadata, and provenance-relevant fields.
+# Full entity data is available via dedicated endpoints.
+_NOTE_INCLUDE: set[str] = {
+    'id',
+    'vault_id',
+    'title',
+    'description',
+    'status',
+    'superseded_by',
+    'appended_to',
+    'publish_date',
+    'created_at',
+    'doc_metadata',
+}
+_UNIT_INCLUDE: set[str] = {
+    'id',
+    'vault_id',
+    'text',
+    'fact_type',
+    'status',
+    'confidence',
+    'note_id',
+    'event_date',
+    'unit_metadata',
+}
+_MM_INCLUDE: set[str] = {
+    'id',
+    'vault_id',
+    'entity_id',
+    'name',
+    'entity_metadata',
+    'version',
+    'last_refreshed',
+}
+_OBS_INCLUDE: set[str] = {'id', 'title', 'trend'}
+_ENTITY_INCLUDE: set[str] = {'id', 'canonical_name', 'entity_type'}
+
 
 class JSONPath(UserDefinedType):
     """SQLAlchemy custom type for Postgres jsonpath literals."""
@@ -24,19 +63,6 @@ class JSONPath(UserDefinedType):
 
     def get_col_spec(self, **kw: Any) -> str:
         return 'jsonpath'
-
-
-def _sanitize_data(data: Any) -> Any:
-    """Recursively convert numpy arrays to plain lists for serialization."""
-    import numpy as np
-
-    if isinstance(data, np.ndarray):
-        return data.tolist()
-    if isinstance(data, dict):
-        return {k: _sanitize_data(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [_sanitize_data(i) for i in data]
-    return data
 
 
 class LineageService(BaseService):
@@ -124,13 +150,27 @@ class LineageService(BaseService):
         stop_recursion = current_depth >= max_depth
 
         if entity_type == 'note':
-            obj = await session.get(Note, entity_id)
+            stmt = (
+                select(Note)
+                .where(col(Note.id) == entity_id)
+                .options(defer(Note.original_text), defer(Note.page_index))  # type: ignore
+            )
+            obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_NOTE_INCLUDE)
 
             if not stop_recursion:
-                stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == entity_id).limit(limit)
+                stmt = (
+                    select(MemoryUnit)
+                    .where(col(MemoryUnit.note_id) == entity_id)
+                    .options(  # type: ignore
+                        defer(MemoryUnit.embedding),
+                        defer(MemoryUnit.context),
+                        defer(MemoryUnit.search_tsvector),
+                    )
+                    .limit(limit)
+                )
                 units = (await session.exec(stmt)).all()
                 for unit in units:
                     child_node = await self._get_lineage_downstream(
@@ -144,20 +184,33 @@ class LineageService(BaseService):
                     children.append(child_node)
 
         elif entity_type == 'memory_unit':
-            obj = await session.get(MemoryUnit, entity_id)
+            stmt = (
+                select(MemoryUnit)
+                .where(col(MemoryUnit.id) == entity_id)
+                .options(  # type: ignore
+                    defer(MemoryUnit.embedding),
+                    defer(MemoryUnit.context),
+                    defer(MemoryUnit.search_tsvector),
+                )
+            )
+            obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_UNIT_INCLUDE)
 
             if not stop_recursion:
-                stmt = select(MentalModel).where(
-                    func.jsonb_path_exists(
-                        MentalModel.observations,
-                        sa_cast(
-                            f'$[*].evidence[*].memory_id ? (@ == "{entity_id}")',
-                            JSONPath(),
-                        ),
+                stmt = (
+                    select(MentalModel)
+                    .where(
+                        func.jsonb_path_exists(
+                            MentalModel.observations,
+                            sa_cast(
+                                f'$[*].evidence[*].memory_id ? (@ == "{entity_id}")',
+                                JSONPath(),
+                            ),
+                        )
                     )
+                    .options(defer(MentalModel.embedding))  # type: ignore
                 )
                 mms = (await session.exec(stmt)).all()
 
@@ -181,11 +234,15 @@ class LineageService(BaseService):
                                     pass
 
         elif entity_type == 'observation':
-            stmt = select(MentalModel).where(
-                func.jsonb_path_exists(
-                    MentalModel.observations,
-                    sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
+            stmt = (
+                select(MentalModel)
+                .where(
+                    func.jsonb_path_exists(
+                        MentalModel.observations,
+                        sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
+                    )
                 )
+                .options(defer(MentalModel.embedding))  # type: ignore
             )
             parent_mm = (await session.exec(stmt)).first()
 
@@ -201,7 +258,7 @@ class LineageService(BaseService):
             if not target_obs:
                 raise ResourceNotFoundError(f'Observation {entity_id} not found.')
 
-            entity_data = _sanitize_data(target_obs)
+            entity_data = {k: v for k, v in target_obs.items() if k in _OBS_INCLUDE}
 
             if not stop_recursion:
                 child_node = await self._get_lineage_downstream(
@@ -215,8 +272,12 @@ class LineageService(BaseService):
                 children.append(child_node)
 
         elif entity_type == 'mental_model':
-            stmt = select(MentalModel).where(
-                (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
+            stmt = (
+                select(MentalModel)
+                .where(
+                    (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
+                )
+                .options(defer(MentalModel.embedding))  # type: ignore
             )
             results = (await session.exec(stmt)).all()
 
@@ -232,17 +293,16 @@ class LineageService(BaseService):
                 stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
                 ent = (await session.exec(stmt_ent)).first()
                 if ent:
-                    entity_data = _sanitize_data(ent.model_dump())
+                    entity_data = ent.model_dump(include=_ENTITY_INCLUDE)
                 else:
                     entity_data = {'id': str(entity_id), 'canonical_name': results[0].name}
 
                 mm_children: list[LineageResponse] = []
                 for mm in results:
-                    mm_data = _sanitize_data(mm.model_dump())
                     mm_children.append(
                         LineageResponse(
                             entity_type='mental_model',
-                            entity=mm_data,
+                            entity=mm.model_dump(include=_MM_INCLUDE),
                             derived_from=[],
                         )
                     )
@@ -255,7 +315,7 @@ class LineageService(BaseService):
 
             # Single mental model: return directly
             obj = results[0]
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_MM_INCLUDE)
 
         else:
             raise ValueError(f'Unknown entity type: {entity_type}')
@@ -284,8 +344,12 @@ class LineageService(BaseService):
         stop_recursion = current_depth >= max_depth
 
         if entity_type == 'mental_model':
-            stmt = select(MentalModel).where(
-                (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
+            stmt = (
+                select(MentalModel)
+                .where(
+                    (col(MentalModel.id) == entity_id) | (col(MentalModel.entity_id) == entity_id)
+                )
+                .options(defer(MentalModel.embedding))  # type: ignore
             )
             results = (await session.exec(stmt)).all()
 
@@ -301,7 +365,7 @@ class LineageService(BaseService):
                 stmt_ent = select(Entity).where(col(Entity.id) == entity_id)
                 ent = (await session.exec(stmt_ent)).first()
                 if ent:
-                    entity_data = _sanitize_data(ent.model_dump())
+                    entity_data = ent.model_dump(include=_ENTITY_INCLUDE)
                 else:
                     entity_data = {'id': str(entity_id), 'canonical_name': results[0].name}
 
@@ -324,7 +388,7 @@ class LineageService(BaseService):
 
             # Single mental model: return directly
             obj = results[0]
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_MM_INCLUDE)
 
             if not stop_recursion:
                 children = await self._build_mm_observations_upstream(
@@ -336,11 +400,15 @@ class LineageService(BaseService):
                 )
 
         elif entity_type == 'observation':
-            stmt = select(MentalModel).where(
-                func.jsonb_path_exists(
-                    MentalModel.observations,
-                    sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
+            stmt = (
+                select(MentalModel)
+                .where(
+                    func.jsonb_path_exists(
+                        MentalModel.observations,
+                        sa_cast(f'$[*] ? (@.id == "{entity_id}")', JSONPath()),
+                    )
                 )
+                .options(defer(MentalModel.embedding))  # type: ignore
             )
             parent_mm = (await session.exec(stmt)).first()
 
@@ -356,7 +424,7 @@ class LineageService(BaseService):
             if not target_obs:
                 raise ResourceNotFoundError(f'Observation {entity_id} not found in parent model.')
 
-            entity_data = _sanitize_data(target_obs)
+            entity_data = {k: v for k, v in target_obs.items() if k in _OBS_INCLUDE}
 
             if not stop_recursion:
                 evidence = target_obs.get('evidence', [])
@@ -382,11 +450,20 @@ class LineageService(BaseService):
                             pass
 
         elif entity_type == 'memory_unit':
-            obj = await session.get(MemoryUnit, entity_id)
+            stmt = (
+                select(MemoryUnit)
+                .where(col(MemoryUnit.id) == entity_id)
+                .options(  # type: ignore
+                    defer(MemoryUnit.embedding),
+                    defer(MemoryUnit.context),
+                    defer(MemoryUnit.search_tsvector),
+                )
+            )
+            obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
 
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_UNIT_INCLUDE)
 
             if not stop_recursion:
                 if obj.note_id:
@@ -404,11 +481,16 @@ class LineageService(BaseService):
                         pass
 
         elif entity_type == 'note':
-            obj = await session.get(Note, entity_id)
+            stmt = (
+                select(Note)
+                .where(col(Note.id) == entity_id)
+                .options(defer(Note.original_text), defer(Note.page_index))  # type: ignore
+            )
+            obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
 
-            entity_data = _sanitize_data(obj.model_dump())
+            entity_data = obj.model_dump(include=_NOTE_INCLUDE)
             # Document is a leaf (upstream-wise)
 
         else:
@@ -462,7 +544,7 @@ class LineageService(BaseService):
 
             obs_node = LineageResponse(
                 entity_type='observation',
-                entity=_sanitize_data(obs),
+                entity={k: v for k, v in obs.items() if k in _OBS_INCLUDE},
                 derived_from=obs_children,
             )
             obs_nodes.append(obs_node)
@@ -478,7 +560,7 @@ class LineageService(BaseService):
         limit: int,
     ) -> LineageResponse:
         """Build a full mental_model LineageResponse node with its observation subtree."""
-        mm_data = _sanitize_data(mm.model_dump())
+        mm_data = mm.model_dump(include=_MM_INCLUDE)
         obs_children: list[LineageResponse] = []
         if current_depth < max_depth:
             obs_children = await self._build_mm_observations_upstream(
