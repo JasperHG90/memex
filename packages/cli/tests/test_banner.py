@@ -37,11 +37,11 @@ class TestInterpolateRgb:
 class TestGradientColor:
     def test_t_zero_returns_first_stop(self):
         color = _gradient_color(0.0)
-        assert color == '#8a2be2'
+        assert color == '#e05a6d'
 
     def test_t_one_returns_last_stop(self):
         color = _gradient_color(1.0)
-        assert color == '#00bfff'
+        assert color == '#f5a623'
 
     def test_clamps_below_zero(self):
         assert _gradient_color(-0.5) == _gradient_color(0.0)
@@ -62,18 +62,10 @@ class TestBuildBanner:
         for line in BANNER_LINES:
             assert line.strip() in plain
 
-    def test_contains_tagline(self):
+    def test_no_tagline_in_banner_text(self):
+        # Tagline is now in print_banner status lines, not build_banner
         banner = build_banner()
-        assert TAGLINE in banner.plain
-
-    def test_contains_version_by_default(self):
-        banner = build_banner()
-        assert '  v' in banner.plain
-
-    def test_no_version_when_disabled(self):
-        banner = build_banner(show_version=False)
-        assert '  v' not in banner.plain
-        assert TAGLINE in banner.plain
+        assert TAGLINE not in banner.plain
 
     def test_banner_width_under_80_columns(self):
         banner = build_banner(show_version=False)
@@ -85,8 +77,10 @@ class TestBuildBanner:
             'memex_cli.banner.importlib.metadata.version',
             side_effect=importlib.metadata.PackageNotFoundError('memex-cli'),
         ):
-            banner = build_banner()
-            assert 'vdev' in banner.plain
+            buf = StringIO()
+            console = Console(file=buf, force_terminal=True, color_system='truecolor')
+            print_banner(console)
+            assert 'vdev' in buf.getvalue()
 
 
 class TestPrintBanner:
@@ -97,6 +91,30 @@ class TestPrintBanner:
         output = buf.getvalue()
         assert len(output) > 0
         assert 'MEMEX' in output or '|' in output
+
+    def test_prints_status_lines(self):
+        buf = StringIO()
+        console = Console(file=buf, force_terminal=True, color_system='truecolor')
+        print_banner(
+            console,
+            config_path='/home/user/.config/memex/config.yaml',
+            server_url='http://127.0.0.1:8000',
+            server_connected=True,
+            vault='memex',
+        )
+        output = buf.getvalue()
+        assert TAGLINE in output
+        assert 'config.yaml' in output
+        assert '127.0.0.1:8000' in output
+        assert 'Vault:' in output
+        assert 'memex' in output
+
+    def test_prints_offline_status(self):
+        buf = StringIO()
+        console = Console(file=buf, force_terminal=True, color_system='truecolor')
+        print_banner(console, server_url='http://127.0.0.1:8000', server_connected=False)
+        output = buf.getvalue()
+        assert 'offline' in output
 
     def test_suppressed_on_non_terminal(self):
         buf = StringIO()

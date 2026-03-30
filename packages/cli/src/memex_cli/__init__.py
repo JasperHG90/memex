@@ -214,7 +214,23 @@ def main(
     if ctx.invoked_subcommand is None:
         from memex_cli.banner import print_banner
 
-        print_banner(Console(stderr=True))
+        banner_kwargs: dict[str, object] = {}
+        if config:
+            banner_kwargs['config_path'] = str(ctx.meta.get('config_path', ''))
+            banner_kwargs['server_url'] = config.server_url
+            banner_kwargs['vault'] = config.write_vault
+            banner_kwargs['vault_source'] = ctx.meta.get('vault_source')
+
+            # Quick connectivity check (non-blocking, short timeout)
+            import httpx
+
+            try:
+                resp = httpx.get(f'{config.server_url}/api/v1/health', timeout=1.0)
+                banner_kwargs['server_connected'] = resp.status_code == 200
+            except Exception:
+                banner_kwargs['server_connected'] = False
+
+        print_banner(Console(stderr=True), **banner_kwargs)  # type: ignore[arg-type]
         import click
 
         click.echo(ctx.get_help())
