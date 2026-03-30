@@ -35,6 +35,7 @@ docs-clean:
 # Install python dependencies
 install:
   uv sync --all-groups --all-extras
+  uv tool install -e ./packages/cli
 
 # Install pre-commit hooks
 prek_setup:
@@ -43,6 +44,11 @@ prek_setup:
 # Set up rtk
 rtk_setup:
   rtk init --global -u
+
+# gh cli setup
+gh_setup:
+  gh auth login
+  gh auth setup-git
 
 # Install python dependencies and pre-commit hooks
 setup: install prek_setup rtk_setup
