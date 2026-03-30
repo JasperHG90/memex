@@ -138,6 +138,67 @@ async def create_vault(
     console.print(f'[bold green]Vault created successfully![/bold green] ID: {vault.id}')
 
 
+@app.command('truncate')
+@async_command
+async def truncate_vault(
+    ctx: typer.Context,
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to truncate.')],
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
+):
+    """
+    Remove all content from a vault (notes, memories, entities, etc.).
+
+    The vault itself is preserved. This is a destructive operation.
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            vault_uuid = await api.resolve_vault_identifier(identifier)
+        except Exception as e:
+            handle_api_error(e)
+
+        # Show what will be deleted
+        try:
+            stats = await api.get_stats_counts(vault_id=vault_uuid)
+        except Exception as e:
+            handle_api_error(e)
+
+        console.print(f'\n[bold]Vault:[/bold] {identifier} ({vault_uuid})')
+        console.print('[bold red]The following will be permanently deleted:[/bold red]')
+
+        stat_table = Table(show_header=False, box=None, padding=(0, 2))
+        stat_table.add_column(style='dim')
+        stat_table.add_column(style='bold')
+        stat_table.add_row('Notes', str(stats.notes))
+        stat_table.add_row('Memory units', str(stats.memories))
+        stat_table.add_row('Entities', str(stats.entities))
+        stat_table.add_row('Reflection queue', str(stats.reflection_queue))
+        console.print(stat_table)
+        console.print()
+
+        total = stats.notes + stats.memories + stats.entities + stats.reflection_queue
+        if total == 0:
+            console.print('[yellow]Vault is already empty.[/yellow]')
+            return
+
+        if not force:
+            if not typer.confirm('Are you sure? This cannot be undone'):
+                console.print('[yellow]Aborted.[/yellow]')
+                return
+
+        console.print(f'[red]Truncating vault:[/red] {identifier}...')
+        try:
+            counts = await api.truncate_vault(vault_uuid)
+        except Exception as e:
+            handle_api_error(e)
+
+    console.print('[bold green]Vault truncated.[/bold green]')
+    for label, count in counts.items():
+        if count > 0:
+            console.print(f'  {label}: [dim]{count} removed[/dim]')
+
+
 @app.command('delete')
 @async_command
 async def delete_vault(

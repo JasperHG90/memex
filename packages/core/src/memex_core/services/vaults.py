@@ -102,6 +102,71 @@ class VaultService(BaseService):
             _VAULT_RESOLUTION_CACHE.clear()
             return True
 
+    async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
+        """Remove all content from a vault without deleting the vault itself.
+
+        Entities are shared across vaults — they are only deleted if they have
+        no mental models remaining in *any* vault after this vault's mental
+        models are removed.
+
+        Returns a dict of table names to the number of rows deleted.
+        """
+        from sqlmodel import delete, select, col
+
+        from memex_core.memory.sql_models import (
+            AuditLog,
+            BatchJob,
+            Entity,
+            KVEntry,
+            MentalModel,
+            MemoryUnit,
+            Note,
+            ReflectionQueue,
+        )
+
+        counts: dict[str, int] = {}
+        async with self.metastore.session() as session:
+            # 1. Find entities that will become orphaned after we delete
+            #    this vault's mental models. An entity is orphaned if the
+            #    only mental models it has are in this vault.
+            orphan_subq = (
+                select(MentalModel.entity_id)
+                .where(col(MentalModel.vault_id) == vault_id)
+                .where(
+                    ~MentalModel.entity_id.in_(  # type: ignore[union-attr]
+                        select(MentalModel.entity_id).where(col(MentalModel.vault_id) != vault_id)
+                    )
+                )
+            )
+            orphan_entity_ids = list((await session.exec(orphan_subq)).all())
+
+            # 2. Delete vault-scoped tables (children before parents)
+            vault_tables = [
+                ('reflection_queue', ReflectionQueue),
+                ('mental_models', MentalModel),
+                ('memory_units', MemoryUnit),
+                ('notes', Note),
+                ('batch_jobs', BatchJob),
+                ('kv_entries', KVEntry),
+                ('audit_logs', AuditLog),
+            ]
+            for label, model in vault_tables:
+                stmt = delete(model).where(col(model.vault_id) == vault_id)  # type: ignore[attr-defined]
+                result = await session.exec(stmt)  # type: ignore[arg-type]
+                counts[label] = result.rowcount  # type: ignore[union-attr]
+
+            # 3. Delete orphaned entities (no mental models in any vault)
+            if orphan_entity_ids:
+                stmt_ent = delete(Entity).where(col(Entity.id).in_(orphan_entity_ids))
+                result_ent = await session.exec(stmt_ent)  # type: ignore[arg-type]
+                counts['entities'] = result_ent.rowcount  # type: ignore[union-attr]
+            else:
+                counts['entities'] = 0
+
+            await session.commit()
+
+        return counts
+
     async def list_vaults(self) -> list[Any]:
         """List all vaults."""
         from memex_core.memory.sql_models import Vault
