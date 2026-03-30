@@ -1,6 +1,7 @@
 from memex_cli.vaults import app
 from uuid import uuid4
 import httpx
+from unittest.mock import MagicMock
 
 
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
@@ -36,6 +37,104 @@ def test_delete_vault_not_found(runner, mock_api, strip_ansi, monkeypatch):
     assert result.exit_code == 1
     clean_stdout = strip_ansi(result.stdout)
     assert f"Vault '{vault_name}' not found" in clean_stdout
+
+
+def _mock_stats(notes=5, memories=20, entities=10, reflection_queue=3):
+    """Create a mock SystemStatsCountsDTO."""
+    s = MagicMock()
+    s.notes = notes
+    s.memories = memories
+    s.entities = entities
+    s.reflection_queue = reflection_queue
+    return s
+
+
+def test_truncate_vault_with_force(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+    vault_name = 'test-vault'
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.get_stats_counts.return_value = _mock_stats()
+    mock_api.truncate_vault.return_value = {
+        'notes': 5,
+        'memory_units': 20,
+        'entities': 10,
+        'mental_models': 3,
+        'reflection_queue': 3,
+    }
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert 'Vault truncated' in clean
+    mock_api.truncate_vault.assert_called_once_with(vault_uuid)
+
+
+def test_truncate_vault_shows_stats(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+    vault_name = 'test-vault'
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.get_stats_counts.return_value = _mock_stats(notes=12, memories=50)
+    mock_api.truncate_vault.return_value = {'notes': 12, 'memory_units': 50}
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert '12' in clean  # notes count shown
+    assert '50' in clean  # memories count shown
+
+
+def test_truncate_vault_aborted_without_force(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.get_stats_counts.return_value = _mock_stats()
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['truncate', 'test-vault'], input='n\n')
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert 'Aborted' in clean
+    mock_api.truncate_vault.assert_not_called()
+
+
+def test_truncate_empty_vault(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.get_stats_counts.return_value = _mock_stats(
+        notes=0, memories=0, entities=0, reflection_queue=0
+    )
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['truncate', 'empty-vault', '--force'])
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert 'already empty' in clean
+    mock_api.truncate_vault.assert_not_called()
+
+
+def test_truncate_vault_not_found(runner, mock_api, strip_ansi, monkeypatch):
+    vault_name = 'non-existent'
+
+    response = httpx.Response(404, json={'detail': f"Vault '{vault_name}' not found"})
+    mock_api.resolve_vault_identifier.side_effect = httpx.HTTPStatusError(
+        f"Vault '{vault_name}' not found", request=None, response=response
+    )
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    assert result.exit_code == 1
+    clean = strip_ansi(result.stdout)
+    assert f"Vault '{vault_name}' not found" in clean
 
 
 def test_create_vault(runner, mock_api, strip_ansi, monkeypatch):

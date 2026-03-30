@@ -229,6 +229,22 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         raise _handle_error(e, 'Vault deletion failed')
 
 
+@router.post('/vaults/{vault_id}/truncate', dependencies=[Depends(require_delete)])
+async def truncate_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+    """Remove all content from a vault without deleting the vault itself."""
+    try:
+        # Verify vault exists
+        exists = await api.validate_vault_exists(vault_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail='Vault not found')
+        counts = await api.truncate_vault(vault_id)
+        return {'status': 'success', 'deleted': counts}
+    except HTTPException:
+        raise
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Vault truncation failed')
+
+
 @router.post('/vaults/{identifier}/set-writer', dependencies=[Depends(require_write)])
 async def set_writer_vault(identifier: str, api: Annotated[MemexAPI, Depends(get_api)]):
     """

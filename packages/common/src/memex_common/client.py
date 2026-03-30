@@ -149,6 +149,11 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
+        """Remove all content from a vault without deleting the vault itself."""
+        result = await self._post(f'vaults/{vault_id}/truncate', data={})
+        return result.get('deleted', {})
+
     async def set_writer_vault(self, identifier: str) -> dict[str, Any]:
         """Set the active (writer) vault for the current server session."""
         response = await self.client.post(f'vaults/{identifier}/set-writer')

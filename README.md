@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v0.0.39a-green?style=flat-square" alt="v0.0.39a" />
-  <img src="https://img.shields.io/badge/tests-2,709%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-2,714%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 ## Requirements
