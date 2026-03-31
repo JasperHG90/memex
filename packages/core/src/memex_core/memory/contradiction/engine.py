@@ -13,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import ContradictionConfig
 from memex_core.llm import run_dspy_operation
+from memex_core.tracing import trace_span
 from memex_core.memory.contradiction.candidates import get_candidates
 from memex_core.memory.contradiction.signatures import (
     ClassifyRelationships,
@@ -57,50 +58,60 @@ class ContradictionEngine:
         vault_id: UUID,
     ) -> None:
         """Core detection logic."""
-        new_units = await self._load_units(session, unit_ids)
-        if not new_units:
-            return
+        with trace_span(
+            'memex.contradiction',
+            'contradiction',
+            {
+                'contradiction.vault_id': str(vault_id),
+                'contradiction.unit_count': str(len(unit_ids)),
+            },
+        ):
+            new_units = await self._load_units(session, unit_ids)
+            if not new_units:
+                return
 
-        flagged_ids = await self._triage(new_units)
-        if not flagged_ids:
-            logger.debug('Triage: no corrective units found among %d units', len(new_units))
-            return
+            flagged_ids = await self._triage(new_units)
+            if not flagged_ids:
+                logger.debug('Triage: no corrective units found among %d units', len(new_units))
+                return
 
-        flagged_units = [u for u in new_units if str(u.id) in flagged_ids]
-        logger.info(
-            'Triage: %d/%d units flagged for contradiction check',
-            len(flagged_units),
-            len(new_units),
-        )
-
-        all_links: list[MemoryLink] = []
-        confidence_updates: dict[UUID, float] = {}
-
-        tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.error('Error processing flagged unit: %s', result)
-                continue
-            links, updates = result
-            all_links.extend(links)
-            confidence_updates.update(updates)
-
-        for link in all_links:
-            session.add(link)
-
-        for unit_id, new_confidence in confidence_updates.items():
-            stmt = (
-                update(MemoryUnit).where(MemoryUnit.id == unit_id).values(confidence=new_confidence)
+            flagged_units = [u for u in new_units if str(u.id) in flagged_ids]
+            logger.info(
+                'Triage: %d/%d units flagged for contradiction check',
+                len(flagged_units),
+                len(new_units),
             )
-            await session.execute(stmt)
 
-        logger.info(
-            'Contradiction detection: created %d links, updated %d confidences',
-            len(all_links),
-            len(confidence_updates),
-        )
+            all_links: list[MemoryLink] = []
+            confidence_updates: dict[UUID, float] = {}
+
+            tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, BaseException):
+                    logger.error('Error processing flagged unit: %s', result)
+                    continue
+                links, updates = result
+                all_links.extend(links)
+                confidence_updates.update(updates)
+
+            for link in all_links:
+                session.add(link)
+
+            for unit_id, new_confidence in confidence_updates.items():
+                stmt = (
+                    update(MemoryUnit)
+                    .where(MemoryUnit.id == unit_id)
+                    .values(confidence=new_confidence)
+                )
+                await session.execute(stmt)
+
+            logger.info(
+                'Contradiction detection: created %d links, updated %d confidences',
+                len(all_links),
+                len(confidence_updates),
+            )
 
     async def _load_units(self, session: AsyncSession, unit_ids: list[UUID]) -> list[MemoryUnit]:
         """Load memory units by IDs."""

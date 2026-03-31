@@ -5,7 +5,11 @@ so that all LLM calls are captured as spans. Compatible with any
 OTLP-compliant backend (Arize Phoenix, Jaeger, Grafana Tempo, etc.).
 """
 
+from __future__ import annotations
+
 import logging
+from contextlib import AbstractContextManager
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -85,3 +89,21 @@ def check_tracing_health() -> bool:
 def is_tracing_enabled() -> bool:
     """Return whether tracing has been initialized."""
     return _initialized
+
+
+def trace_span(
+    tracer_name: str, span_name: str, attributes: dict[str, str] | None = None
+) -> 'AbstractContextManager[Any]':
+    """Return an OTel span context manager, or a no-op if tracing deps are unavailable."""
+    try:
+        from opentelemetry import trace
+        from opentelemetry.trace import SpanKind
+    except ImportError:
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    tracer = trace.get_tracer(tracer_name)
+    return tracer.start_as_current_span(
+        span_name, kind=SpanKind.INTERNAL, attributes=attributes or {}
+    )
