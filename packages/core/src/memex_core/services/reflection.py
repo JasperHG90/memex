@@ -190,6 +190,11 @@ class ReflectionService:
                 session, limit=limit, vault_id=vault_id
             )
 
+    async def recover_stale_processing(self) -> int:
+        """Reset PROCESSING items stuck longer than the configured timeout."""
+        async with self.metastore.session() as session:
+            return await self.queue_service.recover_stale_processing(session)
+
     async def get_dead_letter_items(
         self,
         limit: int = 50,

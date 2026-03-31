@@ -436,6 +436,14 @@ class ReflectionConfig(BaseModel):
         le=1.0,
         description='Minimum priority score required for an entity to be selected for reflection.',
     )
+    stale_processing_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        description=(
+            'Seconds after which a PROCESSING item is considered stale and reset to PENDING. '
+            'Prevents items from being stuck forever when reflection fails mid-flight.'
+        ),
+    )
 
     @model_validator(mode='after')
     def _validate_weight_scores(v: 'ReflectionConfig'):
