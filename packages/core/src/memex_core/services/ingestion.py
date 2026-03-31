@@ -14,6 +14,7 @@ from typing import Any, AsyncGenerator
 from uuid import UUID
 
 import dspy
+import stamina
 import yaml
 from dateutil import parser as dateutil_parser
 from sqlmodel import col
@@ -152,6 +153,25 @@ def _wrap_extracted_content(extracted: ExtractedContent, filename: str) -> str:
         f'---\nsource_file: {filename}\ntype: {extracted.content_type}'
         f'{extra_fm}\ningested_at: {now}\n---\n{extracted.content}\n'
     )
+
+
+_RETRYABLE_PG_CODES = frozenset(
+    {
+        '40P01',  # deadlock_detected
+        '57014',  # query_canceled (statement timeout)
+        '40001',  # serialization_failure
+    }
+)
+
+
+def _is_retryable_db_error(exc: Exception) -> bool:
+    """Check if an exception is a transient PostgreSQL error worth retrying."""
+    from sqlalchemy.exc import DBAPIError, OperationalError
+
+    if isinstance(exc, (OperationalError, DBAPIError)):
+        pgcode = getattr(getattr(exc, 'orig', None), 'pgcode', None)
+        return pgcode in _RETRYABLE_PG_CODES
+    return False
 
 
 class IngestionService:
@@ -456,7 +476,7 @@ ingested_at: {now}
         Orchestrates idempotency checks, asset staging, and batched memory retention.
         Yields progress updates.
         """
-        from memex_core.api import NoteInput, inject_user_notes
+        from memex_core.api import NoteInput
         from memex_core.memory.sql_models import Vault, Note
         from sqlmodel import select
 
@@ -505,107 +525,136 @@ ingested_at: {now}
             chunk = to_process[i : i + batch_size]
 
             try:
-                chunk_txn_id = chunk[0][2]
-
-                async with AsyncTransaction(self.metastore, self.filestore, chunk_txn_id) as txn:
-                    chunk_doc_ids = []
-
-                    for original_idx, note_dto, note_uuid in chunk:
-                        asset_path = f'assets/{vault_name}/{note_uuid}'
-                        asset_files_list = []
-
-                        # --- Format conversion for non-markdown content ---
-                        if _needs_conversion(note_dto):
-                            raw_bytes = note_dto.content_decoded
-                            extracted = await _convert_to_markdown(
-                                raw_bytes,
-                                note_dto.filename,
-                                self._file_processor,
-                            )
-                            decoded_content = _wrap_extracted_content(
-                                extracted,
-                                note_dto.filename,
-                            )
-                            extracted_images = extracted.images
-                        else:
-                            decoded_content = note_dto.content_decoded.decode('utf-8')
-                            extracted_images = {}
-
-                        decoded_content = inject_user_notes(
-                            decoded_content, getattr(note_dto, 'user_notes', None)
-                        )
-
-                        for filename, content in note_dto.files.items():
-                            try:
-                                raw_content = base64.b64decode(content)
-                            except Exception as e:
-                                logger.debug(
-                                    'Base64 decode failed for file %r, using raw: %s',
-                                    filename,
-                                    e,
-                                )
-                                raw_content = content
-
-                            full_asset_key = f'{asset_path}/{filename}'
-                            await txn.save_file(full_asset_key, raw_content)
-                            asset_files_list.append(full_asset_key)
-
-                        # Stage extracted images (from PDF conversion, etc.)
-                        for img_name, img_bytes in extracted_images.items():
-                            full_asset_key = f'{asset_path}/{img_name}'
-                            await txn.save_file(full_asset_key, img_bytes)
-                            asset_files_list.append(full_asset_key)
-
-                        resolved_title = await resolve_document_title(
-                            decoded_content,
-                            note_dto.name,
-                            self.lm,
-                        )
-
-                        # Extract date from frontmatter, fall back to now()
-                        batch_event_date = _extract_date_from_frontmatter(decoded_content)
-                        if batch_event_date is None:
-                            batch_event_date = datetime.now(timezone.utc)
-
-                        retain_content = RetainContent(
-                            content=decoded_content,
-                            event_date=batch_event_date,
-                            payload={
-                                'source': 'batch_note',
-                                'note_name': resolved_title,
-                                'note_description': note_dto.description,
-                                'author': getattr(note_dto, 'author', None),
-                                'uuid': str(note_uuid),
-                                'filestore_path': asset_path if asset_files_list else None,
-                                'assets': asset_files_list,
-                                'content_fingerprint': note_fingerprints[original_idx],
-                                'tags': note_dto.tags or [],
-                            },
-                            vault_id=target_vault_id,
-                        )
-
-                        retain_result = await self.memory.retain(
-                            session=txn.db_session,
-                            contents=[retain_content],
-                            note_id=str(note_uuid),
-                            reflect_after=False,
-                            agent_name='user',
-                        )
-                        contradiction_task = retain_result.pop('contradiction_task', None)
-                        if contradiction_task is not None:
-                            await contradiction_task
-                        chunk_doc_ids.append(note_uuid)
-
-                        # Yield per note for granular progress tracking
-                        results['processed_count'] += 1
-                        results['note_ids'].append(str(note_uuid))
-                        yield results
+                processed_ids = await self._process_chunk(
+                    chunk=chunk,
+                    vault_name=vault_name,
+                    note_fingerprints=note_fingerprints,
+                    target_vault_id=target_vault_id,
+                )
+                results['processed_count'] += len(processed_ids)
+                results['note_ids'].extend(processed_ids)
+                yield results
 
             except Exception as e:
-                logger.error(f'Failed to process ingestion chunk: {e}', exc_info=True)
+                logger.error('Failed to process ingestion chunk: %s', e, exc_info=True)
                 results['failed_count'] += len(chunk)
                 results['errors'].append({'chunk_start': i, 'error': str(e)})
                 yield results
+
+    @stamina.retry(
+        on=_is_retryable_db_error,
+        attempts=3,
+        timeout=None,
+        wait_initial=1.0,
+        wait_max=4.0,
+    )
+    async def _process_chunk(
+        self,
+        chunk: list[tuple[int, Any, UUID]],
+        vault_name: str,
+        note_fingerprints: list[str],
+        target_vault_id: UUID,
+    ) -> list[str]:
+        """Process a single chunk of notes within a transaction.
+
+        Returns a list of processed note ID strings.
+        Retries automatically on transient PostgreSQL errors (deadlocks,
+        statement timeouts, serialization failures).
+        """
+        from memex_core.api import inject_user_notes
+
+        chunk_txn_id = chunk[0][2]
+        processed_ids: list[str] = []
+
+        async with AsyncTransaction(self.metastore, self.filestore, chunk_txn_id) as txn:
+            for original_idx, note_dto, note_uuid in chunk:
+                asset_path = f'assets/{vault_name}/{note_uuid}'
+                asset_files_list = []
+
+                # --- Format conversion for non-markdown content ---
+                if _needs_conversion(note_dto):
+                    raw_bytes = note_dto.content_decoded
+                    extracted = await _convert_to_markdown(
+                        raw_bytes,
+                        note_dto.filename,
+                        self._file_processor,
+                    )
+                    decoded_content = _wrap_extracted_content(
+                        extracted,
+                        note_dto.filename,
+                    )
+                    extracted_images = extracted.images
+                else:
+                    decoded_content = note_dto.content_decoded.decode('utf-8')
+                    extracted_images = {}
+
+                decoded_content = inject_user_notes(
+                    decoded_content, getattr(note_dto, 'user_notes', None)
+                )
+
+                for filename, content in note_dto.files.items():
+                    try:
+                        raw_content = base64.b64decode(content)
+                    except Exception as e:
+                        logger.debug(
+                            'Base64 decode failed for file %r, using raw: %s',
+                            filename,
+                            e,
+                        )
+                        raw_content = content
+
+                    full_asset_key = f'{asset_path}/{filename}'
+                    await txn.save_file(full_asset_key, raw_content)
+                    asset_files_list.append(full_asset_key)
+
+                # Stage extracted images (from PDF conversion, etc.)
+                for img_name, img_bytes in extracted_images.items():
+                    full_asset_key = f'{asset_path}/{img_name}'
+                    await txn.save_file(full_asset_key, img_bytes)
+                    asset_files_list.append(full_asset_key)
+
+                resolved_title = await resolve_document_title(
+                    decoded_content,
+                    note_dto.name,
+                    self.lm,
+                )
+
+                # Extract date from frontmatter, fall back to now()
+                batch_event_date = _extract_date_from_frontmatter(decoded_content)
+                if batch_event_date is None:
+                    batch_event_date = datetime.now(timezone.utc)
+
+                retain_content = RetainContent(
+                    content=decoded_content,
+                    event_date=batch_event_date,
+                    payload={
+                        'source': 'batch_note',
+                        'note_name': resolved_title,
+                        'note_description': note_dto.description,
+                        'author': getattr(note_dto, 'author', None),
+                        'uuid': str(note_uuid),
+                        'filestore_path': asset_path if asset_files_list else None,
+                        'assets': asset_files_list,
+                        'content_fingerprint': note_fingerprints[original_idx],
+                        'tags': note_dto.tags or [],
+                    },
+                    vault_id=target_vault_id,
+                )
+
+                retain_result = await self.memory.retain(
+                    session=txn.db_session,
+                    contents=[retain_content],
+                    note_id=str(note_uuid),
+                    reflect_after=False,
+                    agent_name='user',
+                )
+                contradiction_task = retain_result.pop('contradiction_task', None)
+                if contradiction_task is not None:
+                    await contradiction_task
+
+                processed_ids.append(str(note_uuid))
+
+        return processed_ids
 
     async def _detect_overlapping_notes(
         self,

@@ -50,6 +50,7 @@ dependencies = [
     "pymupdf-layout>=1.27.2",
     "python-multipart>=0.0.22",
     "litellm==1.80.16",
+    "stamina>=25.2.0",
 ]
 
 [project.optional-dependencies]
