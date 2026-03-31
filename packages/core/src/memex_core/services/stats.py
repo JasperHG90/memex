@@ -16,6 +16,9 @@ from memex_core.services.notes import _cleanup_entities_after_delete
 
 logger = logging.getLogger('memex.core.services.stats')
 
+# Prevent fire-and-forget tasks from being garbage-collected before completion.
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 class StatsService(BaseService):
     """Aggregate statistics and memory unit CRUD."""
@@ -93,8 +96,10 @@ class StatsService(BaseService):
 
         # Fire-and-forget entity cleanup in background.
         if entity_ids:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 _cleanup_entities_after_delete(self.metastore, entity_ids, [unit_id], vault_id)
             )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
         return True
