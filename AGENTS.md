@@ -54,7 +54,7 @@ Python monorepo managed by `uv` with 8 packages.
 | Package | Import | Purpose |
 |---------|--------|---------|
 | `packages/core` | `memex_core` | Core library: storage, memory engine (extraction/retrieval/reflection), services layer, MemexAPI facade, FastAPI server |
-| `packages/cli` | `memex_cli` | Typer CLI (`memex` command) — 11 command groups: note, vault, memory, entity, kv, server, mcp, config, stats, db, setup |
+| `packages/cli` | `memex_cli` | Typer CLI (`memex` command) — 12 command groups: note, vault, memory, entity, kv, server, mcp, config, system, database, setup, report-bug |
 | `packages/mcp` | `memex_mcp` | FastMCP server — 31 tools for LLM integration |
 | `packages/common` | `memex_common` | Shared Pydantic models, config (hierarchical YAML), HTTP client, exceptions |
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
