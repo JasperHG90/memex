@@ -23,6 +23,9 @@ from memex_core.storage.transaction import AsyncTransaction
 
 logger = logging.getLogger('memex.core.services.notes')
 
+# Prevent fire-and-forget tasks from being garbage-collected before completion.
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 async def _cleanup_entities_after_delete(
     metastore: AsyncBaseMetaStoreEngine,
@@ -735,11 +738,13 @@ class NoteService:
 
         # Transaction committed. Fire-and-forget entity cleanup in background.
         if entity_ids_for_cleanup:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 _cleanup_entities_after_delete(
                     self.metastore, entity_ids_for_cleanup, unit_ids, note_vault_id
                 )
             )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
         return True
 
