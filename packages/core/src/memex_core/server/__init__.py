@@ -179,14 +179,6 @@ async def lifespan(app: FastAPI):
 
     await metastore.close()
 
-    # Release ONNX model memory eagerly — InferenceSession holds native
-    # buffers that Python's GC may not reclaim before the next test starts
-    # a fresh lifespan, leading to OOM under repeated TestClient usage.
-    del embedding_model, reranking_model, ner_model, api
-    import gc
-
-    gc.collect()
-
 
 app = FastAPI(title='Memex Core API', lifespan=lifespan)
 

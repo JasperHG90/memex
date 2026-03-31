@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from typing import AsyncGenerator, cast
 
+import memex_core.memory.models.embedding as _emb_mod
 from memex_core.memory.models.embedding import get_embedding_model, FastEmbedder
+
+
+@pytest.fixture(autouse=True)
+def _clear_embedding_cache() -> None:
+    """Clear the module-level ONNX embedding cache between tests."""
+    _emb_mod._onnx_embedder_cache = None
 
 
 @pytest.fixture
