@@ -183,7 +183,7 @@ async def ingest_batch_internal(
 ) -> AsyncGenerator[dict[str, Any], None]
 ```
 
-Batch-ingest multiple notes. Yields progress updates per note.
+Batch-ingest multiple notes. Yields cumulative progress updates per chunk (`batch_size` notes), not per individual note.
 
 ### `get_note`
 
