@@ -651,7 +651,7 @@ ingested_at: {now}
                 retain_result = await self.memory.retain(
                     session=txn.db_session,
                     contents=[retain_content],
-                    note_id=note_uuid,
+                    note_id=str(note_uuid),
                     reflect_after=False,
                     agent_name='user',
                 )
