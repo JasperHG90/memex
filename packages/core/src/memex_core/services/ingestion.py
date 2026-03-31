@@ -474,7 +474,14 @@ ingested_at: {now}
         """
         Internal high-performance batch ingestion logic.
         Orchestrates idempotency checks, asset staging, and batched memory retention.
-        Yields progress updates.
+
+        Yields cumulative progress dicts after each *chunk* (batch_size group of
+        notes), not after each individual note.  This is intentional: each chunk
+        is processed inside a single DB transaction via ``_process_chunk``, so
+        yielding finer-grained updates would require breaking transactional
+        atomicity.  Consumers (e.g. ``BatchManager``) use the cumulative
+        ``processed_count / skipped_count / failed_count`` totals to report
+        progress.
         """
         from memex_core.api import NoteInput
         from memex_core.memory.sql_models import Vault, Note
@@ -644,7 +651,7 @@ ingested_at: {now}
                 retain_result = await self.memory.retain(
                     session=txn.db_session,
                     contents=[retain_content],
-                    note_id=str(note_uuid),
+                    note_id=note_uuid,
                     reflect_after=False,
                     agent_name='user',
                 )

@@ -20,6 +20,12 @@ logger = logging.getLogger('memex.core.services.stats')
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
+async def await_background_tasks() -> None:
+    """Await all pending background tasks.  Intended for test teardown."""
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+
+
 class StatsService(BaseService):
     """Aggregate statistics and memory unit CRUD."""
 

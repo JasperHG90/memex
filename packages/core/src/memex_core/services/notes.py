@@ -27,6 +27,12 @@ logger = logging.getLogger('memex.core.services.notes')
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
+async def await_background_tasks() -> None:
+    """Await all pending background tasks.  Intended for test teardown."""
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+
+
 async def _cleanup_entities_after_delete(
     metastore: AsyncBaseMetaStoreEngine,
     entity_ids: set[UUID],
