@@ -110,7 +110,10 @@ def fake_retain_factory():
             )
             .on_conflict_do_update(
                 index_elements=['id'],
-                set_={'content_hash': payload.get('content_fingerprint', 'hash')},
+                set_={
+                    'content_hash': payload.get('content_fingerprint', 'hash'),
+                    'original_text': content_item.content,
+                },
             )
         )
         await session.execute(

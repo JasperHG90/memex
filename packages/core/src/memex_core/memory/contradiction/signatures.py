@@ -2,9 +2,10 @@ import dspy
 
 
 class TriageNewUnits(dspy.Signature):
-    """Identify memory units that explicitly correct, update, revise, or supersede prior information.
-    Most units are genuinely new — only flag units with clear corrective language.
-    Be conservative: only flag units that sound like corrections or updates, not new information."""
+    """Identify memory units that correct, update, revise, or supersede prior information.
+    Flag units where a previously stated fact may no longer hold — including both explicit
+    corrections and natural state changes (e.g. someone replaced someone, a value changed).
+    Most units are genuinely new — do not flag units that only add new information."""
 
     units: str = dspy.InputField(
         description='JSON list of {id, text} for all new units from the document'

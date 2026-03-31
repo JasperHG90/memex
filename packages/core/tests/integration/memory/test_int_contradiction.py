@@ -558,6 +558,10 @@ async def test_llm_no_cross_contamination_between_similar_topics(
         event_date=datetime(2025, 1, 15, tzinfo=timezone.utc),
         embedding=ceo_embedding,
     )
+    # NOTE: this test uses natural language ("replaced") which the triage prompt
+    # may not always flag as corrective. See the _explicit variant below for
+    # a stronger version. If this test becomes flaky, the triage prompt may
+    # need loosening — do not just delete the test.
     globex_unit = _make_unit(
         note_globex.id,
         vault_id,
@@ -629,4 +633,82 @@ async def test_llm_no_cross_contamination_between_similar_topics(
     )
     assert (globex_unit.id, acme_new.id) not in link_pairs, (
         'Should not create cross-company contradiction link (reverse)'
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.llm
+@pytest.mark.asyncio
+async def test_llm_no_cross_contamination_explicit_correction(
+    session: AsyncSession, contradiction_config: ContradictionConfig
+):
+    """Same as test_llm_no_cross_contamination_between_similar_topics but with
+    explicit corrective language so the triage prompt reliably flags it."""
+    _skip_without_api_key()
+    vault_id = GLOBAL_VAULT_ID
+
+    note_acme = _make_note(vault_id, title='Acme Corp Board Minutes')
+    note_globex = _make_note(vault_id, title='Globex Inc Leadership')
+    session.add_all([note_acme, note_globex])
+    await session.flush()
+
+    ceo_embedding = [0.7] * 384
+
+    acme_old = _make_unit(
+        note_acme.id,
+        vault_id,
+        'The CEO of Acme Corp is Alice Johnson.',
+        confidence=1.0,
+        event_date=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    acme_new = _make_unit(
+        note_acme.id,
+        vault_id,
+        'Correction: Alice Johnson is no longer CEO of Acme Corp. Bob Smith took over in January 2025.',
+        confidence=1.0,
+        event_date=datetime(2025, 1, 15, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    globex_unit = _make_unit(
+        note_globex.id,
+        vault_id,
+        'The CEO of Globex Inc is Carol Williams. She was appointed in March 2024.',
+        confidence=1.0,
+        event_date=datetime(2024, 3, 1, tzinfo=timezone.utc),
+        embedding=ceo_embedding,
+    )
+    session.add_all([acme_old, acme_new, globex_unit])
+    await session.flush()
+
+    ceo_entity = _make_entity(f'ceo-{uuid4()}')
+    acme_entity = _make_entity(f'acme-corp-{uuid4()}')
+    globex_entity = _make_entity(f'globex-inc-{uuid4()}')
+    session.add_all([ceo_entity, acme_entity, globex_entity])
+    await session.flush()
+
+    session.add_all(
+        [
+            _make_unit_entity(acme_old.id, ceo_entity.id, vault_id),
+            _make_unit_entity(acme_new.id, ceo_entity.id, vault_id),
+            _make_unit_entity(globex_unit.id, ceo_entity.id, vault_id),
+            _make_unit_entity(acme_old.id, acme_entity.id, vault_id),
+            _make_unit_entity(acme_new.id, acme_entity.id, vault_id),
+            _make_unit_entity(globex_unit.id, globex_entity.id, vault_id),
+        ]
+    )
+    await session.commit()
+
+    engine = _make_llm_engine(contradiction_config)
+    await engine._detect(session, [acme_new.id], vault_id)
+    await session.commit()
+
+    await session.refresh(acme_old)
+    await session.refresh(globex_unit)
+
+    assert acme_old.confidence < 1.0, (
+        f'Acme old CEO unit should be superseded, got confidence={acme_old.confidence}'
+    )
+    assert globex_unit.confidence == 1.0, (
+        f'Globex CEO unit should be untouched, got confidence={globex_unit.confidence}'
     )
