@@ -143,7 +143,7 @@ async def _convert_to_markdown(
 
 def _wrap_extracted_content(extracted: ExtractedContent, filename: str) -> str:
     """Wrap FileContentProcessor output in YAML frontmatter (matches ingest_from_file pattern)."""
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     extra_fm = ''
     if extracted.metadata.get('author'):
         extra_fm += f'\nauthor: {extracted.metadata["author"]}'
@@ -217,7 +217,7 @@ class IngestionService:
         )
 
         title = extracted.metadata.get('title') or None
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         note_content = f"""---
 source_url: {extracted.source}
@@ -291,7 +291,7 @@ publish_date: {extracted.metadata.get('date')}
             vault_id or self.config.server.default_active_vault
         )
 
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         extra_fm = ''
         if extracted.metadata.get('author'):
