@@ -1,7 +1,7 @@
 import math
 import logging
 from uuid import UUID
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import select, col, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -328,3 +328,33 @@ class ReflectionQueueService:
         await session.commit()
         await session.refresh(item)
         return item
+
+    async def recover_stale_processing(self, session: AsyncSession) -> int:
+        """Reset PROCESSING items that have been stuck longer than the configured timeout.
+
+        Returns the number of recovered items.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=self.config.stale_processing_timeout_seconds
+        )
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.status) == ReflectionStatus.PROCESSING)
+            .where(col(ReflectionQueue.last_queued_at) < cutoff)
+            .with_for_update(skip_locked=True)
+        )
+        result = await session.exec(stmt)
+        items = result.all()
+
+        if not items:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        for item in items:
+            item.status = ReflectionStatus.PENDING
+            item.last_queued_at = now
+            session.add(item)
+
+        await session.commit()
+        logger.info('Recovered %d stale PROCESSING items back to PENDING.', len(items))
+        return len(items)

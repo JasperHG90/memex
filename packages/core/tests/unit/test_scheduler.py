@@ -15,6 +15,7 @@ class MockMemexAPI:
     def __init__(self):
         self.claim_reflection_queue_batch = AsyncMock(return_value=[])
         self.reflect_batch = AsyncMock(return_value=[])
+        self.recover_stale_processing = AsyncMock(return_value=0)
 
 
 @pytest.fixture
@@ -101,3 +102,25 @@ async def test_scheduler_task_empty_queue(mock_api):
 
     mock_api.claim_reflection_queue_batch.assert_called_once()
     mock_api.reflect_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_recovers_stale_before_claiming(mock_api):
+    """Scheduler must call recover_stale_processing before claiming new items."""
+    call_order: list[str] = []
+
+    async def _recover() -> int:
+        call_order.append('recover')
+        return 0
+
+    async def _claim(**kw: object) -> list[object]:
+        call_order.append('claim')
+        return []
+
+    mock_api.recover_stale_processing.side_effect = _recover
+    mock_api.claim_reflection_queue_batch.side_effect = _claim
+
+    await periodic_reflection_task(mock_api, batch_size=5)
+
+    assert call_order == ['recover', 'claim']
+    mock_api.recover_stale_processing.assert_called_once()

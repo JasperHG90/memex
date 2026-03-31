@@ -332,10 +332,16 @@ class MemoryEngine:
         Returns:
             Number of entities successfully processed.
         """
-        # 1. Fetch pending tasks with row locking
+        # 1. Fetch pending/failed tasks with row locking, respecting min_priority
         stmt = (
             select(ReflectionQueue)
-            .where(ReflectionQueue.status == ReflectionStatus.PENDING)
+            .where(
+                col(ReflectionQueue.status).in_([ReflectionStatus.PENDING, ReflectionStatus.FAILED])
+            )
+            .where(
+                col(ReflectionQueue.priority_score)
+                >= self.config.server.memory.reflection.min_priority
+            )
             .order_by(col(ReflectionQueue.priority_score).desc())
             .limit(limit)
             .with_for_update(skip_locked=True)

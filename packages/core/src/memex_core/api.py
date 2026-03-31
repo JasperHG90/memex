@@ -950,6 +950,10 @@ class MemexAPI:
         """Claim reflection queue batch. Delegates to ReflectionService."""
         return await self._reflection.claim_reflection_queue_batch(limit=limit, vault_id=vault_id)
 
+    async def recover_stale_processing(self) -> int:
+        """Reset PROCESSING items stuck longer than the configured timeout."""
+        return await self._reflection.recover_stale_processing()
+
     async def get_dead_letter_items(
         self,
         limit: int = 50,

@@ -25,6 +25,11 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
     async with background_session('bg-sched-reflect'):
         logger.info('Scheduler: Running periodic reflection check...')
         try:
+            # 0. Recover stale PROCESSING items before claiming new ones
+            recovered = await api.recover_stale_processing()
+            if recovered:
+                logger.info(f'Scheduler: Recovered {recovered} stale PROCESSING items.')
+
             # 1. Claim items
             queue_items = await api.claim_reflection_queue_batch(limit=batch_size)
             if not queue_items:
@@ -61,7 +66,11 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     interval_seconds = config.server.memory.reflection.background_reflection_interval_seconds
     batch_size = config.server.memory.reflection.background_reflection_batch_size
 
-    logger.info(f'Scheduler: Starting. Interval: {interval_seconds}s. Batch: {batch_size}.')
+    min_priority = config.server.memory.reflection.min_priority
+    logger.info(
+        f'Scheduler: Starting. Interval: {interval_seconds}s. Batch: {batch_size}. '
+        f'Min priority: {min_priority}.'
+    )
 
     # Define AioClock App
     clock = AioClock()

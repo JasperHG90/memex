@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, AsyncMock
 from uuid import uuid4
 
@@ -170,3 +171,45 @@ async def test_claim_next_batch_filtering_logic():
         or 'min_priority' in str(stmt)
         or 'priority_score >= :priority_score_1' in str(stmt)
     )
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_processing():
+    """Stale PROCESSING items should be reset to PENDING."""
+    config = ReflectionConfig(stale_processing_timeout_seconds=600)
+    svc = ReflectionQueueService(config)
+    session = AsyncMock(spec=AsyncSession)
+
+    stale_item = ReflectionQueue(
+        entity_id=uuid4(),
+        status=ReflectionStatus.PROCESSING,
+        last_queued_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        priority_score=0.5,
+    )
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [stale_item]
+    session.exec.return_value = mock_result
+
+    recovered = await svc.recover_stale_processing(session)
+
+    assert recovered == 1
+    assert stale_item.status == ReflectionStatus.PENDING
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_processing_no_stale_items():
+    """No recovery needed when nothing is stale."""
+    config = ReflectionConfig(stale_processing_timeout_seconds=600)
+    svc = ReflectionQueueService(config)
+    session = AsyncMock(spec=AsyncSession)
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = []
+    session.exec.return_value = mock_result
+
+    recovered = await svc.recover_stale_processing(session)
+
+    assert recovered == 0
+    session.commit.assert_not_awaited()
