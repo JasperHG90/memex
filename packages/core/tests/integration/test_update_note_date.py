@@ -17,6 +17,8 @@ from memex_core.memory.sql_models import (
     Observation,
     UnitEntity,
 )
+from memex_core.services.notes import await_background_tasks as await_notes_bg
+from memex_core.services.stats import await_background_tasks as await_stats_bg
 
 
 @pytest.mark.integration
@@ -326,6 +328,7 @@ async def test_delete_note_removes_orphaned_entities(api, metastore, session: As
     # Delete the note
     result = await api.delete_note(note_id)
     assert result is True
+    await await_notes_bg()
 
     # Verify entity was deleted
     async with metastore.session() as verify_session:
@@ -410,6 +413,7 @@ async def test_delete_note_updates_mention_count_for_shared_entities(
     # Delete note 1
     result = await api.delete_note(note_id_1)
     assert result is True
+    await await_notes_bg()
 
     # Verify entity still exists with updated mention_count = 1
     async with metastore.session() as verify_session:
@@ -485,6 +489,7 @@ async def test_delete_note_removes_mental_models_for_orphaned_entities(
 
     # Delete the note
     await api.delete_note(note_id)
+    await await_notes_bg()
 
     # Verify both entity AND mental model are deleted
     async with metastore.session() as verify_session:
@@ -577,6 +582,7 @@ async def test_delete_note_prunes_mental_model_observations(api, metastore, sess
     await session.commit()
 
     await api.delete_note(note_id_1)
+    await await_notes_bg()
 
     async with metastore.session() as vs:
         mm = await vs.get(MentalModel, mm_id)
@@ -652,6 +658,7 @@ async def test_delete_note_removes_empty_mental_model(api, metastore, session: A
     await session.commit()
 
     await api.delete_note(note_id_1)
+    await await_notes_bg()
 
     async with metastore.session() as vs:
         # Entity still exists (note_2's unit still references it)
@@ -727,6 +734,7 @@ async def test_delete_memory_unit_prunes_observations(api, metastore, session: A
     await session.commit()
 
     await api.delete_memory_unit(unit_id_1)
+    await await_stats_bg()
 
     async with metastore.session() as vs:
         mm = await vs.get(MentalModel, mm_id)
@@ -788,6 +796,7 @@ async def test_delete_memory_unit_entity_cleanup(api, metastore, session: AsyncS
     await session.commit()
 
     await api.delete_memory_unit(unit_id)
+    await await_stats_bg()
 
     async with metastore.session() as vs:
         assert await vs.get(Entity, entity_id) is None
