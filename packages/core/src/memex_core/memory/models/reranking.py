@@ -17,6 +17,10 @@ from memex_core.memory.models.protocols import RerankerModel
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
 
+# Module-level cache: avoids reloading ONNX sessions across FastAPI lifespan
+# restarts (e.g. in test suites that create a new TestClient per test).
+_onnx_reranker_cache: 'FastReranker | None' = None
+
 
 async def get_reranking_model(
     config: RerankerBackend | None = None,
@@ -33,9 +37,13 @@ async def get_reranking_model(
         An object satisfying the ``RerankerModel`` protocol, or ``None``
         if reranking is disabled.
     """
+    global _onnx_reranker_cache
     from memex_common.config import OnnxBackend, LitellmRerankerBackend, DisabledBackend
 
     if config is None or isinstance(config, OnnxBackend):
+        if _onnx_reranker_cache is not None:
+            return _onnx_reranker_cache
+
         _spec = MODEL_REGISTRY['reranker']
         path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
@@ -46,7 +54,10 @@ async def get_reranking_model(
             downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
             await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
-        return FastReranker(model_dir=str(path), model_name='model.onnx', batch_size=batch_size)
+        _onnx_reranker_cache = FastReranker(
+            model_dir=str(path), model_name='model.onnx', batch_size=batch_size
+        )
+        return _onnx_reranker_cache
 
     if isinstance(config, LitellmRerankerBackend):
         from memex_core.memory.models.backends.litellm_reranker import LiteLLMReranker

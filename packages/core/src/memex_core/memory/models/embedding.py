@@ -16,6 +16,10 @@ from memex_core.memory.models.protocols import EmbeddingsModel
 
 logger = logging.getLogger('memex.core.memory.models.embedding')
 
+# Module-level cache: avoids reloading ONNX sessions across FastAPI lifespan
+# restarts (e.g. in test suites that create a new TestClient per test).
+_onnx_embedder_cache: FastEmbedder | None = None
+
 
 async def get_embedding_model(
     config: EmbeddingBackend | None = None,
@@ -30,9 +34,13 @@ async def get_embedding_model(
     Returns:
         An object satisfying the ``EmbeddingsModel`` protocol.
     """
+    global _onnx_embedder_cache
     from memex_common.config import OnnxBackend, LitellmEmbeddingBackend
 
     if config is None or isinstance(config, OnnxBackend):
+        if _onnx_embedder_cache is not None:
+            return _onnx_embedder_cache
+
         _spec = MODEL_REGISTRY['embedding']
         path = get_cache_dir() / _spec.repo_id.replace('/', '__') / _spec.revision
 
@@ -43,7 +51,8 @@ async def get_embedding_model(
             downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
             await downloader.download_async(httpx.AsyncClient(), force=False)
 
-        return FastEmbedder(model_dir=str(path), model_name='model.onnx')
+        _onnx_embedder_cache = FastEmbedder(model_dir=str(path), model_name='model.onnx')
+        return _onnx_embedder_cache
 
     if isinstance(config, LitellmEmbeddingBackend):
         from memex_core.memory.models.backends.litellm_embedder import LiteLLMEmbedder

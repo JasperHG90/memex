@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from typing import cast, AsyncGenerator
 
+import memex_core.memory.models.reranking as _rerank_mod
 from memex_core.memory.models.reranking import get_reranking_model, FastReranker
+
+
+@pytest.fixture(autouse=True)
+def _clear_reranker_cache() -> None:
+    """Clear the module-level ONNX reranker cache between tests."""
+    _rerank_mod._onnx_reranker_cache = None
 
 
 @pytest.fixture
