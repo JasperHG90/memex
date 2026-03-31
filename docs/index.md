@@ -29,7 +29,7 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 | [Using MCP](how-to/using-mcp.md) | Connect Memex to Claude Desktop, Claude Code, and other MCP-compatible AI assistants. |
 | [Batch Ingestion](how-to/batch-ingestion.md) | Ingest folders of documents, URLs, and file batches efficiently. |
 | [Doc Search vs Memory Search](how-to/doc-search-vs-memory-search.md) | Choose between note search (raw documents) and memory search (extracted facts). |
-| [Database Migrations](how-to/database-migrations.md) | Manage PostgreSQL schema migrations with `memex db` (Alembic). |
+| [Database Migrations](how-to/database-migrations.md) | Manage PostgreSQL schema migrations with `memex database` (Alembic). |
 | [Delete and Archival](how-to/delete-archival.md) | Delete notes, entities, and memory units; manage data lifecycle. |
 | [Note Templates](how-to/note-templates.md) | Create, register, and use note templates for consistent structure. |
 | [Sync Notes](how-to/sync-notes.md) | Sync a folder of Markdown notes to Memex with incremental updates. |
@@ -62,6 +62,7 @@ Understanding-oriented articles that explain how Memex works and why it is desig
 | [Extraction Pipeline](explanation/extraction-pipeline.md) | How documents are chunked, facts are extracted, entities are resolved, and embeddings are generated. |
 | [Retrieval Strategies](explanation/retrieval-strategies.md) | The TEMPR system: five search strategies fused via Reciprocal Rank Fusion. |
 | [Reflection and Mental Models](explanation/reflection-and-mental-models.md) | How the background engine synthesizes observations into evolving mental models. |
+| [Inference Model Backends](explanation/inference-model-backends.md) | Embedding and reranking model architecture: built-in ONNX models and LiteLLM provider support. |
 
 ---
 
@@ -76,6 +77,7 @@ Each package in the monorepo has its own README with package-specific details.
 | [packages/mcp](../packages/mcp/README.md) | FastMCP server for LLM integration. |
 | [packages/common](../packages/common/README.md) | Shared Pydantic models, configuration, and exceptions. |
 | [packages/eval](../packages/eval/README.md) | LoCoMo evaluation framework and benchmarks. |
+| [packages/obsidian-sync](../packages/obsidian-sync/README.md) | Watchdog-based Obsidian vault synchronization (also available as `memex note sync` in the CLI). |
 | [packages/claude-code-plugin](../packages/claude-code-plugin/README.md) | Claude Code plugin for cross-project memory integration. |
 | [packages/firefox-extension](../packages/firefox-extension/README.md) | Firefox extension for web content capture. |
 

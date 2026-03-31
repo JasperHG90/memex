@@ -314,10 +314,13 @@ class TestSingleNoteConversion:
             from memex_core.server.ingestion import ingest_note
 
             bg_tasks = MagicMock()
+            mock_http_request = MagicMock()
+            mock_http_request.app.state = MagicMock(spec=[])
             await ingest_note(
                 request=dto,
                 api=mock_api,
                 background_tasks=bg_tasks,
+                http_request=mock_http_request,
                 background=False,
                 auth=None,
             )
@@ -477,10 +480,13 @@ class TestImageMergeFromExtraction:
             from memex_core.server.ingestion import ingest_note
 
             bg_tasks = MagicMock()
+            mock_http_request = MagicMock()
+            mock_http_request.app.state = MagicMock(spec=[])
             await ingest_note(
                 request=dto,
                 api=mock_api,
                 background_tasks=bg_tasks,
+                http_request=mock_http_request,
                 background=False,
                 auth=None,
             )

@@ -26,6 +26,7 @@ from memex_common.schemas import (
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
+from memex_core.services.audit import AuditService
 
 logger = logging.getLogger('memex.core.server')
 
@@ -33,6 +34,32 @@ logger = logging.getLogger('memex.core.server')
 def get_api(request: Request) -> MemexAPI:
     """Dependency to get the MemexAPI instance."""
     return request.app.state.api
+
+
+def get_audit_context(
+    request: Request,
+) -> tuple[AuditService | None, str | None, str | None]:
+    """Return (audit_service, actor, session_id) from the current request."""
+    audit: AuditService | None = getattr(request.app.state, 'audit_service', None)
+    auth = getattr(request.state, 'auth_context', None)
+    if auth:
+        actor = f'{auth.key_name} ({auth.key_prefix})' if auth.key_name else auth.key_prefix
+    else:
+        actor = None
+    session_id = get_session_id()
+    return audit, actor, session_id
+
+
+def _request_details(request: Request, **extra: Any) -> dict[str, Any]:
+    """Build audit details dict with request metadata."""
+    details: dict[str, Any] = {
+        'path': request.url.path,
+        'method': request.method,
+        'ip': request.client.host if request.client else None,
+        'user_agent': request.headers.get('user-agent'),
+    }
+    details.update(extra)
+    return details
 
 
 async def resolve_vault_ids(api: MemexAPI, identifiers: list[str] | None) -> list[UUID] | None:

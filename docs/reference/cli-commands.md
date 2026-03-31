@@ -524,6 +524,155 @@ Delete a note and all associated data (memory units, chunks, links, assets).
 
 ---
 
+### `note find`
+
+```
+memex note find QUERY [OPTIONS]
+```
+
+Find notes by approximate title match (trigram similarity).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `QUERY` | Yes | Approximate title to search for. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | | int | `5` | Maximum number of results. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+# Find notes by title
+memex note find "meeting notes"
+
+# Find in a specific vault
+memex note find "architecture" --vault my-project
+```
+
+---
+
+### `note update-date`
+
+```
+memex note update-date NOTE_ID NEW_DATE
+```
+
+Update a note's publish date and cascade the delta to all memory unit timestamps.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to update. |
+| `NEW_DATE` | Yes | New date in ISO 8601 format (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`). |
+
+#### Examples
+
+```bash
+memex note update-date 550e8400-e29b-41d4-a716-446655440000 2025-06-15
+```
+
+---
+
+### `note rename`
+
+```
+memex note rename NOTE_ID NEW_TITLE
+```
+
+Rename a note (updates title in metadata, page index, and doc_metadata).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to rename. |
+| `NEW_TITLE` | Yes | New title for the note. |
+
+#### Examples
+
+```bash
+memex note rename 550e8400-e29b-41d4-a716-446655440000 "Updated Meeting Notes"
+```
+
+---
+
+### `note migrate`
+
+```
+memex note migrate NOTE_ID TARGET_VAULT [OPTIONS]
+```
+
+Move a note and all associated data (memory units, entities, etc.) to a different vault.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to migrate. |
+| `TARGET_VAULT` | Yes | Target vault name or UUID. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+#### Examples
+
+```bash
+# Migrate a note to another vault
+memex note migrate 550e8400-e29b-41d4-a716-446655440000 my-other-vault
+
+# Migrate without confirmation
+memex note migrate 550e8400-e29b-41d4-a716-446655440000 my-other-vault --force
+```
+
+---
+
+### `note export`
+
+```
+memex note export [NOTE_ID] [OPTIONS]
+```
+
+Export notes (and their assets) to a local directory. Each note is written to a subdirectory containing `note.md`, `metadata.json`, and an `assets/` folder (if the note has attached files).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | No | UUID of a specific note to export. Omit to export all notes. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--output` | `-o` | str | `./memex-export` | Output directory path. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. |
+
+#### Examples
+
+```bash
+# Export all notes
+memex note export --output ./backup
+
+# Export a specific note
+memex note export 550e8400-e29b-41d4-a716-446655440000 --output ./backup
+
+# Export from a specific vault
+memex note export --vault my-project --output ./project-backup
+```
+
+---
+
 ## `note assets`
 
 Manage note assets (images, PDFs, and other files attached to notes).
@@ -1267,6 +1416,41 @@ Delete a vault by name or UUID.
 
 ---
 
+### `vault truncate`
+
+```
+memex vault truncate IDENTIFIER [OPTIONS]
+```
+
+Remove all content from a vault (notes, memories, entities, etc.). The vault itself is preserved.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `IDENTIFIER` | Yes | Name or UUID of the vault to truncate. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+#### Examples
+
+```bash
+# Truncate a vault by name (with confirmation prompt)
+memex vault truncate my-vault
+
+# Truncate without confirmation
+memex vault truncate my-vault --force
+```
+
+> [!WARNING]
+> This is a destructive operation that permanently deletes all notes, memory units, entities, and reflection queue items within the vault.
+
+---
+
 ## `server`
 
 Manage the Memex Core API server.
@@ -1372,33 +1556,17 @@ memex mcp run --transport sse --port 8080
 
 ---
 
-## `stats`
+## `system`
 
-View system-wide statistics and usage metrics.
+Show overview of system counts (memories, entities, queue).
 
-### `stats system`
+### `system system`
 
 ```
-memex stats system [OPTIONS]
+memex system system [OPTIONS]
 ```
 
 Show an overview of system counts: total memories (documents), entities, and reflection queue size.
-
-#### Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--json` | bool | `False` | Output as JSON. |
-
----
-
-### `stats tokens`
-
-```
-memex stats tokens [OPTIONS]
-```
-
-Show daily LLM token usage statistics.
 
 #### Options
 
@@ -1441,6 +1609,26 @@ memex config show --format json --compact
 
 ---
 
+### `config env`
+
+```
+memex config env
+```
+
+Output the resolved configuration as shell-sourceable environment variables. Prints `MEMEX_RESOLVED_URL` and `MEMEX_RESOLVED_API_KEY` to stdout with no Rich formatting, so the output can be `eval`'d directly by a shell.
+
+#### Examples
+
+```bash
+# Source resolved config into the current shell
+eval "$(memex config env)"
+
+# Inspect the resolved values
+memex config env
+```
+
+---
+
 ### `config init`
 
 ```
@@ -1467,14 +1655,14 @@ memex config init --path ./my-memex-config.yaml
 
 ---
 
-## `db`
+## `database`
 
 Database schema migration commands. Wraps [Alembic](https://alembic.sqlalchemy.org/) for managing PostgreSQL schema versions.
 
-### `db upgrade`
+### `database upgrade`
 
 ```
-memex db upgrade [REVISION]
+memex database upgrade [REVISION]
 ```
 
 Run pending migrations up to the target revision.
@@ -1489,18 +1677,18 @@ Run pending migrations up to the target revision.
 
 ```bash
 # Upgrade to the latest schema
-memex db upgrade
+memex database upgrade
 
 # Upgrade to a specific revision
-memex db upgrade abc123
+memex database upgrade abc123
 ```
 
 ---
 
-### `db downgrade`
+### `database downgrade`
 
 ```
-memex db downgrade [REVISION]
+memex database downgrade [REVISION]
 ```
 
 Roll back migrations.
@@ -1515,38 +1703,38 @@ Roll back migrations.
 
 ```bash
 # Roll back one migration
-memex db downgrade
+memex database downgrade
 
 # Roll back to a specific revision
-memex db downgrade abc123
+memex database downgrade abc123
 ```
 
 ---
 
-### `db current`
+### `database current`
 
 ```
-memex db current
+memex database current
 ```
 
 Show the current migration revision applied to the database.
 
 ---
 
-### `db history`
+### `database history`
 
 ```
-memex db history
+memex database history
 ```
 
 Show the full migration history.
 
 ---
 
-### `db stamp`
+### `database stamp`
 
 ```
-memex db stamp [REVISION]
+memex database stamp [REVISION]
 ```
 
 Stamp the database with a revision without running migrations. Use this for existing databases created via `create_all` that already have the correct schema.
@@ -1559,10 +1747,10 @@ Stamp the database with a revision without running migrations. Use this for exis
 
 ---
 
-### `db revision`
+### `database revision`
 
 ```
-memex db revision [OPTIONS]
+memex database revision [OPTIONS]
 ```
 
 Generate a new Alembic migration script.
@@ -1578,10 +1766,26 @@ Generate a new Alembic migration script.
 
 ```bash
 # Auto-generate a migration from model changes
-memex db revision --message "add webhooks table"
+memex database revision --message "add webhooks table"
 
 # Create an empty migration script
-memex db revision --message "manual data migration" --no-autogenerate
+memex database revision --message "manual data migration" --no-autogenerate
+```
+
+---
+
+### `database cleanup`
+
+```
+memex database cleanup
+```
+
+Purge orphaned entities and mental models from the database. Removes entities with no remaining memory unit links and mental models whose entity has no remaining links. Safe to run at any time.
+
+#### Examples
+
+```bash
+memex database cleanup
 ```
 
 ---
