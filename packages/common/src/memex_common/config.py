@@ -997,6 +997,12 @@ class ServerConfig(BaseModel):
         'Set type=litellm to use any litellm-supported provider.',
     )
 
+    embedding_batch_size: int = Field(
+        default=0,
+        description='Max texts per ONNX embedding inference call. '
+        '0 = all at once (no batching). Lower values reduce peak GPU memory.',
+    )
+
     logging: LoggingConfig = Field(
         default_factory=LoggingConfig,
         description='Configuration for logging.',

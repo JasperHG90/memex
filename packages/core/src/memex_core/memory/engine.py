@@ -42,7 +42,10 @@ async def get_memory_engine(
     """
     from memex_core.memory.models import get_embedding_model, get_reranking_model, get_ner_model
 
-    embedding_model = await get_embedding_model(config.server.embedding_model)
+    embedding_model = await get_embedding_model(
+        config.server.embedding_model,
+        batch_size=config.server.embedding_batch_size,
+    )
     reranking_model = await get_reranking_model(config.server.memory.retrieval.reranker)
     ner_model = await get_ner_model()
 

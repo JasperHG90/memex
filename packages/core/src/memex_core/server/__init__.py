@@ -104,7 +104,10 @@ async def lifespan(app: FastAPI):
     await metastore.connect(create_schema=create_schema)
 
     configure_cache_dir(config.server.cache_dir)
-    embedding_model = await get_embedding_model(config.server.embedding_model)
+    embedding_model = await get_embedding_model(
+        config.server.embedding_model,
+        batch_size=config.server.embedding_batch_size,
+    )
     reranking_model = await get_reranking_model(
         config.server.memory.retrieval.reranker,
         batch_size=config.server.memory.retrieval.reranker_batch_size,
