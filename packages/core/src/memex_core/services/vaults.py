@@ -114,10 +114,8 @@ class VaultService(BaseService):
         from sqlmodel import delete, select, col
 
         from memex_core.memory.sql_models import (
-            AuditLog,
             BatchJob,
             Entity,
-            KVEntry,
             MentalModel,
             MemoryUnit,
             Note,
@@ -125,7 +123,20 @@ class VaultService(BaseService):
         )
 
         counts: dict[str, int] = {}
+        filestore_paths: list[str] = []
+
         async with self.metastore.session() as session:
+            # 0. Collect filestore paths from notes before deletion
+            note_stmt = select(Note.filestore_path, Note.assets).where(
+                col(Note.vault_id) == vault_id
+            )
+            note_rows = (await session.exec(note_stmt)).all()
+            for filestore_path, assets in note_rows:
+                if filestore_path:
+                    filestore_paths.append(filestore_path)
+                if assets:
+                    filestore_paths.extend(assets)
+
             # 1. Find entities that will become orphaned after we delete
             #    this vault's mental models. An entity is orphaned if the
             #    only mental models it has are in this vault.
@@ -140,15 +151,14 @@ class VaultService(BaseService):
             )
             orphan_entity_ids = list((await session.exec(orphan_subq)).all())
 
-            # 2. Delete vault-scoped tables (children before parents)
+            # 2. Delete vault-scoped tables (children before parents).
+            #    KVEntry and AuditLog are excluded — they are not vault-scoped.
             vault_tables = [
                 ('reflection_queue', ReflectionQueue),
                 ('mental_models', MentalModel),
                 ('memory_units', MemoryUnit),
                 ('notes', Note),
                 ('batch_jobs', BatchJob),
-                ('kv_entries', KVEntry),
-                ('audit_logs', AuditLog),
             ]
             for label, model in vault_tables:
                 stmt = delete(model).where(col(model.vault_id) == vault_id)  # type: ignore[attr-defined]
@@ -164,6 +174,13 @@ class VaultService(BaseService):
                 counts['entities'] = 0
 
             await session.commit()
+
+        # 4. Clean up filestore files (best-effort — DB records are already gone)
+        for path in filestore_paths:
+            try:
+                await self.filestore.delete(path, recursive=True)
+            except Exception:
+                logger.warning('Failed to delete filestore path during vault truncate: %s', path)
 
         return counts
 
