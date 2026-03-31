@@ -55,16 +55,37 @@ options.enable_mem_pattern = True
 options.enable_cpu_mem_arena = False
 
 
-def _get_providers() -> list[str]:
+def _get_providers() -> list[str | tuple[str, dict]]:
     """Return ONNX execution providers from env or default to CPU.
 
     Set MEMEX_ONNX_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
     to enable GPU inference (e.g. on Jetson Orin Nano with CDI passthrough).
+
+    When CUDAExecutionProvider is requested, gpu_mem_limit can be set via
+    MEMEX_ONNX_GPU_MEM_LIMIT (bytes). By default no limit is applied — ONNX
+    will allocate what it needs and fall back to CPU if GPU allocation fails.
     """
     env = os.getenv('MEMEX_ONNX_PROVIDERS')
-    if env:
-        return [p.strip() for p in env.split(',')]
-    return ['CPUExecutionProvider']
+    if not env:
+        return ['CPUExecutionProvider']
+
+    providers: list[str | tuple[str, dict]] = []
+    gpu_mem_limit_str = os.getenv('MEMEX_ONNX_GPU_MEM_LIMIT')
+
+    for p in env.split(','):
+        p = p.strip()
+        if p == 'CUDAExecutionProvider' and gpu_mem_limit_str:
+            providers.append(
+                (
+                    'CUDAExecutionProvider',
+                    {
+                        'gpu_mem_limit': int(gpu_mem_limit_str),
+                    },
+                )
+            )
+        else:
+            providers.append(p)
+    return providers
 
 
 class ModelDownloader:
