@@ -1287,10 +1287,6 @@ def template_register(
     local: Annotated[
         bool, typer.Option('--local', help='Register in project-local scope instead of global.')
     ] = False,
-    name: Annotated[
-        str | None,
-        typer.Option('--name', '-n', help='Override the display name for the template.'),
-    ] = None,
     github_url: Annotated[
         str | None,
         typer.Option(

@@ -115,8 +115,9 @@ additional_context="${session_context}
 ${instructions}${vault_instruction}"
 
 # --- Build compact status summary ---
-vault_count=$(wc -l < "$tmp_vaults" | tr -d ' ')
-vault_count=$((vault_count - 2))  # subtract header rows
+# Count data rows in markdown table (skip header + separator lines starting with |---)
+vault_count=$(grep -c '^|[^-]' "$tmp_vaults" 2>/dev/null || echo "0")
+vault_count=$((vault_count > 1 ? vault_count - 1 : 0))  # subtract column header row
 note_count=$(grep -c '^- ' "$tmp_notes" 2>/dev/null || echo "0")
 kv_count=$([ -s "$tmp_kv" ] && jq 'length' "$tmp_kv" 2>/dev/null || echo "0")
 status="🧠 Memex connected — ${vault_count} vaults, ${note_count} recent notes, ${kv_count} KV facts loaded"
