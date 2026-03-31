@@ -1,6 +1,7 @@
 import pytest
 import pytest_asyncio
 from typing import AsyncGenerator, Generator
+from uuid import UUID, uuid4
 from sqlmodel import SQLModel, text
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -86,29 +87,44 @@ def fake_retain_factory():
     from memex_common.types import FactTypes
 
     async def _fake_retain(session, contents, note_id, **kwargs):
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
         content_item = contents[0]
         vault_id = content_item.vault_id
         payload = content_item.payload or {}
 
-        doc = Note(
-            id=note_id,
-            content_hash=payload.get('content_fingerprint', 'hash'),
-            vault_id=vault_id,
-            original_text=content_item.content,
-            filestore_path=payload.get('filestore_path'),
-            assets=payload.get('assets', []),
+        note_uuid = UUID(note_id) if isinstance(note_id, str) else note_id
+        unit_id = uuid4()
+
+        # Use Core insert to avoid ORM insertmanyvalues sentinel issues
+        # with SA_UUID and asyncpg.
+        await session.execute(
+            pg_insert(Note)
+            .values(
+                id=note_uuid,
+                content_hash=payload.get('content_fingerprint', 'hash'),
+                vault_id=vault_id,
+                original_text=content_item.content,
+                filestore_path=payload.get('filestore_path'),
+                assets=payload.get('assets', []),
+            )
+            .on_conflict_do_update(
+                index_elements=['id'],
+                set_={'content_hash': payload.get('content_fingerprint', 'hash')},
+            )
         )
-        await session.merge(doc)
-        unit = MemoryUnit(
-            note_id=note_id,
-            text='Extracted fact',
-            fact_type=FactTypes.WORLD,
-            vault_id=vault_id,
-            embedding=[0.1] * 384,
-            event_date=content_item.event_date,
+        await session.execute(
+            pg_insert(MemoryUnit).values(
+                id=unit_id,
+                note_id=note_uuid,
+                text='Extracted fact',
+                fact_type=FactTypes.WORLD,
+                vault_id=vault_id,
+                embedding=[0.1] * 384,
+                event_date=content_item.event_date,
+            )
         )
-        session.add(unit)
-        return {'unit_ids': [unit.id], 'status': 'success'}
+        return {'unit_ids': [str(unit_id)], 'status': 'success'}
 
     return _fake_retain
 
