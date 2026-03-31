@@ -21,6 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.llm import run_dspy_operation
+from memex_core.tracing import trace_span
 from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
 from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
 from memex_core.memory.reflect.models import ReflectionRequest
@@ -240,54 +241,65 @@ class ReflectionEngine:
             )
             return mental_model
 
-        # Phase 0: Update Existing
-        updated_observations = await self._phase_0_update(
-            mental_model, entity_name, recent_memories, vault_id=vault_id
-        )
-
-        if not recent_memories:
-            mental_model.observations = [
-                obs.model_dump(mode='json') for obs in updated_observations
-            ]
-            return mental_model
-
-        # Phase 1: Seed (LLM)
-        candidates = await self._phase_1_seed(
-            recent_memories, entity_name, updated_observations, vault_id=vault_id
-        )
-
-        # Phase 2: Hunt (Vector Search)
-        candidates_with_evidence = await self._phase_2_hunt(candidates, db_lock, vault_id=vault_id)
-
-        # Phase 3: Validate (LLM)
-        validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
-
-        # Phase 4: Compare (LLM)
-        final_obs, entity_summary = await self._phase_4_compare(
-            updated_observations, validated, vault_id=vault_id, entity_name=entity_name
-        )
-
-        # Phase 5: Finalize Model
-        await self._phase_5_finalize(
-            mental_model,
-            final_obs,
-            db_lock,
-            entity_summary=entity_summary,
-            entity_type=entity_type,
-        )
-
-        # Phase 6: Enrich (Memory Evolution)
-        if self.config.server.memory.reflection.enrichment_enabled:
-            await self._phase_6_enrich(
-                entity_name=entity_name,
-                entity_summary=entity_summary,
-                final_obs=final_obs,
-                recent_memories=recent_memories,
-                db_lock=db_lock,
-                vault_id=vault_id,
+        with trace_span(
+            'memex.reflection',
+            'reflection',
+            {
+                'reflection.entity_id': str(entity_id),
+                'reflection.entity_name': entity_name,
+                'reflection.vault_id': str(vault_id),
+            },
+        ):
+            # Phase 0: Update Existing
+            updated_observations = await self._phase_0_update(
+                mental_model, entity_name, recent_memories, vault_id=vault_id
             )
 
-        return mental_model
+            if not recent_memories:
+                mental_model.observations = [
+                    obs.model_dump(mode='json') for obs in updated_observations
+                ]
+                return mental_model
+
+            # Phase 1: Seed (LLM)
+            candidates = await self._phase_1_seed(
+                recent_memories, entity_name, updated_observations, vault_id=vault_id
+            )
+
+            # Phase 2: Hunt (Vector Search)
+            candidates_with_evidence = await self._phase_2_hunt(
+                candidates, db_lock, vault_id=vault_id
+            )
+
+            # Phase 3: Validate (LLM)
+            validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
+
+            # Phase 4: Compare (LLM)
+            final_obs, entity_summary = await self._phase_4_compare(
+                updated_observations, validated, vault_id=vault_id, entity_name=entity_name
+            )
+
+            # Phase 5: Finalize Model
+            await self._phase_5_finalize(
+                mental_model,
+                final_obs,
+                db_lock,
+                entity_summary=entity_summary,
+                entity_type=entity_type,
+            )
+
+            # Phase 6: Enrich (Memory Evolution)
+            if self.config.server.memory.reflection.enrichment_enabled:
+                await self._phase_6_enrich(
+                    entity_name=entity_name,
+                    entity_summary=entity_summary,
+                    final_obs=final_obs,
+                    recent_memories=recent_memories,
+                    db_lock=db_lock,
+                    vault_id=vault_id,
+                )
+
+            return mental_model
 
     async def _phase_5_finalize(
         self,

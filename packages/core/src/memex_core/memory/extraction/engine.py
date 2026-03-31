@@ -8,6 +8,7 @@ import dspy
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import memex_core.config
+from memex_core.tracing import trace_span
 from memex_core.config import (
     ExtractionConfig,
     ReflectionConfig,
@@ -227,12 +228,32 @@ class ExtractionEngine:
         # Determine vault_id (assuming uniform per batch)
         vault_id = contents[0].vault_id if contents else GLOBAL_VAULT_ID
 
-        # Check if incremental path is viable
-        if note_id and is_first_batch:
-            existing_blocks = await storage.get_note_blocks(session, note_id)
-            if existing_blocks:
-                if self.config.active_strategy == 'page_index' and self.page_index_lm is not None:
-                    return await self._extract_page_index_incremental(
+        with trace_span(
+            'memex.extraction',
+            'extraction',
+            {
+                'extraction.note_id': note_id or '',
+                'extraction.vault_id': str(vault_id),
+            },
+        ):
+            # Check if incremental path is viable
+            if note_id and is_first_batch:
+                existing_blocks = await storage.get_note_blocks(session, note_id)
+                if existing_blocks:
+                    if (
+                        self.config.active_strategy == 'page_index'
+                        and self.page_index_lm is not None
+                    ):
+                        return await self._extract_page_index_incremental(
+                            session=session,
+                            contents=contents,
+                            agent_name=agent_name,
+                            note_id=note_id,
+                            existing_blocks=existing_blocks,
+                            vault_id=vault_id,
+                            content_fingerprint=content_fingerprint,
+                        )
+                    return await self._extract_incremental(
                         session=session,
                         contents=contents,
                         agent_name=agent_name,
@@ -241,102 +262,99 @@ class ExtractionEngine:
                         vault_id=vault_id,
                         content_fingerprint=content_fingerprint,
                     )
-                return await self._extract_incremental(
+
+            # --- Strategy dispatch ---
+            if self.config.active_strategy == 'page_index' and self.page_index_lm is not None:
+                return await self._extract_page_index(
                     session=session,
                     contents=contents,
                     agent_name=agent_name,
                     note_id=note_id,
-                    existing_blocks=existing_blocks,
+                    is_first_batch=is_first_batch,
                     vault_id=vault_id,
                     content_fingerprint=content_fingerprint,
                 )
 
-        # --- Strategy dispatch ---
-        if self.config.active_strategy == 'page_index' and self.page_index_lm is not None:
-            return await self._extract_page_index(
-                session=session,
-                contents=contents,
-                agent_name=agent_name,
-                note_id=note_id,
-                is_first_batch=is_first_batch,
-                vault_id=vault_id,
-                content_fingerprint=content_fingerprint,
+            # --- Full extraction path (simple strategy or no page_index LM) ---
+            extracted_facts, chunks = await self._extract_facts(contents, agent_name)
+
+            if chunks:
+                chunk_texts = [c.chunk_text for c in chunks]
+                chunk_embeddings = await embedding_processor.generate_embeddings_batch(
+                    self.embedding_model, chunk_texts
+                )
+                for chunk, emb in zip(chunks, chunk_embeddings):
+                    chunk.embedding = emb
+
+            if not extracted_facts:
+                if note_id:
+                    await track_document(
+                        session, note_id, contents, is_first_batch, vault_id=vault_id
+                    )
+                return [], set()
+
+            processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
+
+            # Deduplication
+            is_duplicate = await deduplication.check_duplicates_batch(
+                session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
             )
 
-        # --- Full extraction path (simple strategy or no page_index LM) ---
-        extracted_facts, chunks = await self._extract_facts(contents, agent_name)
+            # Filter duplicates from both lists to maintain parallelism
+            # We need to filter extracted_facts too for chunk linking logic below
+            final_processed_facts = []
+            final_extracted_facts = []
 
-        if chunks:
-            chunk_texts = [c.chunk_text for c in chunks]
-            chunk_embeddings = await embedding_processor.generate_embeddings_batch(
-                self.embedding_model, chunk_texts
-            )
-            for chunk, emb in zip(chunks, chunk_embeddings):
-                chunk.embedding = emb
+            for i, is_dup in enumerate(is_duplicate):
+                if not is_dup:
+                    final_processed_facts.append(processed_facts[i])
+                    final_extracted_facts.append(extracted_facts[i])
 
-        if not extracted_facts:
-            if note_id:
-                await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
-            return [], set()
+            if not final_processed_facts:
+                logger.info(f'All {len(processed_facts)} facts were duplicates.')
+                if note_id:
+                    await track_document(
+                        session, note_id, contents, is_first_batch, vault_id=vault_id
+                    )
+                return [], set()
 
-        processed_facts = await process_embeddings(self.embedding_model, extracted_facts)
+            extracted_facts = final_extracted_facts
+            processed_facts = final_processed_facts
 
-        # Deduplication
-        is_duplicate = await deduplication.check_duplicates_batch(
-            session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
-        )
+            effective_doc_id = note_id
+            if chunks and not effective_doc_id:
+                logger.warning(
+                    'Chunks present but no note_id provided. Chunk linking may be partial.'
+                )
+                effective_doc_id = str(UUID(int=0))
 
-        # Filter duplicates from both lists to maintain parallelism
-        # We need to filter extracted_facts too because they are used for chunk linking logic below
-        final_processed_facts = []
-        final_extracted_facts = []
+            if effective_doc_id:
+                await track_document(
+                    session, effective_doc_id, contents, is_first_batch, vault_id=vault_id
+                )
+                chunk_map = await storage.store_chunks_batch(
+                    session, effective_doc_id, chunks, vault_id=vault_id
+                )
 
-        for i, is_dup in enumerate(is_duplicate):
-            if not is_dup:
-                final_processed_facts.append(processed_facts[i])
-                final_extracted_facts.append(extracted_facts[i])
+                # Link facts to chunks using the parallel lists
+                for ef, pf in zip(extracted_facts, processed_facts):
+                    pf.note_id = effective_doc_id
+                    if ef.chunk_index is not None and ef.chunk_index in chunk_map:
+                        pf.chunk_id = chunk_map[ef.chunk_index]
 
-        if not final_processed_facts:
-            logger.info(f'All {len(processed_facts)} facts were duplicates.')
-            if note_id:
-                await track_document(session, note_id, contents, is_first_batch, vault_id=vault_id)
-            return [], set()
-
-        extracted_facts = final_extracted_facts
-        processed_facts = final_processed_facts
-
-        effective_doc_id = note_id
-        if chunks and not effective_doc_id:
-            logger.warning('Chunks present but no note_id provided. Chunk linking may be partial.')
-            effective_doc_id = str(UUID(int=0))
-
-        if effective_doc_id:
-            await track_document(
-                session, effective_doc_id, contents, is_first_batch, vault_id=vault_id
-            )
-            chunk_map = await storage.store_chunks_batch(
-                session, effective_doc_id, chunks, vault_id=vault_id
+            unit_ids = await storage.insert_facts_batch(
+                session, processed_facts, note_id=effective_doc_id
             )
 
-            # Link facts to chunks using the parallel lists
-            for ef, pf in zip(extracted_facts, processed_facts):
-                pf.note_id = effective_doc_id
-                if ef.chunk_index is not None and ef.chunk_index in chunk_map:
-                    pf.chunk_id = chunk_map[ef.chunk_index]
+            touched_entity_ids = await self._resolve_entities(
+                session, unit_ids, processed_facts, vault_id=vault_id
+            )
+            await create_links(session, unit_ids, processed_facts, vault_id=vault_id)
 
-        unit_ids = await storage.insert_facts_batch(
-            session, processed_facts, note_id=effective_doc_id
-        )
+            # Update Reflection Queue Priorities
+            await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
-        touched_entity_ids = await self._resolve_entities(
-            session, unit_ids, processed_facts, vault_id=vault_id
-        )
-        await create_links(session, unit_ids, processed_facts, vault_id=vault_id)
-
-        # Update Reflection Queue Priorities
-        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
-
-        return unit_ids, touched_entity_ids
+            return unit_ids, touched_entity_ids
 
     async def _extract_incremental(
         self,
