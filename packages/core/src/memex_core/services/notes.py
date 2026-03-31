@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any
@@ -21,6 +22,61 @@ from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.storage.transaction import AsyncTransaction
 
 logger = logging.getLogger('memex.core.services.notes')
+
+
+async def _cleanup_entities_after_delete(
+    metastore: AsyncBaseMetaStoreEngine,
+    entity_ids: set[UUID],
+    deleted_unit_ids: list[UUID],
+    vault_id: UUID,
+) -> None:
+    """Background task: clean up orphaned entities and recount mention_count.
+
+    Runs outside the delete transaction so that lock contention on entity rows
+    (e.g. from concurrent ingestion) cannot cause the delete to fail.
+    """
+    from sqlalchemy import update
+    from sqlmodel import col, func, select
+
+    from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
+    from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
+    try:
+        async with metastore.session() as session:
+            orphaned_entity_ids: set[UUID] = set()
+            for eid in entity_ids:
+                remaining = await session.exec(
+                    select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
+                )
+                if remaining.first() is None:
+                    orphaned_entity_ids.add(eid)
+                    mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
+                    mm_result = await session.exec(mm_stmt)
+                    for mm in mm_result.all():
+                        await session.delete(mm)
+                    entity = await session.get(Entity, eid)
+                    if entity:
+                        await session.delete(entity)
+                else:
+                    count_result = await session.exec(
+                        select(func.count())
+                        .select_from(UnitEntity)
+                        .where(col(UnitEntity.entity_id) == eid)
+                    )
+                    actual_count = count_result.one()
+                    await session.exec(
+                        update(Entity)
+                        .where(col(Entity.id) == eid)
+                        .values(mention_count=actual_count)
+                    )
+
+            shared_entity_ids = entity_ids - orphaned_entity_ids
+            if shared_entity_ids and deleted_unit_ids:
+                await prune_stale_evidence(session, shared_entity_ids, deleted_unit_ids, vault_id)
+
+            await session.commit()
+    except Exception:
+        logger.exception('Background entity cleanup failed (non-critical)')
 
 
 class NoteService:
@@ -635,21 +691,16 @@ class NoteService:
         Uses AsyncTransaction for atomicity across metastore + filestore.
         ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
         FileStore cleanup handles: assets and filestore_path.
-        After deletion, orphaned entities (and their mental models) are removed, and
-        mention_count is recalculated for entities still referenced by other notes.
+        Entity cleanup (orphan removal, mention_count recount, mental model pruning)
+        runs as a background task after the transaction commits to avoid lock contention.
         """
-        from sqlalchemy import update
-        from sqlmodel import func, select
+        from sqlmodel import select
 
         from memex_core.memory.sql_models import (
-            Entity,
             MemoryUnit,
-            MentalModel,
             Note,
             UnitEntity,
         )
-
-        from memex_core.services.mental_model_cleanup import prune_stale_evidence
 
         async with AsyncTransaction(self.metastore, self.filestore, str(note_id)) as txn:
             doc = await txn.db_session.get(Note, note_id)
@@ -680,49 +731,15 @@ class NoteService:
 
             # ORM cascades handle memory_units, chunks, and their children
             await txn.db_session.delete(doc)
-
-            # Flush so cascades execute, then clean up orphaned entities
             await txn.db_session.flush()
 
-            orphaned_entity_ids: set[UUID] = set()
-            if entity_ids_for_cleanup:
-                for eid in entity_ids_for_cleanup:
-                    # Check if any other units still reference this entity
-                    remaining = await txn.db_session.exec(
-                        select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
-                    )
-                    if remaining.first() is None:
-                        orphaned_entity_ids.add(eid)
-                        # No remaining links — delete entity and its mental models.
-                        # MentalModel has no FK CASCADE, so delete explicitly first.
-                        mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
-                        mm_result = await txn.db_session.exec(mm_stmt)
-                        for mm in mm_result.all():
-                            await txn.db_session.delete(mm)
-                        # Entity FK cascades handle aliases, cooccurrences, links
-                        entity = await txn.db_session.get(Entity, eid)
-                        if entity:
-                            await txn.db_session.delete(entity)
-                    else:
-                        # Update mention_count to reflect actual remaining links
-                        count_result = await txn.db_session.exec(
-                            select(func.count())
-                            .select_from(UnitEntity)
-                            .where(col(UnitEntity.entity_id) == eid)
-                        )
-                        actual_count = count_result.one()
-                        await txn.db_session.exec(
-                            update(Entity)
-                            .where(col(Entity.id) == eid)
-                            .values(mention_count=actual_count)
-                        )
-
-                # Prune stale evidence from mental models of shared (non-orphaned) entities
-                shared_entity_ids = entity_ids_for_cleanup - orphaned_entity_ids
-                if shared_entity_ids and unit_ids:
-                    await prune_stale_evidence(
-                        txn.db_session, shared_entity_ids, unit_ids, note_vault_id
-                    )
+        # Transaction committed. Fire-and-forget entity cleanup in background.
+        if entity_ids_for_cleanup:
+            asyncio.create_task(
+                _cleanup_entities_after_delete(
+                    self.metastore, entity_ids_for_cleanup, unit_ids, note_vault_id
+                )
+            )
 
         return True
 

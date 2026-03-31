@@ -1,6 +1,6 @@
 # How to Manage Database Migrations
 
-This guide shows you how to manage PostgreSQL schema migrations using the `memex db` CLI commands, which wrap [Alembic](https://alembic.sqlalchemy.org/).
+This guide shows you how to manage PostgreSQL schema migrations using the `memex database` CLI commands, which wrap [Alembic](https://alembic.sqlalchemy.org/).
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ This guide shows you how to manage PostgreSQL schema migrations using the `memex
 ### 1. Check the Current Migration Status
 
 ```bash
-memex db current
+memex database current
 ```
 
 This shows which migration revision the database is currently at. If no output appears, no migrations have been applied yet.
@@ -21,7 +21,7 @@ This shows which migration revision the database is currently at. If no output a
 ### 2. Apply Pending Migrations
 
 ```bash
-memex db upgrade
+memex database upgrade
 ```
 
 This runs all pending migrations up to the latest (`head`). Memex uses advisory locking (`SELECT ... FOR UPDATE`) to prevent concurrent migration races.
@@ -29,25 +29,25 @@ This runs all pending migrations up to the latest (`head`). Memex uses advisory 
 To upgrade to a specific revision instead of `head`:
 
 ```bash
-memex db upgrade <revision>
+memex database upgrade <revision>
 ```
 
 ### 3. Roll Back a Migration
 
 ```bash
-memex db downgrade
+memex database downgrade
 ```
 
 This rolls back one migration step (default: `-1`). To roll back to a specific revision:
 
 ```bash
-memex db downgrade <revision>
+memex database downgrade <revision>
 ```
 
 ### 4. View Migration History
 
 ```bash
-memex db history
+memex database history
 ```
 
 Lists all migration revisions in order, showing which have been applied.
@@ -57,7 +57,7 @@ Lists all migration revisions in order, showing which have been applied.
 If you have a database that was created via `SQLModel.metadata.create_all()` (e.g., before migrations were introduced) and already has the correct schema:
 
 ```bash
-memex db stamp head
+memex database stamp head
 ```
 
 This marks the database as being at the `head` revision without actually running any migrations.
@@ -67,7 +67,7 @@ This marks the database as being at the `head` revision without actually running
 When you've made changes to SQLModel definitions in the codebase:
 
 ```bash
-memex db revision -m "add webhook_deliveries table"
+memex database revision -m "add webhook_deliveries table"
 ```
 
 This auto-detects schema differences between your models and the database and generates a new migration script in `packages/core/alembic/versions/`. The `--autogenerate` flag is enabled by default.
@@ -75,7 +75,7 @@ This auto-detects schema differences between your models and the database and ge
 To generate an empty migration script for manual editing:
 
 ```bash
-memex db revision -m "custom data migration" --no-autogenerate
+memex database revision -m "custom data migration" --no-autogenerate
 ```
 
 ## How It Works
@@ -94,10 +94,10 @@ The database URL is resolved from your Memex configuration (`meta_store.dsn`) or
 | :--- | :--- |
 | `alembic.ini not found` | Ensure `memex-core` is installed: `uv tool install "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"` |
 | `Connection refused` | Check PostgreSQL is running and `MEMEX_META_STORE__DSN` is correct |
-| `Relation already exists` | Database was created with `create_all` — run `memex db stamp head` |
+| `Relation already exists` | Database was created with `create_all` — run `memex database stamp head` |
 | Concurrent migration conflict | Advisory locking handles this automatically; retry if it fails |
 
 ## See Also
 
-* [CLI Commands — db](../reference/cli-commands.md#db) — full reference for all `memex db` subcommands
+* [CLI Commands — database](../reference/cli-commands.md#database) — full reference for all `memex database` subcommands
 * [Configuration](../reference/configuration.md) — database connection settings (`meta_store.dsn`)

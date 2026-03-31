@@ -93,6 +93,7 @@ class TestVaultAccessUnrestrictedKey:
     def test_writer_all_vaults(self, mock_api):
         auth = AuthContext(
             key_prefix='test1234...',
+            key_name=None,
             policy=Policy.WRITER,
             permissions=POLICY_PERMISSIONS[Policy.WRITER],
             vault_ids=None,
@@ -108,6 +109,7 @@ class TestVaultAccessUnrestrictedKey:
     def test_reader_all_vaults(self, mock_api):
         auth = AuthContext(
             key_prefix='test1234...',
+            key_name=None,
             policy=Policy.READER,
             permissions=POLICY_PERMISSIONS[Policy.READER],
             vault_ids=None,
@@ -123,6 +125,7 @@ class TestVaultAccessUnrestrictedKey:
     def test_admin_all_vaults(self, mock_api):
         auth = AuthContext(
             key_prefix='test1234...',
+            key_name=None,
             policy=Policy.ADMIN,
             permissions=POLICY_PERMISSIONS[Policy.ADMIN],
             vault_ids=None,
@@ -143,6 +146,7 @@ class TestVaultAccessScopedKey:
         """Writer scoped to vault-a, with read access to vault-b. vault-c gets nothing."""
         auth = AuthContext(
             key_prefix='test1234...',
+            key_name=None,
             policy=Policy.WRITER,
             permissions=POLICY_PERMISSIONS[Policy.WRITER],
             vault_ids=['vault-a'],
@@ -162,6 +166,7 @@ class TestVaultAccessScopedKey:
         """Reader scoped to vault-b only."""
         auth = AuthContext(
             key_prefix='test1234...',
+            key_name=None,
             policy=Policy.READER,
             permissions=POLICY_PERMISSIONS[Policy.READER],
             vault_ids=['vault-b'],

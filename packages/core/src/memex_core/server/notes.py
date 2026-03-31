@@ -3,7 +3,17 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
@@ -28,9 +38,11 @@ from memex_core.server.auth import (
 )
 from memex_core.server.common import (
     _handle_error,
+    _request_details,
     build_note_dto,
     build_note_list_item_dto,
     get_api,
+    get_audit_context,
     ndjson_openapi,
     ndjson_response,
     resolve_vault_ids,
@@ -251,10 +263,27 @@ async def set_note_status(
     note_id: UUID,
     request: Annotated[SetNoteStatusRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    http_request: Request,
+    background_tasks: BackgroundTasks,
 ):
     """Set note lifecycle status (active, superseded, appended)."""
     try:
         result = await api.set_note_status(note_id, request.status, request.linked_note_id)
+        audit, actor, session_id = get_audit_context(http_request)
+        if audit:
+            audit.log(
+                action='note.update_status',
+                actor=actor,
+                resource_type='note',
+                resource_id=str(note_id),
+                session_id=session_id,
+                details=_request_details(
+                    http_request,
+                    status=request.status,
+                    linked_note_id=str(request.linked_note_id) if request.linked_note_id else None,
+                ),
+                background_tasks=background_tasks,
+            )
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to set note status')
@@ -269,6 +298,8 @@ async def update_note_date(
     note_id: UUID,
     request: Annotated[UpdateNoteDateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    http_request: Request,
+    background_tasks: BackgroundTasks,
 ):
     """Update a note's publish_date and cascade delta to all memory unit timestamps."""
     from datetime import datetime
@@ -280,6 +311,17 @@ async def update_note_date(
 
     try:
         result = await api.update_note_date(note_id, new_date)
+        audit, actor, session_id = get_audit_context(http_request)
+        if audit:
+            audit.log(
+                action='note.update_date',
+                actor=actor,
+                resource_type='note',
+                resource_id=str(note_id),
+                session_id=session_id,
+                details=_request_details(http_request, date=request.date),
+                background_tasks=background_tasks,
+            )
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to update note date')
@@ -294,20 +336,49 @@ async def rename_note(
     note_id: UUID,
     request: Annotated[RenameNoteRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    http_request: Request,
+    background_tasks: BackgroundTasks,
 ):
     """Rename a note (updates title in metadata, page index, and doc_metadata)."""
     try:
         await api.update_note_title(note_id, request.new_title)
+        audit, actor, session_id = get_audit_context(http_request)
+        if audit:
+            audit.log(
+                action='note.rename',
+                actor=actor,
+                resource_type='note',
+                resource_id=str(note_id),
+                session_id=session_id,
+                details=_request_details(http_request, new_title=request.new_title),
+                background_tasks=background_tasks,
+            )
         return {'status': 'success', 'note_id': str(note_id), 'new_title': request.new_title}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to rename note')
 
 
 @router.delete('/notes/{note_id}', dependencies=[Depends(require_delete)])
-async def delete_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+async def delete_note(
+    note_id: UUID,
+    request: Request,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
+):
     """Delete a note and all associated data (memory units, chunks, links, assets)."""
     try:
         await api.delete_note(note_id)
+        audit, actor, session_id = get_audit_context(request)
+        if audit:
+            audit.log(
+                action='note.delete',
+                actor=actor,
+                resource_type='note',
+                resource_id=str(note_id),
+                session_id=session_id,
+                details=_request_details(request),
+                background_tasks=background_tasks,
+            )
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Note deletion failed')

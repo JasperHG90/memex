@@ -5,7 +5,7 @@ This guide shows you how to import many documents into Memex at once, using eith
 ## Prerequisites
 
 * A running Memex server (`memex server start`)
-* Documents to import (Markdown, PDF, text files)
+* Documents to import (Markdown, PDF, DOCX, PPTX, XLSX, CSV, JSON, XML, HTML, MSG, EML, or plain text files)
 * For API usage: Python 3.12+ with `httpx` installed
 
 ## Instructions

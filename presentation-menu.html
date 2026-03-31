@@ -576,7 +576,7 @@
           <div class="feature-card-emoji">&#x1f916;</div>
           <div class="feature-card-title">AI Agent Integration</div>
         </div>
-        <div class="feature-card-desc">First-class MCP support for Claude Code, Claude Desktop, and Cursor. 26 MCP tools, streamable HTTP transport, slim Docker image decoupled from core.</div>
+        <div class="feature-card-desc">First-class MCP support for Claude Code, Claude Desktop, and Cursor. 31 MCP tools, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</div>
       </div>
 
       <div class="feature-card">
@@ -608,7 +608,7 @@
           <div class="feature-card-emoji">&#x1f4c2;</div>
           <div class="feature-card-title">Folder Sync</div>
         </div>
-        <div class="feature-card-desc">Sync Obsidian vaults or any Markdown folder to Memex. Asset upload, frontmatter skip markers, SQLite state tracking, watchdog/polling watch modes, archive-on-delete with stale cascading.</div>
+        <div class="feature-card-desc">Sync Obsidian vaults or any local folder to Memex. Multi-format support (Markdown, PDF, DOCX, PPTX, XLSX, CSV &amp; more), asset upload, frontmatter skip markers, SQLite state tracking, watchdog/polling watch modes, archive-on-delete with stale cascading.</div>
       </div>
 
       <div class="feature-card">
@@ -875,7 +875,7 @@ const speakerNotes = {
     title: 'Reflection Engine',
     notes: [
       'Background process that synthesizes raw facts into higher-order <strong>mental models</strong> (observations about entities).',
-      '<strong>Six-phase cycle</strong> (Phase 0\u20135): (0) <strong>Update Existing</strong> \u2014 check new evidence against current models. (1) <strong>Seed</strong> \u2014 generate candidate observations from recent memories. (2) <strong>Hunt</strong> \u2014 retrieve supporting/contradicting evidence. (3) <strong>Validate</strong> \u2014 extract quotes, verify against source material. (4) <strong>Compare</strong> \u2014 merge with existing models, update confidence. (5) <strong>Finalize</strong> \u2014 compute trends and persist.',
+      '<strong>Seven-phase cycle</strong> (Phase 0\u20136): (0) <strong>Update Existing</strong> \u2014 check new evidence against current models. (1) <strong>Seed</strong> \u2014 generate candidate observations from recent memories. (2) <strong>Hunt</strong> \u2014 retrieve supporting/contradicting evidence. (3) <strong>Validate</strong> \u2014 extract quotes, verify against source material. (4) <strong>Compare</strong> \u2014 merge with existing models, update confidence. (5) <strong>Finalize</strong> \u2014 compute trends and persist.',
       'Each observation gets a <strong>trend label</strong>: New, Strengthening, Stable, Weakening, or Stale \u2014 computed from evidence density over recent vs. older time windows.',
       'Uses <code>dspy.Predict</code> (not ChainOfThought) to reduce token generation by ~30%.',
       'Batch reflection processes entities concurrently via <code>asyncio.gather</code> \u2014 5 entities take the same wall-clock time as 1.',

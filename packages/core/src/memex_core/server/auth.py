@@ -36,6 +36,7 @@ class AuthContext:
     """Resolved auth state for the current request."""
 
     key_prefix: str  # first 8 chars for audit logging
+    key_name: str | None  # human-readable label from ApiKeyConfig.description
     policy: Policy
     permissions: frozenset[Permission]
     vault_ids: list[str] | None  # None = all vaults (resolved lazily)
@@ -162,8 +163,11 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         )
 
     # Build auth context and attach to request state.
+    key_prefix = api_key[:8] + '...'
+    key_name = key_config.description
     request.state.auth_context = AuthContext(
-        key_prefix=api_key[:8] + '...',
+        key_prefix=key_prefix,
+        key_name=key_name,
         policy=key_config.policy,
         permissions=POLICY_PERMISSIONS[key_config.policy],
         vault_ids=key_config.vault_ids,
@@ -171,9 +175,13 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
     )
 
     if audit:
+        from memex_core.context import get_session_id
+
+        actor = f'{key_name} ({key_prefix})' if key_name else key_prefix
         audit.log(
             action='auth.success',
-            actor=api_key[:8] + '...',
+            actor=actor,
+            session_id=get_session_id(),
             details={'path': request.url.path, 'method': request.method},
         )
 

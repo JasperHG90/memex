@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from uuid import UUID
@@ -11,6 +12,7 @@ from sqlmodel import col
 from memex_common.exceptions import MemoryUnitNotFoundError
 
 from memex_core.services.base import BaseService
+from memex_core.services.notes import _cleanup_entities_after_delete
 
 logger = logging.getLogger('memex.core.services.stats')
 
@@ -67,15 +69,12 @@ class StatsService(BaseService):
 
         ORM cascades handle: unit_entities, outgoing_links, incoming_links.
         DB FK cascade handles: evidence_log.
-        After deletion, orphaned entities (and their mental models) are removed, and
-        mention_count is recalculated for entities still referenced by other units.
-        Mental model observations citing the deleted unit are pruned.
+        Entity cleanup (orphan removal, mention_count recount, mental model pruning)
+        runs as a background task after the commit to avoid lock contention.
         """
-        from sqlalchemy import update
-        from sqlmodel import func, select
+        from sqlmodel import select
 
-        from memex_core.memory.sql_models import Entity, MemoryUnit, MentalModel, UnitEntity
-        from memex_core.services.mental_model_cleanup import prune_stale_evidence
+        from memex_core.memory.sql_models import MemoryUnit, UnitEntity
 
         async with self.metastore.session() as session:
             unit = await session.get(MemoryUnit, unit_id)
@@ -90,40 +89,12 @@ class StatsService(BaseService):
             entity_ids = set(entity_result.all())
 
             await session.delete(unit)
-            await session.flush()
-
-            orphaned_entity_ids: set[UUID] = set()
-            if entity_ids:
-                for eid in entity_ids:
-                    remaining = await session.exec(
-                        select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
-                    )
-                    if remaining.first() is None:
-                        orphaned_entity_ids.add(eid)
-                        mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
-                        mm_result = await session.exec(mm_stmt)
-                        for mm in mm_result.all():
-                            await session.delete(mm)
-                        entity = await session.get(Entity, eid)
-                        if entity:
-                            await session.delete(entity)
-                    else:
-                        count_result = await session.exec(
-                            select(func.count())
-                            .select_from(UnitEntity)
-                            .where(col(UnitEntity.entity_id) == eid)
-                        )
-                        actual_count = count_result.one()
-                        await session.exec(
-                            update(Entity)
-                            .where(col(Entity.id) == eid)
-                            .values(mention_count=actual_count)
-                        )
-
-                shared_entity_ids = entity_ids - orphaned_entity_ids
-                if shared_entity_ids:
-                    await prune_stale_evidence(session, shared_entity_ids, [unit_id], vault_id)
-
             await session.commit()
+
+        # Fire-and-forget entity cleanup in background.
+        if entity_ids:
+            asyncio.create_task(
+                _cleanup_entities_after_delete(self.metastore, entity_ids, [unit_id], vault_id)
+            )
 
         return True

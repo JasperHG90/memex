@@ -37,11 +37,14 @@ class AuditService:
         resource_id: str | None = None,
         session_id: str | None = None,
         details: dict[str, Any] | None = None,
+        background_tasks: Any | None = None,
     ) -> None:
         """Schedule an audit entry write as a background task.
 
         This method returns immediately — the actual DB write happens
-        asynchronously.
+        asynchronously.  When *background_tasks* (a FastAPI ``BackgroundTasks``
+        instance) is provided the work is added there; otherwise it falls back
+        to ``asyncio.create_task``.
         """
         entry = AuditLog(
             actor=actor,
@@ -51,7 +54,10 @@ class AuditService:
             session_id=session_id,
             details=details,
         )
-        asyncio.create_task(self._persist(entry))
+        if background_tasks is not None:
+            background_tasks.add_task(self._persist, entry)
+        else:
+            asyncio.create_task(self._persist(entry))
 
     async def _persist(self, entry: AuditLog) -> None:
         """Persist a single audit log entry."""
@@ -61,6 +67,8 @@ class AuditService:
                 await session.commit()
         except (SQLAlchemyError, OSError, RuntimeError):
             logger.exception('Failed to write audit log entry: action=%s', entry.action)
+        except Exception:
+            logger.exception('Unexpected error writing audit log entry: action=%s', entry.action)
 
     # ------------------------------------------------------------------
     # Read (query)
