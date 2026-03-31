@@ -68,7 +68,7 @@ class TestBuildBanner:
         assert TAGLINE not in banner.plain
 
     def test_banner_width_under_80_columns(self):
-        banner = build_banner(show_version=False)
+        banner = build_banner()
         for line in banner.plain.split('\n'):
             assert len(line) <= 80, f'Line too wide ({len(line)} chars): {line!r}'
 

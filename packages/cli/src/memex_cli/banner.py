@@ -64,7 +64,7 @@ def _gradient_color(
     return f'#{r:02x}{g:02x}{b:02x}'
 
 
-def build_banner(*, show_version: bool = True) -> Text:
+def build_banner() -> Text:
     """Build a Rich Text object containing the banner with gradient styling."""
     max_width = max(len(line) for line in BANNER_LINES)
 
@@ -96,7 +96,7 @@ def print_banner(
     if not console.is_terminal:
         return
 
-    banner = build_banner(show_version=False)
+    banner = build_banner()
     console.print(banner)
 
     # Subtitle directly below the logo
