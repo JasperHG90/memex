@@ -6,6 +6,7 @@ import pytest
 from memex_core.memory.models.base import (
     BaseOnnxModel,
     ModelDownloader,
+    _get_providers,
     configure_cache_dir,
     get_cache_dir,
 )
@@ -67,6 +68,37 @@ class TestCacheDir:
         import memex_core.memory.models.base as base_mod
 
         base_mod._cache_dir = None
+
+
+class TestGetProviders:
+    def test_default_is_cpu(self) -> None:
+        with patch.dict('os.environ', {}, clear=True):
+            assert _get_providers() == ['CPUExecutionProvider']
+
+    def test_custom_providers(self) -> None:
+        with patch.dict(
+            'os.environ', {'MEMEX_ONNX_PROVIDERS': 'CUDAExecutionProvider,CPUExecutionProvider'}
+        ):
+            result = _get_providers()
+            assert result == ['CUDAExecutionProvider', 'CPUExecutionProvider']
+
+    def test_cuda_with_gpu_mem_limit(self) -> None:
+        with patch.dict(
+            'os.environ',
+            {
+                'MEMEX_ONNX_PROVIDERS': 'CUDAExecutionProvider,CPUExecutionProvider',
+                'MEMEX_ONNX_GPU_MEM_LIMIT': '536870912',
+            },
+        ):
+            result = _get_providers()
+            assert result[0] == ('CUDAExecutionProvider', {'gpu_mem_limit': 536870912})
+            assert result[1] == 'CPUExecutionProvider'
+
+    def test_cuda_without_gpu_mem_limit(self) -> None:
+        env = {'MEMEX_ONNX_PROVIDERS': 'CUDAExecutionProvider,CPUExecutionProvider'}
+        with patch.dict('os.environ', env, clear=True):
+            result = _get_providers()
+            assert result == ['CUDAExecutionProvider', 'CPUExecutionProvider']
 
 
 class TestBaseOnnxModel:
