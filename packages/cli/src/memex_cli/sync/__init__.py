@@ -17,7 +17,6 @@ from .config import DEFAULT_CONFIG_TOML, CONFIG_FILENAME, WatchMode, load_config
 from .scanner import scan_vault
 from .state import SyncStateDB, diff
 from .engine import sync_vault
-from .watcher import run_watcher
 
 structlog.configure(
     processors=[
@@ -296,6 +295,8 @@ async def watch(
     api_key_str = memex_config.api_key.get_secret_value() if memex_config.api_key else None
 
     console.print(f'Watch mode: [cyan]{cfg.watch.mode.value}[/cyan]')
+    from .watcher import run_watcher
+
     await run_watcher(
         vault_path,
         sync_config=cfg.sync,

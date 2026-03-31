@@ -60,16 +60,19 @@ def auth_client(
 ) -> TestClient:
     """TestClient with auth enabled and all three policy keys configured."""
     _set_env_vars(postgres_container)
-    os.environ['MEMEX_SERVER__AUTH__ENABLED'] = 'true'
-    os.environ['MEMEX_SERVER__AUTH__KEYS'] = json.dumps(
-        [
-            {'key': ADMIN_KEY, 'policy': 'admin', 'description': 'test-admin'},
-            {'key': WRITER_KEY, 'policy': 'writer', 'description': 'test-writer'},
-            {'key': READER_KEY, 'policy': 'reader', 'description': 'test-reader'},
-        ]
-    )
-    with TestClient(app) as c:
-        yield c
+    env_overlay = {
+        'MEMEX_SERVER__AUTH__ENABLED': 'true',
+        'MEMEX_SERVER__AUTH__KEYS': json.dumps(
+            [
+                {'key': ADMIN_KEY, 'policy': 'admin', 'description': 'test-admin'},
+                {'key': WRITER_KEY, 'policy': 'writer', 'description': 'test-writer'},
+                {'key': READER_KEY, 'policy': 'reader', 'description': 'test-reader'},
+            ]
+        ),
+    }
+    with patch.dict(os.environ, env_overlay):
+        with TestClient(app) as c:
+            yield c
 
 
 @pytest.fixture()
@@ -79,8 +82,12 @@ def noauth_client(
 ) -> TestClient:
     """TestClient with auth disabled (default)."""
     _set_env_vars(postgres_container)
-    with TestClient(app) as c:
-        yield c
+    env_overlay = {
+        'MEMEX_SERVER__AUTH__ENABLED': 'false',
+    }
+    with patch.dict(os.environ, env_overlay):
+        with TestClient(app) as c:
+            yield c
 
 
 def _mock_ingest(client: TestClient, key: str, vault_id: str | None = None):
@@ -368,15 +375,21 @@ class TestEdgeCases:
         key2 = secrets.token_urlsafe(32)
 
         _set_env_vars(postgres_container)
-        os.environ['MEMEX_SERVER__AUTH__ENABLED'] = 'true'
-        os.environ['MEMEX_SERVER__AUTH__KEYS'] = json.dumps(
-            [
-                {'key': key1, 'policy': 'admin'},
-                {'key': key2, 'policy': 'admin'},
-            ]
-        )
-
-        with TestClient(app) as client:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    'MEMEX_SERVER__AUTH__ENABLED': 'true',
+                    'MEMEX_SERVER__AUTH__KEYS': json.dumps(
+                        [
+                            {'key': key1, 'policy': 'admin'},
+                            {'key': key2, 'policy': 'admin'},
+                        ]
+                    ),
+                },
+            ),
+            TestClient(app) as client,
+        ):
             assert client.get('/api/v1/vaults', headers=_h(key1)).status_code == 200
             assert client.get('/api/v1/vaults', headers=_h(key2)).status_code == 200
 
@@ -437,23 +450,30 @@ class TestVaultScopedAccess:
         _set_env_vars(postgres_container)
 
         # First create vaults with an admin key
-        os.environ['MEMEX_SERVER__AUTH__ENABLED'] = 'true'
-        os.environ['MEMEX_SERVER__AUTH__KEYS'] = json.dumps(
-            [
-                {'key': ADMIN_KEY, 'policy': 'admin'},
+        with (
+            patch.dict(
+                os.environ,
                 {
-                    'key': SCOPED_READER_KEY,
-                    'policy': 'reader',
-                    'vault_ids': ['allowed-vault'],
+                    'MEMEX_SERVER__AUTH__ENABLED': 'true',
+                    'MEMEX_SERVER__AUTH__KEYS': json.dumps(
+                        [
+                            {'key': ADMIN_KEY, 'policy': 'admin'},
+                            {
+                                'key': SCOPED_READER_KEY,
+                                'policy': 'reader',
+                                'vault_ids': ['allowed-vault'],
+                            },
+                            {
+                                'key': SCOPED_WRITER_KEY,
+                                'policy': 'writer',
+                                'vault_ids': ['allowed-vault'],
+                            },
+                        ]
+                    ),
                 },
-                {
-                    'key': SCOPED_WRITER_KEY,
-                    'policy': 'writer',
-                    'vault_ids': ['allowed-vault'],
-                },
-            ]
-        )
-        with TestClient(app) as client:
+            ),
+            TestClient(app) as client,
+        ):
             # Create the two vaults
             resp = client.post(
                 '/api/v1/vaults',
@@ -549,19 +569,26 @@ class TestReadVaultIds:
     ):
         """Create vaults and a writer key with read_vault_ids."""
         _set_env_vars(postgres_container)
-        os.environ['MEMEX_SERVER__AUTH__ENABLED'] = 'true'
-        os.environ['MEMEX_SERVER__AUTH__KEYS'] = json.dumps(
-            [
-                {'key': ADMIN_KEY, 'policy': 'admin'},
+        with (
+            patch.dict(
+                os.environ,
                 {
-                    'key': CROSS_READ_WRITER_KEY,
-                    'policy': 'writer',
-                    'vault_ids': ['write-vault'],
-                    'read_vault_ids': ['read-only-vault'],
+                    'MEMEX_SERVER__AUTH__ENABLED': 'true',
+                    'MEMEX_SERVER__AUTH__KEYS': json.dumps(
+                        [
+                            {'key': ADMIN_KEY, 'policy': 'admin'},
+                            {
+                                'key': CROSS_READ_WRITER_KEY,
+                                'policy': 'writer',
+                                'vault_ids': ['write-vault'],
+                                'read_vault_ids': ['read-only-vault'],
+                            },
+                        ]
+                    ),
                 },
-            ]
-        )
-        with TestClient(app) as client:
+            ),
+            TestClient(app) as client,
+        ):
             resp = client.post(
                 '/api/v1/vaults',
                 json={'name': 'write-vault'},

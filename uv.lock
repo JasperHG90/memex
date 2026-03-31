@@ -18,7 +18,6 @@ members = [
     "memex-core",
     "memex-eval",
     "memex-mcp",
-    "memex-obsidian-sync",
 ]
 
 [[package]]
@@ -3129,30 +3128,6 @@ requires-dist = [
 dev = [
     { name = "types-aiofiles", specifier = ">=25.1.0.20251011" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
-]
-
-[[package]]
-name = "memex-obsidian-sync"
-source = { editable = "packages/obsidian-sync" }
-dependencies = [
-    { name = "httpx" },
-    { name = "memex-common" },
-    { name = "rich" },
-    { name = "sqlmodel" },
-    { name = "structlog" },
-    { name = "typer" },
-    { name = "watchdog" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "memex-common", editable = "packages/common" },
-    { name = "rich", specifier = ">=13.7.0" },
-    { name = "sqlmodel", specifier = ">=0.0.22" },
-    { name = "structlog", specifier = ">=25.0.0" },
-    { name = "typer", specifier = ">=0.12.0" },
-    { name = "watchdog", specifier = ">=4.0.0" },
 ]
 
 [[package]]

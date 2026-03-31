@@ -30,7 +30,6 @@ _NOTE_INCLUDE: set[str] = {
     'appended_to',
     'publish_date',
     'created_at',
-    'doc_metadata',
 }
 _UNIT_INCLUDE: set[str] = {
     'id',
@@ -41,19 +40,31 @@ _UNIT_INCLUDE: set[str] = {
     'confidence',
     'note_id',
     'event_date',
-    'unit_metadata',
 }
 _MM_INCLUDE: set[str] = {
     'id',
     'vault_id',
     'entity_id',
     'name',
-    'entity_metadata',
     'version',
     'last_refreshed',
 }
 _OBS_INCLUDE: set[str] = {'id', 'title', 'trend'}
 _ENTITY_INCLUDE: set[str] = {'id', 'canonical_name', 'entity_type'}
+
+# Max length for text fields in lineage responses (provenance, not full content).
+_TEXT_TRUNCATE_LEN = 200
+
+
+def _truncate_text_fields(entity_data: dict[str, Any]) -> dict[str, Any]:
+    """Truncate long text fields in entity dicts to keep lineage responses compact."""
+    text = entity_data.get('text')
+    if isinstance(text, str) and len(text) > _TEXT_TRUNCATE_LEN:
+        entity_data['text'] = text[:_TEXT_TRUNCATE_LEN] + '…'
+    desc = entity_data.get('description')
+    if isinstance(desc, str) and len(desc) > _TEXT_TRUNCATE_LEN:
+        entity_data['description'] = desc[:_TEXT_TRUNCATE_LEN] + '…'
+    return entity_data
 
 
 class JSONPath(UserDefinedType):
@@ -158,7 +169,7 @@ class LineageService(BaseService):
             obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
-            entity_data = obj.model_dump(include=_NOTE_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_NOTE_INCLUDE))
 
             if not stop_recursion:
                 stmt = (
@@ -196,7 +207,7 @@ class LineageService(BaseService):
             obj = (await session.exec(stmt)).first()
             if not obj:
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
-            entity_data = obj.model_dump(include=_UNIT_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_UNIT_INCLUDE))
 
             if not stop_recursion:
                 stmt = (
@@ -302,7 +313,7 @@ class LineageService(BaseService):
                     mm_children.append(
                         LineageResponse(
                             entity_type='mental_model',
-                            entity=mm.model_dump(include=_MM_INCLUDE),
+                            entity=_truncate_text_fields(mm.model_dump(include=_MM_INCLUDE)),
                             derived_from=[],
                         )
                     )
@@ -315,7 +326,7 @@ class LineageService(BaseService):
 
             # Single mental model: return directly
             obj = results[0]
-            entity_data = obj.model_dump(include=_MM_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_MM_INCLUDE))
 
         else:
             raise ValueError(f'Unknown entity type: {entity_type}')
@@ -388,7 +399,7 @@ class LineageService(BaseService):
 
             # Single mental model: return directly
             obj = results[0]
-            entity_data = obj.model_dump(include=_MM_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_MM_INCLUDE))
 
             if not stop_recursion:
                 children = await self._build_mm_observations_upstream(
@@ -463,7 +474,7 @@ class LineageService(BaseService):
             if not obj:
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
 
-            entity_data = obj.model_dump(include=_UNIT_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_UNIT_INCLUDE))
 
             if not stop_recursion:
                 if obj.note_id:
@@ -490,7 +501,7 @@ class LineageService(BaseService):
             if not obj:
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
 
-            entity_data = obj.model_dump(include=_NOTE_INCLUDE)
+            entity_data = _truncate_text_fields(obj.model_dump(include=_NOTE_INCLUDE))
             # Document is a leaf (upstream-wise)
 
         else:
@@ -560,7 +571,7 @@ class LineageService(BaseService):
         limit: int,
     ) -> LineageResponse:
         """Build a full mental_model LineageResponse node with its observation subtree."""
-        mm_data = mm.model_dump(include=_MM_INCLUDE)
+        mm_data = _truncate_text_fields(mm.model_dump(include=_MM_INCLUDE))
         obs_children: list[LineageResponse] = []
         if current_depth < max_depth:
             obs_children = await self._build_mm_observations_upstream(
