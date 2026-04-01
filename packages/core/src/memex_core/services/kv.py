@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import col, or_, select
 
+from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.kv')
@@ -83,6 +84,7 @@ class KVService(BaseService):
 
             # Fetch the full ORM object to return
             entry = await session.get(KVEntry, row.id)
+            audit_event(self._audit_service, 'kv.written', 'kv', key)
             return entry
 
     async def get(self, key: str) -> Any | None:
@@ -140,6 +142,7 @@ class KVService(BaseService):
                 return False
             await session.delete(entry)
             await session.commit()
+            audit_event(self._audit_service, 'kv.deleted', 'kv', key)
             return True
 
     async def list_entries(
