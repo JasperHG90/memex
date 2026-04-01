@@ -16,6 +16,7 @@ from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, Va
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 
 from memex_core.config import MemexConfig
+from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
@@ -90,6 +91,8 @@ async def _cleanup_entities_after_delete(
 
 class NoteService:
     """Note CRUD, listing, and resource access."""
+
+    _audit_service: AuditService | None = None
 
     def __init__(
         self,
@@ -173,6 +176,9 @@ class NoteService:
 
             session.add(doc)
             await session.commit()
+            audit_event(
+                self._audit_service, 'note.status_changed', 'note', str(note_id), status=status
+            )
             return {
                 'note_id': str(note_id),
                 'status': status,
@@ -242,6 +248,13 @@ class NoteService:
             units_updated: int = result.rowcount  # type: ignore[assignment]
 
             await session.commit()
+            audit_event(
+                self._audit_service,
+                'note.date_changed',
+                'note',
+                str(note_id),
+                new_date=new_date.isoformat(),
+            )
             return {
                 'note_id': str(note_id),
                 'old_date': old_date.isoformat(),
@@ -279,6 +292,9 @@ class NoteService:
             session.add(doc)
             await session.commit()
             await session.refresh(doc)
+            audit_event(
+                self._audit_service, 'note.renamed', 'note', str(note_id), new_title=new_title
+            )
             return doc.model_dump()
 
     async def add_note_assets(
@@ -319,6 +335,9 @@ class NoteService:
                 note.assets = (note.assets or []) + added
                 txn.db_session.add(note)
 
+        audit_event(
+            self._audit_service, 'note.assets_added', 'note', str(note_id), count=len(added)
+        )
         return {
             'note_id': str(note_id),
             'added_assets': added,
@@ -359,6 +378,9 @@ class NoteService:
                 note.assets = [a for a in (note.assets or []) if a not in deleted_set]
                 txn.db_session.add(note)
 
+        audit_event(
+            self._audit_service, 'note.assets_deleted', 'note', str(note_id), count=len(deleted)
+        )
         return {
             'note_id': str(note_id),
             'deleted_assets': deleted,
@@ -752,6 +774,7 @@ class NoteService:
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 
+        audit_event(self._audit_service, 'note.deleted', 'note', str(note_id))
         return True
 
     async def migrate_note(self, note_id: UUID, target_vault_id: UUID) -> dict[str, Any]:
@@ -899,6 +922,13 @@ class NoteService:
         if await self.filestore.exists(old_prefix):
             await self.filestore.move_file(old_prefix, new_prefix)
 
+        audit_event(
+            self._audit_service,
+            'note.migrated',
+            'note',
+            str(note_id),
+            target_vault=str(target_vault_id),
+        )
         return {
             'status': 'success',
             'note_id': str(note_id),
