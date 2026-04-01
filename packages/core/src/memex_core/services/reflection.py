@@ -20,6 +20,7 @@ from memex_core.memory.reflect.models import (
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.memory.sql_models import Observation
 from memex_core.memory.models.protocols import EmbeddingsModel
+from memex_core.services.audit import AuditService, audit_event
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.reflection')
@@ -31,6 +32,8 @@ class ReflectionService:
     Unlike other services, ReflectionService has heavier dependencies
     because reflection interacts with the memory engine, LLM, and queue.
     """
+
+    _audit_service: AuditService | None = None
 
     def __init__(
         self,
@@ -113,6 +116,13 @@ class ReflectionService:
                 session, [request.entity_id], vault_id=request.vault_id
             )
 
+            audit_event(
+                self._audit_service,
+                'reflection.triggered',
+                'entity',
+                str(request.entity_id),
+                vault_id=str(request.vault_id),
+            )
             return ReflectionResult(
                 entity_id=request.entity_id,
                 new_observations=[Observation(**o) for o in mental_model.observations],
@@ -162,6 +172,16 @@ class ReflectionService:
                         updated_model=model,
                     )
                 )
+
+            for req in requests:
+                if req.entity_id in succeeded_ids:
+                    audit_event(
+                        self._audit_service,
+                        'reflection.triggered',
+                        'entity',
+                        str(req.entity_id),
+                        vault_id=str(req.vault_id),
+                    )
             return results
 
     async def get_reflection_queue_batch(
@@ -210,4 +230,6 @@ class ReflectionService:
     async def retry_dead_letter_item(self, item_id: UUID) -> Any:
         """Retry a dead-lettered reflection task by resetting it to pending."""
         async with self.metastore.session() as session:
-            return await self.queue_service.retry_dead_letter(session, item_id)
+            result = await self.queue_service.retry_dead_letter(session, item_id)
+            audit_event(self._audit_service, 'reflection.dlq_retried', 'reflection', str(item_id))
+            return result

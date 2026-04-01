@@ -11,6 +11,7 @@ from sqlmodel import col
 
 from memex_common.exceptions import EntityNotFoundError, ResourceNotFoundError
 
+from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.entities')
@@ -255,6 +256,7 @@ class EntityService(BaseService):
             await session.delete(entity)
             await session.commit()
 
+        audit_event(self._audit_service, 'entity.deleted', 'entity', str(entity_id))
         return True
 
     async def delete_mental_model(self, entity_id: UUID, vault_id: UUID) -> bool:
@@ -279,6 +281,13 @@ class EntityService(BaseService):
             await session.delete(model)
             await session.commit()
 
+        audit_event(
+            self._audit_service,
+            'mental_model.deleted',
+            'entity',
+            str(entity_id),
+            vault_id=str(vault_id),
+        )
         return True
 
     async def get_top_entities(

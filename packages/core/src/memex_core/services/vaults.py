@@ -12,6 +12,7 @@ from sqlmodel import col
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
 
+from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.vaults')
@@ -87,6 +88,7 @@ class VaultService(BaseService):
             session.add(vault)
             await session.commit()
             await session.refresh(vault)
+            audit_event(self._audit_service, 'vault.created', 'vault', str(vault.id), name=name)
             return vault
 
     async def delete_vault(self, vault_id: UUID) -> bool:
@@ -100,6 +102,7 @@ class VaultService(BaseService):
             await session.delete(vault)
             await session.commit()
             _VAULT_RESOLUTION_CACHE.clear()
+            audit_event(self._audit_service, 'vault.deleted', 'vault', str(vault_id))
             return True
 
     async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
@@ -182,6 +185,7 @@ class VaultService(BaseService):
             except Exception:
                 logger.warning('Failed to delete filestore path during vault truncate: %s', path)
 
+        audit_event(self._audit_service, 'vault.truncated', 'vault', str(vault_id))
         return counts
 
     async def list_vaults(self) -> list[Any]:

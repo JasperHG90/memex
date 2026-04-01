@@ -324,3 +324,337 @@ class TestIngestionServiceAuditEvents:
             args = mock_ae.call_args
             assert args[0][1] == 'note.ingested_file'
             assert args[1]['file_path'] == '/tmp/doc.pdf'
+
+
+# ---------------------------------------------------------------------------
+# KVService domain events (AC-015)
+# ---------------------------------------------------------------------------
+
+
+class TestKVServiceAuditEvents:
+    """AC-015: KV mutations emit domain events."""
+
+    @pytest.fixture
+    def kv_service(self, mock_metastore, mock_filestore, mock_config):
+        from memex_core.services.kv import KVService
+
+        svc = KVService(mock_metastore, mock_filestore, mock_config)
+        svc._audit_service = _mock_audit_service()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_put_emits_event(self, kv_service, mock_session):
+        """put() emits kv.written after successful upsert."""
+        mock_row = MagicMock()
+        mock_row.id = uuid4()
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row
+        mock_session.exec = AsyncMock(return_value=mock_result)
+
+        mock_entry = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_entry)
+
+        result = await kv_service.put('global:test-key', 'test-value')
+
+        assert result is mock_entry
+        kv_service._audit_service.log.assert_called_once()
+        call_kwargs = kv_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'kv.written'
+        assert call_kwargs['resource_type'] == 'kv'
+        assert call_kwargs['resource_id'] == 'global:test-key'
+
+    @pytest.mark.asyncio
+    async def test_delete_emits_event_on_success(self, kv_service, mock_session):
+        """delete() emits kv.deleted when key exists."""
+        mock_entry = MagicMock()
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_entry
+        mock_session.exec = AsyncMock(return_value=mock_result)
+        mock_session.delete = AsyncMock()
+
+        result = await kv_service.delete('global:test-key')
+
+        assert result is True
+        kv_service._audit_service.log.assert_called_once()
+        call_kwargs = kv_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'kv.deleted'
+        assert call_kwargs['resource_id'] == 'global:test-key'
+
+    @pytest.mark.asyncio
+    async def test_delete_no_event_when_not_found(self, kv_service, mock_session):
+        """delete() emits no event when key not found."""
+        mock_result = MagicMock()
+        mock_result.first.return_value = None
+        mock_session.exec = AsyncMock(return_value=mock_result)
+
+        result = await kv_service.delete('global:missing')
+
+        assert result is False
+        kv_service._audit_service.log.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# VaultService domain events (AC-016)
+# ---------------------------------------------------------------------------
+
+
+class TestVaultServiceAuditEvents:
+    """AC-016: Vault mutations emit domain events."""
+
+    @pytest.fixture
+    def vault_service(self, mock_metastore, mock_filestore, mock_config):
+        from memex_core.services.vaults import VaultService
+
+        svc = VaultService(mock_metastore, mock_filestore, mock_config)
+        svc._audit_service = _mock_audit_service()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_create_vault_emits_event(self, vault_service, mock_session):
+        """create_vault() emits vault.created."""
+        # Mock no existing vault with same name
+        mock_result = MagicMock()
+        mock_result.first.return_value = None
+        mock_session.exec = AsyncMock(return_value=mock_result)
+
+        mock_session.refresh = AsyncMock()
+
+        await vault_service.create_vault('test-vault')
+
+        vault_service._audit_service.log.assert_called_once()
+        call_kwargs = vault_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'vault.created'
+        assert call_kwargs['resource_type'] == 'vault'
+        assert call_kwargs['details']['name'] == 'test-vault'
+
+    @pytest.mark.asyncio
+    async def test_delete_vault_emits_event(self, vault_service, mock_session):
+        """delete_vault() emits vault.deleted on success."""
+        vault_id = uuid4()
+        mock_vault = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_vault)
+        mock_session.delete = AsyncMock()
+
+        result = await vault_service.delete_vault(vault_id)
+
+        assert result is True
+        vault_service._audit_service.log.assert_called_once()
+        call_kwargs = vault_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'vault.deleted'
+        assert call_kwargs['resource_id'] == str(vault_id)
+
+    @pytest.mark.asyncio
+    async def test_delete_vault_no_event_when_not_found(self, vault_service, mock_session):
+        """delete_vault() emits no event when vault not found."""
+        mock_session.get = AsyncMock(return_value=None)
+
+        result = await vault_service.delete_vault(uuid4())
+
+        assert result is False
+        vault_service._audit_service.log.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_truncate_vault_emits_event(self, vault_service, mock_session):
+        """truncate_vault() emits vault.truncated."""
+        vault_id = uuid4()
+
+        # Mock note query returning empty
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
+
+        # Mock delete results
+        mock_delete_result = MagicMock()
+        mock_delete_result.rowcount = 0
+        mock_session.exec = AsyncMock(return_value=mock_delete_result)
+
+        await vault_service.truncate_vault(vault_id)
+
+        vault_service._audit_service.log.assert_called_once()
+        call_kwargs = vault_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'vault.truncated'
+        assert call_kwargs['resource_id'] == str(vault_id)
+
+
+# ---------------------------------------------------------------------------
+# EntityService domain events (AC-017)
+# ---------------------------------------------------------------------------
+
+
+class TestEntityServiceAuditEvents:
+    """AC-017: Entity mutations emit domain events."""
+
+    @pytest.fixture
+    def entity_service(self, mock_metastore, mock_filestore, mock_config):
+        from memex_core.services.entities import EntityService
+
+        svc = EntityService(mock_metastore, mock_filestore, mock_config)
+        svc._audit_service = _mock_audit_service()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_delete_entity_emits_event(self, entity_service, mock_session):
+        """delete_entity() emits entity.deleted."""
+        entity_id = uuid4()
+        mock_entity = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_entity)
+        mock_session.delete = AsyncMock()
+
+        # Mock the mental model query
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_session.exec = AsyncMock(return_value=mock_result)
+
+        result = await entity_service.delete_entity(entity_id)
+
+        assert result is True
+        entity_service._audit_service.log.assert_called_once()
+        call_kwargs = entity_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'entity.deleted'
+        assert call_kwargs['resource_type'] == 'entity'
+        assert call_kwargs['resource_id'] == str(entity_id)
+
+    @pytest.mark.asyncio
+    async def test_delete_mental_model_emits_event(self, entity_service, mock_session):
+        """delete_mental_model() emits mental_model.deleted."""
+        entity_id = uuid4()
+        vault_id = uuid4()
+        mock_model = MagicMock()
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_model
+        mock_session.exec = AsyncMock(return_value=mock_result)
+        mock_session.delete = AsyncMock()
+
+        result = await entity_service.delete_mental_model(entity_id, vault_id)
+
+        assert result is True
+        entity_service._audit_service.log.assert_called_once()
+        call_kwargs = entity_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'mental_model.deleted'
+        assert call_kwargs['resource_type'] == 'entity'
+        assert call_kwargs['resource_id'] == str(entity_id)
+        assert call_kwargs['details']['vault_id'] == str(vault_id)
+
+
+# ---------------------------------------------------------------------------
+# ReflectionService domain events (AC-018)
+# ---------------------------------------------------------------------------
+
+
+class TestReflectionServiceAuditEvents:
+    """AC-018: Reflection operations emit domain events."""
+
+    @pytest.fixture
+    def reflection_service(self, mock_metastore, mock_config):
+        from memex_core.services.reflection import ReflectionService
+
+        svc = ReflectionService(
+            metastore=mock_metastore,
+            config=mock_config,
+            lm=MagicMock(),
+            memory=MagicMock(),
+            extraction=MagicMock(),
+            queue_service=MagicMock(),
+            embedding_model=MagicMock(),
+        )
+        svc._audit_service = _mock_audit_service()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_reflect_emits_event_on_success(self, reflection_service, mock_session):
+        """reflect() emits reflection.triggered on success path."""
+        from memex_core.memory.reflect.models import ReflectionRequest
+        from memex_core.memory.sql_models import MentalModel
+
+        entity_id = uuid4()
+        vault_id = uuid4()
+        request = ReflectionRequest(entity_id=entity_id, vault_id=vault_id)
+
+        mock_model = MentalModel(
+            entity_id=entity_id,
+            vault_id=vault_id,
+            name='test-entity',
+            observations=[],
+        )
+
+        with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=[mock_model])
+            reflection_service.queue_service.complete_reflection = AsyncMock()
+
+            await reflection_service.reflect(request)
+
+        reflection_service._audit_service.log.assert_called_once()
+        call_kwargs = reflection_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'reflection.triggered'
+        assert call_kwargs['resource_type'] == 'entity'
+        assert call_kwargs['resource_id'] == str(entity_id)
+        assert call_kwargs['details']['vault_id'] == str(vault_id)
+
+    @pytest.mark.asyncio
+    async def test_reflect_no_event_on_failure(self, reflection_service, mock_session):
+        """reflect() does NOT emit event when reflection fails (no models produced)."""
+        from memex_core.memory.reflect.models import ReflectionRequest
+
+        entity_id = uuid4()
+        vault_id = uuid4()
+        request = ReflectionRequest(entity_id=entity_id, vault_id=vault_id)
+
+        with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=[])
+            reflection_service.queue_service.mark_failed = AsyncMock()
+
+            await reflection_service.reflect(request)
+
+        reflection_service._audit_service.log.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reflect_batch_emits_only_for_succeeded(self, reflection_service, mock_session):
+        """reflect_batch() emits events only for succeeded entities, not failed."""
+        from memex_core.memory.reflect.models import ReflectionRequest
+        from memex_core.memory.sql_models import MentalModel
+
+        entity1 = uuid4()
+        entity2 = uuid4()
+        entity3 = uuid4()
+        vault_id = uuid4()
+
+        requests = [
+            ReflectionRequest(entity_id=entity1, vault_id=vault_id),
+            ReflectionRequest(entity_id=entity2, vault_id=vault_id),
+            ReflectionRequest(entity_id=entity3, vault_id=vault_id),
+        ]
+
+        # Only entity1 and entity3 succeed
+        model1 = MentalModel(entity_id=entity1, vault_id=vault_id, name='e1', observations=[])
+        model3 = MentalModel(entity_id=entity3, vault_id=vault_id, name='e3', observations=[])
+
+        with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=[model1, model3])
+            reflection_service.queue_service.complete_reflection = AsyncMock()
+            reflection_service.queue_service.mark_failed = AsyncMock()
+
+            await reflection_service.reflect_batch(requests)
+
+        # Should emit exactly 2 events (entity1, entity3), not entity2
+        assert reflection_service._audit_service.log.call_count == 2
+        triggered_ids = set()
+        for call in reflection_service._audit_service.log.call_args_list:
+            assert call.kwargs['action'] == 'reflection.triggered'
+            triggered_ids.add(call.kwargs['resource_id'])
+        assert triggered_ids == {str(entity1), str(entity3)}
+
+    @pytest.mark.asyncio
+    async def test_retry_dead_letter_emits_event(self, reflection_service, mock_session):
+        """retry_dead_letter_item() emits reflection.dlq_retried."""
+        item_id = uuid4()
+        reflection_service.queue_service.retry_dead_letter = AsyncMock(return_value=MagicMock())
+
+        await reflection_service.retry_dead_letter_item(item_id)
+
+        reflection_service._audit_service.log.assert_called_once()
+        call_kwargs = reflection_service._audit_service.log.call_args.kwargs
+        assert call_kwargs['action'] == 'reflection.dlq_retried'
+        assert call_kwargs['resource_type'] == 'reflection'
+        assert call_kwargs['resource_id'] == str(item_id)
