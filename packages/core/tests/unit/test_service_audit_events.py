@@ -274,56 +274,155 @@ class TestNoteServiceAuditEvents:
 class TestIngestionServiceAuditEvents:
     """AC-014: Ingestion operations emit domain events."""
 
+    @pytest.fixture
+    def ingestion_service(self, mock_metastore, mock_filestore, mock_config):
+        from memex_core.services.ingestion import IngestionService
+        from memex_core.services.vaults import VaultService
+
+        memory = AsyncMock()
+        memory.retain = AsyncMock(return_value={'status': 'success'})
+        lm = MagicMock()
+        file_processor = MagicMock()
+        vaults = MagicMock(spec=VaultService)
+        vaults.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+
+        svc = IngestionService(
+            metastore=mock_metastore,
+            filestore=mock_filestore,
+            config=mock_config,
+            lm=lm,
+            memory=memory,
+            file_processor=file_processor,
+            vaults=vaults,
+        )
+        svc._audit_service = _mock_audit_service()
+        return svc
+
     @pytest.mark.asyncio
-    async def test_ingest_emits_event(self):
-        """ingest() emits note.ingested with title."""
+    async def test_ingest_emits_event(self, ingestion_service, mock_session):
+        """ingest() emits note.ingested with title after successful ingestion."""
+        from memex_core.memory.sql_models import Vault
 
-        mock_svc = _mock_audit_service()
+        note_id = uuid4()
+        note = MagicMock()
+        note.idempotency_key = note_id
+        note._metadata.name = 'Test Note'
+        note._metadata.description = 'desc'
+        note._metadata.author = None
+        note._metadata.tags = []
+        note._content = b'# Test content'
+        note._files = {}
+        note.source_uri = None
+        note.content_fingerprint = 'abc123'
+        note.template = None
 
-        # We test via patching audit_event since ingest() is complex
-        with patch('memex_core.services.ingestion.audit_event') as mock_ae:
-            from memex_core.services.ingestion import IngestionService
+        # Idempotency check: no existing note
+        mock_session.exec.return_value.first.return_value = None
 
-            svc = MagicMock(spec=IngestionService)
-            svc._audit_service = mock_svc
+        mock_vault = MagicMock(spec=Vault)
+        mock_vault.name = 'test-vault'
+        mock_session.get = AsyncMock(return_value=mock_vault)
 
-            # Simulate what ingest() does: call audit_event after mutation
-            mock_ae(mock_svc, 'note.ingested', 'note', str(uuid4()), title='Test Note')
+        with (
+            patch('memex_core.services.ingestion.AsyncTransaction') as mock_txn_cls,
+            patch(
+                'memex_core.services.ingestion.resolve_document_title', new_callable=AsyncMock
+            ) as mock_title,
+            patch('memex_core.services.ingestion.audit_event') as mock_ae,
+        ):
+            ctx = AsyncMock()
+            ctx.db_session = mock_session
+            mock_txn_cls.return_value.__aenter__ = AsyncMock(return_value=ctx)
+            mock_txn_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_title.return_value = 'Resolved Title'
+
+            # _detect_overlapping_notes returns empty
+            ingestion_service._detect_overlapping_notes = AsyncMock(return_value=[])
+
+            await ingestion_service.ingest(
+                note, vault_id=uuid4(), event_date=datetime.now(timezone.utc)
+            )
 
             mock_ae.assert_called_once()
             args = mock_ae.call_args
             assert args[0][1] == 'note.ingested'
             assert args[0][2] == 'note'
-            assert args[1]['title'] == 'Test Note'
+            assert args[0][3] == str(note_id)
+            assert args[1]['title'] == 'Resolved Title'
 
     @pytest.mark.asyncio
-    async def test_ingest_from_url_emits_event(self):
+    async def test_ingest_from_url_emits_event(self, ingestion_service):
         """ingest_from_url() emits note.ingested_url after delegation."""
-        with patch('memex_core.services.ingestion.audit_event') as mock_ae:
-            mock_svc = _mock_audit_service()
-            note_id = str(uuid4())
+        note_id = uuid4()
 
-            # Simulate the audit_event call from ingest_from_url
-            mock_ae(mock_svc, 'note.ingested_url', 'note', note_id, url='https://example.com')
+        # Mock self.ingest to return a result dict
+        ingestion_service.ingest = AsyncMock(return_value={'status': 'success', 'note_id': note_id})
+
+        extracted = MagicMock()
+        extracted.content = 'Web content'
+        extracted.source = 'https://example.com'
+        extracted.metadata = {'hostname': 'example.com', 'title': 'Example', 'date': None}
+        extracted.document_date = None
+
+        with (
+            patch(
+                'memex_core.services.ingestion.WebContentProcessor.fetch_and_extract',
+                new_callable=AsyncMock,
+                return_value=extracted,
+            ),
+            patch(
+                'memex_core.services.ingestion.extract_document_date',
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch('memex_core.services.ingestion.audit_event') as mock_ae,
+        ):
+            await ingestion_service.ingest_from_url('https://example.com')
 
             mock_ae.assert_called_once()
             args = mock_ae.call_args
             assert args[0][1] == 'note.ingested_url'
+            assert args[0][2] == 'note'
+            assert args[0][3] == str(note_id)
             assert args[1]['url'] == 'https://example.com'
 
     @pytest.mark.asyncio
-    async def test_ingest_from_file_emits_event(self):
+    async def test_ingest_from_file_emits_event(self, ingestion_service):
         """ingest_from_file() emits note.ingested_file after delegation."""
-        with patch('memex_core.services.ingestion.audit_event') as mock_ae:
-            mock_svc = _mock_audit_service()
-            note_id = str(uuid4())
+        note_id = uuid4()
 
-            mock_ae(mock_svc, 'note.ingested_file', 'note', note_id, file_path='/tmp/doc.pdf')
+        # Mock self.ingest to return a result dict
+        ingestion_service.ingest = AsyncMock(return_value={'status': 'success', 'note_id': note_id})
+
+        extracted = MagicMock()
+        extracted.content = 'PDF content'
+        extracted.content_type = 'pdf'
+        extracted.metadata = {'title': 'Report', 'author': None, 'creation_date': None}
+        extracted.images = {}
+        extracted.document_date = None
+
+        with (
+            patch(
+                'memex_core.services.ingestion.extract_document_date',
+                new_callable=AsyncMock,
+                return_value=datetime.now(timezone.utc),
+            ),
+            patch(
+                'memex_core.services.ingestion._is_meaningful_name',
+                return_value=True,
+            ),
+            patch('memex_core.services.ingestion.audit_event') as mock_ae,
+        ):
+            ingestion_service._file_processor.extract = AsyncMock(return_value=extracted)
+
+            await ingestion_service.ingest_from_file('/tmp/report.pdf')
 
             mock_ae.assert_called_once()
             args = mock_ae.call_args
             assert args[0][1] == 'note.ingested_file'
-            assert args[1]['file_path'] == '/tmp/doc.pdf'
+            assert args[0][2] == 'note'
+            assert args[0][3] == str(note_id)
+            assert args[1]['file_path'] == '/tmp/report.pdf'
 
 
 # ---------------------------------------------------------------------------
