@@ -5,6 +5,7 @@ from typing import cast
 
 import httpx
 import numpy as np
+import onnxruntime as ort
 from memex_common.config import EmbeddingBackend
 from memex_core.memory.models.base import (
     BaseOnnxModel,
@@ -80,6 +81,9 @@ class FastEmbedder(BaseOnnxModel):
     def encode(self, text: list[str]) -> np.ndarray[tuple[int, int], np.dtype[np.float32]]:
         """Retrieve the embedding for a text query.
 
+        Batches inference calls when batch_size > 0. On GPU OOM, automatically
+        halves the batch size and retries (down to single texts).
+
         Args:
             text (list[str]): Input texts to be embedded.
 
@@ -94,19 +98,47 @@ class FastEmbedder(BaseOnnxModel):
 
         for i in range(0, len(text), chunk_size):
             batch = text[i : i + chunk_size]
-
-            input_ids = []
-            attention_mask = []
-            for e in self.tokenizer.encode_batch(batch):
-                input_ids.append(np.array(e.ids, dtype=np.int64))
-                attention_mask.append(np.array(e.attention_mask, dtype=np.int64))
-
-            inputs = {
-                'input_ids': np.vstack(input_ids),
-                'attention_mask': np.vstack(attention_mask),
-            }
-
-            outputs = cast(list[np.ndarray], self.session.run(None, inputs))
-            all_embeddings.append(outputs[0])
+            result = self._run_batch(batch)
+            all_embeddings.append(result)
 
         return np.vstack(all_embeddings)
+
+    def _run_batch(self, texts: list[str]) -> np.ndarray:
+        """Run a batch through the model, halving on OOM until it fits."""
+        size = len(texts)
+        while size >= 1:
+            all_parts: list[np.ndarray] = []
+            oom = False
+            for j in range(0, len(texts), size):
+                sub = texts[j : j + size]
+                inputs = self._tokenize(sub)
+                try:
+                    outputs = cast(list[np.ndarray], self.session.run(None, inputs))
+                    all_parts.append(outputs[0])
+                except ort.capi.onnxruntime_pybind11_state.RuntimeException as e:
+                    if 'Failed to allocate memory' not in str(e):
+                        raise
+                    oom = True
+                    break
+
+            if not oom:
+                return np.vstack(all_parts)
+
+            halved = max(size // 2, 1)
+            if halved == size:
+                raise  # Single text still OOMs — nothing we can do
+            logger.warning('GPU OOM at batch %d, retrying at %d', size, halved)
+            size = halved
+
+        raise RuntimeError('Unreachable')  # pragma: no cover
+
+    def _tokenize(self, texts: list[str]) -> dict[str, np.ndarray]:
+        input_ids = []
+        attention_mask = []
+        for e in self.tokenizer.encode_batch(texts):
+            input_ids.append(np.array(e.ids, dtype=np.int64))
+            attention_mask.append(np.array(e.attention_mask, dtype=np.int64))
+        return {
+            'input_ids': np.vstack(input_ids),
+            'attention_mask': np.vstack(attention_mask),
+        }

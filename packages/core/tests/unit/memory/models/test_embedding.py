@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import numpy as np
+import onnxruntime as ort
 from typing import AsyncGenerator, cast
 
 import memex_core.memory.models.embedding as _emb_mod
@@ -107,3 +108,27 @@ class TestFastEmbedder:
         assert np.array_equal(result[2:4], batch_2)
         assert np.array_equal(result[4:], batch_3)
         assert mock_session.run.call_count == 3
+
+    def test_encode_halves_on_oom(
+        self, mock_tokenizer: MagicMock, mock_onnx_session: MagicMock
+    ) -> None:
+        """When GPU OOMs on a batch of 4, it should halve to 2 and succeed."""
+        with patch('pathlib.Path.exists', return_value=True):
+            embedder = FastEmbedder('/fake/path', batch_size=4)
+
+        dim = 384
+        oom = ort.capi.onnxruntime_pybind11_state.RuntimeException(
+            'Failed to allocate memory for requested buffer'
+        )
+        half_1 = np.random.rand(2, dim).astype(np.float32)
+        half_2 = np.random.rand(2, dim).astype(np.float32)
+
+        mock_session = cast(MagicMock, embedder.session)
+        # First call (batch=4) OOMs, then two calls (batch=2) succeed
+        mock_session.run.side_effect = [oom, [half_1], [half_2]]
+
+        result = embedder.encode(['a', 'b', 'c', 'd'])
+
+        assert result.shape == (4, dim)
+        assert np.array_equal(result[:2], half_1)
+        assert np.array_equal(result[2:], half_2)
