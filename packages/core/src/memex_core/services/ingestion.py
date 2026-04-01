@@ -31,6 +31,7 @@ from memex_core.processing.titles import (
     resolve_document_title,
 )
 from memex_core.processing.web import WebContentProcessor
+from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
@@ -177,6 +178,8 @@ def _is_retryable_db_error(exc: Exception) -> bool:
 class IngestionService:
     """Note ingestion from URLs, files, and raw NoteInput objects."""
 
+    _audit_service: AuditService | None = None
+
     def __init__(
         self,
         metastore: AsyncBaseMetaStoreEngine,
@@ -254,7 +257,15 @@ publish_date: {extracted.metadata.get('date')}
         if event_date is None:
             event_date = await extract_document_date(extracted.content, self.lm)
 
-        return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
+        result = await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
+        audit_event(
+            self._audit_service,
+            'note.ingested_url',
+            'note',
+            str(result.get('note_id', '')),
+            url=url,
+        )
+        return result
 
     async def ingest_from_file(
         self,
@@ -352,7 +363,15 @@ ingested_at: {now}
         if event_date is None:
             event_date = datetime.now(timezone.utc)
 
-        return await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
+        result = await self.ingest(note, vault_id=target_vault_id, event_date=event_date)
+        audit_event(
+            self._audit_service,
+            'note.ingested_file',
+            'note',
+            str(result.get('note_id', '')),
+            file_path=str(path),
+        )
+        return result
 
     async def ingest(
         self,
@@ -463,6 +482,13 @@ ingested_at: {now}
             if overlapping:
                 result['overlapping_notes'] = overlapping
 
+            audit_event(
+                self._audit_service,
+                'note.ingested',
+                'note',
+                str(note_uuid),
+                title=resolved_title,
+            )
             return result
 
     async def ingest_batch_internal(

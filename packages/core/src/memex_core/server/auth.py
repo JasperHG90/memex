@@ -18,6 +18,7 @@ from memex_common.config import (
     Policy,
     POLICY_PERMISSIONS,
 )
+from memex_core.context import set_actor
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
@@ -174,16 +175,9 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         read_vault_ids=key_config.read_vault_ids,
     )
 
-    if audit:
-        from memex_core.context import get_session_id
-
-        actor = f'{key_name} ({key_prefix})' if key_name else key_prefix
-        audit.log(
-            action='auth.success',
-            actor=actor,
-            session_id=get_session_id(),
-            details={'path': request.url.path, 'method': request.method},
-        )
+    # Set actor in context for downstream middleware and route handlers
+    actor = f'{key_name} ({key_prefix})' if key_name else key_prefix
+    set_actor(actor)
 
     return await call_next(request)
 

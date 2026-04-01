@@ -1,5 +1,7 @@
 """Non-blocking audit logging service."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import datetime
@@ -104,3 +106,25 @@ class AuditService:
         async with self._metastore.session() as session:
             result = await session.exec(stmt)  # type: ignore[call-overload]
             return list(result.all())
+
+
+def audit_event(
+    audit_service: AuditService | None,
+    action: str,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    **details: Any,
+) -> None:
+    """Emit a domain audit event. No-op when audit_service is None."""
+    if audit_service is None:
+        return
+    from memex_core.context import get_actor, get_session_id
+
+    audit_service.log(
+        action=action,
+        actor=get_actor(),
+        resource_type=resource_type,
+        resource_id=resource_id,
+        session_id=get_session_id(),
+        details=details or None,
+    )

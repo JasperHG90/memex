@@ -53,7 +53,7 @@ from memex_core.server.auth import (
     get_auth_context,
     require_write,
 )
-from memex_core.server.common import _handle_error, _request_details, get_api, get_audit_context
+from memex_core.server.common import _handle_error, get_api
 
 logger = logging.getLogger('memex.core.server.ingestion')
 
@@ -107,7 +107,6 @@ async def ingest_note(
     request: Annotated[NoteCreateDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
-    http_request: Request,
     background: Annotated[bool, Query()] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> IngestResponse | JSONResponse:
@@ -164,21 +163,6 @@ async def ingest_note(
         )
         result = await api.ingest(note, vault_id=request.vault_id)
         _schedule_contradiction(background_tasks, result)
-        audit, actor, session_id = get_audit_context(http_request)
-        if audit:
-            audit.log(
-                action='note.create',
-                actor=actor,
-                resource_type='note',
-                resource_id=str(result.get('note_id', '')),
-                session_id=session_id,
-                details=_request_details(
-                    http_request,
-                    title=request.name,
-                    vault_id=str(request.vault_id) if request.vault_id else None,
-                ),
-                background_tasks=background_tasks,
-            )
         return IngestResponse(**result)
 
     except HTTPException:
