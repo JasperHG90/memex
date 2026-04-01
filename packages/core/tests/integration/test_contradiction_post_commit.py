@@ -74,7 +74,6 @@ def ingestion_service_with_contradiction(metastore, filestore, memex_config, fak
 @pytest.mark.asyncio
 async def test_contradiction_loads_units_after_commit(
     ingestion_service_with_contradiction,
-    session,
 ):
     """After ingest() returns (transaction committed), the contradiction_task
     coroutine must be able to load the newly created memory units from a
@@ -97,10 +96,6 @@ async def test_contradiction_loads_units_after_commit(
     note.source_uri = None
     note.content_fingerprint = 'fp_' + str(note_id)
     note.template = None
-
-    # Idempotency check: no existing note
-    session.exec = AsyncMock(return_value=MagicMock(first=MagicMock(return_value=None)))
-    session.get = AsyncMock(return_value=MagicMock(name='global'))
 
     with (
         patch(
