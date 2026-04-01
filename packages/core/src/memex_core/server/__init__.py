@@ -114,6 +114,17 @@ async def lifespan(app: FastAPI):
     )
     ner_model = await get_ner_model()
 
+    # Warm ONNX model arenas with a dummy inference call so GPU memory is
+    # pre-allocated before real requests arrive. Prevents cold-start OOM on
+    # memory-constrained devices (e.g. Jetson with shared CPU/GPU memory).
+    logger.info('Warming ONNX model arenas...')
+    _warmup_text = ['memex warmup probe']
+    await asyncio.to_thread(embedding_model.encode, _warmup_text)
+    if reranking_model is not None:
+        await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
+    await asyncio.to_thread(ner_model.predict, _warmup_text[0])
+    logger.info('ONNX model arenas warmed.')
+
     # Validate embedding dimensions match the database schema.
     # Only probe litellm backends (the fine-tuned ONNX model is known-good).
     from memex_common.config import LitellmEmbeddingBackend
