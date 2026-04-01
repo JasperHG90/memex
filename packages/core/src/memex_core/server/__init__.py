@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 import structlog
@@ -16,7 +17,7 @@ from memex_common.config import (
     LocalYamlConfigSettingsSource,
     MemexConfig,
 )
-from memex_core.context import set_session_id
+from memex_core.context import get_actor, get_session_id, set_session_id
 
 # Optional: bridge session IDs to OpenTelemetry spans (for Arize Phoenix sessions)
 try:
@@ -207,6 +208,40 @@ app.add_middleware(
 )
 
 Instrumentator().instrument(app).expose(app, endpoint='/api/v1/metrics')
+
+_AUDIT_SKIP_PATHS: frozenset[str] = frozenset(
+    {
+        '/api/v1/health',
+        '/api/v1/ready',
+        '/api/v1/metrics',
+        '/docs',
+        '/openapi.json',
+    }
+)
+
+
+@app.middleware('http')
+async def audit_access_log(request: Request, call_next):
+    """Layer 1: HTTP access log for every non-skipped request."""
+    t0 = time.monotonic()
+    response = await call_next(request)
+    if request.url.path not in _AUDIT_SKIP_PATHS:
+        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+        audit: AuditService | None = getattr(request.app.state, 'audit_service', None)
+        if audit:
+            audit.log(
+                action='http.request',
+                actor=get_actor(),
+                session_id=get_session_id(),
+                details={
+                    'method': request.method,
+                    'path': request.url.path,
+                    'status': response.status_code,
+                    'latency_ms': latency_ms,
+                },
+            )
+    return response
+
 
 # Auth middleware: reads app.state.auth_config (set by setup_auth in lifespan).
 # Registered at module level so it's part of the middleware stack before app starts.

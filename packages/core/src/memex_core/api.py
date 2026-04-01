@@ -482,6 +482,22 @@ class MemexAPI:
             vaults=self._vaults,
         )
 
+        # Wire audit service into all domain services that emit events
+        from memex_core.services.audit import AuditService as _AuditService
+
+        self._audit_svc = _AuditService(metastore)
+        for svc in (
+            self._notes,
+            self._kv,
+            self._vaults,
+            self._entities,
+            self._reflection,
+            self._ingestion,
+            self._search,
+            self._lineage,
+        ):
+            svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
+
     @property
     def embedder(self) -> EmbeddingsModel:
         """Alias for embedding_model for backward compatibility."""
