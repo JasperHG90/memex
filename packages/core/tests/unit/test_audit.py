@@ -304,7 +304,8 @@ class TestAuthAuditIntegration:
 
         return app
 
-    def test_auth_success_logs_audit(self, audit_service):
+    def test_auth_success_no_longer_logged(self, audit_service):
+        """auth.success is no longer emitted — replaced by Layer 1 access log."""
         config = AuthConfig(
             enabled=True,
             keys=[ApiKeyConfig(key=SecretStr('test-key-123'), policy=Policy.ADMIN)],
@@ -314,10 +315,9 @@ class TestAuthAuditIntegration:
 
         with patch.object(audit_service, 'log') as mock_log:
             client.get('/api/v1/notes', headers={'X-API-Key': 'test-key-123'})
-            mock_log.assert_called_once()
-            call_kwargs = mock_log.call_args.kwargs
-            assert call_kwargs['action'] == 'auth.success'
-            assert 'test-key' in call_kwargs['actor']
+            # auth.success should NOT be emitted (replaced by access log middleware)
+            for call in mock_log.call_args_list:
+                assert call.kwargs.get('action') != 'auth.success'
 
     def test_auth_failure_logs_audit(self, audit_service):
         config = AuthConfig(

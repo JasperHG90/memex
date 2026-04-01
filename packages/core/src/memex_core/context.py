@@ -8,6 +8,9 @@ import structlog
 # ContextVar to store the current session ID
 _session_id_ctx: ContextVar[str] = ContextVar('session_id', default='global')
 
+# ContextVar to store the current actor (who is performing the operation)
+_actor_ctx: ContextVar[str] = ContextVar('actor', default='anonymous')
+
 # Optional: bridge session IDs to OpenTelemetry spans (for Arize Phoenix sessions)
 try:
     from openinference.instrumentation import using_session as _oi_using_session
@@ -27,10 +30,24 @@ def set_session_id(session_id: str | None = None) -> str:
     return sid
 
 
+def get_actor() -> str:
+    """Get the current actor from context."""
+    return _actor_ctx.get()
+
+
+def set_actor(actor: str) -> str:
+    """Set the actor for the current context."""
+    _actor_ctx.set(actor)
+    return actor
+
+
 @asynccontextmanager
-async def background_session(label: str = 'background') -> AsyncIterator[str]:
+async def background_session(
+    label: str = 'background', actor: str = 'system'
+) -> AsyncIterator[str]:
     """Establish session context for background (non-HTTP) tasks."""
     sid = set_session_id(f'{label}-{uuid4().hex[:12]}')
+    set_actor(actor)
     structlog.contextvars.bind_contextvars(session_id=sid)
     if _oi_using_session:
         with _oi_using_session(sid):
