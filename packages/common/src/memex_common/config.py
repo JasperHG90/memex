@@ -998,7 +998,7 @@ class ServerConfig(BaseModel):
     )
 
     embedding_batch_size: int = Field(
-        default=32,
+        default=0,
         description='Max texts per ONNX embedding inference call. '
         '0 = all at once (no batching). Lower values reduce peak GPU memory.',
     )
