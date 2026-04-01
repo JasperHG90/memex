@@ -333,6 +333,16 @@ class LocalAsyncFileStore(BaseAsyncFileStore[LocalFileStoreConfig]):
         """
         return AsyncFileSystemWrapper(LocalFileSystem())
 
+    async def check_connection(self) -> bool:
+        """Verify the backend is reachable, creating the root directory if needed."""
+        root = self.config.root
+        if root:
+            try:
+                os.makedirs(root, exist_ok=True)
+            except OSError:
+                return False
+        return await super().check_connection()
+
     def join_path(self, key: str) -> str:
         """Join root path with a key using OS-native path resolution.
 
