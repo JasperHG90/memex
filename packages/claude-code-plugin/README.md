@@ -2,6 +2,14 @@
 
 Long-term memory for Claude Code, powered by [Memex](https://github.com/JasperHG90/memex).
 
+## Why Memex?
+
+Most AI memory systems are platform-controlled black boxes — the provider decides what to remember, how to store it, and what to surface. You have no visibility and no portability.
+
+Memex takes the opposite approach. You own everything: the Postgres database, the markdown files, the vault structure. You decide what gets stored, how it's indexed, and when it's retrieved. You can inspect, export, or migrate your data at any time.
+
+As AI assistants become more capable and long-lived, the question of who controls the memory becomes increasingly important. Memex keeps that control with you.
+
 ## Installation
 
 ### From the Memex marketplace
