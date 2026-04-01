@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import dspy
+from sqlalchemy.exc import DBAPIError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import memex_core.config
@@ -63,6 +64,13 @@ from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.processing.titles import resolve_title_from_page_index
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
+
+
+def _is_statement_timeout(exc: DBAPIError) -> bool:
+    """Check if a DBAPIError wraps an asyncpg QueryCanceledError (statement timeout)."""
+    orig = getattr(exc, 'orig', None)
+    return type(orig).__name__ == 'QueryCanceledError' if orig else False
+
 
 _USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
 
@@ -1407,7 +1415,12 @@ class ExtractionEngine:
         facts: list[ProcessedFact],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> set[UUID]:
-        """Resolve entities and link them to units. Returns set of touched entity IDs."""
+        """Resolve entities and link them to units. Returns set of touched entity IDs.
+
+        On transient DB errors (e.g. statement timeout from lock contention),
+        logs a warning and returns an empty set. The reflection queue's stale
+        recovery will pick up unprocessed entities on the next cycle.
+        """
         import re
 
         entities_data = []
@@ -1457,16 +1470,35 @@ class ExtractionEngine:
             return set()
 
         default_date = facts[0].mentioned_at if facts else datetime.now(timezone.utc)
-        resolved_ids = await self.entity_resolver.resolve_entities_batch(
-            session, entities_data, default_date
-        )
+
+        try:
+            resolved_ids = await self.entity_resolver.resolve_entities_batch(
+                session, entities_data, default_date
+            )
+        except DBAPIError as e:
+            if _is_statement_timeout(e):
+                logger.warning(
+                    'Entity resolution timed out (likely lock contention). '
+                    'Skipping — entities will be resolved on next ingestion or reflection cycle.'
+                )
+                return set()
+            raise
 
         unit_entity_pairs = []
         for data, entity_id in zip(entities_data, resolved_ids):
             unit_entity_pairs.append((data['unit_id'], entity_id))
 
-        await self.entity_resolver.link_units_to_entities_batch(
-            session, unit_entity_pairs, vault_id=vault_id
-        )
+        try:
+            await self.entity_resolver.link_units_to_entities_batch(
+                session, unit_entity_pairs, vault_id=vault_id
+            )
+        except DBAPIError as e:
+            if _is_statement_timeout(e):
+                logger.warning(
+                    'Entity linking timed out (likely lock contention). '
+                    'Skipping — links will be created on next ingestion cycle.'
+                )
+                return set()
+            raise
 
         return {UUID(rid) for rid in resolved_ids}
