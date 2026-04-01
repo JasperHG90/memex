@@ -78,6 +78,61 @@ class TestAuditEvent:
 
 
 # ---------------------------------------------------------------------------
+# MemexAPI audit service wiring tests (AC-012)
+# ---------------------------------------------------------------------------
+
+
+class TestMemexAPIAuditWiring:
+    """AC-012: MemexAPI.__init__ wires _audit_service onto all domain services."""
+
+    def test_all_services_have_audit_service(
+        self,
+        api,
+    ) -> None:
+        """Each domain service has _audit_service set to an AuditService instance."""
+        from memex_core.services.audit import AuditService
+
+        service_attrs = [
+            '_notes',
+            '_kv',
+            '_vaults',
+            '_entities',
+            '_reflection',
+            '_ingestion',
+            '_search',
+            '_lineage',
+        ]
+        for attr in service_attrs:
+            svc = getattr(api, attr)
+            assert hasattr(svc, '_audit_service'), f'{attr} missing _audit_service attribute'
+            assert isinstance(svc._audit_service, AuditService), (
+                f'{attr}._audit_service is {type(svc._audit_service)}, expected AuditService'
+            )
+
+    def test_audit_svc_stored_on_api(self, api) -> None:
+        """MemexAPI stores the AuditService as _audit_svc."""
+        from memex_core.services.audit import AuditService
+
+        assert hasattr(api, '_audit_svc')
+        assert isinstance(api._audit_svc, AuditService)
+
+    def test_all_services_share_same_audit_instance(self, api) -> None:
+        """All services share the same AuditService instance."""
+        service_attrs = [
+            '_notes',
+            '_kv',
+            '_vaults',
+            '_entities',
+            '_reflection',
+            '_ingestion',
+            '_search',
+            '_lineage',
+        ]
+        instances = [getattr(api, attr)._audit_service for attr in service_attrs]
+        assert all(inst is instances[0] for inst in instances)
+
+
+# ---------------------------------------------------------------------------
 # HTTP access log middleware tests (AC-006, AC-007, AC-008, AC-009)
 # ---------------------------------------------------------------------------
 
