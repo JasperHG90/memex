@@ -468,10 +468,6 @@ ingested_at: {now}
                 reflect_after=False,
                 agent_name='user',
             )
-            contradiction_task = result.pop('contradiction_task', None)
-            if contradiction_task is not None:
-                await contradiction_task
-
             result['note_id'] = note_uuid
             result['status'] = 'success'
 
@@ -681,9 +677,9 @@ ingested_at: {now}
                     reflect_after=False,
                     agent_name='user',
                 )
-                contradiction_task = retain_result.pop('contradiction_task', None)
-                if contradiction_task is not None:
-                    await contradiction_task
+                _coro = retain_result.pop('contradiction_task', None)
+                if _coro is not None:
+                    _coro.close()
 
                 processed_ids.append(str(note_uuid))
 
