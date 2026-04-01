@@ -194,7 +194,7 @@ class ReflectionEngine:
                     db_lock=db_lock,
                     vault_id=req.vault_id,
                 )
-            except (ValueError, RuntimeError, OSError, KeyError, SQLAlchemyError) as e:
+            except Exception as e:
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
                 return None
 
