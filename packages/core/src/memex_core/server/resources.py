@@ -1,5 +1,6 @@
 """Resource and lineage endpoints."""
 
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -11,6 +12,8 @@ from memex_common.schemas import LineageDirection, LineageResponse
 from memex_core.api import MemexAPI
 from memex_core.server.auth import require_read
 from memex_core.server.common import _handle_error, get_api
+
+logger = logging.getLogger('memex.core.server.resources')
 
 router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_read)])
 
@@ -74,6 +77,7 @@ async def get_lineage(
     limit: Annotated[int, Query(ge=1, le=500)] = 10,
 ):
     """Get the lineage of any entity type."""
+    logger.debug('Lineage request: entity_type=%s id=%s direction=%s', entity_type, id, direction)
     if entity_type not in VALID_LINEAGE_TYPES:
         raise HTTPException(
             status_code=400,

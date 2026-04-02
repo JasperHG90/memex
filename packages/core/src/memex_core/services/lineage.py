@@ -168,6 +168,7 @@ class LineageService(BaseService):
             )
             obj = (await session.exec(stmt)).first()
             if not obj:
+                logger.warning('Lineage downstream: note %s not found', entity_id)
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
             entity_data = _truncate_text_fields(obj.model_dump(include=_NOTE_INCLUDE))
 
@@ -206,6 +207,7 @@ class LineageService(BaseService):
             )
             obj = (await session.exec(stmt)).first()
             if not obj:
+                logger.warning('Lineage downstream: memory_unit %s not found', entity_id)
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
             entity_data = _truncate_text_fields(obj.model_dump(include=_UNIT_INCLUDE))
 
@@ -472,6 +474,7 @@ class LineageService(BaseService):
             )
             obj = (await session.exec(stmt)).first()
             if not obj:
+                logger.warning('Lineage lookup failed: memory_unit %s not found', entity_id)
                 raise ResourceNotFoundError(f'Memory Unit {entity_id} not found.')
 
             entity_data = _truncate_text_fields(obj.model_dump(include=_UNIT_INCLUDE))
@@ -499,6 +502,7 @@ class LineageService(BaseService):
             )
             obj = (await session.exec(stmt)).first()
             if not obj:
+                logger.warning('Lineage lookup failed: note %s not found', entity_id)
                 raise ResourceNotFoundError(f'Note {entity_id} not found.')
 
             entity_data = _truncate_text_fields(obj.model_dump(include=_NOTE_INCLUDE))
