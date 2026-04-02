@@ -224,7 +224,12 @@ async def _truncate_db(postgres_url: str) -> AsyncGenerator[None, None]:
     async with session_maker() as session:
         conn = await session.connection()
         for table in reversed(SQLModel.metadata.sorted_tables):
-            await conn.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
+            # Skip tables registered in SQLModel metadata but not created in the
+            # test DB (e.g. synced_files from the removed obsidian-sync package).
+            try:
+                await conn.execute(text(f'TRUNCATE TABLE {table.name} CASCADE'))
+            except Exception:
+                await conn.rollback()
         await session.commit()
 
         vault = Vault(id=GLOBAL_VAULT_ID, name=GLOBAL_VAULT_NAME, description='Test Global Vault')
