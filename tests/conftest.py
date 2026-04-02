@@ -21,6 +21,26 @@ postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
 @pytest.fixture(autouse=True)
+def _disable_background_scheduler():
+    """Prevent the reflection scheduler from running during E2E tests.
+
+    The scheduler continuously polls Postgres for advisory locks.  Tests that
+    enter the lifespan via ``runner.invoke()`` + ``nest_asyncio`` can deadlock
+    because the synchronous CLI runner blocks the event loop while the
+    scheduler's async DB calls are pending.
+    """
+    from unittest.mock import patch as _patch
+
+    async def _noop(*_a, **_kw):
+        import asyncio
+
+        await asyncio.Event().wait()
+
+    with _patch('memex_core.server.run_scheduler_with_leader_election', side_effect=_noop):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def reset_circuit_breaker():
     """Reset the global LLM circuit breaker before each test to prevent cross-test contamination."""
     from memex_core.llm import get_circuit_breaker
