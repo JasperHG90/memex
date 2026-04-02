@@ -33,6 +33,8 @@ def setup_rate_limiting(app: FastAPI, config: RateLimitConfig) -> None:
     """
     if not config.enabled:
         logger.info('Rate limiting is disabled.')
+        if hasattr(app.state, 'limiter'):
+            del app.state.limiter
         return
 
     limiter = Limiter(

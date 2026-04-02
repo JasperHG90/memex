@@ -100,6 +100,8 @@ def setup_auth(app: FastAPI, auth_config: AuthConfig) -> None:
     """
     if not auth_config.enabled:
         logger.info('API key authentication is disabled.')
+        if hasattr(app.state, 'auth_config'):
+            del app.state.auth_config
         return
 
     if not auth_config.keys:

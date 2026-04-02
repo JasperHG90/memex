@@ -22,18 +22,20 @@ KEY_PREFIX = VALID_KEY[:8] + '...'
 KEY_DESCRIPTION = 'test-agent'
 
 
-def _set_env_vars(container: PostgresContainer) -> None:
+def _build_env_vars(container: PostgresContainer) -> dict[str, str]:
     dsn = container.get_connection_url()
     parsed = urlparse(dsn)
-    os.environ['MEMEX_LOAD_LOCAL_CONFIG'] = 'false'
-    os.environ['MEMEX_LOAD_GLOBAL_CONFIG'] = 'false'
-    os.environ['MEMEX_SERVER__META_STORE__TYPE'] = 'postgres'
-    os.environ['MEMEX_SERVER__META_STORE__INSTANCE__HOST'] = parsed.hostname or 'localhost'
-    os.environ['MEMEX_SERVER__META_STORE__INSTANCE__PORT'] = str(parsed.port or 5432)
-    os.environ['MEMEX_SERVER__META_STORE__INSTANCE__DATABASE'] = parsed.path.lstrip('/')
-    os.environ['MEMEX_SERVER__META_STORE__INSTANCE__USER'] = parsed.username or 'test'
-    os.environ['MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD'] = parsed.password or 'test'
-    os.environ['MEMEX_SERVER__MEMORY__REFLECTION__BACKGROUND_REFLECTION_ENABLED'] = 'false'
+    return {
+        'MEMEX_LOAD_LOCAL_CONFIG': 'false',
+        'MEMEX_LOAD_GLOBAL_CONFIG': 'false',
+        'MEMEX_SERVER__META_STORE__TYPE': 'postgres',
+        'MEMEX_SERVER__META_STORE__INSTANCE__HOST': parsed.hostname or 'localhost',
+        'MEMEX_SERVER__META_STORE__INSTANCE__PORT': str(parsed.port or 5432),
+        'MEMEX_SERVER__META_STORE__INSTANCE__DATABASE': parsed.path.lstrip('/'),
+        'MEMEX_SERVER__META_STORE__INSTANCE__USER': parsed.username or 'test',
+        'MEMEX_SERVER__META_STORE__INSTANCE__PASSWORD': parsed.password or 'test',
+        'MEMEX_SERVER__MEMORY__REFLECTION__BACKGROUND_REFLECTION_ENABLED': 'false',
+    }
 
 
 @pytest.fixture()
@@ -41,8 +43,8 @@ def audit_client(
     postgres_container: PostgresContainer,
 ) -> Generator[TestClient, None, None]:
     """TestClient with auth enabled and real middleware stack."""
-    _set_env_vars(postgres_container)
-    env_overlay = {
+    env = {
+        **_build_env_vars(postgres_container),
         'MEMEX_SERVER__AUTH__ENABLED': 'true',
         'MEMEX_SERVER__AUTH__KEYS': json.dumps(
             [{'key': VALID_KEY, 'policy': 'admin', 'description': KEY_DESCRIPTION}]
@@ -50,7 +52,7 @@ def audit_client(
     }
     from memex_core.server import app
 
-    with patch.dict(os.environ, env_overlay):
+    with patch.dict(os.environ, env):
         with TestClient(app) as c:
             yield c
 

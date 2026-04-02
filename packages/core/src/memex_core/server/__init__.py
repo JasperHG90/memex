@@ -194,6 +194,12 @@ async def lifespan(app: FastAPI):
 
     await metastore.close()
 
+    # Clean up app.state to prevent cross-test pollution when the app
+    # singleton is reused across multiple TestClient sessions.
+    for attr in ('api', 'audit_service', 'auth_config', 'limiter'):
+        if hasattr(app.state, attr):
+            delattr(app.state, attr)
+
 
 app = FastAPI(title='Memex Core API', lifespan=lifespan)
 
