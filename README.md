@@ -34,65 +34,6 @@
 2. [uv](https://docs.astral.sh/uv/) >= 0.10.0
 3. PostgreSQL with pgvector
 
-## 🚀 Quick Start
-
-> [!NOTE]
-> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
-
-### 1. Set up postgres
-
-Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
-
-### 2. Install
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (>= 0.10.0).
-
-```bash
-uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
-```
-
-It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
-
-### 3. Initialize
-Sets up your local storage and configuration.
-
-```bash
-memex config init
-```
-
-### 4. Start the Server
-Memex requires a running API server for all operations.
-
-```bash
-# In a separate terminal
-memex server start -d
-```
-
-### 5. Ingest
-Feed it knowledge.
-
-```bash
-# Isolate notes with vaults
-memex vault create notes --description "Notes about things"
-
-# Inline note
-memex note add -v notes "Memex provides long-term memory that evolves."
-
-# Capture a webpage
-# Goes to the 'global' vault
-memex note add --url "https://docs.python.org/3/tutorial/"
-
-# Point it to local files
-# Supports: MD, PDF, docx, xlsx, outlook, pptx
-memex note add --file /path/to/file.md --vault notes
-```
-
-### 6. Search
-Ask questions.
-
-```bash
-memex memory search "How does Python handle memory management?"
-```
-
 ## Features
 
 <table>
@@ -264,6 +205,65 @@ Swap the built-in ONNX embedding and reranking models for any LiteLLM-supported 
 Distributed tracing via Arize Phoenix. Session IDs propagate across spans, DSPy LLM calls get operation names, and background reflection jobs are tracked across tracing sessions.
 
 </details>
+
+## 🚀 Quick Start
+
+> [!NOTE]
+> Features like AI-generated answers, fact extraction, and reflection require an LLM API key. By default, Memex uses Gemini and needs `GEMINI_API_KEY` set in your environment. See [Configure Memex](./docs/how-to/configure-memex.md) for other model providers.
+
+### 1. Set up postgres
+
+Download e.g. the [Postgres app](https://postgresapp.com/), or use docker for just the database: `docker compose up -d postgres` (see `docker-compose.yaml` in this repository).
+
+### 2. Install
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (>= 0.10.0).
+
+```bash
+uv tool install --refresh "memex-cli[server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
+```
+
+It's easiest to just alias the `uv tool` command: `alias memex="uv tool run --from memex-cli memex"`
+
+### 3. Initialize
+Sets up your local storage and configuration.
+
+```bash
+memex config init
+```
+
+### 4. Start the Server
+Memex requires a running API server for all operations.
+
+```bash
+# In a separate terminal
+memex server start -d
+```
+
+### 5. Ingest
+Feed it knowledge.
+
+```bash
+# Isolate notes with vaults
+memex vault create notes --description "Notes about things"
+
+# Inline note
+memex note add -v notes "Memex provides long-term memory that evolves."
+
+# Capture a webpage
+# Goes to the 'global' vault
+memex note add --url "https://docs.python.org/3/tutorial/"
+
+# Point it to local files
+# Supports: MD, PDF, docx, xlsx, outlook, pptx
+memex note add --file /path/to/file.md --vault notes
+```
+
+### 6. Search
+Ask questions.
+
+```bash
+memex memory search "How does Python handle memory management?"
+```
 
 ## See it in action
 
