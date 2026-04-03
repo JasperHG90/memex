@@ -2,6 +2,8 @@
 
 from uuid import UUID
 
+ALL_VAULTS_WILDCARD = '*'  # Pass "*" as a vault identifier to match all vaults.
+
 
 def resolve_vault_list(
     vault_id: UUID | None = None,

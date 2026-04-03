@@ -238,44 +238,11 @@ async def test_mcp_read_note_not_found(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_mcp_list_tools(mcp_client):
-    """Verify that all expected tools are registered."""
+    """Verify that progressive disclosure meta-tools are listed by default."""
     tools = await mcp_client.list_tools()
-    names = [t.name for t in tools]
-    # Core tools should exist
-    assert 'memex_add_note' in names
-    assert 'memex_memory_search' in names
-    assert 'memex_note_search' in names
-    assert 'memex_list_vaults' in names
-    assert 'memex_recent_notes' in names
-    assert 'memex_list_entities' in names
-    assert 'memex_get_entities' in names
-    assert 'memex_get_entity_mentions' in names
-    assert 'memex_get_entity_cooccurrences' in names
-    assert 'memex_get_memory_units' in names
-    assert 'memex_get_lineage' in names
-    assert 'memex_get_nodes' in names
-    assert 'memex_get_notes_metadata' in names
-    assert 'memex_get_page_indices' in names
-    assert 'memex_get_resources' in names
-    # Removed tools should not exist
-    assert 'memex_get_page_index' not in names
-    assert 'memex_get_resource' not in names
-    assert 'memex_reflect' not in names
-    assert 'memex_batch_ingest' not in names
-    assert 'memex_get_batch_status' not in names
-    assert 'memex_migrate_note' not in names
-    assert 'memex_ingest_url' not in names
-    assert 'memex_get_node' not in names
-    assert 'memex_get_note_metadata' not in names
-    assert 'memex_get_memory_unit' not in names
-    assert 'memex_get_entity' not in names
-    assert 'memex_list_notes' in names
-
-    # Tool descriptions should guide agents to use leaf node IDs
-    tool_by_name = {t.name: t for t in tools}
-    page_desc = tool_by_name['memex_get_page_indices'].description
-    assert 'leaf' in page_desc.lower(), 'page_indices description should mention leaf nodes'
-    assert 'memex_get_nodes' in page_desc, 'page_indices description should reference get_nodes'
+    names = {t.name for t in tools}
+    # Progressive disclosure is on by default — only meta-tools are listed
+    assert names == {'memex_tags', 'memex_search', 'memex_get_schema'}
 
 
 @pytest.mark.asyncio

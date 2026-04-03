@@ -1,6 +1,5 @@
 "FastMCP Memex server implementation"
 
-import logging
 import os
 import pathlib as plb
 import asyncio
@@ -11,6 +10,7 @@ import mimetypes
 
 import aiofiles
 import httpx
+import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.utilities.types import Image, Audio, File
@@ -124,6 +124,12 @@ def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
 
 async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
     """Resolve and validate that all vault identifiers exist."""
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
+    if ALL_VAULTS_WILDCARD in vault_ids:
+        vaults = await api.list_vaults()
+        return [v.id for v in vaults]
+
     resolved: list[UUID] = []
     for vid in vault_ids:
         try:
@@ -136,6 +142,13 @@ async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
 
 async def _resolve_vault_id(api: Any, vault_id: str) -> 'UUID':
     """Resolve and validate a single vault identifier exists."""
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
+    if vault_id == ALL_VAULTS_WILDCARD:
+        raise ToolError(
+            '"*" (all vaults) is not supported for this parameter. '
+            'Use a specific vault name or UUID.'
+        )
     try:
         return await api.resolve_vault_identifier(vault_id)
     except Exception:
@@ -152,12 +165,18 @@ def _default_read_vaults(ctx: Context) -> list[str]:
 
 configure_logging(level=os.environ.get('MEMEX_MCP_LOG_LEVEL', 'WARNING'))
 
-persona_logger = logging.getLogger('persona')
-persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
+logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     'memex_mcp',
     instructions="""Memex is a personal knowledge management system.
+
+TOOL DISCOVERY — This server supports progressive disclosure.
+If you see memex_tags/memex_search/memex_get_schema instead of the full tool list:
+  1. `memex_tags()` — see tool categories and counts
+  2. `memex_search(query, tags=[...])` — find tools by keyword, optionally filtered by tag
+  3. `memex_get_schema(tools=[...])` — get parameter details before calling a tool
+You can also call any tool directly by name if you already know it.
 
 VAULT DEFAULTS — vault parameters are optional. Writes default to the active vault;
 reads default to search vaults (from .memex.yaml or global config). Only pass
@@ -216,10 +235,19 @@ RULES:
 
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=False, transform_errors=True))
 
+if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() not in ('0', 'false', 'no'):
+    from memex_mcp.transforms import DiscoveryMode
+
+    mcp.add_transform(DiscoveryMode())
+
 
 @mcp.tool(
     name='memex_list_assets',
-    description='List file assets for a note. REQUIRED when has_assets is true. Feed paths to memex_get_resources.',
+    description=(
+        'List file attachments (assets) for a note — images, audio, PDFs, documents. '
+        'REQUIRED when has_assets is true. Feed paths to memex_get_resources to retrieve files.'
+    ),
+    tags={'assets'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -266,13 +294,14 @@ async def memex_list_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'List assets failed: {e}', exc_info=True)
+        logger.error(f'List assets failed: {e}', exc_info=True)
         raise ToolError(f'List assets failed: {e}')
 
 
 @mcp.tool(
     name='memex_read_note',
     description='Read full note. ONLY when total_tokens < 500 (use force=True to override). Otherwise: memex_get_page_indices + memex_get_nodes.',
+    tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -328,17 +357,19 @@ async def memex_read_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Read note failed: {e}', exc_info=True)
+        logger.error(f'Read note failed: {e}', exc_info=True)
         raise ToolError(f'Read note failed: {e}')
 
 
 @mcp.tool(
     name='memex_set_note_status',
     description=(
-        'Set note lifecycle status: active, superseded, appended. '
+        'Set note lifecycle status: active, superseded, appended, archived. '
+        'Use to supersede an outdated note, mark it as appended, or archive it. '
         'When superseded, all memory units are marked stale. '
         'Optionally link to the replacing/parent note.'
     ),
+    tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
 )
 async def memex_set_note_status(
@@ -377,13 +408,14 @@ async def memex_set_note_status(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Set note status failed: {e}', exc_info=True)
+        logger.error(f'Set note status failed: {e}', exc_info=True)
         raise ToolError(f'Set note status failed: {e}')
 
 
 @mcp.tool(
     name='memex_rename_note',
     description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+    tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
 )
 async def memex_rename_note(
@@ -405,7 +437,7 @@ async def memex_rename_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Rename note failed: {e}', exc_info=True)
+        logger.error(f'Rename note failed: {e}', exc_info=True)
         raise ToolError(f'Rename note failed: {e}')
 
 
@@ -440,9 +472,11 @@ async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | 
 @mcp.tool(
     name='memex_get_resources',
     description=(
-        'Retrieve 1+ file resources (images, audio, documents) by path. '
+        'Retrieve 1+ file attachments (images, audio, documents) by path. '
+        'View or download assets attached to notes. '
         'Get paths from memex_list_assets. Accepts a single path or a list.'
     ),
+    tags={'assets'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -472,13 +506,14 @@ async def memex_get_resources(
         return results
 
     except Exception as e:
-        logging.error(f'Get resource failed: {e}', exc_info=True)
+        logger.error(f'Get resource failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve resources: {e}')
 
 
 @mcp.tool(
     name='memex_add_assets',
     description='Add one or more file assets to an existing note. Provide local file paths.',
+    tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=60.0,
 )
@@ -511,7 +546,7 @@ async def memex_add_assets(
         for file_path in file_paths:
             path = plb.Path(file_path)
             if not path.exists() or not path.is_file():
-                logging.warning(f'Asset file not found or not a file: {file_path}')
+                logger.warning(f'Asset file not found or not a file: {file_path}')
                 continue
             async with aiofiles.open(path, 'rb') as f:
                 files_content[path.name] = await f.read()
@@ -544,13 +579,14 @@ async def memex_add_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Add assets failed: {e}', exc_info=True)
+        logger.error(f'Add assets failed: {e}', exc_info=True)
         raise ToolError(f'Add assets failed: {e}')
 
 
 @mcp.tool(
     name='memex_delete_assets',
     description='Delete one or more asset files from an existing note. Get paths from memex_list_assets.',
+    tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=30.0,
 )
@@ -596,7 +632,7 @@ async def memex_delete_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Delete assets failed: {e}', exc_info=True)
+        logger.error(f'Delete assets failed: {e}', exc_info=True)
         raise ToolError(f'Delete assets failed: {e}')
 
 
@@ -608,7 +644,7 @@ def _get_template_registry(ctx: Context) -> TemplateRegistry:
     if '://' not in root:
         dirs.append(('global', plb.Path(root) / 'templates'))
     else:
-        logging.debug('Skipping global templates: remote filestore (%s)', root)
+        logger.debug('Skipping global templates: remote filestore (%s)', root)
     dirs.append(('local', plb.Path('.memex/templates')))
     return TemplateRegistry(dirs)
 
@@ -616,6 +652,7 @@ def _get_template_registry(ctx: Context) -> TemplateRegistry:
 @mcp.tool(
     name='memex_get_template',
     description='Get a markdown template for memex_add_note. Use memex_list_templates to see available templates.',
+    tags={'write'},
     annotations={'readOnlyHint': True},
 )
 def memex_get_template(
@@ -634,13 +671,14 @@ def memex_get_template(
     except KeyError as e:
         raise ToolError(str(e))
     except Exception as e:
-        logging.error(f'Get template failed: {e}', exc_info=True)
+        logger.error(f'Get template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve template: {e}')
 
 
 @mcp.tool(
     name='memex_list_templates',
     description='List all available note templates with metadata (slug, name, description, source).',
+    tags={'write'},
     annotations={'readOnlyHint': True},
 )
 def memex_list_templates(ctx: Context) -> str:
@@ -654,7 +692,7 @@ def memex_list_templates(ctx: Context) -> str:
             lines.append(f'- **{t.slug}** {source_tag} — {t.display_name}: {t.description}')
         return '\n'.join(lines) if lines else 'No templates available.'
     except Exception as e:
-        logging.error(f'List templates failed: {e}', exc_info=True)
+        logger.error(f'List templates failed: {e}', exc_info=True)
         raise ToolError(f'Failed to list templates: {e}')
 
 
@@ -664,6 +702,7 @@ def memex_list_templates(ctx: Context) -> str:
         'Register a new note template. Creates a template from inline content. '
         'To delete a template, use the CLI: memex note template delete <slug>'
     ),
+    tags={'write'},
     annotations={'readOnlyHint': False},
 )
 def memex_register_template(
@@ -685,7 +724,7 @@ def memex_register_template(
         )
         return f'Registered template: {info.slug} ({info.display_name}) in {info.source} scope.'
     except Exception as e:
-        logging.error(f'Register template failed: {e}', exc_info=True)
+        logger.error(f'Register template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to register template: {e}')
 
 
@@ -695,6 +734,7 @@ def memex_register_template(
         '[DEPRECATED — use memex_list_vaults instead, which includes is_active flag] '
         'Get the active vault name and ID. Shows both server default and client-resolved vault.'
     ),
+    tags={'browse'},
     annotations={'readOnlyHint': True},
 )
 async def memex_active_vault(ctx: Context) -> str:
@@ -725,13 +765,14 @@ async def memex_active_vault(ctx: Context) -> str:
         return '\n'.join(lines)
 
     except Exception as e:
-        logging.error(f'Get active vault failed: {e}', exc_info=True)
+        logger.error(f'Get active vault failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve active vault: {e}')
 
 
 @mcp.tool(
     name='memex_add_note',
-    description='Add a note to Memex. Confirm vault with user first, or pass vault_id.',
+    description='Add a new note or document to Memex. Ingest content into a vault. Confirm vault with user first, or pass vault_id.',
+    tags={'write'},
     annotations={'readOnlyHint': False},
     timeout=120.0,
 )
@@ -824,7 +865,7 @@ async def memex_add_note(
                     async with aiofiles.open(path, 'rb') as f:
                         files_content[path.name] = base64.b64encode(await f.read())
                 else:
-                    logging.warning(f'Supporting file not found or not a file: {file_path}')
+                    logger.warning(f'Supporting file not found or not a file: {file_path}')
 
         # Construct frontmatter
         fm_data: dict[str, Any] = {
@@ -892,7 +933,7 @@ async def memex_add_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Add note failed: {e}', exc_info=True)
+        logger.error(f'Add note failed: {e}', exc_info=True)
         raise ToolError(f'Add note failed: {e}')
 
 
@@ -958,9 +999,10 @@ def _build_memory_unit_model(
     name='memex_memory_search',
     description=(
         'Search extracted facts, events, and observations across all notes (memory search). '
-        'Best for broad/exploratory queries. '
+        'Find information about any topic. Best for broad/exploratory queries. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
     ),
+    tags={'search'},
     annotations={'readOnlyHint': True},
     timeout=60.0,
 )
@@ -971,7 +1013,7 @@ async def memex_memory_search(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit to use config defaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
         ),
     ] = None,
     limit: Annotated[
@@ -1061,17 +1103,19 @@ async def memex_memory_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Search failed: {e}', exc_info=True)
+        logger.error(f'Search failed: {e}', exc_info=True)
         raise ToolError(f'Search failed: {e}')
 
 
 @mcp.tool(
     name='memex_note_search',
     description=(
-        'Search source notes by hybrid retrieval (note search). '
-        'Returns ranked notes with 5W summaries. Best for targeted document lookup. '
+        'Search and find source notes by hybrid retrieval (note search). '
+        'Find notes about any topic. Returns ranked notes with 5W summaries. '
+        'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
+    tags={'search'},
     annotations={'readOnlyHint': True},
     timeout=60.0,
 )
@@ -1082,7 +1126,7 @@ async def memex_note_search(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit to use config defaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
         ),
     ] = None,
     limit: Annotated[
@@ -1171,7 +1215,7 @@ async def memex_note_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Note search failed: {e}', exc_info=True)
+        logger.error(f'Note search failed: {e}', exc_info=True)
         raise ToolError(f'Note search failed: {e}')
 
 
@@ -1270,13 +1314,15 @@ async def _get_single_page_index(
 @mcp.tool(
     name='memex_get_page_indices',
     description=(
-        'Get note TOC: section titles, summaries, node IDs, and subtree_tokens for 1+ notes. '
+        'Get note table of contents (TOC): section titles, summaries, node IDs, '
+        'and subtree_tokens for 1+ notes. '
         'Each node includes subtree_tokens (own + all descendant tokens) for read budgeting. '
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
         'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content.'
     ),
+    tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1331,7 +1377,7 @@ async def memex_get_page_indices(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get page index failed: {e}', exc_info=True)
+        logger.error(f'Get page index failed: {e}', exc_info=True)
         raise ToolError(f'Get page index failed: {e}')
 
 
@@ -1342,6 +1388,7 @@ async def memex_get_page_indices(
         'Use after memex_memory_search to filter results before reading. '
         'SKIP after memex_note_search (metadata already inline).'
     ),
+    tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1403,7 +1450,7 @@ async def memex_get_notes_metadata(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get notes metadata failed: {e}', exc_info=True)
+        logger.error(f'Get notes metadata failed: {e}', exc_info=True)
         raise ToolError(f'Get notes metadata failed: {e}')
 
 
@@ -1413,6 +1460,7 @@ async def memex_get_notes_metadata(
         'Read note sections by node IDs. Get node IDs from memex_get_page_indices. '
         'Accepts 1 or more IDs — use for single and batch reads.'
     ),
+    tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1470,13 +1518,14 @@ async def memex_get_nodes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get nodes failed: {e}', exc_info=True)
+        logger.error(f'Get nodes failed: {e}', exc_info=True)
         raise ToolError(f'Get nodes failed: {e}')
 
 
 @mcp.tool(
     name='memex_list_vaults',
     description='List all vaults with note counts. Each vault includes is_active and note_count.',
+    tags={'browse'},
     annotations={'readOnlyHint': True},
 )
 async def memex_list_vaults(ctx: Context) -> list[McpVault]:
@@ -1516,7 +1565,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
             ]
 
     except Exception as e:
-        logging.error(f'List vaults failed: {e}', exc_info=True)
+        logger.error(f'List vaults failed: {e}', exc_info=True)
         raise ToolError(f'List vaults failed: {e}')
 
 
@@ -1526,6 +1575,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
         'List notes with optional date filters. '
         "Use after/before for temporal queries like 'documents from 2026'."
     ),
+    tags={'browse'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1606,7 +1656,7 @@ async def memex_list_notes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'List notes failed: {e}', exc_info=True)
+        logger.error(f'List notes failed: {e}', exc_info=True)
         raise ToolError(f'List notes failed: {e}')
 
 
@@ -1614,6 +1664,7 @@ async def memex_list_notes(
     name='memex_recent_notes',
     description='Browse recent notes. Defaults to all vaults. '
     'Filter by vault names/UUIDs and optional date range.',
+    tags={'browse'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1626,7 +1677,7 @@ async def memex_recent_notes(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit for all vaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit for all vaults.',
         ),
     ] = None,
     after: Annotated[
@@ -1698,7 +1749,7 @@ async def memex_recent_notes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Recent notes failed: {e}', exc_info=True)
+        logger.error(f'Recent notes failed: {e}', exc_info=True)
         raise ToolError(f'Recent notes failed: {e}')
 
 
@@ -1714,6 +1765,7 @@ async def memex_recent_notes(
         '3. memex_get_entity_mentions → find facts/observations mentioning entity\n'
         '4. memex_get_entity_cooccurrences → find related entities'
     ),
+    tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1775,7 +1827,7 @@ async def memex_list_entities(
         ]
 
     except Exception as e:
-        logging.error(f'List entities failed: {e}', exc_info=True)
+        logger.error(f'List entities failed: {e}', exc_info=True)
         raise ToolError(f'List entities failed: {e}')
 
 
@@ -1785,6 +1837,7 @@ async def memex_list_entities(
         'Get entity details (name, type, mention count) for 1+ entities by UUID. '
         'Use after memex_list_entities to get full details.'
     ),
+    tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1848,13 +1901,14 @@ async def memex_get_entities(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entities failed: {e}', exc_info=True)
+        logger.error(f'Get entities failed: {e}', exc_info=True)
         raise ToolError(f'Get entities failed: {e}')
 
 
 @mcp.tool(
     name='memex_get_entity_mentions',
     description='Get facts, observations, and events that mention an entity. Each mention links to its source note, revealing cross-note connections.',
+    tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1902,13 +1956,14 @@ async def memex_get_entity_mentions(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entity mentions failed: {e}', exc_info=True)
+        logger.error(f'Get entity mentions failed: {e}', exc_info=True)
         raise ToolError(f'Get entity mentions failed: {e}')
 
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
     description='Find entities that frequently appear alongside a given entity — the fastest way to map relationships and discover connected concepts. Returns entity names, types, and co-occurrence counts inline (no follow-up calls needed). Use this for "what relates to X?" questions.',
+    tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -1957,7 +2012,7 @@ async def memex_get_entity_cooccurrences(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
+        logger.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
         raise ToolError(f'Get entity cooccurrences failed: {e}')
 
 
@@ -1976,10 +2031,12 @@ def _lineage_to_mcp(resp: LineageResponse) -> McpLineageNode:
 @mcp.tool(
     name='memex_get_lineage',
     description=(
-        'Trace the provenance chain of an entity. '
+        'Trace provenance and connections between documents and facts. '
+        'How does a fact connect to a document? '
         'Upstream: mental_model → observation → memory_unit → note. '
         'Downstream: note → memory_unit → observation → mental_model.'
     ),
+    tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -2040,13 +2097,14 @@ async def memex_get_lineage(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get lineage failed: {e}', exc_info=True)
+        logger.error(f'Get lineage failed: {e}', exc_info=True)
         raise ToolError(f'Get lineage failed: {e}')
 
 
 @mcp.tool(
     name='memex_get_memory_units',
     description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+    tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -2079,7 +2137,7 @@ async def memex_get_memory_units(
         return output
 
     except Exception as e:
-        logging.error(f'Get memory units failed: {e}', exc_info=True)
+        logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
 
 
@@ -2089,6 +2147,7 @@ async def memex_get_memory_units(
         'Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. '
         'Use when you know (part of) the title. For content search, use memex_note_search.'
     ),
+    tags={'search'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
@@ -2100,7 +2159,7 @@ async def memex_find_note(
         BeforeValidator(_coerce_list),
         Field(
             default=None,
-            description="Vault UUIDs or names to search in, e.g. ['rituals']. None = all vaults.",
+            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. Use "*" for all vaults. None = all vaults.',
         ),
     ] = None,
     limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
@@ -2134,7 +2193,7 @@ async def memex_find_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Find note failed: {e}', exc_info=True)
+        logger.error(f'Find note failed: {e}', exc_info=True)
         raise ToolError(f'Find note failed: {e}')
 
 
@@ -2150,6 +2209,7 @@ async def memex_find_note(
         'Examples: "global:tool:python:pkg_mgr", "user:work:employer", '
         '"project:github.com/user/repo:vault", "app:claude-code:theme".'
     ),
+    tags={'storage'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
 )
@@ -2186,13 +2246,14 @@ async def memex_kv_write(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV write failed: {e}', exc_info=True)
+        logger.error(f'KV write failed: {e}', exc_info=True)
         raise ToolError(f'KV write failed: {e}')
 
 
 @mcp.tool(
     name='memex_kv_get',
     description='Get a fact by exact key from the KV store.',
+    tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
@@ -2218,7 +2279,7 @@ async def memex_kv_get(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV get failed: {e}', exc_info=True)
+        logger.error(f'KV get failed: {e}', exc_info=True)
         raise ToolError(f'KV get failed: {e}')
 
 
@@ -2229,6 +2290,7 @@ async def memex_kv_get(
         'Returns the closest matching entries. '
         'Optionally filter by namespace prefixes (global, user, project).'
     ),
+    tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
@@ -2262,16 +2324,17 @@ async def memex_kv_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV search failed: {e}', exc_info=True)
+        logger.error(f'KV search failed: {e}', exc_info=True)
         raise ToolError(f'KV search failed: {e}')
 
 
 @mcp.tool(
     name='memex_kv_list',
     description=(
-        'List all facts in the KV store. '
-        'Optionally filter by namespace prefixes (global, user, project).'
+        'List all entries in the key-value store. Shows stored facts, preferences, '
+        'and settings. Optionally filter by namespace prefixes (global, user, project).'
     ),
+    tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
@@ -2310,7 +2373,7 @@ async def memex_kv_list(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV list failed: {e}', exc_info=True)
+        logger.error(f'KV list failed: {e}', exc_info=True)
         raise ToolError(f'KV list failed: {e}')
 
 

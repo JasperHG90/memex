@@ -312,7 +312,10 @@ async def list_notes(
     ctx: typer.Context,
     limit: int = 50,
     offset: int = 0,
-    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    vault: Annotated[
+        list[str],
+        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+    ] = [],
     after: Annotated[
         str | None,
         typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
@@ -338,6 +341,8 @@ async def list_notes(
     """
     from datetime import datetime
 
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
     config: MemexConfig = ctx.obj
 
     parsed_after = None
@@ -355,7 +360,10 @@ async def list_notes(
             console.print(f'[red]Invalid --before date: {before}[/red]')
             raise typer.Exit(code=1)
 
-    vault_ids = vault if vault else config.read_vaults
+    if vault and ALL_VAULTS_WILDCARD in vault:
+        vault_ids = None
+    else:
+        vault_ids = vault if vault else config.read_vaults
 
     async with get_api_context(config) as api:
         try:
@@ -406,7 +414,10 @@ async def list_notes(
 async def list_recent(
     ctx: typer.Context,
     limit: int = 10,
-    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    vault: Annotated[
+        list[str],
+        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+    ] = [],
     after: Annotated[
         str | None,
         typer.Option('--after', help='Only notes on/after this date (ISO 8601).'),
@@ -428,6 +439,8 @@ async def list_recent(
     """
     from datetime import datetime
 
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
     config: MemexConfig = ctx.obj
 
     parsed_after = None
@@ -445,7 +458,10 @@ async def list_recent(
             console.print(f'[red]Invalid --before date: {before}[/red]')
             raise typer.Exit(code=1)
 
-    vault_ids = vault if vault else None
+    if vault and ALL_VAULTS_WILDCARD in vault:
+        vault_ids = None
+    else:
+        vault_ids = vault if vault else None
 
     async with get_api_context(config) as api:
         try:
@@ -509,18 +525,24 @@ async def find_note(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Approximate title to search for.')],
     limit: int = 5,
-    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    vault: Annotated[
+        list[str],
+        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+    ] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
     Find notes by approximate title match (trigram similarity).
     """
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
     config: MemexConfig = ctx.obj
+    vault_ids = None if (vault and ALL_VAULTS_WILDCARD in vault) else (vault or None)
     async with get_api_context(config) as api:
         try:
             results = await api.find_notes_by_title(
                 query=query,
-                vault_ids=vault or None,
+                vault_ids=vault_ids,
                 limit=limit,
             )
         except Exception as e:
@@ -937,7 +959,10 @@ async def search_notes(
     limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of notes.')] = 5,
     expand: Annotated[bool, typer.Option('--expand', help='Enable query expansion.')] = False,
     blend: Annotated[bool, typer.Option('--blend', help='Enable position-aware blending.')] = False,
-    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to search.')] = [],
+    vault: Annotated[
+        list[str],
+        typer.Option('--vault', '-v', help='Vault(s) to search. Use "*" for all vaults.'),
+    ] = [],
     reason: Annotated[
         bool,
         typer.Option('--reason', help='Run skeleton-tree identification; shows relevant sections.'),
@@ -1146,7 +1171,10 @@ async def export_notes(
         str,
         typer.Option('--output', '-o', help='Output directory path.'),
     ] = './memex-export',
-    vault: Annotated[list[str], typer.Option('--vault', '-v', help='Vault(s) to filter by.')] = [],
+    vault: Annotated[
+        list[str],
+        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+    ] = [],
 ):
     """
     Export notes (and their assets) to a local directory.
@@ -1154,9 +1182,16 @@ async def export_notes(
     Each note is written to a subdirectory containing note.md, metadata.json,
     and an assets/ folder (if the note has attached files).
     """
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
     config: MemexConfig = ctx.obj
     output_dir = pathlib.Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if vault and ALL_VAULTS_WILDCARD in vault:
+        export_vault_ids = None
+    else:
+        export_vault_ids = vault if vault else config.read_vaults
 
     async with get_api_context(config) as api:
         if note_id:
@@ -1168,9 +1203,7 @@ async def export_notes(
             notes = [note]
         else:
             try:
-                notes = await api.list_notes(
-                    limit=10000, vault_ids=vault if vault else config.read_vaults
-                )
+                notes = await api.list_notes(limit=10000, vault_ids=export_vault_ids)
             except Exception as e:
                 handle_api_error(e)
 

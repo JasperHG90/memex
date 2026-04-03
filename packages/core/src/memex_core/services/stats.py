@@ -97,14 +97,18 @@ class StatsService(BaseService):
             entity_result = await session.exec(entity_stmt)
             entity_ids = set(entity_result.all())
 
+            # Prune stale evidence from mental models before deleting the unit.
+            if entity_ids:
+                from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
+                await prune_stale_evidence(session, entity_ids, [unit_id], vault_id)
+
             await session.delete(unit)
             await session.commit()
 
-        # Fire-and-forget entity cleanup in background.
+        # Fire-and-forget entity cleanup in background (orphan removal + recount).
         if entity_ids:
-            task = asyncio.create_task(
-                _cleanup_entities_after_delete(self.metastore, entity_ids, [unit_id], vault_id)
-            )
+            task = asyncio.create_task(_cleanup_entities_after_delete(self.metastore, entity_ids))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 

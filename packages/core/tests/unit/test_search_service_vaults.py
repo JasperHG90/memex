@@ -111,3 +111,67 @@ async def test_search_default_reader_vault_only(vault_service):
 
     request = memory.recall.call_args[0][1]
     assert len(request.vault_ids) == 1, 'Should only have the default reader vault'
+
+
+@pytest.mark.asyncio
+async def test_search_wildcard_resolves_to_all_vaults(vault_service):
+    """When vault_ids=['*'], search should resolve to all vaults."""
+    v1, v2 = uuid4(), uuid4()
+    vault_service.list_vaults = AsyncMock(return_value=[MagicMock(id=v1), MagicMock(id=v2)])
+
+    config = MagicMock()
+    config.server.default_reader_vault = 'default'
+
+    memory = AsyncMock()
+    memory.recall = AsyncMock(return_value=([], None))
+
+    svc = SearchService(
+        metastore=MagicMock(),
+        config=config,
+        lm=MagicMock(),
+        memory=memory,
+        doc_search=MagicMock(),
+        vaults=vault_service,
+    )
+    mock_session = AsyncMock()
+    svc.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    svc.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    await svc.search(query='test', vault_ids=['*'])
+
+    request = memory.recall.call_args[0][1]
+    assert set(request.vault_ids) == {v1, v2}, 'Should contain all vaults'
+
+
+@pytest.mark.asyncio
+async def test_search_notes_wildcard_resolves_to_all_vaults(vault_service):
+    """When vault_ids=['*'], search_notes should resolve to all vaults."""
+    v1, v2 = uuid4(), uuid4()
+    vault_service.list_vaults = AsyncMock(return_value=[MagicMock(id=v1), MagicMock(id=v2)])
+
+    config = MagicMock()
+    config.server.default_reader_vault = 'default'
+    config.server.document.mmr_lambda = None
+
+    doc_search = AsyncMock()
+    doc_search.search = AsyncMock(return_value=[])
+
+    metastore = MagicMock()
+    mock_session = AsyncMock()
+    metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    svc = SearchService(
+        metastore=metastore,
+        config=config,
+        lm=MagicMock(),
+        memory=MagicMock(),
+        doc_search=doc_search,
+        vaults=vault_service,
+    )
+
+    await svc.search_notes(query='test', vault_ids=['*'])
+
+    doc_search.search.assert_called_once()
+    request = doc_search.search.call_args[0][1]
+    assert set(request.vault_ids) == {v1, v2}, 'Should contain all vaults'

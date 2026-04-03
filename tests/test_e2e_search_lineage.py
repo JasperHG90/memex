@@ -1,10 +1,10 @@
-"""E2E test: ingest a note, search for it, then verify lineage returns 200."""
+"""E2E tests: ingest→search→lineage pipeline and note deletion cleanup."""
 
 import base64
 import json
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -142,3 +142,129 @@ def test_search_results_resolvable_via_lineage(client: TestClient):
     assert resp.status_code == 200
     lineage = resp.json()
     assert len(lineage['derived_from']) > 0, 'Note downstream lineage should contain memory units'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_note_prunes_mental_model_observations(postgres_container):
+    """Deleting a note via the API must prune mental model observations that
+    cited the deleted note's memory units. This is the root cause of the
+    lineage 404 bug: stale observations survive deletion and get returned
+    by the mental_model retrieval strategy as virtual units."""
+    import asyncio
+    from httpx import AsyncClient, ASGITransport
+    from sqlmodel import col, select
+    from memex_core.memory.sql_models import (
+        Entity,
+        MentalModel,
+        MemoryUnit,
+        Note,
+        UnitEntity,
+    )
+    from memex_core.server import app as server_app, lifespan
+    from memex_common.config import GLOBAL_VAULT_ID
+    from memex_common.types import FactTypes
+
+    async with lifespan(server_app):
+        api = server_app.state.api
+
+        vault_id = GLOBAL_VAULT_ID
+        entity_id = uuid4()
+        note_a_id = uuid4()
+        note_b_id = uuid4()
+        unit_a_id = uuid4()
+        unit_b_id = uuid4()
+        obs_shared_id = uuid4()
+        obs_only_a_id = uuid4()
+        now = datetime.now(timezone.utc)
+
+        # Setup: create test data
+        async with api.metastore.session() as session:
+            session.add(Entity(id=entity_id, canonical_name='TestEnt', vault_id=vault_id))
+            session.add(Note(id=note_a_id, vault_id=vault_id, original_text='A'))
+            session.add(Note(id=note_b_id, vault_id=vault_id, original_text='B'))
+            await session.flush()
+            session.add(
+                MemoryUnit(
+                    id=unit_a_id,
+                    vault_id=vault_id,
+                    note_id=note_a_id,
+                    text='Fact A',
+                    fact_type=FactTypes.WORLD,
+                    embedding=[0.0] * 384,
+                    event_date=now,
+                )
+            )
+            session.add(
+                MemoryUnit(
+                    id=unit_b_id,
+                    vault_id=vault_id,
+                    note_id=note_b_id,
+                    text='Fact B',
+                    fact_type=FactTypes.WORLD,
+                    embedding=[0.0] * 384,
+                    event_date=now,
+                )
+            )
+            await session.flush()
+            session.add(UnitEntity(unit_id=unit_a_id, entity_id=entity_id))
+            session.add(UnitEntity(unit_id=unit_b_id, entity_id=entity_id))
+            session.add(
+                MentalModel(
+                    entity_id=entity_id,
+                    vault_id=vault_id,
+                    name='TestEnt',
+                    observations=[
+                        {
+                            'id': str(obs_shared_id),
+                            'title': 'Shared',
+                            'content': 'Both',
+                            'trend': 'new',
+                            'evidence': [
+                                {'memory_id': str(unit_a_id), 'quote': 'A', 'relevance': 1.0},
+                                {'memory_id': str(unit_b_id), 'quote': 'B', 'relevance': 1.0},
+                            ],
+                        },
+                        {
+                            'id': str(obs_only_a_id),
+                            'title': 'OnlyA',
+                            'content': 'A only',
+                            'trend': 'new',
+                            'evidence': [
+                                {'memory_id': str(unit_a_id), 'quote': 'A', 'relevance': 1.0},
+                            ],
+                        },
+                    ],
+                    version=1,
+                )
+            )
+            await session.commit()
+
+        # Act: delete note A via HTTP
+        async with AsyncClient(
+            transport=ASGITransport(app=server_app), base_url='http://test'
+        ) as http:
+            resp = await http.delete(f'/api/v1/notes/{note_a_id}')
+            assert resp.status_code == 200, f'Delete failed: {resp.text}'
+
+        # Allow background tasks to settle
+        await asyncio.sleep(0.5)
+
+        # Assert: mental model observations are pruned
+        async with api.metastore.session() as session:
+            mm = (
+                await session.exec(
+                    select(MentalModel).where(col(MentalModel.entity_id) == entity_id)
+                )
+            ).first()
+
+        assert mm is not None, 'Mental model should survive (note B still exists)'
+
+        obs_ids = {o['id'] for o in mm.observations}
+        assert str(obs_only_a_id) not in obs_ids, (
+            'Observation with evidence only from deleted note should be removed'
+        )
+        assert str(obs_shared_id) in obs_ids, 'Observation with mixed evidence should survive'
+        shared = next(o for o in mm.observations if o['id'] == str(obs_shared_id))
+        assert len(shared['evidence']) == 1
+        assert shared['evidence'][0]['memory_id'] == str(unit_b_id)
