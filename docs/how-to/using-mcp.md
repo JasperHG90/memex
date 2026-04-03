@@ -8,28 +8,31 @@ This guide shows you how to connect Memex to AI assistants via the Model Context
 * A running Memex server (`memex server start`)
 * An MCP-compatible AI client
 
+## Progressive Disclosure
+
+By default, the MCP server uses **progressive disclosure** — `tools/list` returns 3 discovery meta-tools instead of all 31 tool schemas. This reduces context window usage from ~5-8K tokens to ~100 tokens on connect.
+
+The three discovery tools:
+
+1. **`memex_tags`** — browse 7 tool categories with counts
+2. **`memex_search(query, tags=[...])`** — find tools by keyword, optionally filtered by tag
+3. **`memex_get_schema(tools=[...])`** — get parameter details for specific tools
+
+Real tools remain directly callable by name — they are hidden from `tools/list` but available via `tools/call`. To disable progressive disclosure and expose all 31 tools directly, set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=false` in the MCP server environment.
+
 ## Available MCP Tools
 
-The Memex MCP server exposes these tools to connected AI clients:
+The Memex MCP server exposes 31 tools organized into 7 categories:
 
-| Tool | Purpose |
-| :--- | :--- |
-| `memex_memory_search` | Search memory units (facts, events, observations) via TEMPR |
-| `memex_note_search` | Search source notes via hybrid retrieval (semantic + BM25 + graph) |
-| `memex_add_note` | Save new knowledge to Memex |
-| `memex_set_note_status` | Set note lifecycle status (active, superseded, appended) |
-| `memex_rename_note` | Rename a note (updates title in metadata and page index) |
-| `memex_read_note` | Read full note content (fallback — prefer `memex_get_page_indices` + `memex_get_nodes`) |
-| `memex_get_page_indices` | Get the table of contents for 1+ notes |
-| `memex_get_nodes` | Retrieve note sections by node IDs (batch) |
-| `memex_get_notes_metadata` | Quick metadata check for 1+ notes (title, tags, dates) — ~50 tokens each |
-| `memex_list_assets` / `memex_get_resources` | Retrieve attached files (images, PDFs) |
-| `memex_get_template` | Get markdown templates for structured notes |
-| `memex_list_vaults` / `memex_active_vault` | Vault management |
-| `memex_recent_notes` | Browse recent notes (not for discovery) |
-| `memex_list_entities` / `memex_get_entities` | Browse the entity graph |
-| `memex_get_entity_mentions` / `memex_get_entity_cooccurrences` | Entity relationships |
-| `memex_get_memory_units` | Batch lookup of memory units with contradiction context |
+| Tag | Tools | Purpose |
+| :--- | :--- | :--- |
+| `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note` | Search facts/notes, fuzzy title lookup |
+| `read` | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | Read note content via TOC + sections |
+| `write` | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes and templates |
+| `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault` | List notes, vaults, recent activity |
+| `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | Manage file attachments (images, PDFs) |
+| `entities` | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | Knowledge graph exploration |
+| `storage` | `memex_kv_write`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | KV store, memory units, lineage |
 
 ## Instructions
 
@@ -171,7 +174,7 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 
 - **Search before answering**: Use `memex_memory_search` to ground responses in stored knowledge.
 - **Use templates for consistency**: Call `memex_get_template` before saving structured notes (ADRs, tech briefs).
-- **Check the active vault**: Call `memex_active_vault` before writing to confirm the target vault.
+- **Check the active vault**: Call `memex_list_vaults` before writing to confirm the target vault (`memex_active_vault` is deprecated).
 - **Prefer page index over full reads**: Use `memex_get_page_indices` then `memex_get_nodes` instead of `memex_read_note` for large notes.
 
 ## See Also

@@ -2,6 +2,16 @@
 
 The Memex MCP server exposes 31 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
+## Progressive Disclosure (Default)
+
+By default, `tools/list` returns 3 discovery meta-tools instead of all 31 tool schemas:
+
+- **`memex_tags`** — browse 7 tool categories (`search`, `read`, `write`, `browse`, `assets`, `entities`, `storage`)
+- **`memex_search(query, tags=[...])`** — find tools by keyword (BM25), optionally filtered by tag
+- **`memex_get_schema(tools=[...])`** — get parameter details for specific tools
+
+Real tools remain directly callable by name via `tools/call`. Set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=false` to disable and expose all 31 tools on `tools/list`.
+
 ## Running the MCP Server
 
 ```bash
