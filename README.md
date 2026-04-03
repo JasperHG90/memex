@@ -113,6 +113,30 @@
 <sub>Distributed tracing with Arize Phoenix — session IDs on spans, operation names on DSPy LLM calls, background reflection jobs tracked across tracing sessions.</sub></p>
 </td>
 </tr>
+<tr>
+<td valign="top">
+<p>📎 <strong>Asset Management</strong><br>
+<sub>Attach images, PDFs, audio, and documents to notes. List, retrieve, add, and delete assets per note. Served as native MCP content types (Image, Audio, File).</sub></p>
+</td>
+<td valign="top">
+<p>🔑 <strong>KV Store</strong><br>
+<sub>Namespaced key-value store for structured facts, preferences, and conventions. Semantic search via embeddings, exact key lookup, namespace filtering (global, user, project, app).</sub></p>
+</td>
+<td valign="top">
+<p>🧩 <strong>Claude Code Plugin</strong><br>
+<sub>One-step persistent memory across all projects. /remember and /recall skills, session lifecycle hooks, behavioral instructions, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<p>📋 <strong>Audit Logging</strong><br>
+<sub>Append-only audit trail tracking actions, actors, resource IDs, and session IDs. Non-blocking background dispatch backed by the metastore.</sub></p>
+</td>
+<td valign="top">
+</td>
+<td valign="top">
+</td>
+</tr>
 </table>
 
 <details>
@@ -209,6 +233,22 @@ Swap the built-in ONNX embedding and reranking models for any LiteLLM-supported 
 ### OpenTelemetry observability
 
 Distributed tracing via Arize Phoenix. Session IDs propagate across spans, DSPy LLM calls get operation names, and background reflection jobs are tracked across tracing sessions.
+
+### Asset management
+
+Attach images, PDFs, audio files, and other documents to any note. Assets are stored alongside notes in the file store (local, S3, or GCS) and served through the MCP server as native content types — Image, Audio, and File. The CLI and MCP tools support listing, retrieving, adding, and deleting assets per note.
+
+### KV store
+
+A lightweight namespaced key-value store for structured facts, preferences, and conventions. Keys use namespace prefixes (`global:`, `user:`, `project:<id>:`, `app:<id>:`) for scoping. Each entry gets an embedding for semantic search, enabling fuzzy lookup alongside exact key access. Ideal for storing agent preferences, project conventions, and user facts that persist across sessions.
+
+### Claude Code plugin
+
+Give Claude Code persistent memory across all projects with a single plugin install. The plugin bundles the Memex MCP server, `/remember` and `/recall` slash commands, session lifecycle hooks (start, compaction, commit), and behavioral instructions that teach the agent when and how to capture knowledge. No per-project configuration needed.
+
+### Audit logging
+
+An append-only audit trail backed by the metastore. Every significant action (ingestion, deletion, status change, reflection) is logged with the actor, resource ID, action type, and session ID. Dispatch is non-blocking — audit writes happen in the background without impacting request latency.
 
 </details>
 
