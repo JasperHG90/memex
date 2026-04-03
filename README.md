@@ -28,6 +28,12 @@
 > [!IMPORTANT]
 > **Memex is in beta.** It is functional and actively used, but expect rough edges, breaking changes between versions, and incomplete documentation. Feedback and bug reports are welcome — run `memex report-bug` or open an issue.
 
+---
+
+**[Requirements](#requirements)** · **[Features](#features)** · **[Quick Start](#-quick-start)** · **[Claude Code Plugin](#claude-code-plugin)** · **[See it in action](#see-it-in-action)** · **[Documentation](#-documentation)** · **[Releasing](#releasing)** · **[FAQ](./FAQ.md)**
+
+---
+
 ## Requirements
 
 1. Python 3.12+ (3.13 tested in CI)
