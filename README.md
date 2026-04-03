@@ -6,7 +6,7 @@
 <h3 align="center">Long-Term Memory for LLMs</h3>
 
 <p align="center">
-  Persistent, evolving knowledge for AI agents. Extracts facts, builds mental models, and retrieves with five-strategy fusion.<br/>
+  The knowledge layer your AI agents are missing.<br/>
   <strong>Ingest anything. Remember everything. Retrieve what matters.</strong>
 </p>
 
