@@ -3108,6 +3108,7 @@ dependencies = [
     { name = "httpx" },
     { name = "memex-common" },
     { name = "pyyaml" },
+    { name = "structlog" },
 ]
 
 [package.dev-dependencies]
@@ -3122,6 +3123,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "memex-common", editable = "packages/common" },
     { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "structlog", specifier = ">=25.0.0" },
 ]
 
 [package.metadata.requires-dev]

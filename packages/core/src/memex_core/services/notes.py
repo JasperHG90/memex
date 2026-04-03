@@ -37,29 +37,27 @@ async def await_background_tasks() -> None:
 async def _cleanup_entities_after_delete(
     metastore: AsyncBaseMetaStoreEngine,
     entity_ids: set[UUID],
-    deleted_unit_ids: list[UUID],
-    vault_id: UUID,
 ) -> None:
     """Background task: clean up orphaned entities and recount mention_count.
 
     Runs outside the delete transaction so that lock contention on entity rows
     (e.g. from concurrent ingestion) cannot cause the delete to fail.
+
+    Evidence pruning is handled inside the delete transaction (not here) to
+    guarantee atomicity — see ``NoteService.delete_note``.
     """
     from sqlalchemy import update
     from sqlmodel import col, func, select
 
     from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
-    from memex_core.services.mental_model_cleanup import prune_stale_evidence
 
     try:
         async with metastore.session() as session:
-            orphaned_entity_ids: set[UUID] = set()
             for eid in entity_ids:
                 remaining = await session.exec(
                     select(UnitEntity.unit_id).where(col(UnitEntity.entity_id) == eid).limit(1)
                 )
                 if remaining.first() is None:
-                    orphaned_entity_ids.add(eid)
                     mm_stmt = select(MentalModel).where(col(MentalModel.entity_id) == eid)
                     mm_result = await session.exec(mm_stmt)
                     for mm in mm_result.all():
@@ -79,10 +77,6 @@ async def _cleanup_entities_after_delete(
                         .where(col(Entity.id) == eid)
                         .values(mention_count=actual_count)
                     )
-
-            shared_entity_ids = entity_ids - orphaned_entity_ids
-            if shared_entity_ids and deleted_unit_ids:
-                await prune_stale_evidence(session, shared_entity_ids, deleted_unit_ids, vault_id)
 
             await session.commit()
     except Exception:
@@ -753,6 +747,16 @@ class NoteService:
                 entity_result = await txn.db_session.exec(entity_stmt)
                 entity_ids_for_cleanup = set(entity_result.all())
 
+            # Prune stale evidence from mental models BEFORE cascade-deleting
+            # the note. This is a data integrity concern — must be atomic with
+            # the delete, not deferred to a fire-and-forget background task.
+            if entity_ids_for_cleanup and unit_ids:
+                from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
+                await prune_stale_evidence(
+                    txn.db_session, entity_ids_for_cleanup, unit_ids, note_vault_id
+                )
+
             # Stage filestore deletes (deferred until commit)
             if doc.assets:
                 for asset_path in doc.assets:
@@ -767,9 +771,7 @@ class NoteService:
         # Transaction committed. Fire-and-forget entity cleanup in background.
         if entity_ids_for_cleanup:
             task = asyncio.create_task(
-                _cleanup_entities_after_delete(
-                    self.metastore, entity_ids_for_cleanup, unit_ids, note_vault_id
-                )
+                _cleanup_entities_after_delete(self.metastore, entity_ids_for_cleanup)
             )
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)

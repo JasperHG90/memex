@@ -13,7 +13,8 @@
 <p align="center">
   <a href="./docs/index.md">Documentation</a> &bull;
   <a href="./docs/tutorials/getting-started.md">Quick Start</a> &bull;
-  <a href="#claude-code-plugin">Claude Code Plugin</a>
+  <a href="#claude-code-plugin">Claude Code Plugin</a> &bull;
+  <a href="./FAQ.md">FAQ</a>
 </p>
 
 <p align="center">
@@ -21,8 +22,11 @@
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v0.0.39a-green?style=flat-square" alt="v0.0.39a" />
-  <img src="https://img.shields.io/badge/tests-2,705%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-2,725%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
+
+> [!IMPORTANT]
+> **Memex is in beta.** It is functional and actively used, but expect rough edges, breaking changes between versions, and incomplete documentation. Feedback and bug reports are welcome — run `memex report-bug` or open an issue.
 
 ## Requirements
 
@@ -158,6 +162,82 @@ Capture web content directly into your knowledge base.
 
 ## Features
 
+<table>
+<tr>
+<td width="33%" valign="top">
+<p>📥 <strong>Ingest Anything</strong><br>
+<sub>Markdown, PDF, Word, PowerPoint, Excel, Outlook emails, web pages, or entire directories. Conversion via MarkItDown &amp; PyMuPDF. Pluggable note templates, asset management, and batch CLI operations.</sub></p>
+</td>
+<td width="33%" valign="top">
+<p>🧠 <strong>Five-Strategy Retrieval (TEMPR)</strong><br>
+<sub>Semantic, Keyword, Graph, Temporal, and Mental Model — five strategies run in parallel, fused via Reciprocal Rank Fusion. MMR diversity filtering prunes near-duplicates.</sub></p>
+</td>
+<td width="33%" valign="top">
+<p>🌳 <strong>Hierarchical Page Index</strong><br>
+<sub>Documents are split into a structured TOC with section summaries, token estimates, and node IDs. Read a 50-page PDF section by section instead of dumping everything into context.</sub></p>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<p>🔄 <strong>Incremental Extraction</strong><br>
+<sub>Update a note and Memex diffs the content, only re-extracting changed blocks. Unchanged facts, entities, and embeddings are preserved — fast for living documents.</sub></p>
+</td>
+<td valign="top">
+<p>⚔️ <strong>Contradiction Detection</strong><br>
+<sub>New facts are triaged for corrections. When a newer note contradicts an older one, confidence is adjusted and supersession links are recorded. Retrieval favors current information.</sub></p>
+</td>
+<td valign="top">
+<p>🪞 <strong>Reflection &amp; Mental Models</strong><br>
+<sub>Background reflection synthesizes observations and builds versioned mental models. Memex evolves from raw facts into structured understanding over time.</sub></p>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<p>🏦 <strong>Vaults</strong><br>
+<sub>Isolate knowledge by project, team, or topic. Policy-based ACL (reader/writer/admin) with vault-scoped API keys. Cross-vault read access for shared knowledge without write permissions.</sub></p>
+</td>
+<td valign="top">
+<p>☁️ <strong>Cloud-Native Storage</strong><br>
+<sub>File store uses fsspec — swap between local disk, S3, and GCS with a config change. PostgreSQL + pgvector for metadata and vector search.</sub></p>
+</td>
+<td valign="top">
+<p>🤖 <strong>AI Agent Integration</strong><br>
+<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 31 MCP tools, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<p>🌐 <strong>REST API &amp; Webhooks</strong><br>
+<sub>FastAPI server with NDJSON streaming, OpenAPI docs, policy-based auth, vault-scoped API keys, rate limiting, and CORS extension support.</sub></p>
+</td>
+<td valign="top">
+<p>🧬 <strong>Lineage &amp; Provenance</strong><br>
+<sub>Trace any mental model back through observations to the original source document. Full bidirectional provenance traversal with depth control.</sub></p>
+</td>
+<td valign="top">
+<p>🦊 <strong>Firefox Extension</strong><br>
+<sub>One-click save of articles, PDFs &amp; web pages. Readability extraction, Markdown conversion, inline image capture. AES-GCM encrypted API key storage.</sub></p>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<p>📂 <strong>Folder Sync</strong><br>
+<sub>Sync Obsidian vaults or any local folder to Memex. Multi-format support, asset upload, frontmatter skip markers, SQLite state tracking, watchdog/polling watch modes, archive-on-delete.</sub></p>
+</td>
+<td valign="top">
+<p>🐦‍🔥 <strong>Pluggable Inference Backends</strong><br>
+<sub>Swap built-in ONNX embedding &amp; reranking models for any LiteLLM provider — OpenAI, Gemini, Cohere, Ollama. Inverse-sigmoid logit transform preserves retrieval scoring.</sub></p>
+</td>
+<td valign="top">
+<p>🔭 <strong>OpenTelemetry Observability</strong><br>
+<sub>Distributed tracing with Arize Phoenix — session IDs on spans, operation names on DSPy LLM calls, background reflection jobs tracked across tracing sessions.</sub></p>
+</td>
+</tr>
+</table>
+
+<details>
+<summary><strong>Feature details</strong></summary>
+
 ### Ingest anything
 
 Feed Memex from any source — plain text, Markdown, PDFs, Word docs, PowerPoint, Excel, Outlook emails, web pages, or entire directories. File conversion is handled automatically via [MarkItDown](https://github.com/microsoft/markitdown) and [PyMuPDF](https://pymupdf.readthedocs.io/). Background and batch ingestion modes let you import large document collections without blocking. Pluggable note templates (built-in, global, and project-local `.toml` files) provide consistent structure for different note types.
@@ -228,13 +308,9 @@ First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compati
 
 A full FastAPI server with NDJSON streaming, OpenAPI docs, policy-based auth (reader/writer/admin) with vault-scoped API keys, rate limiting, and outgoing webhook subscriptions for event-driven integrations (`ingestion.completed`, `reflection.completed`).
 
-### Tight integration with MCP
+### Lineage and provenance
 
-The MCP server allows any agent to retrieve information from and add notes to Memex.
-
-### Note templates
-
-Pluggable note templates provide consistent structure for different note types. Templates are `.toml` files discovered across three layers — built-in, global (`{filestore_root}/templates/`), and project-local (`.memex/templates/`) — with later layers overriding on slug collision. Built-in templates include `technical_brief`, `general_note`, `architectural_decision_record`, `request_for_comments`, and `quick_note`. Manage templates via `memex note template` CLI commands or the `memex_list_templates` / `memex_register_template` MCP tools.
+Trace any mental model back through observations to the original source document. Full bidirectional provenance traversal (`upstream`, `downstream`, `both`) with configurable depth and child limits.
 
 ### Folder sync
 
@@ -245,6 +321,16 @@ memex note sync init ~/notes          # create default config
 memex note sync run ~/notes           # sync changed files
 memex note sync watch ~/notes         # continuous sync
 ```
+
+### Pluggable inference backends
+
+Swap the built-in ONNX embedding and reranking models for any LiteLLM-supported provider (OpenAI, Gemini, Cohere, Ollama, etc.) via config. An inverse-sigmoid logit transform on LiteLLM reranker scores preserves the retrieval engine's scoring semantics.
+
+### OpenTelemetry observability
+
+Distributed tracing via Arize Phoenix. Session IDs propagate across spans, DSPy LLM calls get operation names, and background reflection jobs are tracked across tracing sessions.
+
+</details>
 
 ## 📚 Documentation
 

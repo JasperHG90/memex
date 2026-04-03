@@ -65,9 +65,14 @@ class SearchService:
         Convenience method for search with reranking.
         Scopes to default reader vault if vault_ids is not provided.
         """
+        from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
         vaults = []
 
-        if vault_ids:
+        if vault_ids and ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
+            all_v = await self._vaults.list_vaults()
+            vaults = [v.id for v in all_v]
+        elif vault_ids:
             for v in vault_ids:
                 vaults.append(await self._vaults.resolve_vault_identifier(str(v)))
         else:
@@ -124,8 +129,13 @@ class SearchService:
         tags: list[str] | None = None,
     ) -> list[NoteSearchResult]:
         """Search for documents containing relevant information using raw chunks."""
+        from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
         vaults = []
-        if vault_ids:
+        if vault_ids and ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
+            all_v = await self._vaults.list_vaults()
+            vaults = [v.id for v in all_v]
+        elif vault_ids:
             for v in vault_ids:
                 vaults.append(await self._vaults.resolve_vault_identifier(str(v)))
         else:
