@@ -1,11 +1,9 @@
 "Tests for the DiscoveryMode progressive disclosure transform."
 
-import pytest
 from fastmcp import Client
 from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 
 from memex_mcp.server import mcp
-from memex_mcp.transforms import DiscoveryMode
 
 
 EXPECTED_TAGS = {'search', 'read', 'write', 'browse', 'entities', 'assets', 'storage'}
@@ -49,23 +47,6 @@ BM25_TEST_CASES: list[tuple[str, list[str]]] = [
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def discovery_mcp():
-    """Return a copy of the MCP server with DiscoveryMode applied."""
-    transform = DiscoveryMode()
-    original_transforms = list(mcp._transforms) if hasattr(mcp, '_transforms') else []
-    mcp.add_transform(transform)
-    yield mcp
-    # Restore original transforms
-    if hasattr(mcp, '_transforms'):
-        mcp._transforms = original_transforms
-
-
-# ---------------------------------------------------------------------------
 # Tag coverage
 # ---------------------------------------------------------------------------
 
@@ -87,38 +68,38 @@ async def test_tag_taxonomy():
 
 
 # ---------------------------------------------------------------------------
-# Discovery mode behaviour
+# Discovery mode behaviour (enabled by default)
 # ---------------------------------------------------------------------------
 
 
-async def test_list_tools_returns_only_meta_tools(discovery_mcp):
-    """With DiscoveryMode active, tools/list should return only the 3 meta-tools."""
-    async with Client(discovery_mcp) as client:
+async def test_enabled_by_default():
+    """DiscoveryMode should be active by default — tools/list returns only meta-tools."""
+    async with Client(mcp) as client:
         tools = await client.list_tools()
     names = {t.name for t in tools}
     assert names == {'memex_tags', 'memex_search', 'memex_get_schema'}
 
 
-async def test_tags_returns_categories(discovery_mcp):
+async def test_tags_returns_categories():
     """memex_tags should return all 7 categories."""
-    async with Client(discovery_mcp) as client:
+    async with Client(mcp) as client:
         result = await client.call_tool('memex_tags', {'detail': 'brief'})
     text = result.content[0].text
     for tag in EXPECTED_TAGS:
         assert tag in text, f'Tag {tag!r} not found in memex_tags output'
 
 
-async def test_search_finds_tools(discovery_mcp):
+async def test_search_finds_tools():
     """memex_search should return relevant tools for a keyword query."""
-    async with Client(discovery_mcp) as client:
+    async with Client(mcp) as client:
         result = await client.call_tool('memex_search', {'query': 'search notes'})
     text = result.content[0].text
     assert 'memex_note_search' in text or 'memex_memory_search' in text
 
 
-async def test_search_with_tag_filter(discovery_mcp):
+async def test_search_with_tag_filter():
     """memex_search with tags filter should only return tools from that tag."""
-    async with Client(discovery_mcp) as client:
+    async with Client(mcp) as client:
         result = await client.call_tool('memex_search', {'query': 'list', 'tags': ['assets']})
     text = result.content[0].text
     assert 'memex_list_assets' in text
@@ -127,32 +108,21 @@ async def test_search_with_tag_filter(discovery_mcp):
     assert 'memex_list_vaults' not in text
 
 
-async def test_get_schema_returns_params(discovery_mcp):
+async def test_get_schema_returns_params():
     """memex_get_schema should return parameter details for a named tool."""
-    async with Client(discovery_mcp) as client:
+    async with Client(mcp) as client:
         result = await client.call_tool('memex_get_schema', {'tools': ['memex_memory_search']})
     text = result.content[0].text
     assert 'memex_memory_search' in text
     assert 'query' in text  # main parameter
 
 
-async def test_real_tools_still_callable(discovery_mcp, mock_api, mock_config):
-    """Real tools should remain callable by name even with DiscoveryMode active."""
+async def test_real_tools_still_callable(mock_api, mock_config):
+    """Real tools should remain callable by name via tools/call passthrough."""
     mock_api.list_vaults.return_value = []
-    async with Client(discovery_mcp) as client:
-        result = await client.call_tool('memex_list_vaults', {})
-    # Should not raise — the tool should be dispatched through get_tool passthrough
-    assert result is not None
-
-
-async def test_disabled_by_default():
-    """Without DiscoveryMode, all 31+ tools should be visible."""
     async with Client(mcp) as client:
-        tools = await client.list_tools()
-    names = {t.name for t in tools}
-    assert 'memex_memory_search' in names
-    assert 'memex_list_vaults' in names
-    assert len(names) >= 31
+        result = await client.call_tool('memex_list_vaults', {})
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------

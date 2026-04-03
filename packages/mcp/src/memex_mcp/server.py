@@ -235,7 +235,7 @@ RULES:
 
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=False, transform_errors=True))
 
-if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() in ('1', 'true', 'yes'):
+if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() not in ('0', 'false', 'no'):
     from memex_mcp.transforms import DiscoveryMode
 
     mcp.add_transform(DiscoveryMode())
