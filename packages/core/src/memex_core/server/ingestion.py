@@ -513,7 +513,12 @@ async def get_batch_job_status(job_id: UUID, api: Annotated[MemexAPI, Depends(ge
             )
 
         return BatchJobStatus(
-            job_id=job.id, status=job.status, progress=job.progress, result=result_dto
+            job_id=job.id,
+            status=job.status,
+            progress=job.progress,
+            processed_count=job.processed_count + job.skipped_count + job.failed_count,
+            total_count=job.notes_count,
+            result=result_dto,
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to retrieve batch job status')

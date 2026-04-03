@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
@@ -100,7 +101,14 @@ async def _poll_job(
     while elapsed < max_wait:
         status = await api.get_job_status(job_id)
         if on_progress and status.progress:
-            on_progress('ingesting', 0, 0, status.progress)
+            current = status.processed_count or 0
+            total = status.total_count or 0
+            # Fallback: parse "Processed X/Y notes" if server lacks numeric fields
+            if not current and not total:
+                m = re.search(r'(\d+)/(\d+)', status.progress)
+                if m:
+                    current, total = int(m.group(1)), int(m.group(2))
+            on_progress('ingesting', current, total, status.progress)
         if status.status in ('completed', 'failed'):
             return status
         await asyncio.sleep(poll_interval)
