@@ -77,8 +77,8 @@
 <sub>Isolate knowledge by project, team, or topic. Policy-based ACL (reader/writer/admin) with vault-scoped API keys. Cross-vault read access for shared knowledge without write permissions.</sub></p>
 </td>
 <td valign="top">
-<p>☁️ <strong>Cloud-Native Storage</strong><br>
-<sub>File store uses fsspec — swap between local disk, S3, and GCS with a config change. PostgreSQL + pgvector for metadata and vector search.</sub></p>
+<p>☁️ <strong>Cloud-Native Storage &amp; Assets</strong><br>
+<sub>Notes and file assets (images, PDFs, audio) stored via fsspec — swap between local disk, S3, and GCS with a config change. PostgreSQL + pgvector for metadata and vector search.</sub></p>
 </td>
 <td valign="top">
 <p>🤖 <strong>AI Agent Integration</strong><br>
@@ -115,10 +115,6 @@
 </tr>
 <tr>
 <td valign="top">
-<p>📎 <strong>Asset Management</strong><br>
-<sub>Attach images, PDFs, audio, and documents to notes. List, retrieve, add, and delete assets per note. Served as native MCP content types (Image, Audio, File).</sub></p>
-</td>
-<td valign="top">
 <p>🔑 <strong>KV Store</strong><br>
 <sub>Namespaced key-value store for structured facts, preferences, and conventions. Semantic search via embeddings, exact key lookup, namespace filtering (global, user, project, app).</sub></p>
 </td>
@@ -126,15 +122,9 @@
 <p>🧩 <strong>Claude Code Plugin</strong><br>
 <sub>One-step persistent memory across all projects. /remember and /recall skills, session lifecycle hooks, behavioral instructions, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
 </td>
-</tr>
-<tr>
 <td valign="top">
 <p>📋 <strong>Audit Logging</strong><br>
 <sub>Append-only audit trail tracking actions, actors, resource IDs, and session IDs. Non-blocking background dispatch backed by the metastore.</sub></p>
-</td>
-<td valign="top">
-</td>
-<td valign="top">
 </td>
 </tr>
 </table>
@@ -193,9 +183,9 @@ A background reflection loop periodically reviews entities with new evidence, sy
 
 Isolate knowledge by project, team, or topic. Each vault is a self-contained scope for notes, memories, entities, and mental models. Policy-based access control (reader/writer/admin) with vault-scoped API keys lets you grant fine-grained permissions. Use `read_vault_ids` for cross-vault read access without write permissions.
 
-### Cloud-native storage
+### Cloud-native storage and assets
 
-The file store uses [fsspec](https://filesystem-spec.readthedocs.io/) for backend-agnostic storage. Swap between local disk, Amazon S3, and Google Cloud Storage with a config change:
+The file store uses [fsspec](https://filesystem-spec.readthedocs.io/) for backend-agnostic storage. Swap between local disk, Amazon S3, and Google Cloud Storage with a config change. File assets (images, PDFs, audio) are stored alongside notes and served through MCP as native content types (Image, Audio, File). The CLI and MCP tools support listing, retrieving, adding, and deleting assets per note.
 
 ```yaml
 server:
@@ -233,10 +223,6 @@ Swap the built-in ONNX embedding and reranking models for any LiteLLM-supported 
 ### OpenTelemetry observability
 
 Distributed tracing via Arize Phoenix. Session IDs propagate across spans, DSPy LLM calls get operation names, and background reflection jobs are tracked across tracing sessions.
-
-### Asset management
-
-Attach images, PDFs, audio files, and other documents to any note. Assets are stored alongside notes in the file store (local, S3, or GCS) and served through the MCP server as native content types — Image, Audio, and File. The CLI and MCP tools support listing, retrieving, adding, and deleting assets per note.
 
 ### KV store
 
