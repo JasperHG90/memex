@@ -1,6 +1,6 @@
 # How to Use the MCP Server
 
-This guide shows you how to connect Memex to AI assistants via the Model Context Protocol (MCP), including Claude Desktop, Claude Code, Cursor, and other MCP-compatible clients.
+This guide shows you how to connect Memex to AI assistants via the Model Context Protocol (MCP), including Claude Desktop and other MCP-compatible clients.
 
 ## Prerequisites
 
@@ -62,15 +62,9 @@ All vault parameters on MCP tools are optional and default to the resolved confi
 
 ### Configure for Claude Code
 
-Run the automated setup command:
+The recommended way to use Memex with Claude Code is via the plugin. See [How to Set Up Claude Code Integration](setup-claude-code.md) for installation and configuration.
 
-```bash
-memex setup claude-code
-```
-
-This generates the MCP configuration, CLAUDE.md integration instructions, and lifecycle hooks (session start, compaction, commit) in your project directory.
-
-To manually configure, add to your `.claude/settings.json`:
+If you need manual MCP configuration without the plugin, add to your `.claude/settings.json`:
 
 ```json
 {
@@ -86,27 +80,9 @@ To manually configure, add to your `.claude/settings.json`:
 }
 ```
 
-### Configure for Cursor
-
-Add to your Cursor MCP settings (`.cursor/mcp.json` in your project root):
-
-```json
-{
-  "mcpServers": {
-    "memex": {
-      "command": "uv",
-      "args": ["run", "memex", "mcp", "run"],
-      "env": {
-        "MEMEX_VAULT__ACTIVE": "global"
-      }
-    }
-  }
-}
-```
-
 ### Vault Configuration for MCP
 
-MCP servers are spawned as subprocesses by your AI client (Claude Desktop, Claude Code, Cursor, etc.). Unlike the CLI — which runs in your shell and reliably finds `.memex.yaml` from your working directory — MCP subprocesses are **not guaranteed** to inherit your project's CWD. This means a `.memex.yaml` in your project root may not be found by the MCP server.
+MCP servers are spawned as subprocesses by your AI client (Claude Desktop, Claude Code, etc.). Unlike the CLI — which runs in your shell and reliably finds `.memex.yaml` from your working directory — MCP subprocesses are **not guaranteed** to inherit your project's CWD. This means a `.memex.yaml` in your project root may not be found by the MCP server.
 
 For this reason, always set vault configuration via environment variables in the MCP server config:
 
@@ -126,8 +102,6 @@ For this reason, always set vault configuration via environment variables in the
 ```
 
 > **Important:** `MEMEX_VAULT__SEARCH` must be a **string** containing a JSON array, not a native JSON array. Env vars are always strings — write `"[\"a\", \"b\"]"`, not `["a", "b"]`. The latter will fail MCP config validation. Pydantic-settings automatically JSON-decodes string env vars when the target field is a complex type like `list[str]`, so the string `'["a", "b"]'` becomes the Python list `["a", "b"]`.
-
-> **Tip:** Running `memex setup claude-code --vault my-project` sets `MEMEX_VAULT__ACTIVE` in the MCP config automatically.
 
 For the full vault resolution precedence (shared by CLI and MCP), see [Configuring Memex — Vault Resolution for CLI and MCP](configure-memex.md#vault-resolution-for-cli-and-mcp).
 
