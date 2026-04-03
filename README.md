@@ -93,73 +93,6 @@ Ask questions.
 memex memory search "How does Python handle memory management?"
 ```
 
-## See it in action
-
-### Claude Code Plugin
-
-Give Claude Code persistent memory across all projects — no per-project setup needed.
-
-```bash
-# Add the Memex marketplace
-claude plugin marketplace add JasperHG90/memex
-
-# Install the plugin
-claude plugin install memex@memex
-```
-
-Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
-
-The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
-
-#### Updating the claude code plugin
-
-To update the claude code plugin, first execute `claude plugin marketplace update`, then `claude plugin update memex@memex` to update the claude code plugin.
-
-#### Overriding defaults
-
-- By default, the claude code plugin uses the MCP server from tag `latest`. To override this, you can specify a project-level memex MCP server in your project's `.mcp.json`.
-- To override individual memex settings (e.g. MEMEX_BASE_URL), add these to './claude/settings.json', e.g.
-
-```json
-{
-  "env": {
-    "MEMEX_SERVER_URL": "http://host.docker.internal:8000"
-  }
-}
-```
-
-![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
-
-### Memory Search
-Search across your knowledge base with TEMPR multi-strategy retrieval.
-
-![Memory search showing results for Python memory management](assets/memex_cli_memory.gif)
-
-### Memory Search with AI Answer
-Get synthesized answers from your memories using `--answer`.
-
-![Memory search with AI-generated answer](assets/memex_cli_memory_answer.gif)
-
-### Note Search with Reasoning
-Find relevant documents with LLM-powered relevance reasoning using `--reason`.
-
-![Note search with reasoning annotations](assets/memex_cli_docs.gif)
-
-### Entity Explorer
-Browse and explore entities extracted from your knowledge base.
-
-![Entity list and related entity exploration](assets/memex_cli_entities.gif)
-
-### System Stats
-Monitor your Memex instance at a glance.
-
-![System statistics overview](assets/memex_cli_stats.gif)
-
-### URL Ingestion
-Capture web content directly into your knowledge base.
-
-![Ingesting a URL into Memex](assets/memex_cli_ingest.gif)
-
 ## Features
 
 <table>
@@ -331,6 +264,73 @@ Swap the built-in ONNX embedding and reranking models for any LiteLLM-supported 
 Distributed tracing via Arize Phoenix. Session IDs propagate across spans, DSPy LLM calls get operation names, and background reflection jobs are tracked across tracing sessions.
 
 </details>
+
+## See it in action
+
+### Claude Code Plugin
+
+Give Claude Code persistent memory across all projects — no per-project setup needed.
+
+```bash
+# Add the Memex marketplace
+claude plugin marketplace add JasperHG90/memex
+
+# Install the plugin
+claude plugin install memex@memex
+```
+
+Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
+
+The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+
+#### Updating the claude code plugin
+
+To update the claude code plugin, first execute `claude plugin marketplace update`, then `claude plugin update memex@memex` to update the claude code plugin.
+
+#### Overriding defaults
+
+- By default, the claude code plugin uses the MCP server from tag `latest`. To override this, you can specify a project-level memex MCP server in your project's `.mcp.json`.
+- To override individual memex settings (e.g. MEMEX_BASE_URL), add these to './claude/settings.json', e.g.
+
+```json
+{
+  "env": {
+    "MEMEX_SERVER_URL": "http://host.docker.internal:8000"
+  }
+}
+```
+
+![Claude Code using Memex for long-term memory](assets/memex_claude_code.gif)
+
+### Memory Search
+Search across your knowledge base with TEMPR multi-strategy retrieval.
+
+![Memory search showing results for Python memory management](assets/memex_cli_memory.gif)
+
+### Memory Search with AI Answer
+Get synthesized answers from your memories using `--answer`.
+
+![Memory search with AI-generated answer](assets/memex_cli_memory_answer.gif)
+
+### Note Search with Reasoning
+Find relevant documents with LLM-powered relevance reasoning using `--reason`.
+
+![Note search with reasoning annotations](assets/memex_cli_docs.gif)
+
+### Entity Explorer
+Browse and explore entities extracted from your knowledge base.
+
+![Entity list and related entity exploration](assets/memex_cli_entities.gif)
+
+### System Stats
+Monitor your Memex instance at a glance.
+
+![System statistics overview](assets/memex_cli_stats.gif)
+
+### URL Ingestion
+Capture web content directly into your knowledge base.
+
+![Ingesting a URL into Memex](assets/memex_cli_ingest.gif)
 
 ## 📚 Documentation
 
