@@ -1,6 +1,5 @@
 "FastMCP Memex server implementation"
 
-import logging
 import os
 import pathlib as plb
 import asyncio
@@ -11,6 +10,7 @@ import mimetypes
 
 import aiofiles
 import httpx
+import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.utilities.types import Image, Audio, File
@@ -165,8 +165,7 @@ def _default_read_vaults(ctx: Context) -> list[str]:
 
 configure_logging(level=os.environ.get('MEMEX_MCP_LOG_LEVEL', 'WARNING'))
 
-persona_logger = logging.getLogger('persona')
-persona_logger.setLevel(os.getenv('PERSONA_LOG_LEVEL', 'INFO'))
+logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     'memex_mcp',
@@ -295,7 +294,7 @@ async def memex_list_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'List assets failed: {e}', exc_info=True)
+        logger.error(f'List assets failed: {e}', exc_info=True)
         raise ToolError(f'List assets failed: {e}')
 
 
@@ -358,7 +357,7 @@ async def memex_read_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Read note failed: {e}', exc_info=True)
+        logger.error(f'Read note failed: {e}', exc_info=True)
         raise ToolError(f'Read note failed: {e}')
 
 
@@ -409,7 +408,7 @@ async def memex_set_note_status(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Set note status failed: {e}', exc_info=True)
+        logger.error(f'Set note status failed: {e}', exc_info=True)
         raise ToolError(f'Set note status failed: {e}')
 
 
@@ -438,7 +437,7 @@ async def memex_rename_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Rename note failed: {e}', exc_info=True)
+        logger.error(f'Rename note failed: {e}', exc_info=True)
         raise ToolError(f'Rename note failed: {e}')
 
 
@@ -507,7 +506,7 @@ async def memex_get_resources(
         return results
 
     except Exception as e:
-        logging.error(f'Get resource failed: {e}', exc_info=True)
+        logger.error(f'Get resource failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve resources: {e}')
 
 
@@ -547,7 +546,7 @@ async def memex_add_assets(
         for file_path in file_paths:
             path = plb.Path(file_path)
             if not path.exists() or not path.is_file():
-                logging.warning(f'Asset file not found or not a file: {file_path}')
+                logger.warning(f'Asset file not found or not a file: {file_path}')
                 continue
             async with aiofiles.open(path, 'rb') as f:
                 files_content[path.name] = await f.read()
@@ -580,7 +579,7 @@ async def memex_add_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Add assets failed: {e}', exc_info=True)
+        logger.error(f'Add assets failed: {e}', exc_info=True)
         raise ToolError(f'Add assets failed: {e}')
 
 
@@ -633,7 +632,7 @@ async def memex_delete_assets(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Delete assets failed: {e}', exc_info=True)
+        logger.error(f'Delete assets failed: {e}', exc_info=True)
         raise ToolError(f'Delete assets failed: {e}')
 
 
@@ -645,7 +644,7 @@ def _get_template_registry(ctx: Context) -> TemplateRegistry:
     if '://' not in root:
         dirs.append(('global', plb.Path(root) / 'templates'))
     else:
-        logging.debug('Skipping global templates: remote filestore (%s)', root)
+        logger.debug('Skipping global templates: remote filestore (%s)', root)
     dirs.append(('local', plb.Path('.memex/templates')))
     return TemplateRegistry(dirs)
 
@@ -672,7 +671,7 @@ def memex_get_template(
     except KeyError as e:
         raise ToolError(str(e))
     except Exception as e:
-        logging.error(f'Get template failed: {e}', exc_info=True)
+        logger.error(f'Get template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve template: {e}')
 
 
@@ -693,7 +692,7 @@ def memex_list_templates(ctx: Context) -> str:
             lines.append(f'- **{t.slug}** {source_tag} — {t.display_name}: {t.description}')
         return '\n'.join(lines) if lines else 'No templates available.'
     except Exception as e:
-        logging.error(f'List templates failed: {e}', exc_info=True)
+        logger.error(f'List templates failed: {e}', exc_info=True)
         raise ToolError(f'Failed to list templates: {e}')
 
 
@@ -725,7 +724,7 @@ def memex_register_template(
         )
         return f'Registered template: {info.slug} ({info.display_name}) in {info.source} scope.'
     except Exception as e:
-        logging.error(f'Register template failed: {e}', exc_info=True)
+        logger.error(f'Register template failed: {e}', exc_info=True)
         raise ToolError(f'Failed to register template: {e}')
 
 
@@ -766,7 +765,7 @@ async def memex_active_vault(ctx: Context) -> str:
         return '\n'.join(lines)
 
     except Exception as e:
-        logging.error(f'Get active vault failed: {e}', exc_info=True)
+        logger.error(f'Get active vault failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve active vault: {e}')
 
 
@@ -866,7 +865,7 @@ async def memex_add_note(
                     async with aiofiles.open(path, 'rb') as f:
                         files_content[path.name] = base64.b64encode(await f.read())
                 else:
-                    logging.warning(f'Supporting file not found or not a file: {file_path}')
+                    logger.warning(f'Supporting file not found or not a file: {file_path}')
 
         # Construct frontmatter
         fm_data: dict[str, Any] = {
@@ -934,7 +933,7 @@ async def memex_add_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Add note failed: {e}', exc_info=True)
+        logger.error(f'Add note failed: {e}', exc_info=True)
         raise ToolError(f'Add note failed: {e}')
 
 
@@ -1104,7 +1103,7 @@ async def memex_memory_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Search failed: {e}', exc_info=True)
+        logger.error(f'Search failed: {e}', exc_info=True)
         raise ToolError(f'Search failed: {e}')
 
 
@@ -1216,7 +1215,7 @@ async def memex_note_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Note search failed: {e}', exc_info=True)
+        logger.error(f'Note search failed: {e}', exc_info=True)
         raise ToolError(f'Note search failed: {e}')
 
 
@@ -1378,7 +1377,7 @@ async def memex_get_page_indices(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get page index failed: {e}', exc_info=True)
+        logger.error(f'Get page index failed: {e}', exc_info=True)
         raise ToolError(f'Get page index failed: {e}')
 
 
@@ -1451,7 +1450,7 @@ async def memex_get_notes_metadata(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get notes metadata failed: {e}', exc_info=True)
+        logger.error(f'Get notes metadata failed: {e}', exc_info=True)
         raise ToolError(f'Get notes metadata failed: {e}')
 
 
@@ -1519,7 +1518,7 @@ async def memex_get_nodes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get nodes failed: {e}', exc_info=True)
+        logger.error(f'Get nodes failed: {e}', exc_info=True)
         raise ToolError(f'Get nodes failed: {e}')
 
 
@@ -1566,7 +1565,7 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
             ]
 
     except Exception as e:
-        logging.error(f'List vaults failed: {e}', exc_info=True)
+        logger.error(f'List vaults failed: {e}', exc_info=True)
         raise ToolError(f'List vaults failed: {e}')
 
 
@@ -1657,7 +1656,7 @@ async def memex_list_notes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'List notes failed: {e}', exc_info=True)
+        logger.error(f'List notes failed: {e}', exc_info=True)
         raise ToolError(f'List notes failed: {e}')
 
 
@@ -1750,7 +1749,7 @@ async def memex_recent_notes(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Recent notes failed: {e}', exc_info=True)
+        logger.error(f'Recent notes failed: {e}', exc_info=True)
         raise ToolError(f'Recent notes failed: {e}')
 
 
@@ -1828,7 +1827,7 @@ async def memex_list_entities(
         ]
 
     except Exception as e:
-        logging.error(f'List entities failed: {e}', exc_info=True)
+        logger.error(f'List entities failed: {e}', exc_info=True)
         raise ToolError(f'List entities failed: {e}')
 
 
@@ -1902,7 +1901,7 @@ async def memex_get_entities(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entities failed: {e}', exc_info=True)
+        logger.error(f'Get entities failed: {e}', exc_info=True)
         raise ToolError(f'Get entities failed: {e}')
 
 
@@ -1957,7 +1956,7 @@ async def memex_get_entity_mentions(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entity mentions failed: {e}', exc_info=True)
+        logger.error(f'Get entity mentions failed: {e}', exc_info=True)
         raise ToolError(f'Get entity mentions failed: {e}')
 
 
@@ -2013,7 +2012,7 @@ async def memex_get_entity_cooccurrences(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
+        logger.error(f'Get entity cooccurrences failed: {e}', exc_info=True)
         raise ToolError(f'Get entity cooccurrences failed: {e}')
 
 
@@ -2098,7 +2097,7 @@ async def memex_get_lineage(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Get lineage failed: {e}', exc_info=True)
+        logger.error(f'Get lineage failed: {e}', exc_info=True)
         raise ToolError(f'Get lineage failed: {e}')
 
 
@@ -2138,7 +2137,7 @@ async def memex_get_memory_units(
         return output
 
     except Exception as e:
-        logging.error(f'Get memory units failed: {e}', exc_info=True)
+        logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
 
 
@@ -2194,7 +2193,7 @@ async def memex_find_note(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'Find note failed: {e}', exc_info=True)
+        logger.error(f'Find note failed: {e}', exc_info=True)
         raise ToolError(f'Find note failed: {e}')
 
 
@@ -2247,7 +2246,7 @@ async def memex_kv_write(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV write failed: {e}', exc_info=True)
+        logger.error(f'KV write failed: {e}', exc_info=True)
         raise ToolError(f'KV write failed: {e}')
 
 
@@ -2280,7 +2279,7 @@ async def memex_kv_get(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV get failed: {e}', exc_info=True)
+        logger.error(f'KV get failed: {e}', exc_info=True)
         raise ToolError(f'KV get failed: {e}')
 
 
@@ -2325,7 +2324,7 @@ async def memex_kv_search(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV search failed: {e}', exc_info=True)
+        logger.error(f'KV search failed: {e}', exc_info=True)
         raise ToolError(f'KV search failed: {e}')
 
 
@@ -2374,7 +2373,7 @@ async def memex_kv_list(
     except ToolError:
         raise
     except Exception as e:
-        logging.error(f'KV list failed: {e}', exc_info=True)
+        logger.error(f'KV list failed: {e}', exc_info=True)
         raise ToolError(f'KV list failed: {e}')
 
 
