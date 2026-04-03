@@ -761,6 +761,10 @@ class BatchJobStatus(BaseModel):
         examples=['pending', 'processing', 'completed', 'failed'],
     )
     progress: str | None = Field(default=None, description='Optional human-readable progress info.')
+    processed_count: int | None = Field(
+        default=None, description='Notes processed so far (including skipped/failed).'
+    )
+    total_count: int | None = Field(default=None, description='Total notes in the batch.')
     result: BatchIngestResponse | None = Field(
         default=None, description='Final results, available when status is "completed".'
     )
