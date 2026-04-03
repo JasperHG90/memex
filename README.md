@@ -76,7 +76,7 @@
 </td>
 <td valign="top">
 <p>🤖 <strong>AI Agent Integration</strong><br>
-<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 31 MCP tools, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
+<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 31 MCP tools with progressive disclosure, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
 </td>
 </tr>
 <tr>
@@ -176,7 +176,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 31 MCP tools cover the full API surface. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 31 MCP tools with progressive disclosure (3-stage tool discovery by default) cover the full API surface. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
 
 ### REST API and webhooks
 
