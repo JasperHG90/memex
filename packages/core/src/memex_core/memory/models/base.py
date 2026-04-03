@@ -46,9 +46,13 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
 }
 
 
+# Silence the global ONNX Runtime C++ logger (controls model loading / graph
+# optimization output that bypasses per-session log_severity_level).
+ort.set_default_logger_severity(3)  # ERROR
+
 # Shared ONNX Runtime options
 options = ort.SessionOptions()  # type: ignore
-options.log_severity_level = 3
+options.log_severity_level = 3  # ERROR
 # Re-use memory layouts between runs of the same model (models are singletons)
 options.enable_mem_pattern = True
 # Disable CPU memory arena to prevent the allocator from holding memory between runs
@@ -147,7 +151,7 @@ class ModelDownloader:
                 # Atomic rename — safe even if another process races
                 os.replace(tmp_path, local_path)
             except (httpx.HTTPError, OSError, RuntimeError) as e:
-                print(f'  [Error] Failed to download {filename}: {e}')
+                logger.error('Failed to download %s: %s', filename, e)
                 # Clean up partial temp file
                 if tmp_path.exists():
                     tmp_path.unlink()
@@ -156,16 +160,16 @@ class ModelDownloader:
         """
         Main entry point: gets the list, creates tasks, and downloads.
         """
-        print(f'Connecting to Hugging Face: {self.repo_id}...')
+        logger.info('Connecting to Hugging Face: %s...', self.repo_id)
         try:
             files = await self._fetch_file_list(client)
         except (httpx.HTTPError, OSError, ValueError) as e:
-            print(f'Failed to fetch repo info: {e}')
+            logger.error('Failed to fetch repo info: %s', e)
             raise e
-        print(f'Found {len(files)} files. Syncing to: {self.cache_dir}')
+        logger.info('Found %d files. Syncing to: %s', len(files), self.cache_dir)
         tasks = [self._download_file(client, filename, force) for filename in files]
         await asyncio.gather(*tasks)
-        print('\nDownload complete.')
+        logger.info('Download complete.')
         return self.cache_dir
 
     def download(self, force: bool = False) -> plb.Path:
