@@ -124,6 +124,12 @@ def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
 
 async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
     """Resolve and validate that all vault identifiers exist."""
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
+    if ALL_VAULTS_WILDCARD in vault_ids:
+        vaults = await api.list_vaults()
+        return [v.id for v in vaults]
+
     resolved: list[UUID] = []
     for vid in vault_ids:
         try:
@@ -971,7 +977,7 @@ async def memex_memory_search(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit to use config defaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
         ),
     ] = None,
     limit: Annotated[
@@ -1082,7 +1088,7 @@ async def memex_note_search(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit to use config defaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
         ),
     ] = None,
     limit: Annotated[
@@ -1626,7 +1632,7 @@ async def memex_recent_notes(
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
-            description='Vault UUIDs or names. Omit for all vaults.',
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit for all vaults.',
         ),
     ] = None,
     after: Annotated[
@@ -2100,7 +2106,7 @@ async def memex_find_note(
         BeforeValidator(_coerce_list),
         Field(
             default=None,
-            description="Vault UUIDs or names to search in, e.g. ['rituals']. None = all vaults.",
+            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. Use "*" for all vaults. None = all vaults.',
         ),
     ] = None,
     limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,

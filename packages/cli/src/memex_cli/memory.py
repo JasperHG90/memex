@@ -384,7 +384,8 @@ async def search_memory(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Search query.')],
     vault: Annotated[
-        list[str] | None, typer.Option('--vault', '-v', help='Filter by vault(s).')
+        list[str] | None,
+        typer.Option('--vault', '-v', help='Filter by vault(s). Use "*" for all vaults.'),
     ] = None,
     limit: int = 5,
     token_budget: Annotated[
