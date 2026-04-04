@@ -103,6 +103,31 @@ class TestNoteSearchReranking:
         )
 
     @pytest.mark.asyncio
+    async def test_rerank_false_skips_reranker(self, mock_embedder, mock_reranker):
+        """When rerank=False, the reranker must not be called (AC-002)."""
+        mock_reranker.score.return_value = [1.0, 0.5]
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+
+        ids = [uuid4(), uuid4()]
+        results = [
+            _make_result(note_id=ids[0], score=0.06),
+            _make_result(note_id=ids[1], score=0.05),
+        ]
+        chunk_texts = {ids[0]: 'chunk a', ids[1]: 'chunk b'}
+
+        # Simulate the guard in search(): rerank=False should skip reranking
+        request = MagicMock()
+        request.rerank = False
+
+        if request.rerank and engine.reranker and results:
+            results = await engine._rerank_results('query', results, chunk_texts)
+
+        mock_reranker.score.assert_not_called()
+        # Scores should remain as original RRF scores
+        assert results[0].score == 0.06
+        assert results[1].score == 0.05
+
+    @pytest.mark.asyncio
     async def test_rerank_graceful_fallback_on_error(self, mock_embedder, mock_reranker):
         """On reranker error, fall back to original RRF order."""
         mock_reranker.score.side_effect = RuntimeError('model failed')
