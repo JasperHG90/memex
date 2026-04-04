@@ -951,7 +951,7 @@ class DocumentConfig(BaseModel):
         description='Default enabled search strategies for document search.',
     )
     mmr_lambda: float | None = Field(
-        default=None,
+        default=0.8,
         ge=0.0,
         le=1.0,
         description=(

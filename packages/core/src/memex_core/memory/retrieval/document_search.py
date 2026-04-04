@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
@@ -17,7 +18,7 @@ from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.models.protocols import EmbeddingsModel
+from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_common.config import RetrievalConfig
@@ -91,9 +92,11 @@ class NoteSearchEngine:
         ner_model: FastNERModel | None = None,
         lm: dspy.LM | None = None,
         retrieval_config: RetrievalConfig | None = None,
+        reranker: RerankerModel | None = None,
     ) -> None:
         self.embedder = embedder
         self.lm = lm
+        self.reranker = reranker
         _config = retrieval_config or RetrievalConfig()
         self.graph_strategy = get_note_graph_strategy(
             type=_config.graph_retriever_type,
@@ -149,6 +152,17 @@ class NoteSearchEngine:
         if not merged:
             return []
 
+        # Build best-chunk text per document for reranking
+        best_chunk_text_by_note: dict[UUID, str] = {}
+        best_chunk_score_by_note: dict[UUID, float] = {}
+        for chunk, score in merged:
+            if (
+                chunk.note_id not in best_chunk_score_by_note
+                or score > best_chunk_score_by_note[chunk.note_id]
+            ):
+                best_chunk_score_by_note[chunk.note_id] = score
+                best_chunk_text_by_note[chunk.note_id] = chunk.text or ''
+
         results = await self._group_by_document(
             session,
             merged,
@@ -159,6 +173,10 @@ class NoteSearchEngine:
             before=request.before,
             tags=request.tags,
         )
+
+        # Cross-encoder reranking
+        if request.rerank and self.reranker and results:
+            results = await self._rerank_results(request.query, results, best_chunk_text_by_note)
 
         # Skeleton-tree reasoning refinement
         if (request.reason or request.summarize) and self.lm:
@@ -173,6 +191,33 @@ class NoteSearchEngine:
                 )
 
         return results
+
+    async def _rerank_results(
+        self,
+        query: str,
+        results: list[NoteSearchResult],
+        best_chunk_text_by_note: dict[UUID, str],
+    ) -> list[NoteSearchResult]:
+        """Re-rank note search results using a cross-encoder.
+
+        Uses the best-scoring chunk text per document (raw text, no prefixes)
+        and applies sigmoid normalization to produce scores in [0, 1].
+        """
+        if not self.reranker or not results:
+            return results
+
+        try:
+            texts = [best_chunk_text_by_note.get(r.note_id, '') for r in results]
+            scores = await asyncio.to_thread(self.reranker.score, query, texts)
+            normalized = [1.0 / (1.0 + math.exp(-s)) for s in scores]
+
+            scored = sorted(zip(results, normalized), key=lambda x: x[1], reverse=True)
+            for result, score in scored:
+                result.score = score
+            return [r for r, _ in scored]
+        except (ValueError, RuntimeError, OSError) as e:
+            logger.error(f'Note search reranking failed: {e}. Falling back to RRF order.')
+            return results
 
     async def _identify_relevant_sections(
         self,
