@@ -36,12 +36,12 @@ class TestBoostLinkedNotes:
         note_b = _make_result(title='Performance Review', score=0.08)
 
         # note_b's chunk text mentions note_a's title
-        best_chunk_text = {
-            note_a.note_id: 'Some analysis of caching strategies',
-            note_b.note_id: 'As discussed in Redis Caching Analysis, the approach works',
+        chunk_texts = {
+            note_a.note_id: ['Some analysis of caching strategies'],
+            note_b.note_id: ['As discussed in Redis Caching Analysis, the approach works'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         # note_a should be boosted because note_b mentions its title
         boosted_a = next(r for r in results if r.note_id == note_a.note_id)
@@ -56,12 +56,12 @@ class TestBoostLinkedNotes:
         note_a = _make_result(title='Redis Caching', score=0.10)
         note_b = _make_result(title='Other Note', score=0.08)
 
-        best_chunk_text = {
-            note_a.note_id: 'unrelated text',
-            note_b.note_id: 'mentions redis caching in lowercase',
+        chunk_texts = {
+            note_a.note_id: ['unrelated text'],
+            note_b.note_id: ['mentions redis caching in lowercase'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         boosted_a = next(r for r in results if r.note_id == note_a.note_id)
         assert boosted_a.score == pytest.approx(0.10 + LINKED_NOTE_BOOST)
@@ -71,12 +71,12 @@ class TestBoostLinkedNotes:
         note_a = _make_result(title='API', score=0.10)  # 3 chars < 4
         note_b = _make_result(title='Other', score=0.08)
 
-        best_chunk_text = {
-            note_a.note_id: 'text',
-            note_b.note_id: 'calls the API frequently',
+        chunk_texts = {
+            note_a.note_id: ['text'],
+            note_b.note_id: ['calls the API frequently'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         # note_a should NOT be boosted (title too short)
         a = next(r for r in results if r.note_id == note_a.note_id)
@@ -86,11 +86,11 @@ class TestBoostLinkedNotes:
         """A note mentioning its own title in its chunk text does not boost itself."""
         note_a = _make_result(title='Redis Analysis', score=0.10)
 
-        best_chunk_text = {
-            note_a.note_id: 'This is the Redis Analysis document',
+        chunk_texts = {
+            note_a.note_id: ['This is the Redis Analysis document'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a], chunk_texts)
 
         assert results[0].score == pytest.approx(0.10)
 
@@ -101,13 +101,13 @@ class TestBoostLinkedNotes:
         note_c = _make_result(title='Third Note', score=0.06)
 
         # note_a mentions note_c's title, boosting note_c from 0.06 to 0.21
-        best_chunk_text = {
-            note_a.note_id: 'Related to Third Note findings',
-            note_b.note_id: 'unrelated text',
-            note_c.note_id: 'some content',
+        chunk_texts = {
+            note_a.note_id: ['Related to Third Note findings'],
+            note_b.note_id: ['unrelated text'],
+            note_c.note_id: ['some content'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b, note_c], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b, note_c], chunk_texts)
 
         scores = [r.score for r in results]
         assert scores == sorted(scores, reverse=True)
@@ -119,12 +119,12 @@ class TestBoostLinkedNotes:
         note_a = _make_result(title='First Note', score=0.10)
         note_b = _make_result(title='Second Note', score=0.08)
 
-        best_chunk_text = {
-            note_a.note_id: 'unrelated content',
-            note_b.note_id: 'also unrelated',
+        chunk_texts = {
+            note_a.note_id: ['unrelated content'],
+            note_b.note_id: ['also unrelated'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         assert results[0].score == pytest.approx(0.10)
         assert results[1].score == pytest.approx(0.08)
@@ -140,11 +140,11 @@ class TestBoostLinkedNotes:
         note_b = _make_result(title='Second Note', score=0.08)
 
         # note_a has no chunk text entry
-        best_chunk_text = {
-            note_b.note_id: 'mentions First Note here',
+        chunk_texts = {
+            note_b.note_id: ['mentions First Note here'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         # note_a should be boosted (note_b mentions it)
         a = next(r for r in results if r.note_id == note_a.note_id)
@@ -157,16 +157,16 @@ class TestBoostLinkedNotes:
         note_c = _make_result(title='Background Data', score=0.05)
 
         # note_c mentions note_a's title -> note_a gets boosted
-        best_chunk_text = {
-            note_a.note_id: 'analysis content',
-            note_b.note_id: 'summary content',
-            note_c.note_id: 'references the Important Analysis for context',
+        chunk_texts = {
+            note_a.note_id: ['analysis content'],
+            note_b.note_id: ['summary content'],
+            note_c.note_id: ['references the Important Analysis for context'],
         }
 
         # Before boost, order is: B(0.12), A(0.10), C(0.05)
         results = [note_b, note_a, note_c]
 
-        boosted = NoteSearchEngine._boost_linked_notes(results, best_chunk_text)
+        boosted = NoteSearchEngine._boost_linked_notes(results, chunk_texts)
 
         # After boost, A should be 0.25, reordered above B
         note_ids = [r.note_id for r in boosted]
@@ -177,12 +177,12 @@ class TestBoostLinkedNotes:
         note_a = _make_result(title='Target Note', score=0.10)
         note_b = _make_result(title='Other', score=0.08)
 
-        best_chunk_text = {
-            note_a.note_id: 'content',
-            note_b.note_id: 'mentions Target Note here',
+        chunk_texts = {
+            note_a.note_id: ['content'],
+            note_b.note_id: ['mentions Target Note here'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text, boost=0.5)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts, boost=0.5)
 
         a = next(r for r in results if r.note_id == note_a.note_id)
         assert a.score == pytest.approx(0.10 + 0.5)
@@ -192,12 +192,12 @@ class TestBoostLinkedNotes:
         note_a = _make_result(title='Redis Guide', score=0.10)
         note_b = _make_result(title='Cache Strategy', score=0.08)
 
-        best_chunk_text = {
-            note_a.note_id: 'see also the Cache Strategy document',
-            note_b.note_id: 'based on the Redis Guide approach',
+        chunk_texts = {
+            note_a.note_id: ['see also the Cache Strategy document'],
+            note_b.note_id: ['based on the Redis Guide approach'],
         }
 
-        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes([note_a, note_b], chunk_texts)
 
         a = next(r for r in results if r.note_id == note_a.note_id)
         b = next(r for r in results if r.note_id == note_b.note_id)
@@ -238,15 +238,17 @@ class TestBoostBeforeRerankPipeline:
         note_c = _make_result(title='Gamma Analysis', score=0.05)
 
         # note_a's chunk text references note_c's title -> note_c gets boosted
-        best_chunk_text = {
-            note_a.note_id: 'see the Gamma Analysis for details',
-            note_b.note_id: 'unrelated text here',
-            note_c.note_id: 'gamma analysis content',
+        all_chunk_texts = {
+            note_a.note_id: ['see the Gamma Analysis for details'],
+            note_b.note_id: ['unrelated text here'],
+            note_c.note_id: ['gamma analysis content'],
         }
+        # best_chunk_text_by_note for reranker (single string per note)
+        best_chunk_text = {nid: texts[0] for nid, texts in all_chunk_texts.items()}
 
         # Run pipeline: boost then rerank (same sequence as search())
         results = [note_a, note_b, note_c]
-        results = NoteSearchEngine._boost_linked_notes(results, best_chunk_text)
+        results = NoteSearchEngine._boost_linked_notes(results, all_chunk_texts)
         results = await engine._rerank_results('test query', results, best_chunk_text)
 
         # After boost: C=0.05+0.15=0.20, A=0.12, B=0.08 -> order is [C, A, B]

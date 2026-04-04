@@ -64,7 +64,7 @@ logger = logging.getLogger('memex.core.api')
 
 
 _FRONTMATTER_RE = re.compile(r'\A---[ \t]*\n(.*?\n)---[ \t]*\n', re.DOTALL)
-_USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
+_USER_NOTES_FIELD_RE = re.compile(r'^user_notes:[ \t]*\|?[^\n]*\n(?:[ \t]+[^\n]*\n)*', re.MULTILINE)
 
 
 def inject_user_notes(content: str, user_notes: str | None) -> str:
@@ -488,7 +488,6 @@ class MemexAPI:
             memory=self.memory,
             file_processor=self._file_processor,
             vaults=self._vaults,
-            vault_summary_service=self.vault_summary,
         )
 
         # Wire audit service into all domain services that emit events

@@ -155,9 +155,11 @@ class NoteSearchEngine:
         if not merged:
             return []
 
-        # Build best-chunk text per document for reranking
+        # Build best-chunk text per document for reranking,
+        # and all-chunk texts per document for note-linking boost.
         best_chunk_text_by_note: dict[UUID, str] = {}
         best_chunk_score_by_note: dict[UUID, float] = {}
+        all_chunk_texts_by_note: dict[UUID, list[str]] = {}
         for chunk, score in merged:
             if (
                 chunk.note_id not in best_chunk_score_by_note
@@ -165,6 +167,8 @@ class NoteSearchEngine:
             ):
                 best_chunk_score_by_note[chunk.note_id] = score
                 best_chunk_text_by_note[chunk.note_id] = chunk.text or ''
+            if chunk.text:
+                all_chunk_texts_by_note.setdefault(chunk.note_id, []).append(chunk.text)
 
         results = await self._group_by_document(
             session,
@@ -179,7 +183,7 @@ class NoteSearchEngine:
 
         # Boost notes whose titles appear in other notes' chunk text
         if results:
-            results = self._boost_linked_notes(results, best_chunk_text_by_note)
+            results = self._boost_linked_notes(results, all_chunk_texts_by_note)
 
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
@@ -202,13 +206,13 @@ class NoteSearchEngine:
     @staticmethod
     def _boost_linked_notes(
         results: list[NoteSearchResult],
-        best_chunk_text_by_note: dict[UUID, str],
+        all_chunk_texts_by_note: dict[UUID, list[str]],
         boost: float = LINKED_NOTE_BOOST,
     ) -> list[NoteSearchResult]:
         """Boost scores of notes whose titles are mentioned in other notes' chunk text.
 
         For each pair of result notes, checks if note_j's title appears as a
-        case-insensitive substring in note_i's best chunk text. If so, note_j
+        case-insensitive substring in ANY of note_i's chunk texts. If so, note_j
         receives a score boost. Titles shorter than MIN_TITLE_LENGTH are skipped
         to avoid false positives.
         """
@@ -225,12 +229,12 @@ class NoteSearchEngine:
         # Build set of note IDs that are referenced by another note's chunk text
         boosted_ids: set[UUID] = set()
         for r in results:
-            chunk_text = best_chunk_text_by_note.get(r.note_id, '')
-            if not chunk_text:
+            chunk_texts = all_chunk_texts_by_note.get(r.note_id, [])
+            if not chunk_texts:
                 continue
-            chunk_lower = chunk_text.lower()
+            combined_lower = '\n'.join(chunk_texts).lower()
             for other_id, title in titles_by_id.items():
-                if other_id != r.note_id and title.lower() in chunk_lower:
+                if other_id != r.note_id and title.lower() in combined_lower:
                     boosted_ids.add(other_id)
 
         # Apply boost

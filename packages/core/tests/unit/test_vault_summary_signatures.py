@@ -7,23 +7,22 @@ from dspy.utils.dummies import DummyLM
 
 from memex_core.services.vault_summary_signatures import (
     VaultSummaryFullSignature,
-    VaultSummaryPatchSignature,
+    VaultSummaryUpdateSignature,
     VaultTopicExtractSignature,
     VaultTopicMergeSignature,
 )
 
 
-class TestVaultSummaryPatchSignature:
+class TestVaultSummaryUpdateSignature:
     def test_input_fields(self):
-        fields = VaultSummaryPatchSignature.input_fields
+        fields = VaultSummaryUpdateSignature.input_fields
         assert 'current_summary' in fields
         assert 'current_topics_json' in fields
-        assert 'current_stats_json' in fields
-        assert 'note_title' in fields
-        assert 'note_description' in fields
+        assert 'new_notes_json' in fields
+        assert 'vault_stats_json' in fields
 
     def test_output_fields(self):
-        fields = VaultSummaryPatchSignature.output_fields
+        fields = VaultSummaryUpdateSignature.output_fields
         assert 'updated_summary' in fields
         assert 'updated_topics_json' in fields
 
@@ -38,15 +37,29 @@ class TestVaultSummaryPatchSignature:
             ]
         )
         with dspy.context(lm=lm):
-            predictor = dspy.Predict(VaultSummaryPatchSignature)
+            predictor = dspy.Predict(VaultSummaryUpdateSignature)
             result = predictor(
                 current_summary='Vault contains AI research.',
                 current_topics_json=json.dumps(
                     [{'name': 'AI', 'note_count': 3, 'description': 'AI research'}]
                 ),
-                current_stats_json=json.dumps({'total_notes': 3}),
-                note_title='ML Optimization',
-                note_description='A study on ML optimization techniques.',
+                new_notes_json=json.dumps(
+                    [
+                        {
+                            'title': 'ML Optimization',
+                            'description': 'A study on ML optimization techniques.',
+                            'summaries': [
+                                {'topic': 'ML Optimization', 'key_points': ['Gradient methods']}
+                            ],
+                            'tags': ['ml'],
+                            'template': 'general_note',
+                            'author': 'test',
+                            'source_domain': '',
+                            'publish_date': '2026-04-04',
+                        }
+                    ]
+                ),
+                vault_stats_json=json.dumps({'total_notes': 4, 'new_since_last': 1}),
             )
         assert 'ML' in result.updated_summary
         parsed = json.loads(result.updated_topics_json)

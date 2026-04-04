@@ -13,8 +13,6 @@ from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
-import asyncio
-
 import dspy
 import stamina
 import yaml
@@ -191,7 +189,6 @@ class IngestionService:
         memory: MemoryEngine,
         file_processor: FileContentProcessor,
         vaults: VaultService,
-        vault_summary_service: Any | None = None,
     ) -> None:
         self.metastore = metastore
         self.filestore = filestore
@@ -200,7 +197,6 @@ class IngestionService:
         self.memory = memory
         self._file_processor = file_processor
         self._vaults = vaults
-        self._vault_summary = vault_summary_service
 
     async def ingest_from_url(
         self,
@@ -490,38 +486,7 @@ ingested_at: {now}
                 title=resolved_title,
             )
 
-        # Fire background vault summary patch (after transaction commit)
-        if self._vault_summary and self.config.server.vault_summary.enabled:
-            asyncio.create_task(
-                self._patch_vault_summary_safe(
-                    vault_id=target_vault_id,
-                    note_id=note_uuid,
-                    title=resolved_title,
-                    description=note._metadata.description or '',
-                )
-            )
-
         return result
-
-    async def _patch_vault_summary_safe(
-        self,
-        vault_id: UUID,
-        note_id: UUID,
-        title: str,
-        description: str,
-    ) -> None:
-        """Patch vault summary in the background. Errors are logged, not raised."""
-        if self._vault_summary is None:
-            return
-        try:
-            await self._vault_summary.patch_summary(vault_id, note_id, title, description)
-        except Exception:
-            logger.warning(
-                'Failed to patch vault summary for note %s in vault %s',
-                note_id,
-                vault_id,
-                exc_info=True,
-            )
 
     async def ingest_batch_internal(
         self,
