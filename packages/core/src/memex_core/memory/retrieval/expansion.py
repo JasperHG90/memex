@@ -49,10 +49,13 @@ class SurveyDecomposer:
             if len(sub_questions) > 5:
                 sub_questions = sub_questions[:5]
             elif len(sub_questions) < 3:
-                # Pad with rephrases of existing questions
-                while len(sub_questions) < 3:
-                    idx = len(sub_questions) % len(sub_questions) if sub_questions else 0
-                    sub_questions.append(f'{topic} — {sub_questions[idx]}')
+                # Pad with rephrases cycling through existing questions
+                _prefixes = ['aspects of', 'details about', 'context for']
+                original_len = len(sub_questions)
+                for i in range(original_len, 3):
+                    idx = i % original_len
+                    prefix = _prefixes[i % len(_prefixes)]
+                    sub_questions.append(f'{prefix} {topic} — {sub_questions[idx]}')
 
             return sub_questions
         except (ValueError, RuntimeError, OSError, KeyError) as e:
