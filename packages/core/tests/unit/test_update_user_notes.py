@@ -60,7 +60,9 @@ async def test_extract_user_notes_returns_empty_for_blank():
     from memex_core.memory.extraction.engine import ExtractionEngine
 
     engine = MagicMock(spec=ExtractionEngine)
+    engine.prepare_user_notes = ExtractionEngine.prepare_user_notes.__get__(engine)
     engine.extract_user_notes = ExtractionEngine.extract_user_notes.__get__(engine)
+    engine.persist_user_notes = AsyncMock(return_value=([], set()))
     engine.SECONDS_PER_FACT = 10
 
     session = AsyncMock()
@@ -74,7 +76,9 @@ async def test_extract_user_notes_returns_empty_for_whitespace():
     from memex_core.memory.extraction.engine import ExtractionEngine
 
     engine = MagicMock(spec=ExtractionEngine)
+    engine.prepare_user_notes = ExtractionEngine.prepare_user_notes.__get__(engine)
     engine.extract_user_notes = ExtractionEngine.extract_user_notes.__get__(engine)
+    engine.persist_user_notes = AsyncMock(return_value=([], set()))
     engine.SECONDS_PER_FACT = 10
 
     session = AsyncMock()
@@ -121,7 +125,10 @@ async def test_update_user_notes_strips_and_reinjects():
 
     # Mock extraction engine
     mock_extraction = AsyncMock()
-    mock_extraction.extract_user_notes = AsyncMock(return_value=(['unit-1', 'unit-2'], set()))
+    mock_extraction.prepare_user_notes = AsyncMock(
+        return_value=['fake-processed-1', 'fake-processed-2']
+    )
+    mock_extraction.persist_user_notes = AsyncMock(return_value=(['unit-1', 'unit-2'], set()))
 
     # Build a minimal MemexAPI mock
     api = MagicMock()
@@ -173,6 +180,7 @@ async def test_update_user_notes_null_deletes_only():
     mock_metastore.session.return_value = _SessionCtx()
 
     mock_extraction = AsyncMock()
+    mock_extraction.prepare_user_notes = AsyncMock(return_value=[])
 
     api = MagicMock()
     api.metastore = mock_metastore
@@ -187,8 +195,8 @@ async def test_update_user_notes_null_deletes_only():
 
     assert result['units_deleted'] == 0
     assert result['units_created'] == 0
-    # Extraction should NOT have been called
-    mock_extraction.extract_user_notes.assert_not_called()
+    # prepare_user_notes returns [] for None, so persist should not be called
+    mock_extraction.persist_user_notes.assert_not_called()
     # user_notes should be stripped from text
     assert 'user_notes' not in mock_note.original_text
     assert 'Old notes' not in mock_note.original_text
@@ -244,44 +252,61 @@ def _build_api_with_old_units(
     mock_note.created_at = None
     mock_note.content_hash = 'old-hash'
 
-    # Build execute side_effect: first call returns old unit IDs,
-    # second returns old entity IDs, third+fourth are deletes (no return needed)
+    # Build execute side_effect for phase 3 (atomic write session):
+    # Call 1: SELECT old unit IDs, Call 2: SELECT old entity IDs,
+    # Call 3+4: DELETEs (if old units exist)
     old_unit_rows = [(uid,) for uid in old_unit_ids]
     old_entity_rows = [(eid,) for eid in old_entity_ids]
 
     execute_results = []
-    # Call 1: SELECT MemoryUnit.id WHERE note_id AND context='user_notes'
     r1 = MagicMock()
     r1.all.return_value = old_unit_rows
     execute_results.append(r1)
-    # Call 2: SELECT UnitEntity.entity_id WHERE unit_id IN (...)
     if old_unit_ids:
         r2 = MagicMock()
         r2.all.return_value = old_entity_rows
         execute_results.append(r2)
-    # Call 3+4: DELETE UnitEntity, DELETE MemoryUnit (if old units exist)
     if old_unit_ids:
         execute_results.append(MagicMock())  # DELETE UnitEntity
         execute_results.append(MagicMock())  # DELETE MemoryUnit
 
-    mock_session = AsyncMock()
-    mock_session.get = AsyncMock(return_value=mock_note)
-    mock_session.execute = AsyncMock(side_effect=execute_results)
-    mock_session.commit = AsyncMock()
+    # Phase 1 session (read-only): returns mock_note via session.get
+    read_session = AsyncMock()
+    read_session.get = AsyncMock(return_value=mock_note)
+
+    # Phase 3 session (write): returns mock_note via get, then execute side_effect
+    write_session = AsyncMock()
+    write_session.get = AsyncMock(return_value=mock_note)
+    write_session.execute = AsyncMock(side_effect=execute_results)
+    write_session.commit = AsyncMock()
 
     mock_metastore = MagicMock()
 
+    # Return read_session for phase 1, write_session for phase 3
+    session_sequence = [read_session, write_session]
+    session_idx = 0
+
     class _SessionCtx:
+        def __init__(self, sess):
+            self._sess = sess
+
         async def __aenter__(self):
-            return mock_session
+            return self._sess
 
         async def __aexit__(self, *args):
             pass
 
-    mock_metastore.session.return_value = _SessionCtx()
+    def session_factory():
+        nonlocal session_idx
+        ctx = _SessionCtx(session_sequence[session_idx])
+        session_idx += 1
+        return ctx
+
+    mock_metastore.session = session_factory
 
     mock_extraction = AsyncMock()
-    mock_extraction.extract_user_notes = AsyncMock(
+    mock_extraction.prepare_user_notes = AsyncMock(return_value=['fake-processed'])
+    mock_extraction.persist_user_notes = AsyncMock(
         return_value=(new_unit_ids or [], new_entity_ids or set())
     )
 
@@ -296,7 +321,7 @@ def _build_api_with_old_units(
 
     api.update_user_notes = MemexAPI.update_user_notes.__get__(api)
 
-    return api, mock_session, mock_extraction, mock_queue_service
+    return api, write_session, mock_extraction, mock_queue_service
 
 
 # ---------------------------------------------------------------------------
@@ -375,18 +400,24 @@ async def test_update_user_notes_calls_extract_with_correct_args():
 
     assert result['units_created'] == 2
 
-    # Verify extract_user_notes was called exactly once with the right arguments
-    mock_extraction.extract_user_notes.assert_called_once()
-    call_kwargs = mock_extraction.extract_user_notes.call_args
-    # Positional or keyword: session, user_notes_text, note_id, vault_id
-    assert call_kwargs.kwargs.get('user_notes_text') == 'Brand new annotation' or (
-        len(call_kwargs.args) >= 2 and call_kwargs.args[1] == 'Brand new annotation'
+    # Verify prepare_user_notes was called with the right text and vault
+    mock_extraction.prepare_user_notes.assert_called_once()
+    prep_kwargs = mock_extraction.prepare_user_notes.call_args
+    assert prep_kwargs.kwargs.get('user_notes_text') == 'Brand new annotation' or (
+        len(prep_kwargs.args) >= 1 and prep_kwargs.args[0] == 'Brand new annotation'
     )
-    assert call_kwargs.kwargs.get('note_id') == str(note_id) or (
-        len(call_kwargs.args) >= 3 and call_kwargs.args[2] == str(note_id)
+    assert prep_kwargs.kwargs.get('vault_id') == vault_id or (
+        len(prep_kwargs.args) >= 2 and prep_kwargs.args[1] == vault_id
     )
-    assert call_kwargs.kwargs.get('vault_id') == vault_id or (
-        len(call_kwargs.args) >= 4 and call_kwargs.args[3] == vault_id
+
+    # Verify persist_user_notes was called with correct note_id and vault_id
+    mock_extraction.persist_user_notes.assert_called_once()
+    persist_kwargs = mock_extraction.persist_user_notes.call_args
+    assert persist_kwargs.kwargs.get('note_id') == str(note_id) or (
+        len(persist_kwargs.args) >= 3 and persist_kwargs.args[2] == str(note_id)
+    )
+    assert persist_kwargs.kwargs.get('vault_id') == vault_id or (
+        len(persist_kwargs.args) >= 4 and persist_kwargs.args[3] == vault_id
     )
 
 

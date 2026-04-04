@@ -265,28 +265,18 @@ class TestUpdateSummary:
             mock_fetch.return_value = delta_notes
             mock_run.return_value = mock_prediction
 
-            # Mock sessions: summary lookup, total count, persist
-            session_results = []
-
-            # Session 1: summary lookup
+            # Session 1: summary lookup + _fetch_note_metadata + total count
             ctx1, s1 = _mock_session(existing)
-            session_results.append(ctx1)
-
-            # Session 2: _fetch_note_metadata (handled by mock)
-            ctx2, s2 = _mock_session(None)
-            session_results.append(ctx2)
-
-            # Session 3: total count
-            ctx3, s3 = _mock_session(None)
+            summary_result = MagicMock()
+            summary_result.scalar_one_or_none.return_value = existing
             count_result = MagicMock()
             count_result.scalar.return_value = 13
-            s3.execute.return_value = count_result
-            session_results.append(ctx3)
+            s1.execute = AsyncMock(side_effect=[summary_result, count_result])
 
-            # Session 4: persist
-            ctx4, s4 = _mock_session(existing)
-            session_results.append(ctx4)
+            # Session 2: persist with FOR UPDATE
+            ctx2, s2 = _mock_session(existing)
 
+            session_results = [ctx1, ctx2]
             idx = 0
 
             def session_factory():
@@ -335,15 +325,18 @@ class TestUpdateSummary:
             mock_fetch.return_value = _make_note_metadata(1)
             mock_run.return_value = mock_prediction
 
-            ctx1, _ = _mock_session(existing)
-            ctx2, s2 = _mock_session(None)
-            ctx3, s3 = _mock_session(None)
+            # Session 1: summary lookup + _fetch_note_metadata + total count
+            ctx1, s1 = _mock_session(existing)
+            summary_result = MagicMock()
+            summary_result.scalar_one_or_none.return_value = existing
             count_result = MagicMock()
             count_result.scalar.return_value = 11
-            s3.execute.return_value = count_result
-            ctx4, _ = _mock_session(existing)
+            s1.execute = AsyncMock(side_effect=[summary_result, count_result])
 
-            results = [ctx1, ctx2, ctx3, ctx4]
+            # Session 2: persist with FOR UPDATE
+            ctx2, _ = _mock_session(existing)
+
+            results = [ctx1, ctx2]
             idx = 0
 
             def sf():
@@ -356,6 +349,70 @@ class TestUpdateSummary:
             result = await svc.update_summary(vault_id)
 
         assert len(result.patch_log) == 3  # bounded to max_patch_log=3
+
+    @pytest.mark.asyncio
+    async def test_skips_write_on_version_conflict(self):
+        """If another update bumped the version during LLM call, skip the write."""
+        svc = _make_service()
+        vault_id = uuid4()
+        existing = VaultSummary(
+            vault_id=vault_id,
+            summary='Old overview',
+            topics=[],
+            stats={'total_notes': 10},
+            version=3,
+            notes_incorporated=10,
+            patch_log=[],
+            updated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        )
+
+        mock_prediction = MagicMock()
+        mock_prediction.updated_summary = 'Should not be persisted'
+        mock_prediction.updated_topics_json = '[]'
+
+        with (
+            patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
+        ):
+            mock_fetch.return_value = _make_note_metadata(1)
+            mock_run.return_value = mock_prediction
+
+            # Session 1: return version=3
+            ctx1, s1 = _mock_session(existing)
+            summary_result = MagicMock()
+            summary_result.scalar_one_or_none.return_value = existing
+            count_result = MagicMock()
+            count_result.scalar.return_value = 11
+            s1.execute = AsyncMock(side_effect=[summary_result, count_result])
+
+            # Session 2 (persist): return version=5 (bumped by concurrent update)
+            concurrent_summary = VaultSummary(
+                vault_id=vault_id,
+                summary='Concurrently updated',
+                topics=[],
+                stats={'total_notes': 12},
+                version=5,
+                notes_incorporated=12,
+                patch_log=[],
+                updated_at=datetime(2026, 4, 3, tzinfo=timezone.utc),
+            )
+            ctx2, _ = _mock_session(concurrent_summary)
+
+            results = [ctx1, ctx2]
+            idx = 0
+
+            def sf():
+                nonlocal idx
+                c = results[idx]
+                idx += 1
+                return c
+
+            svc.metastore.session = sf
+            result = await svc.update_summary(vault_id)
+
+        # Should return the concurrent version, NOT apply our LLM prediction
+        assert result.summary == 'Concurrently updated'
+        assert result.version == 5
 
 
 class TestRegenerateSummary:

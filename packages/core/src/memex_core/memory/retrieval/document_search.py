@@ -272,6 +272,19 @@ class NoteSearchEngine:
             scored = sorted(zip(rerank_candidates, normalized), key=lambda x: x[1], reverse=True)
             for result, score in scored:
                 result.score = score
+
+            # Normalize overflow scores so they don't outrank reranked results.
+            # Overflow items were never sent to the cross-encoder, so their scores
+            # are still on the RRF+boost scale.  Place them just below the lowest
+            # reranked score to preserve their relative order without polluting
+            # the sigmoid-normalized ranking.
+            if overflow and scored:
+                min_reranked = scored[-1][1]
+                # Small decrement per position so overflow items stay sorted
+                step = min(1e-4, min_reranked / (len(overflow) + 1)) if min_reranked > 0 else 0.0
+                for i, r in enumerate(overflow):
+                    r.score = max(0.0, min_reranked - step * (i + 1))
+
             return [r for r, _ in scored] + overflow
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Note search reranking failed: {e}. Falling back to RRF order.')
