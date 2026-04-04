@@ -20,6 +20,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 001_full_baseline uses SQLModel.metadata.create_all which creates
+    # the table from the current model (without last_note_id). Only drop
+    # the column if it actually exists.
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            'SELECT EXISTS (SELECT 1 FROM information_schema.columns '
+            "WHERE table_name = 'vault_summaries' AND column_name = 'last_note_id')"
+        )
+    )
+    if not result.scalar():
+        return
+
     op.drop_column('vault_summaries', 'last_note_id')
 
 

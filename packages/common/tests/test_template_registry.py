@@ -21,6 +21,7 @@ from memex_common.templates import (
 # ---------------------------------------------------------------------------
 
 BUILTIN_SLUGS = {
+    'agent_reflection',
     'general_note',
     'technical_brief',
     'architectural_decision_record',

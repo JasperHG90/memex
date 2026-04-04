@@ -104,6 +104,22 @@ def _mock_mcp_lifespan():
     mcp._lifespan = original
 
 
+@pytest.fixture(autouse=True)
+def _enable_discovery_mode():
+    """Enable progressive disclosure for all MCP tests.
+
+    The server only adds the transform when MEMEX_MCP_PROGRESSIVE_DISCLOSURE is
+    set at import time. Tests assume it's active, so we add/remove it here.
+    """
+    from memex_mcp.transforms import DiscoveryMode
+
+    transform = DiscoveryMode()
+    mcp.add_transform(transform)
+    yield
+    # Remove only the transform we added
+    mcp._transforms = [t for t in mcp._transforms if t is not transform]
+
+
 @pytest.fixture
 async def mcp_client():
     """Fixture providing a connected FastMCP client."""
