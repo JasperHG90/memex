@@ -902,7 +902,7 @@ class NoteSearchRequest(BaseModel):
         description=(
             'MMR lambda for relevance-diversity trade-off. '
             '1.0 = pure relevance, 0.0 = max diversity. '
-            'None = use server config default (which itself defaults to disabled).'
+            'None = use server config default (which itself defaults to 0.8).'
         ),
     )
 
