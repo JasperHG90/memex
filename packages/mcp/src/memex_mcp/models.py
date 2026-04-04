@@ -89,6 +89,7 @@ class McpMemoryUnitBase(BaseModel):
     tags: list[str] = []
     status: str = 'active'
     superseded_by: list[McpSupersession] = []
+    previously_returned: bool = False
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -176,6 +177,7 @@ class McpNoteSearchResult(BaseModel):
     source_uri: str | None = None
     has_assets: bool = False
     summaries: list[McpBlockSummary] = Field(default_factory=list)
+    previously_returned: bool = False
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -365,3 +367,35 @@ class McpLineageNode(BaseModel):
 
 
 McpLineageNode.model_rebuild()
+
+
+# ── Survey ──
+
+
+class McpSurveyFact(BaseModel):
+    """A single fact in a survey topic."""
+
+    id: UUID
+    text: str
+    fact_type: str
+    score: float | None = None
+
+
+class McpSurveyTopic(BaseModel):
+    """A group of facts from a single source note."""
+
+    note_id: UUID
+    title: str | None = None
+    fact_count: int
+    facts: list[McpSurveyFact] = []
+
+
+class McpSurveyResult(BaseModel):
+    """Result from a broad topic survey."""
+
+    query: str
+    sub_queries: list[str]
+    topics: list[McpSurveyTopic] = []
+    total_notes: int = 0
+    total_facts: int = 0
+    truncated: bool = False
