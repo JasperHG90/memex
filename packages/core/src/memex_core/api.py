@@ -991,7 +991,7 @@ class MemexAPI:
             from sqlmodel import select, col
 
             old_units_stmt = select(MemoryUnit.id).where(
-                col(MemoryUnit.note_id) == str(note_id),
+                col(MemoryUnit.note_id) == note_id,
                 col(MemoryUnit.context) == 'user_notes',
             )
             old_unit_rows = (await session.execute(old_units_stmt)).all()
@@ -1000,7 +1000,7 @@ class MemexAPI:
             old_entity_ids: set[UUID] = set()
             if old_unit_ids:
                 entity_stmt = select(UnitEntity.entity_id).where(
-                    col(UnitEntity.unit_id).in_([str(uid) for uid in old_unit_ids])
+                    col(UnitEntity.unit_id).in_(old_unit_ids)
                 )
                 entity_rows = (await session.execute(entity_stmt)).all()
                 old_entity_ids = {row[0] for row in entity_rows}
