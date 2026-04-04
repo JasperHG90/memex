@@ -60,12 +60,14 @@ class TestSynthesizeTags:
         assert result[1] == 'testing'
 
     def test_fifteen_tag_cap(self):
-        """Output must never exceed 15 tags."""
+        """Output must never exceed 15 tags; user tags are prioritized (appear first)."""
         many_tags = [f'tag-{i}' for i in range(10)]
         page_index = _make_page_index([many_tags])
         user_tags = [f'user-{i}' for i in range(10)]
         result = _synthesize_tags(page_index, user_tags=user_tags)
         assert len(result) == 15
+        # User tags must appear first and not be truncated
+        assert result[:10] == user_tags
 
     def test_multiple_blocks_merged(self):
         """Tags from multiple blocks are all included."""
