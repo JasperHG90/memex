@@ -66,6 +66,13 @@ async def list_notes(
     template: str | None = Query(
         None, description='Filter by template slug (e.g. "general_note").'
     ),
+    tags: list[str] | None = Query(
+        None, description='Filter by tags (AND semantics). Only notes containing all tags.'
+    ),
+    status: str | None = Query(
+        None,
+        description='Filter by note lifecycle status (e.g. "active", "archived").',
+    ),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -78,6 +85,8 @@ async def list_notes(
     - vault_id: Optional vault ID(s) or name(s) to filter by.
     - after: ISO 8601 date string. Only notes with date >= after.
     - before: ISO 8601 date string. Only notes with date <= before.
+    - tags: Filter by tags (AND semantics).
+    - status: Filter by note lifecycle status.
     """
     from datetime import datetime as dt
 
@@ -113,6 +122,8 @@ async def list_notes(
                 after=parsed_after,
                 before=parsed_before,
                 template=template,
+                tags=tags,
+                status=status,
             )
         return ndjson_response([build_note_list_item_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

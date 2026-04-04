@@ -1572,8 +1572,10 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
 @mcp.tool(
     name='memex_list_notes',
     description=(
-        'List notes with optional date filters. '
-        "Use after/before for temporal queries like 'documents from 2026'."
+        'List notes with optional date, tag, and status filters. '
+        "Use after/before for temporal queries like 'documents from 2026'. "
+        'Use tags for topic filtering (AND semantics). '
+        'Use status to filter by lifecycle (active, archived, etc.).'
     ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
@@ -1606,8 +1608,22 @@ async def memex_list_notes(
         str | None,
         Field(default=None, description='Filter by template slug (e.g. "general_note").'),
     ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description='Filter by tags (AND semantics). Only notes containing all specified tags.',
+        ),
+    ] = None,
+    status: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Filter by note lifecycle status (e.g. "active", "archived").',
+        ),
+    ] = None,
 ) -> list[McpNote]:
-    """List notes with optional date filters."""
+    """List notes with optional date, tag, and status filters."""
     from datetime import datetime as _dt
 
     try:
@@ -1635,6 +1651,8 @@ async def memex_list_notes(
             after=parsed_after,
             before=parsed_before,
             template=template,
+            tags=tags,
+            status=status,
         )
 
         return [
