@@ -1,7 +1,7 @@
 """Add vault_summaries table.
 
 Stores evolving vault-level summaries with topics, stats, patch log,
-and an optional embedding vector for semantic retrieval.
+and a patch log.
 
 Revision ID: 013_vault_summaries
 Revises: 012_note_archived_status
@@ -12,14 +12,11 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from pgvector.sqlalchemy import Vector
 
 revision: str = '013_vault_summaries'
 down_revision: Union[str, None] = '012_note_archived_status'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
-EMBEDDING_DIMENSION = 384
 
 
 def upgrade() -> None:
@@ -42,7 +39,6 @@ def upgrade() -> None:
         sa.Column(
             'patch_log', sa.dialects.postgresql.JSONB(), server_default=sa.text("'[]'::jsonb")
         ),
-        sa.Column('embedding', Vector(EMBEDDING_DIMENSION), nullable=True),
         sa.Column(
             'created_at',
             sa.dialects.postgresql.TIMESTAMP(timezone=True),
