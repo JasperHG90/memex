@@ -1011,9 +1011,7 @@ class MemexAPI:
                 from sqlalchemy import delete
 
                 await session.execute(
-                    delete(UnitEntity).where(
-                        col(UnitEntity.unit_id).in_([str(uid) for uid in old_unit_ids])
-                    )
+                    delete(UnitEntity).where(col(UnitEntity.unit_id).in_(old_unit_ids))
                 )
                 await session.execute(
                     delete(MemoryUnit).where(col(MemoryUnit.id).in_(old_unit_ids))

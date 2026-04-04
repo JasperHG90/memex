@@ -1361,10 +1361,5 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description='Last 20 patches: [{note_id, action, timestamp, delta}].',
     )
-    embedding: list[float] | None = Field(
-        default=None,
-        sa_column=Column(Vector(EMBEDDING_DIMENSION)),
-        description='Semantic embedding of the summary for retrieval.',
-    )
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
