@@ -234,3 +234,90 @@ async def delete_vault(
         console.print(f'[green]Vault "{identifier}" deleted successfully.[/green]')
     else:
         console.print(f'[red]Vault "{identifier}" not found.[/red]')
+
+
+@app.command('summary')
+@async_command
+async def vault_summary(
+    ctx: typer.Context,
+    identifier: Annotated[
+        str | None,
+        typer.Argument(help='Name or UUID of the vault. Defaults to the active vault.'),
+    ] = None,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    compact: Annotated[bool, typer.Option('--compact', help='Output as plain text.')] = False,
+    regenerate: Annotated[
+        bool, typer.Option('--regenerate', '-r', help='Regenerate the summary from all notes.')
+    ] = False,
+):
+    """
+    View or regenerate the vault summary.
+    """
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        vault_name = identifier or config.write_vault
+        try:
+            vault_uuid = await api.resolve_vault_identifier(vault_name)
+        except Exception as e:
+            handle_api_error(e)
+
+        if regenerate:
+            console.print(f'[bold cyan]Regenerating summary for vault:[/bold cyan] {vault_name}')
+            try:
+                summary = await api.regenerate_vault_summary(vault_uuid)
+            except Exception as e:
+                handle_api_error(e)
+            console.print('[bold green]Summary regenerated.[/bold green]')
+        else:
+            try:
+                summary = await api.get_vault_summary(vault_uuid)
+            except Exception as e:
+                handle_api_error(e)
+
+        if summary is None:
+            console.print('[yellow]No summary exists for this vault yet.[/yellow]')
+            console.print('Run with [bold]--regenerate[/bold] to generate one.')
+            return
+
+    if json_output:
+        console.print_json(json.dumps(summary.model_dump(), default=str))
+        return
+
+    if compact:
+        console.print(summary.summary)
+        if summary.topics:
+            console.print(f'\nTopics: {", ".join(t["name"] for t in summary.topics)}')
+        return
+
+    # Rich display
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+
+    console.print(
+        Panel(
+            Markdown(summary.summary),
+            title=f'Vault Summary — {vault_name} (v{summary.version})',
+            subtitle=f'{summary.notes_incorporated} notes incorporated',
+            border_style='cyan',
+        )
+    )
+
+    if summary.topics:
+        topic_table = Table(title='Topics')
+        topic_table.add_column('Name', style='cyan')
+        topic_table.add_column('Notes', style='dim', justify='right')
+        topic_table.add_column('Description', style='white')
+        for t in summary.topics:
+            topic_table.add_row(
+                t.get('name', ''), str(t.get('note_count', '')), t.get('description', '')
+            )
+        console.print(topic_table)
+
+    if summary.stats:
+        stat_table = Table(title='Stats', show_header=False, box=None, padding=(0, 2))
+        stat_table.add_column(style='dim')
+        stat_table.add_column(style='bold')
+        for k, v in summary.stats.items():
+            stat_table.add_row(k.replace('_', ' ').title(), str(v))
+        console.print(stat_table)

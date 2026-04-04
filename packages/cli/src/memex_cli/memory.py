@@ -417,6 +417,13 @@ async def search_memory(
     include_stale: Annotated[
         bool, typer.Option('--include-stale', help='Include stale memory units in results.')
     ] = False,
+    source_context: Annotated[
+        str | None,
+        typer.Option(
+            '--source-context',
+            help='Filter by source context (e.g. "user_notes").',
+        ),
+    ] = None,
 ):
     """
     Search for memories.
@@ -455,6 +462,7 @@ async def search_memory(
                 strategies=strategies,
                 vault_ids=vault_ids,
                 include_stale=include_stale,
+                source_context=source_context,
             )
         except Exception as e:
             handle_api_error(e)

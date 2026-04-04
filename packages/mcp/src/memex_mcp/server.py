@@ -257,6 +257,17 @@ RESPONSE FORMAT — MANDATORY for every response:
   `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID
 - Example: `[1] [note] Detailing the Sys Layer architecture — 2eb202ed-bee6-7b2a-f0b9-917e8d5dd6f0`
 
+IF checking vault overview, topics, or "what's in this vault":
+  → VAULT SUMMARY + SURVEY
+  1. `memex_get_vault_summary(vault_id)` → natural language summary, topics, stats
+  2. `memex_survey(query)` → decompose into sub-questions, parallel search, grouped results
+  Run both in parallel for comprehensive vault overview.
+
+IF user wants to annotate a note or update their commentary:
+  → USER NOTES
+  - `memex_update_user_notes(note_id, user_notes)` — update user annotations on a note
+  - `memex_search_user_notes(query)` — search only user annotations (source_context='user_notes')
+
 RULES:
 - Only use IDs from tool output. Never fabricate IDs.
 - Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
@@ -2703,45 +2714,6 @@ async def memex_get_vault_summary(
     except Exception as e:
         logger.error(f'Get vault summary failed: {e}', exc_info=True)
         raise ToolError(f'Get vault summary failed: {e}')
-
-
-@mcp.tool(
-    name='memex_regenerate_vault_summary',
-    description='Regenerate the vault summary from all notes. Use this when the summary '
-    'is stale or when you want a fresh overview. May take a moment for large vaults.',
-    tags={'manage'},
-)
-async def memex_regenerate_vault_summary(
-    ctx: Context,
-    vault_id: str | None = None,
-) -> dict:
-    """Trigger full regeneration of the vault summary."""
-    try:
-        api = get_api(ctx)
-        config = get_config(ctx)
-
-        if vault_id is None:
-            vid = await api.resolve_vault_identifier(config.server.default_active_vault)
-        else:
-            vid = await api.resolve_vault_identifier(vault_id)
-
-        summary = await api.vault_summary.regenerate_summary(vid)
-        return {
-            'id': str(summary.id),
-            'vault_id': str(summary.vault_id),
-            'summary': summary.summary,
-            'topics': summary.topics,
-            'stats': summary.stats,
-            'version': summary.version,
-            'notes_incorporated': summary.notes_incorporated,
-            'created_at': summary.created_at.isoformat() if summary.created_at else None,
-            'updated_at': summary.updated_at.isoformat() if summary.updated_at else None,
-        }
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'Regenerate vault summary failed: {e}', exc_info=True)
-        raise ToolError(f'Regenerate vault summary failed: {e}')
 
 
 def entrypoint():
