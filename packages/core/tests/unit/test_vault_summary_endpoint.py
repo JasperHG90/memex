@@ -30,7 +30,6 @@ def mock_summary(vault_id):
         stats={'total_notes': 5},
         version=3,
         notes_incorporated=5,
-        last_note_id=uuid4(),
         patch_log=[],
         created_at=now,
         updated_at=now,

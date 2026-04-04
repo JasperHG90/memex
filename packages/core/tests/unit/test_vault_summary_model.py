@@ -19,7 +19,6 @@ class TestVaultSummaryModel:
         assert vs.stats == {}
         assert vs.version == 1
         assert vs.notes_incorporated == 0
-        assert vs.last_note_id is None
         assert vs.patch_log == []
 
     def test_create_with_all_fields(self):
@@ -37,7 +36,6 @@ class TestVaultSummaryModel:
             stats=stats,
             version=3,
             notes_incorporated=10,
-            last_note_id=note_id,
             patch_log=patch_log,
         )
 
@@ -46,7 +44,6 @@ class TestVaultSummaryModel:
         assert vs.stats == stats
         assert vs.version == 3
         assert vs.notes_incorporated == 10
-        assert vs.last_note_id == note_id
         assert vs.patch_log == patch_log
 
     def test_tablename(self):

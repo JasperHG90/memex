@@ -204,3 +204,81 @@ class TestMaxRerankDocs:
         call_args = mock_reranker.score.call_args
         assert len(call_args[0][1]) == n_candidates
         assert len(reranked) == n_candidates
+
+
+class TestOverflowScoreNormalization:
+    """Verify overflow results get scores below all reranked results."""
+
+    @pytest.mark.asyncio
+    async def test_overflow_scores_below_min_reranked(self, mock_embedder, mock_reranker):
+        """Overflow scores must be strictly below the lowest reranked score."""
+        n_candidates = 35
+        ids = [uuid4() for _ in range(n_candidates)]
+        # Give overflow items high RRF+boost scores that would otherwise outrank
+        results = [
+            _make_result(note_id=ids[i], score=0.3 if i >= MAX_RERANK_DOCS else 0.05)
+            for i in range(n_candidates)
+        ]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        # Reranker returns moderate logits → sigmoid scores around 0.5-0.88
+        mock_reranker.score.return_value = [1.0 + i * 0.1 for i in range(MAX_RERANK_DOCS)]
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        reranked_scores = [r.score for r in reranked[:MAX_RERANK_DOCS]]
+        overflow_scores = [r.score for r in reranked[MAX_RERANK_DOCS:]]
+
+        min_reranked = min(reranked_scores)
+        for s in overflow_scores:
+            assert s < min_reranked, f'Overflow score {s} >= min reranked score {min_reranked}'
+
+    @pytest.mark.asyncio
+    async def test_overflow_preserves_relative_order(self, mock_embedder, mock_reranker):
+        """Overflow items should maintain descending score order."""
+        n_candidates = 35
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.1 - i * 0.001) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        mock_reranker.score.return_value = [float(i) for i in range(MAX_RERANK_DOCS)]
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        overflow_scores = [r.score for r in reranked[MAX_RERANK_DOCS:]]
+        assert overflow_scores == sorted(overflow_scores, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_overflow_scores_non_negative(self, mock_embedder, mock_reranker):
+        """Overflow scores must never go below 0."""
+        n_candidates = 35
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.05) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        # Very low logits → sigmoid near 0 → min_reranked very small
+        mock_reranker.score.return_value = [-10.0] * MAX_RERANK_DOCS
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        for r in reranked[MAX_RERANK_DOCS:]:
+            assert r.score >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_no_overflow_leaves_scores_unchanged(self, mock_embedder, mock_reranker):
+        """When all results fit in rerank window, no overflow normalization needed."""
+        n_candidates = 5
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.05) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        logits = [2.0, 1.0, 0.5, -0.5, -1.0]
+        mock_reranker.score.return_value = logits
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        # All scores should be sigmoid-normalized, no overflow processing
+        expected = sorted([1.0 / (1.0 + math.exp(-s)) for s in logits], reverse=True)
+        actual = [r.score for r in reranked]
+        for a, e in zip(actual, expected):
+            assert a == pytest.approx(e, rel=1e-6)

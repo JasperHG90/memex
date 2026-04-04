@@ -989,15 +989,29 @@ class MemexAPI:
         from memex_core.memory.extraction.core import content_hash as compute_hash
         from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
 
+        # Phase 1 — Read note metadata (short session, released immediately)
         async with self.metastore.session() as session:
-            # 1. Fetch note
+            note = await session.get(Note, note_id)
+            if note is None:
+                raise ValueError(f'Note {note_id} not found')
+            original_text = note.original_text or ''
+            note_vault_id = note.vault_id
+            note_created_at = note.created_at
+
+        # Phase 2 — LLM extraction + embeddings (no DB connection held)
+        processed_facts = await self._extraction.prepare_user_notes(
+            user_notes_text=user_notes or '',
+            vault_id=note_vault_id,
+            event_date=note_created_at,
+        )
+
+        # Phase 3 — Single atomic transaction: text update + delete old + persist new
+        async with self.metastore.session() as session:
             note = await session.get(Note, note_id)
             if note is None:
                 raise ValueError(f'Note {note_id} not found')
 
-            original_text = note.original_text or ''
-
-            # 2. Strip old user_notes from frontmatter
+            # Strip old user_notes from frontmatter
             fm_match = _FRONTMATTER_RE.match(original_text)
             if fm_match:
                 fm_body = fm_match.group(1)
@@ -1009,18 +1023,18 @@ class MemexAPI:
             else:
                 cleaned_text = original_text
 
-            # 3. Inject new user_notes
+            # Inject new user_notes
             if user_notes and user_notes.strip():
                 updated_text = inject_user_notes(cleaned_text, user_notes)
             else:
                 updated_text = cleaned_text
 
-            # 4. Update note
+            # Update note text + hash
             note.original_text = updated_text
             note.content_hash = compute_hash(updated_text)
             session.add(note)
 
-            # 5. Collect old entity IDs from context='user_notes' units
+            # Collect old entity IDs from context='user_notes' units
             from sqlmodel import select, col
 
             old_units_stmt = select(MemoryUnit.id).where(
@@ -1038,7 +1052,7 @@ class MemexAPI:
                 entity_rows = (await session.execute(entity_stmt)).all()
                 old_entity_ids = {row[0] for row in entity_rows}
 
-            # 6. Delete old MemoryUnits with context='user_notes'
+            # Delete old MemoryUnits with context='user_notes'
             units_deleted = len(old_unit_ids)
             if old_unit_ids:
                 from sqlalchemy import delete
@@ -1050,26 +1064,25 @@ class MemexAPI:
                     delete(MemoryUnit).where(col(MemoryUnit.id).in_(old_unit_ids))
                 )
 
-            # 7. Re-extract if non-empty
+            # Persist new extracted facts (dedup + insert + resolve + link)
             units_created = 0
             new_entity_ids: set[UUID] = set()
-            if user_notes and user_notes.strip():
-                new_unit_ids, new_entity_ids = await self._extraction.extract_user_notes(
+            if processed_facts:
+                new_unit_ids, new_entity_ids = await self._extraction.persist_user_notes(
                     session=session,
-                    user_notes_text=user_notes,
+                    processed_facts=processed_facts,
                     note_id=str(note_id),
-                    vault_id=note.vault_id,
-                    event_date=note.created_at,
+                    vault_id=note_vault_id,
                 )
                 units_created = len(new_unit_ids)
 
-            # 8. Enqueue affected entities for reflection
+            # Enqueue affected entities for reflection
             all_entity_ids = old_entity_ids | new_entity_ids
             if all_entity_ids and self.queue_service:
                 from memex_core.memory.extraction.pipeline.tracking import enqueue_for_reflection
 
                 await enqueue_for_reflection(
-                    session, all_entity_ids, note.vault_id, self.queue_service
+                    session, all_entity_ids, note_vault_id, self.queue_service
                 )
 
             await session.commit()

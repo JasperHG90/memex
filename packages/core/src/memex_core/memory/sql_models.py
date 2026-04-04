@@ -1332,7 +1332,7 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         description='1-3 paragraph natural language summary of vault contents.',
     )
     topics: list[dict[str, Any]] = Field(
-        default=[],
+        default_factory=list,
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description=(
             'Extracted topics: [{name, note_count, description, representative_note_ids}].'
@@ -1351,13 +1351,8 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         default=0,
         description='Count of notes incorporated into this summary.',
     )
-    last_note_id: UUID | None = Field(
-        default=None,
-        sa_column=Column(SA_UUID(), nullable=True),
-        description='ID of the most recently incorporated note.',
-    )
     patch_log: list[dict[str, Any]] = Field(
-        default=[],
+        default_factory=list,
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description='Last 20 patches: [{note_id, action, timestamp, delta}].',
     )

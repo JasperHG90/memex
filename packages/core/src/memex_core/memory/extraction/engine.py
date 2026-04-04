@@ -1501,25 +1501,22 @@ class ExtractionEngine:
 
         return {UUID(rid) for rid in resolved_ids}
 
-    async def extract_user_notes(
+    async def prepare_user_notes(
         self,
-        session: AsyncSession,
         user_notes_text: str,
-        note_id: str,
         vault_id: UUID,
         event_date: datetime | None = None,
-    ) -> tuple[list[str], set[UUID]]:
-        """Extract facts from user_notes text using the full post-processing pipeline.
+    ) -> list[ProcessedFact]:
+        """LLM extraction + embedding for user_notes text.  No DB access.
 
-        Runs: LLM extraction -> embeddings -> dedup -> persistence -> entity resolution
-        -> linking -> reflection queue. Mirrors the user_notes path in
-        ``extract_and_persist`` but is callable standalone for post-ingestion updates.
+        Call :meth:`persist_user_notes` afterwards inside a DB session to
+        write the results.  Splitting the two phases lets callers keep the
+        expensive LLM/embedding work outside a held DB connection.
 
-        Returns:
-            ``(unit_ids, touched_entity_ids)``
+        Returns an empty list when there is nothing to persist.
         """
         if not user_notes_text or not user_notes_text.strip():
-            return [], set()
+            return []
 
         effective_date = event_date or datetime.now(timezone.utc)
 
@@ -1556,10 +1553,28 @@ class ExtractionEngine:
         ]
 
         if not all_extracted_facts:
-            return [], set()
+            return []
 
         add_temporal_offsets(all_extracted_facts, self.SECONDS_PER_FACT)
-        processed_facts = await process_embeddings(self.embedding_model, all_extracted_facts)
+        return await process_embeddings(self.embedding_model, all_extracted_facts)
+
+    async def persist_user_notes(
+        self,
+        session: AsyncSession,
+        processed_facts: list[ProcessedFact],
+        note_id: str,
+        vault_id: UUID,
+    ) -> tuple[list[str], set[UUID]]:
+        """Persist pre-processed user_notes facts into the DB.
+
+        Handles deduplication, storage, entity resolution, linking, and
+        reflection enqueuing.  Must be called inside an active DB session.
+
+        Returns:
+            ``(unit_ids, touched_entity_ids)``
+        """
+        if not processed_facts:
+            return [], set()
 
         is_duplicate = await deduplication.check_duplicates_batch(
             session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
@@ -1582,3 +1597,29 @@ class ExtractionEngine:
         await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
 
         return unit_ids, touched_entity_ids
+
+    async def extract_user_notes(
+        self,
+        session: AsyncSession,
+        user_notes_text: str,
+        note_id: str,
+        vault_id: UUID,
+        event_date: datetime | None = None,
+    ) -> tuple[list[str], set[UUID]]:
+        """Extract facts from user_notes text using the full post-processing pipeline.
+
+        Convenience wrapper that calls :meth:`prepare_user_notes` then
+        :meth:`persist_user_notes` within the provided *session*.
+
+        .. note::
+
+           This holds the DB session open during LLM inference.  Prefer
+           calling ``prepare_user_notes`` outside a session and
+           ``persist_user_notes`` inside one when connection-pool pressure
+           is a concern.
+
+        Returns:
+            ``(unit_ids, touched_entity_ids)``
+        """
+        processed = await self.prepare_user_notes(user_notes_text, vault_id, event_date)
+        return await self.persist_user_notes(session, processed, note_id, vault_id)

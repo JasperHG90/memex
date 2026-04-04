@@ -108,25 +108,25 @@ class VaultSummaryService:
 
         If no summary exists, falls back to ``regenerate_summary()``.
         """
+        # Phase 1: Read current summary + delta notes + total count in one session
         async with self.metastore.session() as session:
             stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
             result = await session.execute(stmt)
             summary = result.scalar_one_or_none()
 
-        if summary is None:
-            return await self.regenerate_summary(vault_id)
+            if summary is None:
+                return await self.regenerate_summary(vault_id)
 
-        # Fetch delta notes (new since last update)
-        async with self.metastore.session() as session:
-            notes_data = await self._fetch_note_metadata(
-                session, vault_id, since=summary.updated_at
-            )
+            current_summary_text = summary.summary
+            current_topics = list(summary.topics)
+            current_version = summary.version
+            last_updated = summary.updated_at
 
-        if not notes_data:
-            return summary  # Nothing new
+            notes_data = await self._fetch_note_metadata(session, vault_id, since=last_updated)
 
-        # Count total active notes for stats
-        async with self.metastore.session() as session:
+            if not notes_data:
+                return summary  # Nothing new
+
             total_stmt = (
                 select(func.count())
                 .select_from(Note)
@@ -135,14 +135,14 @@ class VaultSummaryService:
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
-        # LLM call: update summary with delta
+        # Phase 2: LLM call outside any DB session
         predictor = dspy.Predict(VaultSummaryUpdateSignature)
         prediction = await run_dspy_operation(
             lm=self.lm,
             predictor=predictor,
             input_kwargs={
-                'current_summary': summary.summary,
-                'current_topics_json': json.dumps(summary.topics),
+                'current_summary': current_summary_text,
+                'current_topics_json': json.dumps(current_topics),
                 'new_notes_json': json.dumps(notes_data, default=str),
                 'vault_stats_json': json.dumps(
                     {
@@ -158,15 +158,27 @@ class VaultSummaryService:
         try:
             updated_topics = json.loads(prediction.updated_topics_json)
         except (json.JSONDecodeError, AttributeError):
-            updated_topics = summary.topics
+            updated_topics = current_topics
 
-        # Persist
+        # Phase 3: Persist with SELECT FOR UPDATE to prevent concurrent overwrites
         async with self.metastore.session() as session:
-            stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
+            stmt = (
+                select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id).with_for_update()
+            )
             result = await session.execute(stmt)
             summary = result.scalar_one_or_none()
             if summary is None:
                 return await self.regenerate_summary(vault_id)
+
+            # Optimistic check: if another update already incremented the version,
+            # skip this write to avoid overwriting a more recent update.
+            if summary.version != current_version:
+                logger.info(
+                    'Vault summary version changed (%d -> %d) during update, skipping',
+                    current_version,
+                    summary.version,
+                )
+                return summary
 
             summary.summary = prediction.updated_summary
             summary.topics = updated_topics
@@ -332,7 +344,6 @@ class VaultSummaryService:
             summary.stats = {'total_notes': 0}
             summary.version = (summary.version or 0) + 1
             summary.notes_incorporated = 0
-            summary.last_note_id = None
             summary.patch_log = []
 
             await session.commit()
@@ -410,6 +421,9 @@ class VaultSummaryService:
                     logger.warning(
                         'Failed to merge group in hierarchical pass, skipping', exc_info=True
                     )
+            if not merged:
+                logger.error('All merge groups failed in hierarchical pass')
+                return '', []
             batch_results = merged
 
         return await self._merge_batch_results(batch_results, note_count)
