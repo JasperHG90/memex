@@ -1419,3 +1419,58 @@ def template_dir(
     else:
         config: MemexConfig = ctx.obj
         console.print(str(pathlib.Path(config.server.file_store.root) / 'templates'))
+
+
+@app.command('update-user-notes')
+@async_command
+async def update_user_notes(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='UUID of the note to update.')],
+    user_notes: Annotated[
+        str | None,
+        typer.Option('--text', '-t', help='User notes text. Pass empty string to clear.'),
+    ] = None,
+    file: Annotated[
+        pathlib.Path | None,
+        typer.Option('--file', '-f', help='Read user notes from a file.'),
+    ] = None,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    Update user notes on an existing note.
+
+    User notes are your own commentary or context attached to a note.
+    They are extracted into the memory graph with source_context='user_notes'.
+    """
+    config: MemexConfig = ctx.obj
+    nid = parse_uuid(note_id, 'note_id')
+
+    if file and user_notes is not None:
+        console.print('[red]Provide either --text or --file, not both.[/red]')
+        raise typer.Exit(1)
+
+    if file:
+        if not file.exists():
+            console.print(f'[red]File not found: {file}[/red]')
+            raise typer.Exit(1)
+        async with aiofiles.open(file, 'r') as f:
+            user_notes = await f.read()
+    elif user_notes is None:
+        console.print('[red]Provide user notes via --text or --file.[/red]')
+        raise typer.Exit(1)
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.update_user_notes(nid, user_notes)
+        except Exception as e:
+            handle_api_error(e)
+
+    if json_output:
+        console.print_json(json.dumps(result, default=str))
+        return
+
+    console.print(f'[green]User notes updated for note {nid}.[/green]')
+    if 'units_deleted' in result:
+        console.print(f'  Old units removed: {result["units_deleted"]}')
+    if 'units_created' in result:
+        console.print(f'  New units created: {result["units_created"]}')

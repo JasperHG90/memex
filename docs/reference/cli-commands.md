@@ -54,6 +54,7 @@ Add a new memory to Memex. Accepts text content directly, a file/directory path,
 | `--vault NAME` | `-v` | str | Target vault for writing (overrides active vault). |
 | `--key KEY` | `-k` | str | Unique stable key for the note (enables idempotent updates). |
 | `--background` | `-b` | bool | Queue ingestion as a background job instead of waiting for completion. |
+| `--user-notes TEXT` | `-n` | str | Your own context or commentary about this note. |
 
 #### Examples
 
@@ -106,6 +107,13 @@ Add a new note to Memex. Accepts text content directly, a file/directory path, o
 | `--vault NAME` | `-v` | str | Target vault for writing (overrides active vault). |
 | `--key KEY` | `-k` | str | Unique stable key for the note (enables idempotent updates). |
 | `--background` | `-b` | bool | Queue ingestion as a background job instead of waiting for completion. |
+| `--user-notes TEXT` | `-n` | str | Your own context or commentary about this note. |
+| `--title TEXT` | `-t` | str | Note title (default: "Quick Note" for inline). |
+| `--description TEXT` | | str | Note description/summary. |
+| `--author TEXT` | | str | Author name. |
+| `--tag TEXT` | | str | Tag for the note. Repeatable for multiple tags. |
+| `--date DATE` | `-d` | str | Note date in ISO 8601 format (e.g. `2026-03-15`). |
+| `--template SLUG` | | str | Template slug used to create this note. |
 
 #### Examples
 

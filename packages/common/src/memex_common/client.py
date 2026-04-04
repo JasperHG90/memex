@@ -27,6 +27,7 @@ from memex_common.schemas import (
     ReflectionResultDTO,
     MemoryUnitDTO,
     VaultDTO,
+    VaultSummaryDTO,
     ReflectionQueueDTO,
     IngestResponse,
     EntityDTO,
@@ -165,6 +166,21 @@ class RemoteMemexAPI:
         """Set the default reader vault on the server."""
         response = await self.client.post(f'vaults/{identifier}/set-reader')
         return await self._handle_response(response)
+
+    async def get_vault_summary(self, vault_id: UUID) -> VaultSummaryDTO | None:
+        """Get the summary for a vault. Returns None if no summary exists."""
+        try:
+            result = await self._get(f'vaults/{vault_id}/summary')
+            return VaultSummaryDTO(**result)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def regenerate_vault_summary(self, vault_id: UUID) -> VaultSummaryDTO:
+        """Regenerate the vault summary from all notes."""
+        result = await self._post(f'vaults/{vault_id}/summary/regenerate', {})
+        return VaultSummaryDTO(**result)
 
     # --- Memory ---
     async def ingest(
@@ -400,6 +416,10 @@ class RemoteMemexAPI:
     async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
         """Get metadata for multiple notes."""
         return await self._post('notes/metadata/batch', {'note_ids': [str(n) for n in note_ids]})
+
+    async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
+        """Update user notes on an existing note and reprocess into memory graph."""
+        return await self._patch(f'notes/{note_id}/user-notes', {'user_notes': user_notes})
 
     async def delete_note(self, note_id: UUID) -> bool:
         """Delete a note and all associated data."""
