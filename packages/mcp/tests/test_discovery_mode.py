@@ -6,7 +6,7 @@ from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from memex_mcp.server import mcp
 
 
-EXPECTED_TAGS = {'search', 'read', 'write', 'browse', 'entities', 'assets', 'storage', 'manage'}
+EXPECTED_TAGS = {'search', 'read', 'write', 'browse', 'entities', 'assets', 'storage'}
 
 # Natural-language queries mapped to expected tool(s) — used for BM25 recall testing.
 BM25_TEST_CASES: list[tuple[str, list[str]]] = [
@@ -81,7 +81,7 @@ async def test_enabled_by_default():
 
 
 async def test_tags_returns_categories():
-    """memex_tags should return all 7 categories."""
+    """memex_tags should return all categories."""
     async with Client(mcp) as client:
         result = await client.call_tool('memex_tags', {'detail': 'brief'})
     text = result.content[0].text
