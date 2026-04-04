@@ -1011,6 +1011,61 @@ class FindNoteResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Survey (broad topic exploration)
+# ---------------------------------------------------------------------------
+
+
+class SurveyRequest(BaseModel):
+    """Request for broad topic survey — decomposes into sub-questions and aggregates."""
+
+    query: str = Field(..., description='Broad topic or panoramic query to survey.')
+    vault_ids: list[UUID | str] | None = Field(
+        default=None,
+        description='Vault UUIDs or names to search. If None, uses default reader vault.',
+    )
+    limit_per_query: int = Field(
+        default=10, ge=1, le=50, description='Max results per sub-question.'
+    )
+    token_budget: int | None = Field(
+        default=None,
+        description='Max token budget for all results. Greedy packing: truncates when exceeded.',
+    )
+
+
+class SurveyFact(BaseModel):
+    """A single fact within a survey topic."""
+
+    id: UUID = Field(description='Memory unit ID.')
+    text: str = Field(description='The fact text.')
+    fact_type: str = Field(description='Type: world, event, or observation.')
+    score: float | None = Field(default=None, description='Relevance score.')
+
+
+class SurveyTopic(BaseModel):
+    """A group of facts from a single source note."""
+
+    note_id: UUID = Field(description='Source note ID.')
+    title: str | None = Field(default=None, description='Note title.')
+    fact_count: int = Field(description='Number of facts from this note.')
+    facts: list[SurveyFact] = Field(default_factory=list, description='Facts from this note.')
+
+
+class SurveyResponse(BaseModel):
+    """Response from a broad topic survey."""
+
+    query: str = Field(description='The original survey query.')
+    sub_queries: list[str] = Field(description='Decomposed sub-questions.')
+    topics: list[SurveyTopic] = Field(
+        default_factory=list, description='Results grouped by source note.'
+    )
+    total_notes: int = Field(default=0, description='Total unique notes found.')
+    total_facts: int = Field(default=0, description='Total unique facts found.')
+    truncated: bool = Field(
+        default=False, description='True if results were truncated by token budget.'
+    )
+
+
+# ---------------------------------------------------------------------------
 # TOC filtering utility
 # ---------------------------------------------------------------------------
 
