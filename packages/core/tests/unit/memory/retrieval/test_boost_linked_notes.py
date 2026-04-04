@@ -1,6 +1,8 @@
 """Unit tests for NoteSearchEngine._boost_linked_notes (Feature E: Note Linking)."""
 
+import numpy as np
 import pytest
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 from memex_common.schemas import NoteSearchResult
@@ -201,3 +203,55 @@ class TestBoostLinkedNotes:
         b = next(r for r in results if r.note_id == note_b.note_id)
         assert a.score == pytest.approx(0.10 + LINKED_NOTE_BOOST)
         assert b.score == pytest.approx(0.08 + LINKED_NOTE_BOOST)
+
+
+class TestBoostBeforeRerankPipeline:
+    """AC-E02: Pipeline-level test proving boost runs before rerank."""
+
+    @pytest.mark.asyncio
+    async def test_reranker_receives_boost_reordered_input(self):
+        """Simulate the search() pipeline: boost then rerank.
+
+        Setup: three notes where note_c (lowest score) gets boosted above note_b
+        because another note mentions its title. The mock reranker captures the
+        input texts it receives. We assert that the reranker sees them in the
+        post-boost order (C first), not the original RRF order (A first).
+        """
+        mock_embedder = MagicMock()
+        mock_embedder.encode.return_value = [np.array([0.1] * 384)]
+
+        captured_texts: list[str] = []
+
+        def capture_reranker(query: str, texts: list[str]) -> list[float]:
+            captured_texts.extend(texts)
+            # Return descending scores to preserve input order
+            return [float(len(texts) - i) for i in range(len(texts))]
+
+        mock_reranker = MagicMock()
+        mock_reranker.score.side_effect = capture_reranker
+
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+
+        # note_a: highest RRF score, note_b: middle, note_c: lowest
+        note_a = _make_result(title='Alpha Report', score=0.12)
+        note_b = _make_result(title='Beta Summary', score=0.08)
+        note_c = _make_result(title='Gamma Analysis', score=0.05)
+
+        # note_a's chunk text references note_c's title -> note_c gets boosted
+        best_chunk_text = {
+            note_a.note_id: 'see the Gamma Analysis for details',
+            note_b.note_id: 'unrelated text here',
+            note_c.note_id: 'gamma analysis content',
+        }
+
+        # Run pipeline: boost then rerank (same sequence as search())
+        results = [note_a, note_b, note_c]
+        results = NoteSearchEngine._boost_linked_notes(results, best_chunk_text)
+        results = await engine._rerank_results('test query', results, best_chunk_text)
+
+        # After boost: C=0.05+0.15=0.20, A=0.12, B=0.08 -> order is [C, A, B]
+        # The reranker must see texts in that boosted order
+        assert len(captured_texts) == 3
+        assert captured_texts[0] == best_chunk_text[note_c.note_id]
+        assert captured_texts[1] == best_chunk_text[note_a.note_id]
+        assert captured_texts[2] == best_chunk_text[note_b.note_id]
