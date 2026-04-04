@@ -891,6 +891,10 @@ class NoteSearchRequest(BaseModel):
         default=False,
         description='Synthesize a full answer from identified sections (implies reason=True).',
     )
+    rerank: bool = Field(
+        default=True,
+        description='Apply cross-encoder reranking when a reranker is available.',
+    )
     mmr_lambda: float | None = Field(
         default=None,
         ge=0.0,
