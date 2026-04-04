@@ -196,6 +196,15 @@ class RetrievalRequest(BaseModel):
         default=None, description='Only return results from notes with ALL of these tags.'
     )
 
+    # Source context filtering
+    source_context: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by their context field (e.g. "user_notes"). '
+            'When set, only units with matching context are returned.'
+        ),
+    )
+
     # Advanced options
     rerank: bool = Field(
         default=True, description='Whether to apply neural reranking if available.'
