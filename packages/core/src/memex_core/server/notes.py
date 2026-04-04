@@ -376,3 +376,20 @@ async def delete_note_assets(
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to delete assets from note')
+
+
+class UpdateUserNotesRequest(BaseModel):
+    user_notes: str | None
+
+
+@router.patch('/notes/{note_id}/user-notes', dependencies=[Depends(require_write)])
+async def update_user_notes(
+    note_id: UUID,
+    request: Annotated[UpdateUserNotesRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Update user_notes on an existing note and reprocess into memory graph."""
+    try:
+        return await api.update_user_notes(note_id, request.user_notes)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to update user notes')
