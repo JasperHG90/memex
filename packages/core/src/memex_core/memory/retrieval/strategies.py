@@ -75,6 +75,14 @@ def apply_generic_filters(statement: Select, **kwargs: Any) -> Select:
     return statement
 
 
+def apply_context_filter(statement: Select, **kwargs: Any) -> Select:
+    """Filter MemoryUnits by their ``context`` column when ``source_context`` is set."""
+    source_context = kwargs.get('source_context')
+    if source_context:
+        statement = statement.where(col(MemoryUnit.context) == source_context)
+    return statement
+
+
 @runtime_checkable
 class RetrievalStrategy(Protocol):
     """Protocol for memory retrieval strategies."""
@@ -99,6 +107,7 @@ class SemanticStrategy:
         statement = apply_date_filters(statement, MemoryUnit.event_date, **kwargs)
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
+        statement = apply_context_filter(statement, **kwargs)
 
         if query_embedding is None:
             # If no embedding, this strategy is effectively disabled
@@ -138,6 +147,7 @@ class KeywordStrategy:
         statement = apply_date_filters(statement, MemoryUnit.event_date, **kwargs)
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
+        statement = apply_context_filter(statement, **kwargs)
 
         return (
             statement.add_columns(rank.label('score'))
@@ -447,10 +457,12 @@ class EntityCooccurrenceGraphStrategy:
         select_first = apply_date_filters(select_first, MemoryUnit.event_date, **kwargs)
         select_first = apply_vault_filters(select_first, MemoryUnit.vault_id, **kwargs)
         select_first = apply_generic_filters(select_first, **kwargs)
+        select_first = apply_context_filter(select_first, **kwargs)
 
         select_second = apply_date_filters(select_second, MemoryUnit.event_date, **kwargs)
         select_second = apply_vault_filters(select_second, MemoryUnit.vault_id, **kwargs)
         select_second = apply_generic_filters(select_second, **kwargs)
+        select_second = apply_context_filter(select_second, **kwargs)
 
         # 2. 1st Order Memories (Direct Link)
         # V2 Scoring: 1.0 + Temporal Decay
@@ -576,6 +588,7 @@ class TemporalStrategy:
         statement = apply_date_filters(statement, MemoryUnit.event_date, **kwargs)
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
+        statement = apply_context_filter(statement, **kwargs)
 
         return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
 
@@ -661,6 +674,7 @@ class EntityCooccurrenceNoteGraphStrategy:
             first_order = first_order.where(col(Chunk.status) == ContentStatus.ACTIVE)
 
         first_order = apply_vault_filters(first_order, Chunk.vault_id, **kwargs)
+        first_order = apply_context_filter(first_order, **kwargs)
 
         # 2nd Order: Co-occurrence expansion
         neighbor_id_expr = func.coalesce(
@@ -700,6 +714,7 @@ class EntityCooccurrenceNoteGraphStrategy:
         if not include_stale:
             second_order = second_order.where(col(Chunk.status) == ContentStatus.ACTIVE)
         second_order = apply_vault_filters(second_order, Chunk.vault_id, **kwargs)
+        second_order = apply_context_filter(second_order, **kwargs)
 
         return first_order.union_all(second_order).order_by(text('score DESC')).limit(limit)
 
@@ -784,6 +799,7 @@ class CausalGraphStrategy:
         select_first = apply_date_filters(select_first, MemoryUnit.event_date, **kwargs)
         select_first = apply_vault_filters(select_first, MemoryUnit.vault_id, **kwargs)
         select_first = apply_generic_filters(select_first, **kwargs)
+        select_first = apply_context_filter(select_first, **kwargs)
 
         days_diff = (
             func.extract('epoch', func.now()) - func.extract('epoch', col(MemoryUnit.event_date))
@@ -806,6 +822,7 @@ class CausalGraphStrategy:
         select_causal = apply_date_filters(select_causal, MemoryUnit.event_date, **kwargs)
         select_causal = apply_vault_filters(select_causal, MemoryUnit.vault_id, **kwargs)
         select_causal = apply_generic_filters(select_causal, **kwargs)
+        select_causal = apply_context_filter(select_causal, **kwargs)
 
         causal_expansion = (
             select_causal.add_columns((col(MemoryLink.weight) * literal(0.8)).label('score'))
@@ -1011,6 +1028,7 @@ class LinkExpansionGraphStrategy:
         fo_stmt = apply_date_filters(fo_stmt, MemoryUnit.event_date, **kwargs)
         fo_stmt = apply_vault_filters(fo_stmt, MemoryUnit.vault_id, **kwargs)
         fo_stmt = apply_generic_filters(fo_stmt, **kwargs)
+        fo_stmt = apply_context_filter(fo_stmt, **kwargs)
         first_order = fo_stmt.cte('le_first_order')
 
         # 1. Entity expansion -------------------------------------------

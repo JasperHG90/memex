@@ -1500,3 +1500,85 @@ class ExtractionEngine:
             raise
 
         return {UUID(rid) for rid in resolved_ids}
+
+    async def extract_user_notes(
+        self,
+        session: AsyncSession,
+        user_notes_text: str,
+        note_id: str,
+        vault_id: UUID,
+        event_date: datetime | None = None,
+    ) -> tuple[list[str], set[UUID]]:
+        """Extract facts from user_notes text using the full post-processing pipeline.
+
+        Runs: LLM extraction -> embeddings -> dedup -> persistence -> entity resolution
+        -> linking -> reflection queue. Mirrors the user_notes path in
+        ``extract_and_persist`` but is callable standalone for post-ingestion updates.
+
+        Returns:
+            ``(unit_ids, touched_entity_ids)``
+        """
+        if not user_notes_text or not user_notes_text.strip():
+            return [], set()
+
+        effective_date = event_date or datetime.now(timezone.utc)
+
+        un_facts, _ = await extract_facts_from_text(
+            text=user_notes_text,
+            event_date=effective_date,
+            lm=self.lm,
+            predictor=self.predictor,
+            agent_name='memex_agent',
+            chunk_max_chars=4000,
+            chunk_overlap=200,
+            context='user_notes',
+            semaphore=self.semaphore,
+        )
+
+        all_extracted_facts = [
+            ExtractedFact(
+                fact_text=f.formatted_text,
+                fact_type=f.fact_type,
+                entities=f.entities,
+                occurred_start=parse_iso_datetime(f.occurred_start) if f.occurred_start else None,
+                occurred_end=parse_iso_datetime(f.occurred_end) if f.occurred_end else None,
+                causal_relations=[],
+                content_index=0,
+                chunk_index=0,
+                context='user_notes',
+                mentioned_at=effective_date,
+                payload={},
+                who=f.who,
+                where=f.where,
+                vault_id=vault_id,
+            )
+            for f in un_facts
+        ]
+
+        if not all_extracted_facts:
+            return [], set()
+
+        add_temporal_offsets(all_extracted_facts, self.SECONDS_PER_FACT)
+        processed_facts = await process_embeddings(self.embedding_model, all_extracted_facts)
+
+        is_duplicate = await deduplication.check_duplicates_batch(
+            session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
+        )
+        final_processed = [pf for pf, dup in zip(processed_facts, is_duplicate) if not dup]
+
+        if not final_processed:
+            return [], set()
+
+        for pf in final_processed:
+            pf.note_id = note_id
+
+        unit_ids = await storage.insert_facts_batch(session, final_processed, note_id=note_id)
+
+        touched_entity_ids = await self._resolve_entities(
+            session, unit_ids, final_processed, vault_id=vault_id
+        )
+        await create_links(session, unit_ids, final_processed, vault_id=vault_id)
+
+        await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
+
+        return unit_ids, touched_entity_ids

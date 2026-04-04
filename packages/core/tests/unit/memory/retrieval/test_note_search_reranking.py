@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from memex_common.schemas import NoteSearchResult
-from memex_core.memory.retrieval.document_search import NoteSearchEngine
+from memex_core.memory.retrieval.document_search import MAX_RERANK_DOCS, NoteSearchEngine
 
 
 @pytest.fixture
@@ -140,3 +140,67 @@ class TestNoteSearchReranking:
         assert len(reranked) == 2
         assert reranked[0].score == 0.07
         assert reranked[1].score == 0.05
+
+
+class TestMaxRerankDocs:
+    def test_max_rerank_docs_constant_is_30(self):
+        """AC-F01: MAX_RERANK_DOCS constant exists and equals 30."""
+        assert MAX_RERANK_DOCS == 30
+
+    @pytest.mark.asyncio
+    async def test_rerank_caps_at_max_rerank_docs(self, mock_embedder, mock_reranker):
+        """AC-F02: Only top 30 candidates are sent to the cross-encoder."""
+        n_candidates = 50
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.1 - i * 0.001) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        # Reranker should only receive MAX_RERANK_DOCS texts
+        mock_reranker.score.return_value = [float(i) for i in range(MAX_RERANK_DOCS)]
+
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        # Verify reranker was called with exactly MAX_RERANK_DOCS texts
+        call_args = mock_reranker.score.call_args
+        assert len(call_args[0][1]) == MAX_RERANK_DOCS
+
+        # All 50 results should still be returned (30 reranked + 20 overflow)
+        assert len(reranked) == n_candidates
+
+    @pytest.mark.asyncio
+    async def test_rerank_preserves_overflow_after_reranked(self, mock_embedder, mock_reranker):
+        """Non-reranked overflow results are appended after the reranked set."""
+        n_candidates = 35
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.1 - i * 0.001) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+        overflow_ids = set(ids[MAX_RERANK_DOCS:])
+
+        mock_reranker.score.return_value = [float(i) for i in range(MAX_RERANK_DOCS)]
+
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        # Last 5 results should be the overflow (unreranked), preserving original order
+        tail = reranked[MAX_RERANK_DOCS:]
+        assert len(tail) == 5
+        for r in tail:
+            assert r.note_id in overflow_ids
+
+    @pytest.mark.asyncio
+    async def test_rerank_under_cap_sends_all(self, mock_embedder, mock_reranker):
+        """When candidates <= MAX_RERANK_DOCS, all are sent to reranker."""
+        n_candidates = 10
+        ids = [uuid4() for _ in range(n_candidates)]
+        results = [_make_result(note_id=ids[i], score=0.05) for i in range(n_candidates)]
+        chunk_texts = {ids[i]: f'chunk {i}' for i in range(n_candidates)}
+
+        mock_reranker.score.return_value = [float(i) for i in range(n_candidates)]
+
+        engine = NoteSearchEngine(embedder=mock_embedder, reranker=mock_reranker)
+        reranked = await engine._rerank_results('query', results, chunk_texts)
+
+        call_args = mock_reranker.score.call_args
+        assert len(call_args[0][1]) == n_candidates
+        assert len(reranked) == n_candidates

@@ -68,6 +68,7 @@ class SearchService:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
+        source_context: str | None = None,
     ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
@@ -100,6 +101,7 @@ class SearchService:
             after=after,
             before=before,
             tags=tags,
+            source_context=source_context,
         )
 
         async with self.metastore.session() as session:

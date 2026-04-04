@@ -41,6 +41,7 @@ from memex_core.server.stats import router as stats_router
 from memex_core.server.health import router as health_router
 from memex_core.server.summary import router as summary_router
 from memex_core.server.survey import router as survey_router
+from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
@@ -293,3 +294,4 @@ app.include_router(summary_router)
 app.include_router(audit_router)
 app.include_router(kv_router)
 app.include_router(survey_router)
+app.include_router(vault_summary_router)

@@ -275,6 +275,10 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Thread source_context filter for context-scoped retrieval
+        if request.source_context:
+            filters['source_context'] = request.source_context
+
         # Pre-compute NER entities off the event loop so graph strategies don't block
         t0 = _t()
         if self.ner_model is not None:

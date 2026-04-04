@@ -196,6 +196,15 @@ class RetrievalRequest(BaseModel):
         default=None, description='Only return results from notes with ALL of these tags.'
     )
 
+    # Source context filtering
+    source_context: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by their context field (e.g. "user_notes"). '
+            'When set, only units with matching context are returned.'
+        ),
+    )
+
     # Advanced options
     rerank: bool = Field(
         default=True, description='Whether to apply neural reranking if available.'
@@ -902,7 +911,7 @@ class NoteSearchRequest(BaseModel):
         description=(
             'MMR lambda for relevance-diversity trade-off. '
             '1.0 = pure relevance, 0.0 = max diversity. '
-            'None = use server config default (which itself defaults to disabled).'
+            'None = use server config default (which itself defaults to 0.8).'
         ),
     )
 
@@ -930,6 +939,22 @@ class SummaryResponse(BaseModel):
     summary: str = Field(
         description='AI-generated summary with bracket citations (e.g. [0], [1]).',
     )
+
+
+class VaultSummaryDTO(BaseModel):
+    """DTO for a vault-level summary."""
+
+    id: UUID = Field(description='Unique identifier for the vault summary.')
+    vault_id: UUID = Field(description='The vault this summary describes.')
+    summary: str = Field(description='Natural language summary of vault contents.')
+    topics: list[dict[str, Any]] = Field(
+        description='Extracted topics: [{name, note_count, description}].'
+    )
+    stats: dict[str, Any] = Field(description='Aggregate vault statistics.')
+    version: int = Field(description='Summary version number.')
+    notes_incorporated: int = Field(description='Number of notes incorporated.')
+    created_at: dt.datetime = Field(description='When the summary was created.')
+    updated_at: dt.datetime = Field(description='When the summary was last updated.')
 
 
 class PageMetadataDTO(BaseModel):

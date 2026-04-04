@@ -123,6 +123,7 @@ class VaultService(BaseService):
             MemoryUnit,
             Note,
             ReflectionQueue,
+            VaultSummary,
         )
 
         counts: dict[str, int] = {}
@@ -162,6 +163,7 @@ class VaultService(BaseService):
                 ('memory_units', MemoryUnit),
                 ('notes', Note),
                 ('batch_jobs', BatchJob),
+                ('vault_summaries', VaultSummary),
             ]
             for label, model in vault_tables:
                 stmt = delete(model).where(col(model.vault_id) == vault_id)  # type: ignore[attr-defined]

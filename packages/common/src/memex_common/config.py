@@ -962,6 +962,46 @@ class DocumentConfig(BaseModel):
     )
 
 
+class VaultSummaryConfig(BaseModel):
+    """Configuration for vault summary generation.
+
+    Vault summaries are updated periodically (time-based) by checking for
+    new notes since the last update. Full regeneration is available on demand.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic vault summary generation via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description='Interval in seconds between vault summary update checks. Default: 1 hour.',
+    )
+    model: ModelConfig | None = Field(
+        default=None,
+        description='Model for vault summary LLM calls. If None, uses server default.',
+    )
+    batch_size: int = Field(
+        default=50,
+        ge=10,
+        le=200,
+        description='Number of notes per batch for hierarchical summarization (Tier 2/3).',
+    )
+    max_patch_log: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description='Maximum number of entries in the update log.',
+    )
+    max_summary_tokens: int = Field(
+        default=750,
+        ge=100,
+        le=2000,
+        description='Maximum token count for the vault summary text.',
+    )
+
+
 class ServerConfig(BaseModel):
     """Configuration for the Memex API Server."""
 
@@ -1060,6 +1100,11 @@ class ServerConfig(BaseModel):
         description='Configuration for document search and processing.',
     )
 
+    vault_summary: VaultSummaryConfig = Field(
+        default_factory=VaultSummaryConfig,
+        description='Configuration for vault summary generation.',
+    )
+
     tracing: TracingConfig = Field(
         default_factory=TracingConfig,
         description='OpenTelemetry tracing configuration. Disabled by default.',
@@ -1124,6 +1169,8 @@ class ServerConfig(BaseModel):
             self.memory.contradiction.model = dm
         if self.document.model is None:
             self.document.model = dm
+        if self.vault_summary.model is None:
+            self.vault_summary.model = dm
         return self
 
 
