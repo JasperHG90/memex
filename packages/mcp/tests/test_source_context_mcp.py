@@ -42,9 +42,11 @@ async def test_memory_search_source_context_defaults_none(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_search_user_notes_tool_exists(mcp_client):
+async def test_search_user_notes_tool_exists():
     """AC-B06: memex_search_user_notes tool exists."""
-    tools = await mcp_client.list_tools()
+    from memex_mcp.server import mcp
+
+    tools = await mcp._list_tools()
     tool_names = [t.name for t in tools]
     assert 'memex_search_user_notes' in tool_names
 

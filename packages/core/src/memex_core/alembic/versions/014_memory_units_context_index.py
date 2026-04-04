@@ -10,6 +10,7 @@ Create Date: 2026-04-04
 
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = '014_memory_units_context_index'
@@ -19,6 +20,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 001_full_baseline uses SQLModel.metadata.create_all which may already
+    # create this index if it's defined in the model's __table_args__.
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_memory_units_context')"
+        )
+    )
+    if result.scalar():
+        return
+
     op.create_index(
         'ix_memory_units_context',
         'memory_units',

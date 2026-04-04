@@ -20,6 +20,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 001_full_baseline uses SQLModel.metadata.create_all which may already
+    # create this table if the VaultSummary model exists at import time.
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            'SELECT EXISTS (SELECT 1 FROM information_schema.tables '
+            "WHERE table_name = 'vault_summaries')"
+        )
+    )
+    if result.scalar():
+        return
+
     op.create_table(
         'vault_summaries',
         sa.Column('id', sa.Uuid(), primary_key=True),

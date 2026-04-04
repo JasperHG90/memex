@@ -651,6 +651,11 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
             'search_tsvector',
             postgresql_using='gin',
         ),
+        Index(
+            'ix_memory_units_context',
+            'context',
+            postgresql_where=sql_text('context IS NOT NULL'),
+        ),
     )
 
     @property
