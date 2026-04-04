@@ -25,11 +25,13 @@ fi
 # Build stats summary
 stats="commits: ${commits}, file writes: ${writes}"
 
-# Post marker note via CLI
-memex note add \
-    "Session ended. Stats: ${stats}." \
-    --tags "session-marker" --tags "agent-reflection" \
-    2>/dev/null || true
+# Post marker note via CLI (if memex is available)
+if command -v memex >/dev/null 2>&1; then
+    memex note add \
+        "Session ended. Stats: ${stats}." \
+        --tags "session-marker" --tags "agent-reflection" \
+        2>/dev/null || true
+fi
 
 # Output empty JSON (SessionEnd hooks do not inject context)
 echo '{}'

@@ -674,6 +674,7 @@ class EntityCooccurrenceNoteGraphStrategy:
             first_order = first_order.where(col(Chunk.status) == ContentStatus.ACTIVE)
 
         first_order = apply_vault_filters(first_order, Chunk.vault_id, **kwargs)
+        first_order = apply_context_filter(first_order, **kwargs)
 
         # 2nd Order: Co-occurrence expansion
         neighbor_id_expr = func.coalesce(
@@ -713,6 +714,7 @@ class EntityCooccurrenceNoteGraphStrategy:
         if not include_stale:
             second_order = second_order.where(col(Chunk.status) == ContentStatus.ACTIVE)
         second_order = apply_vault_filters(second_order, Chunk.vault_id, **kwargs)
+        second_order = apply_context_filter(second_order, **kwargs)
 
         return first_order.union_all(second_order).order_by(text('score DESC')).limit(limit)
 
