@@ -474,6 +474,12 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self.vault_summary = VaultSummaryService(
+            metastore=self.metastore,
+            lm=self.lm,
+            config=self.config.server.vault_summary,
+        )
+
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -482,12 +488,7 @@ class MemexAPI:
             memory=self.memory,
             file_processor=self._file_processor,
             vaults=self._vaults,
-        )
-
-        self.vault_summary = VaultSummaryService(
-            metastore=self.metastore,
-            lm=self.lm,
-            config=self.config.server.vault_summary,
+            vault_summary_service=self.vault_summary,
         )
 
         # Wire audit service into all domain services that emit events
