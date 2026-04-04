@@ -43,6 +43,8 @@ from memex_common.schemas import (
     NodeDTO,
     SummaryRequest,
     SummaryResponse,
+    SurveyRequest,
+    SurveyResponse,
 )
 
 logger = logging.getLogger('memex.common.client')
@@ -339,6 +341,23 @@ class RemoteMemexAPI:
         )
         result = await self._post('notes/search', request)
         return [NoteSearchResult(**r) for r in result]
+
+    async def survey(
+        self,
+        query: str,
+        vault_ids: list[UUID | str] | None = None,
+        limit_per_query: int = 10,
+        token_budget: int | None = None,
+    ) -> SurveyResponse:
+        """Broad topic survey — decompose, parallel search, grouped results."""
+        request = SurveyRequest(
+            query=query,
+            vault_ids=vault_ids,
+            limit_per_query=limit_per_query,
+            token_budget=token_budget,
+        )
+        result = await self._post('survey', request)
+        return SurveyResponse(**result)
 
     async def get_note(self, note_id: UUID) -> NoteDTO:
         """Get a note by ID."""

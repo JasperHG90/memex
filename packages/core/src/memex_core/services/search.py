@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 from typing import Any
@@ -9,12 +10,19 @@ from uuid import UUID
 
 import dspy
 
-from memex_common.schemas import NoteSearchRequest, NoteSearchResult
+from memex_common.schemas import (
+    NoteSearchRequest,
+    NoteSearchResult,
+    SurveyFact,
+    SurveyResponse,
+    SurveyTopic,
+)
 
 from memex_core.config import MemexConfig
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.engine import MemoryEngine
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
+from memex_core.memory.retrieval.expansion import SurveyDecomposer
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.sql_models import MemoryUnit
 from memex_core.services.vaults import VaultService
@@ -217,3 +225,128 @@ class SearchService:
             results = (await session.exec(stmt)).all()
 
             return {row[0]: row[1] for row in results if row[1] is not None}
+
+    async def survey(
+        self,
+        query: str,
+        vault_ids: list[UUID] | None = None,
+        limit_per_query: int = 10,
+        token_budget: int | None = None,
+    ) -> SurveyResponse:
+        """
+        Broad topic survey: decompose into sub-questions, parallel search,
+        dedup by memory unit ID, group by note.
+        """
+        # Resolve vaults
+        if vault_ids is None:
+            vault_ids = [
+                await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
+            ]
+
+        # Decompose query into sub-questions
+        decomposer = SurveyDecomposer(self.lm)
+        sub_queries = await decomposer.decompose(query)
+
+        # Parallel search per sub-question
+        async def _search_one(sub_query: str) -> list[MemoryUnit]:
+            request = RetrievalRequest(
+                query=sub_query,
+                limit=limit_per_query,
+                vault_ids=vault_ids,
+            )
+            async with self.metastore.session() as session:
+                units, _ = await self.memory.recall(session, request)
+            return units
+
+        results_per_query = await asyncio.gather(*[_search_one(sq) for sq in sub_queries])
+
+        # Dedup by memory unit ID, keeping highest-score occurrence
+        seen_ids: dict[UUID, MemoryUnit] = {}
+        for units in results_per_query:
+            for unit in units:
+                existing = seen_ids.get(unit.id)
+                if existing is None:
+                    seen_ids[unit.id] = unit
+                else:
+                    # Keep the one with the higher score
+                    existing_score = getattr(existing, 'score', None) or 0.0
+                    new_score = getattr(unit, 'score', None) or 0.0
+                    if new_score > existing_score:
+                        seen_ids[unit.id] = unit
+
+        all_units = list(seen_ids.values())
+
+        # Sort by score descending
+        all_units.sort(key=lambda u: getattr(u, 'score', None) or 0.0, reverse=True)
+
+        # Token budget truncation
+        truncated = False
+        if token_budget is not None:
+            budget_units: list[MemoryUnit] = []
+            token_count = 0
+            for unit in all_units:
+                # Rough token estimate: ~4 chars per token
+                unit_tokens = len(unit.text) // 4
+                if token_count + unit_tokens > token_budget:
+                    truncated = True
+                    break
+                budget_units.append(unit)
+                token_count += unit_tokens
+            all_units = budget_units
+
+        # Group by note_id
+        note_groups: dict[UUID, list[MemoryUnit]] = {}
+        for unit in all_units:
+            if unit.note_id is not None:
+                note_groups.setdefault(unit.note_id, []).append(unit)
+
+        # Resolve note titles
+        note_titles: dict[UUID, str] = {}
+        if note_groups:
+            from memex_core.memory.sql_models import Note
+            from sqlmodel import select, col
+
+            async with self.metastore.session() as session:
+                stmt = select(Note.id, Note.title).where(col(Note.id).in_(list(note_groups.keys())))
+                rows = (await session.exec(stmt)).all()
+                for row in rows:
+                    if row[1]:
+                        note_titles[row[0]] = row[1]
+
+        # Build topics
+        topics: list[SurveyTopic] = []
+        for note_id, units in note_groups.items():
+            facts = [
+                SurveyFact(
+                    id=u.id,
+                    text=u.text,
+                    fact_type=u.fact_type,
+                    score=getattr(u, 'score', None),
+                )
+                for u in units
+            ]
+            topics.append(
+                SurveyTopic(
+                    note_id=note_id,
+                    title=note_titles.get(note_id),
+                    fact_count=len(facts),
+                    facts=facts,
+                )
+            )
+
+        # Sort topics by total fact score descending
+        topics.sort(
+            key=lambda t: sum(f.score or 0.0 for f in t.facts),
+            reverse=True,
+        )
+
+        total_facts = sum(t.fact_count for t in topics)
+
+        return SurveyResponse(
+            query=query,
+            sub_queries=sub_queries,
+            topics=topics,
+            total_notes=len(topics),
+            total_facts=total_facts,
+            truncated=truncated,
+        )
