@@ -566,6 +566,275 @@ class TestUnarchiveOnReturn:
         state.close()
 
 
+class TestPollJob:
+    """Tests for _poll_job: stale detection, connection resilience, terminal states."""
+
+    def test_polls_until_completed(self) -> None:
+        """Should keep polling until status is 'completed'."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+
+        processing = BatchJobStatus(
+            job_id=job_id,
+            status='processing',
+            progress='Processed 5/10 notes',
+            processed_count=5,
+            total_count=10,
+        )
+        completed = BatchJobStatus(
+            job_id=job_id,
+            status='completed',
+            progress='Completed: 10/10 processed',
+            processed_count=10,
+            total_count=10,
+            result=BatchIngestResponse(
+                processed_count=10, skipped_count=0, failed_count=0, note_ids=[], errors=[]
+            ),
+        )
+        api.get_job_status.side_effect = [processing, processing, completed]
+
+        result = asyncio.run(_poll_job(api, job_id, poll_interval=0.01))
+        assert result is not None
+        assert result.status == 'completed'
+        assert api.get_job_status.call_count == 3
+
+    def test_polls_until_failed(self) -> None:
+        """Should stop polling when status is 'failed'."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+
+        failed = BatchJobStatus(job_id=job_id, status='failed', progress='Failed')
+        api.get_job_status.return_value = failed
+
+        result = asyncio.run(_poll_job(api, job_id, poll_interval=0.01))
+        assert result is not None
+        assert result.status == 'failed'
+
+    def test_connection_errors_retry_then_give_up(self) -> None:
+        """After max consecutive errors, returns last known status."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+
+        good_status = BatchJobStatus(
+            job_id=job_id,
+            status='processing',
+            progress='Processed 5/10 notes',
+            processed_count=5,
+            total_count=10,
+        )
+        # One good response, then 30 consecutive errors
+        api.get_job_status.side_effect = [good_status] + [ConnectionError('server down')] * 30
+
+        result = asyncio.run(_poll_job(api, job_id, poll_interval=0.01))
+        # Should return the last known good status
+        assert result is not None
+        assert result.status == 'processing'
+        assert result.processed_count == 5
+
+    def test_connection_errors_recover(self) -> None:
+        """Transient errors should be retried and recover."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+
+        processing = BatchJobStatus(
+            job_id=job_id,
+            status='processing',
+            progress='Processed 5/10 notes',
+            processed_count=5,
+            total_count=10,
+        )
+        completed = BatchJobStatus(
+            job_id=job_id,
+            status='completed',
+            progress='Completed: 10/10 processed',
+            processed_count=10,
+            total_count=10,
+            result=BatchIngestResponse(
+                processed_count=10, skipped_count=0, failed_count=0, note_ids=[], errors=[]
+            ),
+        )
+        # Good, 3 errors, then completed
+        api.get_job_status.side_effect = [
+            processing,
+            ConnectionError('blip'),
+            ConnectionError('blip'),
+            ConnectionError('blip'),
+            completed,
+        ]
+
+        result = asyncio.run(_poll_job(api, job_id, poll_interval=0.01))
+        assert result is not None
+        assert result.status == 'completed'
+
+    def test_no_response_returns_none(self) -> None:
+        """If server is unreachable from the start, returns None."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+        api.get_job_status.side_effect = ConnectionError('unreachable')
+
+        result = asyncio.run(_poll_job(api, job_id, poll_interval=0.01))
+        assert result is None
+
+    def test_progress_callback_called(self) -> None:
+        """Progress callback should be invoked with parsed counts."""
+        from memex_cli.sync.engine import _poll_job
+
+        job_id = uuid4()
+        api = AsyncMock()
+        progress_calls: list[tuple] = []
+
+        def on_progress(phase: str, current: int, total: int, detail: str) -> None:
+            progress_calls.append((phase, current, total, detail))
+
+        completed = BatchJobStatus(
+            job_id=job_id,
+            status='completed',
+            progress='Completed: 10/10 processed',
+            processed_count=10,
+            total_count=10,
+            result=BatchIngestResponse(
+                processed_count=10, skipped_count=0, failed_count=0, note_ids=[], errors=[]
+            ),
+        )
+        api.get_job_status.return_value = completed
+
+        asyncio.run(_poll_job(api, job_id, poll_interval=0.01, on_progress=on_progress))
+        assert len(progress_calls) == 1
+        assert progress_calls[0] == ('ingesting', 10, 10, 'Completed: 10/10 processed')
+
+
+class TestSyncVaultConnectionLoss:
+    """Tests for sync_vault handling of non-terminal poll results."""
+
+    def test_connection_loss_reports_error_with_job_id(
+        self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """When polling loses connection, result should contain job_id and error message."""
+        job_id = uuid4()
+        mock_api.ingest_batch.return_value = BatchJobStatus(job_id=job_id, status='pending')
+        # Server goes down immediately
+        mock_api.get_job_status.side_effect = ConnectionError('server down')
+
+        result = asyncio.run(sync_vault(vault, mock_api, sync_config, vault_id='test-vault'))
+
+        assert result.job_id == job_id
+        assert len(result.errors) == 1
+        assert str(job_id) in result.errors[0]
+        assert 'unreachable' in result.errors[0].lower() or 'running' in result.errors[0].lower()
+
+    def test_connection_loss_mid_processing_reports_job_id(
+        self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """When server dies mid-processing, result preserves the job_id for manual follow-up."""
+        job_id = uuid4()
+        processing = BatchJobStatus(
+            job_id=job_id,
+            status='processing',
+            progress='Processed 1/2 notes',
+            processed_count=1,
+            total_count=2,
+        )
+        mock_api.ingest_batch.return_value = BatchJobStatus(job_id=job_id, status='pending')
+        # One good poll, then 30 errors
+        mock_api.get_job_status.side_effect = [processing] + [ConnectionError('gone')] * 30
+
+        result = asyncio.run(sync_vault(vault, mock_api, sync_config, vault_id='test-vault'))
+
+        assert result.job_id == job_id
+        assert len(result.errors) == 1
+        assert 'still be running' in result.errors[0].lower()
+
+
+class TestProgressCallback:
+    """Tests that on_progress 'done' fires correctly in all outcomes."""
+
+    def test_done_fires_on_success(
+        self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        progress_calls: list[tuple] = []
+
+        def on_progress(phase: str, current: int, total: int, detail: str) -> None:
+            progress_calls.append((phase, current, total, detail))
+
+        mock_batch = BatchJobStatus(
+            job_id=uuid4(),
+            status='completed',
+            result=BatchIngestResponse(
+                processed_count=2, skipped_count=0, failed_count=0, note_ids=[], errors=[]
+            ),
+        )
+        mock_api.ingest_batch.return_value = mock_batch
+        mock_api.get_job_status.return_value = mock_batch
+
+        asyncio.run(
+            sync_vault(vault, mock_api, sync_config, vault_id='test-vault', on_progress=on_progress)
+        )
+
+        done_calls = [c for c in progress_calls if c[0] == 'done']
+        assert len(done_calls) == 1
+        assert 'ingested' in done_calls[0][3].lower()
+
+    def test_done_fires_on_all_failed(
+        self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        progress_calls: list[tuple] = []
+
+        def on_progress(phase: str, current: int, total: int, detail: str) -> None:
+            progress_calls.append((phase, current, total, detail))
+
+        mock_batch = BatchJobStatus(
+            job_id=uuid4(),
+            status='completed',
+            result=BatchIngestResponse(
+                processed_count=0,
+                skipped_count=0,
+                failed_count=2,
+                note_ids=[],
+                errors=[{'chunk_start': 0, 'error': 'test error'}],
+            ),
+        )
+        mock_api.ingest_batch.return_value = mock_batch
+        mock_api.get_job_status.return_value = mock_batch
+
+        asyncio.run(
+            sync_vault(vault, mock_api, sync_config, vault_id='test-vault', on_progress=on_progress)
+        )
+
+        done_calls = [c for c in progress_calls if c[0] == 'done']
+        assert len(done_calls) == 1
+        assert 'failed' in done_calls[0][3].lower()
+
+    def test_done_fires_on_connection_loss(
+        self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        progress_calls: list[tuple] = []
+
+        def on_progress(phase: str, current: int, total: int, detail: str) -> None:
+            progress_calls.append((phase, current, total, detail))
+
+        job_id = uuid4()
+        mock_api.ingest_batch.return_value = BatchJobStatus(job_id=job_id, status='pending')
+        mock_api.get_job_status.side_effect = ConnectionError('server down')
+
+        asyncio.run(
+            sync_vault(vault, mock_api, sync_config, vault_id='test-vault', on_progress=on_progress)
+        )
+
+        done_calls = [c for c in progress_calls if c[0] == 'done']
+        assert len(done_calls) == 1
+        assert str(job_id) in done_calls[0][3] or 'unreachable' in done_calls[0][3].lower()
+
+
 class TestSyncVaultConfig:
     def test_respects_exclude(
         self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig

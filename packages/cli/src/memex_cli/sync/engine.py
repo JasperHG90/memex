@@ -92,14 +92,49 @@ async def _poll_job(
     api: RemoteMemexAPI,
     job_id: UUID,
     poll_interval: float = 2.0,
-    max_wait: float = 600.0,
     on_progress: ProgressCallback | None = None,
 ) -> BatchJobStatus | None:
-    """Poll a batch job until completion or timeout."""
-    elapsed = 0.0
-    status = None
-    while elapsed < max_wait:
-        status = await api.get_job_status(job_id)
+    """Poll a batch job until it reaches a terminal state (completed/failed).
+
+    Polls indefinitely while the server reports ``pending`` or ``processing``.
+    If the server becomes unreachable, retries up to 30 consecutive times
+    (~1 minute at *poll_interval*) before giving up and returning the last
+    known status so callers can handle partial progress.
+
+    Logs a warning when progress stalls for 5 minutes but keeps polling.
+    """
+    status: BatchJobStatus | None = None
+    last_progress_value = -1
+    stale_polls = 0
+    consecutive_errors = 0
+    max_consecutive_errors = 30
+    stale_warn_threshold = int(300 / poll_interval)  # 5 minutes
+
+    while True:
+        try:
+            status = await api.get_job_status(job_id)
+            consecutive_errors = 0
+        except Exception as e:
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error(
+                    'Lost connection to server while polling batch job',
+                    job_id=str(job_id),
+                    error=str(e),
+                    consecutive_errors=consecutive_errors,
+                )
+                return status
+            logger.warning(
+                'Failed to poll batch job, retrying',
+                job_id=str(job_id),
+                error=str(e),
+                attempt=consecutive_errors,
+            )
+            await asyncio.sleep(poll_interval)
+            continue
+
+        assert status is not None  # assigned in try, exception continues
+
         if on_progress and status.progress:
             current = status.processed_count or 0
             total = status.total_count or 0
@@ -109,11 +144,25 @@ async def _poll_job(
                 if m:
                     current, total = int(m.group(1)), int(m.group(2))
             on_progress('ingesting', current, total, status.progress)
+
+            # Stale detection: warn but keep polling
+            if current == last_progress_value:
+                stale_polls += 1
+                if stale_polls == stale_warn_threshold:
+                    logger.warning(
+                        'Batch job progress stalled',
+                        job_id=str(job_id),
+                        stuck_at=f'{current}/{total}',
+                        stale_seconds=int(stale_polls * poll_interval),
+                    )
+                    stale_polls = 0  # reset so we warn again after another 5 min
+            else:
+                stale_polls = 0
+                last_progress_value = current
+
         if status.status in ('completed', 'failed'):
             return status
         await asyncio.sleep(poll_interval)
-        elapsed += poll_interval
-    return status
 
 
 async def _handle_deletes(
@@ -337,6 +386,22 @@ async def sync_vault(
                         elif final is not None and final.status == 'failed':
                             result.failed = len(dtos)
                             result.errors.append(f'Batch job {job_status.job_id} failed')
+                        elif final is not None:
+                            # Non-terminal status (e.g. lost connection while processing)
+                            result.job_id = job_status.job_id
+                            result.errors.append(
+                                f'Lost connection to server. '
+                                f'Batch job {job_status.job_id} may still be running. '
+                                f'Check status: memex note sync job {job_status.job_id}'
+                            )
+                        else:
+                            # final is None — never got a response
+                            result.job_id = job_status.job_id
+                            result.errors.append(
+                                f'Server unreachable. '
+                                f'Batch job {job_status.job_id} may still be running. '
+                                f'Check status: memex note sync job {job_status.job_id}'
+                            )
                     except Exception as e:
                         result.failed = len(dtos)
                         result.errors.append(str(e))
@@ -423,7 +488,18 @@ async def sync_vault(
                     )
 
         if on_progress:
-            on_progress('done', result.ingested, result.changed, 'Sync complete')
+            total_handled = result.ingested + result.skipped + result.failed
+            if result.ingested > 0 or result.skipped > 0:
+                detail = f'Synced {result.ingested} ingested, {result.skipped} skipped'
+                if result.failed:
+                    detail += f', {result.failed} failed'
+            elif result.failed > 0:
+                detail = f'Failed: {result.failed} notes'
+            elif result.errors:
+                detail = result.errors[0][:80]
+            else:
+                detail = 'No changes'
+            on_progress('done', total_handled, result.changed, detail)
 
     finally:
         state.close()
