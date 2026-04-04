@@ -941,6 +941,22 @@ class SummaryResponse(BaseModel):
     )
 
 
+class VaultSummaryDTO(BaseModel):
+    """DTO for a vault-level summary."""
+
+    id: UUID = Field(description='Unique identifier for the vault summary.')
+    vault_id: UUID = Field(description='The vault this summary describes.')
+    summary: str = Field(description='Natural language summary of vault contents.')
+    topics: list[dict[str, Any]] = Field(
+        description='Extracted topics: [{name, note_count, description}].'
+    )
+    stats: dict[str, Any] = Field(description='Aggregate vault statistics.')
+    version: int = Field(description='Summary version number.')
+    notes_incorporated: int = Field(description='Number of notes incorporated.')
+    created_at: dt.datetime = Field(description='When the summary was created.')
+    updated_at: dt.datetime = Field(description='When the summary was last updated.')
+
+
 class PageMetadataDTO(BaseModel):
     """Metadata from a note's page index."""
 
