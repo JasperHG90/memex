@@ -153,10 +153,8 @@ def _synthesize_tags(
     user_tags: list[str],
 ) -> list[str]:
     """Merge user-provided tags with LLM-generated block tags."""
-    if user_tags:
-        return user_tags  # User-provided tags take priority
-    seen: set[str] = set()
-    tags: list[str] = []
+    tags: list[str] = list(user_tags) if user_tags else []
+    seen: set[str] = {t.strip().lower() for t in tags}
     for block in page_index_output.blocks:
         if block.summary:
             for tag in block.summary.tags:
