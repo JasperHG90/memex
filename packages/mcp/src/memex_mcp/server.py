@@ -413,6 +413,42 @@ async def memex_set_note_status(
 
 
 @mcp.tool(
+    name='memex_update_user_notes',
+    description=(
+        'Update user_notes on an existing note and reprocess into the memory graph. '
+        'Pass null to delete all user annotations. '
+        'Old user_notes MemoryUnits are deleted and new ones extracted.'
+    ),
+    tags={'write'},
+    annotations={'readOnlyHint': False},
+)
+async def memex_update_user_notes(
+    ctx: Context,
+    note_id: Annotated[str, Field(description='Note UUID.')],
+    user_notes: Annotated[
+        str | None,
+        Field(description='New user_notes text, or null to delete all annotations.'),
+    ] = None,
+) -> dict:
+    """Update user_notes on an existing note."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(note_id)
+        except ValueError:
+            raise ToolError(f'Invalid Note UUID: {note_id}')
+
+        result = await api.update_user_notes(uuid_obj, user_notes)
+        return result
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Update user notes failed: {e}', exc_info=True)
+        raise ToolError(f'Update user notes failed: {e}')
+
+
+@mcp.tool(
     name='memex_rename_note',
     description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
     tags={'write'},
@@ -2422,6 +2458,88 @@ async def memex_kv_list(
     except Exception as e:
         logger.error(f'KV list failed: {e}', exc_info=True)
         raise ToolError(f'KV list failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_vault_summary',
+    description='Get the current summary for a vault. Returns topics, stats, and a natural '
+    'language overview of vault contents. Use this to orient yourself in a vault.',
+    tags={'browse'},
+    annotations={'readOnlyHint': True},
+)
+async def memex_get_vault_summary(
+    ctx: Context,
+    vault_id: str | None = None,
+) -> dict:
+    """Retrieve the current vault summary."""
+    try:
+        api = get_api(ctx)
+        config = get_config(ctx)
+
+        if vault_id is None:
+            vid = await api.resolve_vault_identifier(config.server.default_active_vault)
+        else:
+            vid = await api.resolve_vault_identifier(vault_id)
+
+        summary = await api.vault_summary.get_summary(vid)
+        if summary is None:
+            return {'message': 'No summary exists for this vault. Use regenerate to create one.'}
+
+        return {
+            'id': str(summary.id),
+            'vault_id': str(summary.vault_id),
+            'summary': summary.summary,
+            'topics': summary.topics,
+            'stats': summary.stats,
+            'version': summary.version,
+            'notes_incorporated': summary.notes_incorporated,
+            'created_at': summary.created_at.isoformat() if summary.created_at else None,
+            'updated_at': summary.updated_at.isoformat() if summary.updated_at else None,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Get vault summary failed: {e}', exc_info=True)
+        raise ToolError(f'Get vault summary failed: {e}')
+
+
+@mcp.tool(
+    name='memex_regenerate_vault_summary',
+    description='Regenerate the vault summary from all notes. Use this when the summary '
+    'is stale or when you want a fresh overview. May take a moment for large vaults.',
+    tags={'manage'},
+)
+async def memex_regenerate_vault_summary(
+    ctx: Context,
+    vault_id: str | None = None,
+) -> dict:
+    """Trigger full regeneration of the vault summary."""
+    try:
+        api = get_api(ctx)
+        config = get_config(ctx)
+
+        if vault_id is None:
+            vid = await api.resolve_vault_identifier(config.server.default_active_vault)
+        else:
+            vid = await api.resolve_vault_identifier(vault_id)
+
+        summary = await api.vault_summary.regenerate_summary(vid)
+        return {
+            'id': str(summary.id),
+            'vault_id': str(summary.vault_id),
+            'summary': summary.summary,
+            'topics': summary.topics,
+            'stats': summary.stats,
+            'version': summary.version,
+            'notes_incorporated': summary.notes_incorporated,
+            'created_at': summary.created_at.isoformat() if summary.created_at else None,
+            'updated_at': summary.updated_at.isoformat() if summary.updated_at else None,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Regenerate vault summary failed: {e}', exc_info=True)
+        raise ToolError(f'Regenerate vault summary failed: {e}')
 
 
 def entrypoint():
