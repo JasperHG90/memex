@@ -85,6 +85,15 @@ class RetrievalRequest(SQLModel):
         default=None, description='Only return results before this date.'
     )
 
+    # Source context filtering
+    source_context: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by their context field (e.g. "user_notes"). '
+            'When set, only units with matching context are returned.'
+        ),
+    )
+
     # Tag filtering
     tags: list[str] | None = Field(
         default=None, description='Only return results from notes with ALL of these tags.'

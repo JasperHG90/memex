@@ -485,7 +485,8 @@ ingested_at: {now}
                 str(note_uuid),
                 title=resolved_title,
             )
-            return result
+
+        return result
 
     async def ingest_batch_internal(
         self,

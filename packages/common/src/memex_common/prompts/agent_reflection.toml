@@ -1,0 +1,44 @@
+name = "Agent Reflection"
+description = "Structured template for agent session postmortems — captures what worked, what failed, and actionable improvements."
+
+template = '''
+---
+date: YYYY-MM-DD
+created_by: [Agent name, e.g. claude-code]
+tags: [agent-reflection, session-postmortem]
+---
+
+# Session Reflection: [Brief session descriptor]
+
+## Session Summary
+[2-3 sentence overview of the session goal, scope, and outcome.]
+
+## What Worked
+- [Approach, tool, or decision that was effective]
+- [Another success — be specific about why it worked]
+
+## What Failed
+- [Approach, tool, or decision that did not work]
+- [Include root cause if known]
+
+## Errors Encountered
+- [Error message or failure mode and how it was resolved, or "None"]
+
+## Tool Call Performance
+
+| Tool | Calls | Successes | Failures | Notes |
+|------|-------|-----------|----------|-------|
+| [tool_name] | [N] | [N] | [N] | [Optional context] |
+
+## Key Decisions
+- [Decision made and rationale]
+- [Trade-off considered and outcome]
+
+## Improvement Suggestions
+- [Actionable suggestion for future sessions]
+- [Process or tooling improvement]
+
+## Follow-up Items
+- [ ] [Task or investigation to carry forward]
+- [ ] [Open question to revisit]
+'''

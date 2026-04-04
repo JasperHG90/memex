@@ -54,6 +54,20 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
             logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
 
 
+async def periodic_vault_summary_task(api: 'MemexAPI'):
+    """Check each vault for staleness and update summaries."""
+    async with background_session('bg-sched-vault-summary'):
+        logger.info('Scheduler: Running vault summary check...')
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                if await api.vault_summary.is_stale(vault.id):
+                    logger.info(f'Scheduler: Updating stale summary for vault {vault.name}')
+                    await api.vault_summary.update_summary(vault.id)
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Vault summary task failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -78,6 +92,15 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     @clock.task(trigger=Every(seconds=interval_seconds))
     async def run_reflection_job():
         await periodic_reflection_task(api, batch_size)
+
+    # Vault summary periodic task
+    if config.server.vault_summary.enabled:
+        vs_interval = config.server.vault_summary.interval_seconds
+        logger.info(f'Scheduler: Vault summary enabled. Interval: {vs_interval}s.')
+
+        @clock.task(trigger=Every(seconds=vs_interval))
+        async def run_vault_summary_job():
+            await periodic_vault_summary_task(api)
 
     # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
     sa_url = make_url(config.server.meta_store.instance.connection_string)
