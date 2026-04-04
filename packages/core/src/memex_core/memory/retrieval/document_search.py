@@ -74,6 +74,8 @@ class ReasoningOutput:
 K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
 MAX_RERANK_DOCS = 30
+LINKED_NOTE_BOOST = 0.15
+MIN_TITLE_LENGTH = 4
 
 
 class NoteSearchEngine:
@@ -175,6 +177,10 @@ class NoteSearchEngine:
             tags=request.tags,
         )
 
+        # Boost notes whose titles appear in other notes' chunk text
+        if results:
+            results = self._boost_linked_notes(results, best_chunk_text_by_note)
+
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
             results = await self._rerank_results(request.query, results, best_chunk_text_by_note)
@@ -191,6 +197,49 @@ class NoteSearchEngine:
                     results, request.query, reasoning.section_texts, self.lm
                 )
 
+        return results
+
+    @staticmethod
+    def _boost_linked_notes(
+        results: list[NoteSearchResult],
+        best_chunk_text_by_note: dict[UUID, str],
+        boost: float = LINKED_NOTE_BOOST,
+    ) -> list[NoteSearchResult]:
+        """Boost scores of notes whose titles are mentioned in other notes' chunk text.
+
+        For each pair of result notes, checks if note_j's title appears as a
+        case-insensitive substring in note_i's best chunk text. If so, note_j
+        receives a score boost. Titles shorter than MIN_TITLE_LENGTH are skipped
+        to avoid false positives.
+        """
+        # Collect titles (from metadata) for each result note
+        titles_by_id: dict[UUID, str] = {}
+        for r in results:
+            title = r.metadata.get('title', '') or ''
+            if len(title) >= MIN_TITLE_LENGTH:
+                titles_by_id[r.note_id] = title
+
+        if not titles_by_id:
+            return results
+
+        # Build set of note IDs that are referenced by another note's chunk text
+        boosted_ids: set[UUID] = set()
+        for r in results:
+            chunk_text = best_chunk_text_by_note.get(r.note_id, '')
+            if not chunk_text:
+                continue
+            chunk_lower = chunk_text.lower()
+            for other_id, title in titles_by_id.items():
+                if other_id != r.note_id and title.lower() in chunk_lower:
+                    boosted_ids.add(other_id)
+
+        # Apply boost
+        for r in results:
+            if r.note_id in boosted_ids:
+                r.score += boost
+
+        # Re-sort by score
+        results.sort(key=lambda x: x.score, reverse=True)
         return results
 
     async def _rerank_results(
