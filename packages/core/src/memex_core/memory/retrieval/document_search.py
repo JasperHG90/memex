@@ -73,6 +73,7 @@ class ReasoningOutput:
 
 K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
+MAX_RERANK_DOCS = 30
 
 
 class NoteSearchEngine:
@@ -207,14 +208,18 @@ class NoteSearchEngine:
             return results
 
         try:
-            texts = [best_chunk_text_by_note.get(r.note_id, '') for r in results]
+            # Cap the number of candidates sent to the cross-encoder
+            rerank_candidates = results[:MAX_RERANK_DOCS]
+            overflow = results[MAX_RERANK_DOCS:]
+
+            texts = [best_chunk_text_by_note.get(r.note_id, '') for r in rerank_candidates]
             scores = await asyncio.to_thread(self.reranker.score, query, texts)
             normalized = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            scored = sorted(zip(results, normalized), key=lambda x: x[1], reverse=True)
+            scored = sorted(zip(rerank_candidates, normalized), key=lambda x: x[1], reverse=True)
             for result, score in scored:
                 result.score = score
-            return [r for r, _ in scored]
+            return [r for r, _ in scored] + overflow
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Note search reranking failed: {e}. Falling back to RRF order.')
             return results
