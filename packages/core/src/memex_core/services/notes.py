@@ -570,8 +570,12 @@ class NoteService:
             if template is not None:
                 stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
             if tags:
+                from sqlalchemy import literal
+
                 stmt = stmt.where(
-                    col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+                    col(Note.doc_metadata)['tags']
+                    .astext.cast(JSONB)
+                    .contains(literal(json.dumps(tags)).cast(JSONB))
                 )
             if status is not None:
                 stmt = stmt.where(col(Note.status) == status)
