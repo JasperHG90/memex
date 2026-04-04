@@ -4,6 +4,8 @@ import os
 import pathlib as plb
 import asyncio
 import base64
+import time
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 from uuid import UUID
 import mimetypes
@@ -49,6 +51,9 @@ from memex_mcp.models import (
     McpPageMetadata,
     McpBlockSummary,
     McpSupersession,
+    McpSurveyFact,
+    McpSurveyResult,
+    McpSurveyTopic,
     McpVault,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
@@ -62,6 +67,37 @@ from memex_common.schemas import (
     TOCNodeDTO,
     filter_toc,
 )
+
+
+_SESSION_DEDUP_TTL = 1800  # 30 minutes
+
+
+@dataclass
+class SessionDedup:
+    """Tracks seen note/memory IDs for a single MCP session."""
+
+    seen_note_ids: set[str] = field(default_factory=set)
+    seen_memory_ids: set[str] = field(default_factory=set)
+    last_access: float = field(default_factory=time.monotonic)
+
+
+# Module-level session dedup state, keyed by session ID
+_session_dedup: dict[str, SessionDedup] = {}
+
+
+def _get_session_dedup(session_id: str) -> SessionDedup:
+    """Get or create session dedup state, purging stale entries."""
+    now = time.monotonic()
+    # Purge stale entries
+    stale = [k for k, v in _session_dedup.items() if now - v.last_access > _SESSION_DEDUP_TTL]
+    for k in stale:
+        del _session_dedup[k]
+    # Get or create
+    if session_id not in _session_dedup:
+        _session_dedup[session_id] = SessionDedup(last_access=now)
+    dedup = _session_dedup[session_id]
+    dedup.last_access = now
+    return dedup
 
 
 def _coerce_list(v: Any) -> Any:
@@ -1056,6 +1092,18 @@ async def memex_memory_search(
         BeforeValidator(_coerce_list),
         Field(default=None, description='Only results from notes with ALL of these tags.'),
     ] = None,
+    include_seen: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=True,
+            description=(
+                'Include previously returned results in full. '
+                'Set to false to compress already-seen results '
+                '(returns {id, note_title, previously_returned: true}).'
+            ),
+        ),
+    ] = True,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1098,7 +1146,28 @@ async def memex_memory_search(
             except Exception:
                 pass  # Graceful degradation — titles are optional
 
-        return [_build_memory_unit_model(res, note_titles) for res in results]
+        # Session-level dedup
+        dedup = _get_session_dedup(ctx.session_id)
+        output: list[McpFact | McpEvent | McpObservation] = []
+        for res in results:
+            mid = str(res.id)
+            if not include_seen and mid in dedup.seen_memory_ids:
+                # Compressed representation for already-seen results
+                output.append(
+                    McpFact(
+                        id=res.id,
+                        text='',
+                        note_id=res.note_id,
+                        note_title=note_titles.get(res.note_id) if res.note_id else None,
+                        previously_returned=True,
+                    )
+                )
+            else:
+                model = _build_memory_unit_model(res, note_titles)
+                output.append(model)
+            dedup.seen_memory_ids.add(mid)
+
+        return output
 
     except ToolError:
         raise
@@ -1156,6 +1225,18 @@ async def memex_note_search(
         BeforeValidator(_coerce_list),
         Field(default=None, description='Only notes with ALL of these tags.'),
     ] = None,
+    include_seen: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=True,
+            description=(
+                'Include previously returned results in full. '
+                'Set to false to compress already-seen results '
+                '(returns {note_id, title, previously_returned: true}).'
+            ),
+        ),
+    ] = True,
 ) -> list[McpNoteSearchResult]:
     """Search Memex for source notes by hybrid retrieval."""
     try:
@@ -1185,30 +1266,52 @@ async def memex_note_search(
         if not results:
             return []
 
+        # Session-level dedup
+        dedup = _get_session_dedup(ctx.session_id)
         output: list[McpNoteSearchResult] = []
         for doc in results:
-            metadata = doc.metadata or {}
-            title = (
-                metadata.get('title')
-                or metadata.get('name')
-                or metadata.get('filename')
-                or 'Untitled'
-            )
-            summaries = [McpBlockSummary(**s.model_dump()) for s in doc.summaries]
-            output.append(
-                McpNoteSearchResult(
-                    note_id=doc.note_id,
-                    title=title,
-                    score=doc.score,
-                    vault_name=doc.vault_name,
-                    status=getattr(doc, 'note_status', None),
-                    description=metadata.get('description'),
-                    tags=metadata.get('tags', []),
-                    source_uri=metadata.get('source_uri'),
-                    has_assets=metadata.get('has_assets', False),
-                    summaries=summaries,
+            nid = str(doc.note_id)
+            if not include_seen and nid in dedup.seen_note_ids:
+                # Compressed representation for already-seen notes
+                metadata = doc.metadata or {}
+                title = (
+                    metadata.get('title')
+                    or metadata.get('name')
+                    or metadata.get('filename')
+                    or 'Untitled'
                 )
-            )
+                output.append(
+                    McpNoteSearchResult(
+                        note_id=doc.note_id,
+                        title=title,
+                        score=doc.score,
+                        previously_returned=True,
+                    )
+                )
+            else:
+                metadata = doc.metadata or {}
+                title = (
+                    metadata.get('title')
+                    or metadata.get('name')
+                    or metadata.get('filename')
+                    or 'Untitled'
+                )
+                summaries = [McpBlockSummary(**s.model_dump()) for s in doc.summaries]
+                output.append(
+                    McpNoteSearchResult(
+                        note_id=doc.note_id,
+                        title=title,
+                        score=doc.score,
+                        vault_name=doc.vault_name,
+                        status=getattr(doc, 'note_status', None),
+                        description=metadata.get('description'),
+                        tags=metadata.get('tags', []),
+                        source_uri=metadata.get('source_uri'),
+                        has_assets=metadata.get('has_assets', False),
+                        summaries=summaries,
+                    )
+                )
+            dedup.seen_note_ids.add(nid)
 
         return output
 
@@ -2393,6 +2496,87 @@ async def memex_kv_list(
     except Exception as e:
         logger.error(f'KV list failed: {e}', exc_info=True)
         raise ToolError(f'KV list failed: {e}')
+
+
+@mcp.tool(
+    name='memex_survey',
+    description=(
+        'Survey a broad topic. Decomposes into 3-5 focused sub-questions, '
+        'runs parallel searches, deduplicates, and returns facts grouped by source note. '
+        'Use for panoramic queries like "what do you know about X?" instead of '
+        'making many manual search calls.'
+    ),
+    tags={'search'},
+    annotations={'readOnlyHint': True},
+    timeout=120.0,
+)
+async def memex_survey(
+    ctx: Context,
+    query: Annotated[str, Field(description='Broad topic or panoramic query to survey.')],
+    vault_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
+        ),
+    ] = None,
+    limit_per_query: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(description='Max results per sub-question.'),
+    ] = 10,
+    token_budget: Annotated[
+        int | None,
+        BeforeValidator(_coerce_int),
+        Field(description='Max token budget for all results. Truncates when exceeded.'),
+    ] = None,
+) -> McpSurveyResult:
+    """Survey a broad topic — decompose, parallel search, grouped results."""
+    try:
+        api = get_api(ctx)
+        vault_ids = vault_ids or _default_read_vaults(ctx)
+        _validate_vault_ids(vault_ids)
+        resolved_vids = await _resolve_vault_ids(api, vault_ids)
+
+        result = await api.survey(
+            query=query,
+            vault_ids=resolved_vids,
+            limit_per_query=limit_per_query,
+            token_budget=token_budget,
+        )
+
+        topics = [
+            McpSurveyTopic(
+                note_id=t.note_id,
+                title=t.title,
+                fact_count=t.fact_count,
+                facts=[
+                    McpSurveyFact(
+                        id=f.id,
+                        text=f.text,
+                        fact_type=f.fact_type,
+                        score=f.score,
+                    )
+                    for f in t.facts
+                ],
+            )
+            for t in result.topics
+        ]
+
+        return McpSurveyResult(
+            query=result.query,
+            sub_queries=result.sub_queries,
+            topics=topics,
+            total_notes=result.total_notes,
+            total_facts=result.total_facts,
+            truncated=result.truncated,
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Survey failed: {e}', exc_info=True)
+        raise ToolError(f'Survey failed: {e}')
 
 
 def entrypoint():
