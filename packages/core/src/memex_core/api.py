@@ -57,6 +57,7 @@ from memex_core.services.notes import NoteService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
+from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
 logger = logging.getLogger('memex.core.api')
@@ -481,6 +482,12 @@ class MemexAPI:
             memory=self.memory,
             file_processor=self._file_processor,
             vaults=self._vaults,
+        )
+
+        self.vault_summary = VaultSummaryService(
+            metastore=self.metastore,
+            lm=self.lm,
+            config=self.config.server.vault_summary,
         )
 
         # Wire audit service into all domain services that emit events
@@ -931,6 +938,116 @@ class MemexAPI:
         """Move a note to a different vault. Delegates to NoteService."""
         resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
         return await self._notes.migrate_note(note_id, resolved_id)
+
+    async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
+        """Update user_notes on an existing note and reprocess into the memory graph.
+
+        Steps:
+        1. Fetch note, raise if not found
+        2. Strip old user_notes from frontmatter
+        3. Inject new user_notes (if non-empty)
+        4. Update note.original_text and note.content_hash
+        5. Collect entity IDs from existing context='user_notes' MemoryUnits
+        6. Delete old MemoryUnits with context='user_notes'
+        7. Re-extract via ExtractionEngine.extract_user_notes() if non-empty
+        8. Enqueue affected entities for reflection
+        9. Return {note_id, units_deleted, units_created}
+        """
+        from memex_core.memory.extraction.core import content_hash as compute_hash
+        from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
+
+        async with self.metastore.session() as session:
+            # 1. Fetch note
+            note = await session.get(Note, note_id)
+            if note is None:
+                raise ValueError(f'Note {note_id} not found')
+
+            original_text = note.original_text or ''
+
+            # 2. Strip old user_notes from frontmatter
+            fm_match = _FRONTMATTER_RE.match(original_text)
+            if fm_match:
+                fm_body = fm_match.group(1)
+                cleaned_body = _USER_NOTES_FIELD_RE.sub('', fm_body)
+                if cleaned_body.strip():
+                    cleaned_text = f'---\n{cleaned_body}---\n{original_text[fm_match.end() :]}'
+                else:
+                    cleaned_text = original_text[fm_match.end() :]
+            else:
+                cleaned_text = original_text
+
+            # 3. Inject new user_notes
+            if user_notes and user_notes.strip():
+                updated_text = inject_user_notes(cleaned_text, user_notes)
+            else:
+                updated_text = cleaned_text
+
+            # 4. Update note
+            note.original_text = updated_text
+            note.content_hash = compute_hash(updated_text)
+            session.add(note)
+
+            # 5. Collect old entity IDs from context='user_notes' units
+            from sqlmodel import select, col
+
+            old_units_stmt = select(MemoryUnit.id).where(
+                col(MemoryUnit.note_id) == str(note_id),
+                col(MemoryUnit.context) == 'user_notes',
+            )
+            old_unit_rows = (await session.execute(old_units_stmt)).all()
+            old_unit_ids = [row[0] for row in old_unit_rows]
+
+            old_entity_ids: set[UUID] = set()
+            if old_unit_ids:
+                entity_stmt = select(UnitEntity.entity_id).where(
+                    col(UnitEntity.unit_id).in_([str(uid) for uid in old_unit_ids])
+                )
+                entity_rows = (await session.execute(entity_stmt)).all()
+                old_entity_ids = {row[0] for row in entity_rows}
+
+            # 6. Delete old MemoryUnits with context='user_notes'
+            units_deleted = len(old_unit_ids)
+            if old_unit_ids:
+                from sqlalchemy import delete
+
+                await session.execute(
+                    delete(UnitEntity).where(
+                        col(UnitEntity.unit_id).in_([str(uid) for uid in old_unit_ids])
+                    )
+                )
+                await session.execute(
+                    delete(MemoryUnit).where(col(MemoryUnit.id).in_(old_unit_ids))
+                )
+
+            # 7. Re-extract if non-empty
+            units_created = 0
+            new_entity_ids: set[UUID] = set()
+            if user_notes and user_notes.strip():
+                new_unit_ids, new_entity_ids = await self._extraction.extract_user_notes(
+                    session=session,
+                    user_notes_text=user_notes,
+                    note_id=str(note_id),
+                    vault_id=note.vault_id,
+                    event_date=note.created_at,
+                )
+                units_created = len(new_unit_ids)
+
+            # 8. Enqueue affected entities for reflection
+            all_entity_ids = old_entity_ids | new_entity_ids
+            if all_entity_ids and self.queue_service:
+                from memex_core.memory.extraction.pipeline.tracking import enqueue_for_reflection
+
+                await enqueue_for_reflection(
+                    session, all_entity_ids, note.vault_id, self.queue_service
+                )
+
+            await session.commit()
+
+            return {
+                'note_id': str(note_id),
+                'units_deleted': units_deleted,
+                'units_created': units_created,
+            }
 
     async def delete_entity(self, entity_id: UUID) -> bool:
         """Delete an entity. Delegates to EntityService."""
