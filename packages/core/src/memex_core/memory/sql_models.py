@@ -1301,3 +1301,70 @@ class KVEntry(SQLModel, table=True):  # type: ignore
             postgresql_ops={'key': 'text_pattern_ops'},
         ),
     )
+
+
+class VaultSummary(SQLModel, table=True):  # type: ignore
+    """
+    What it is: An evolving summary of what's in a vault.
+    Function: Provides a cheap-to-compute overview of vault contents,
+    updated incrementally on each note ingestion or regenerated on demand.
+    """
+
+    __tablename__ = 'vault_summaries'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        primary_key=True,
+        description='Unique identifier for the vault summary.',
+    )
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            unique=True,
+            nullable=False,
+        ),
+        description='The vault this summary describes. One summary per vault.',
+    )
+    summary: str = Field(
+        default='',
+        sa_column=Column(Text, server_default=sql_text("''")),
+        description='1-3 paragraph natural language summary of vault contents.',
+    )
+    topics: list[dict[str, Any]] = Field(
+        default=[],
+        sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
+        description=(
+            'Extracted topics: [{name, note_count, description, representative_note_ids}].'
+        ),
+    )
+    stats: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
+        description='Aggregate stats: {total_notes, total_entities, date_range, top_entity_types}.',
+    )
+    version: int = Field(
+        default=1,
+        description='Incremented on each update (patch or regeneration).',
+    )
+    notes_incorporated: int = Field(
+        default=0,
+        description='Count of notes incorporated into this summary.',
+    )
+    last_note_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='ID of the most recently incorporated note.',
+    )
+    patch_log: list[dict[str, Any]] = Field(
+        default=[],
+        sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
+        description='Last 20 patches: [{note_id, action, timestamp, delta}].',
+    )
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION)),
+        description='Semantic embedding of the summary for retrieval.',
+    )
+    created_at: datetime = created_at_field()
+    updated_at: datetime = updated_at_field()
