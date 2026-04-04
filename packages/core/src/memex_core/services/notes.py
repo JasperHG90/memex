@@ -535,13 +535,20 @@ class NoteService:
         after: datetime | None = None,
         before: datetime | None = None,
         template: str | None = None,
+        tags: list[str] | None = None,
+        status: str | None = None,
     ) -> list[Any]:
         """
         List ingested documents.
         Filters by the given vault_id(s), or returns all vaults if not provided.
         Optional after/before filters use COALESCE(publish_date, created_at).
+        Optional tags filter uses JSONB containment (AND semantics).
+        Optional status filter matches exact note lifecycle status.
         """
+        import json
+
         from sqlalchemy import func
+        from sqlalchemy.dialects.postgresql import JSONB
         from sqlmodel import select
 
         from memex_core.memory.sql_models import Note
@@ -562,6 +569,12 @@ class NoteService:
                 stmt = stmt.where(date_col <= before)
             if template is not None:
                 stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
+            if tags:
+                stmt = stmt.where(
+                    col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+                )
+            if status is not None:
+                stmt = stmt.where(col(Note.status) == status)
 
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())

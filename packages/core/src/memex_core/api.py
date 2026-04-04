@@ -20,6 +20,7 @@ from memex_common.schemas import (
     LineageDirection,
     NoteSearchResult,
     NodeDTO,
+    SurveyResponse,
 )
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.models import NoteMetadata
@@ -720,6 +721,8 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         template: str | None = None,
+        tags: list[str] | None = None,
+        status: str | None = None,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
@@ -730,6 +733,8 @@ class MemexAPI:
             after=after,
             before=before,
             template=template,
+            tags=tags,
+            status=status,
         )
 
     async def get_stats_counts(
@@ -883,6 +888,34 @@ class MemexAPI:
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
         """Resolve source note IDs. Delegates to SearchService."""
         return await self._search.resolve_source_notes(unit_ids)
+
+    async def survey(
+        self,
+        query: str,
+        vault_ids: list[UUID | str] | None = None,
+        limit_per_query: int = 10,
+        token_budget: int | None = None,
+    ) -> SurveyResponse:
+        """Broad topic survey. Delegates to SearchService."""
+        # Resolve vault identifiers to UUIDs
+        resolved: list[UUID] | None = None
+        if vault_ids:
+            from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
+            if ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
+                all_v = await self.list_vaults()
+                resolved = [v.id for v in all_v]
+            else:
+                resolved = []
+                for v in vault_ids:
+                    resolved.append(await self.resolve_vault_identifier(str(v)))
+
+        return await self._search.survey(
+            query=query,
+            vault_ids=resolved,
+            limit_per_query=limit_per_query,
+            token_budget=token_budget,
+        )
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
         """Run background reflection. Delegates to ReflectionService."""
