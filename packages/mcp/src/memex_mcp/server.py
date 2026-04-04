@@ -1056,6 +1056,15 @@ async def memex_memory_search(
         BeforeValidator(_coerce_list),
         Field(default=None, description='Only results from notes with ALL of these tags.'),
     ] = None,
+    source_context: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by source context (e.g. "user_notes" to search only user annotations).'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1079,6 +1088,7 @@ async def memex_memory_search(
             after=after_dt,
             before=before_dt,
             tags=tags,
+            source_context=source_context,
         )
 
         if not results:
@@ -1105,6 +1115,43 @@ async def memex_memory_search(
     except Exception as e:
         logger.error(f'Search failed: {e}', exc_info=True)
         raise ToolError(f'Search failed: {e}')
+
+
+@mcp.tool(
+    name='memex_search_user_notes',
+    description=(
+        'Search only your own annotations (user_notes) across all notes. '
+        'Returns memory units extracted from user_notes frontmatter. '
+        'Use this to recall what you yourself have been thinking or annotating.'
+    ),
+    tags={'search'},
+    annotations={'readOnlyHint': True},
+    timeout=60.0,
+)
+async def memex_search_user_notes(
+    ctx: Context,
+    query: Annotated[str, Field(description='Search query.')],
+    vault_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            description='Vault UUIDs or names. Use "*" for all vaults. Omit to use config defaults.',
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(description='Max results.'),
+    ] = 10,
+) -> list[McpFact | McpEvent | McpObservation]:
+    """Search user annotations only (hardcodes source_context='user_notes')."""
+    return await memex_memory_search(
+        ctx=ctx,
+        query=query,
+        vault_ids=vault_ids,
+        limit=limit,
+        source_context='user_notes',
+    )
 
 
 @mcp.tool(
