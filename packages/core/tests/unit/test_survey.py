@@ -5,6 +5,9 @@ Tests cover:
 - SearchService.survey(): dedup by memory unit ID, grouping by note
 - Token budget truncation and `truncated` flag
 - Empty results handling
+
+All tests are pure unit tests with mocked dependencies — no database, no Docker,
+no real LLM calls. Safe from hanging issues.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ class TestSurveyDecomposer:
         lm = MagicMock(spec=dspy.LM)
         return SurveyDecomposer(lm)
 
+    @pytest.mark.asyncio
     async def test_decompose_returns_sub_questions(self, decomposer):
         """Normal case: LLM returns 3-5 sub-questions."""
         result = SimpleNamespace(
@@ -52,6 +56,7 @@ class TestSurveyDecomposer:
         assert len(questions) == 3
         assert questions[0] == 'What tools does the team use?'
 
+    @pytest.mark.asyncio
     async def test_decompose_clamps_to_max_5(self, decomposer):
         """If LLM returns >5 sub-questions, truncate to 5."""
         result = SimpleNamespace(sub_questions=[f'Question {i}' for i in range(8)])
@@ -63,6 +68,7 @@ class TestSurveyDecomposer:
             questions = await decomposer.decompose('topic')
         assert len(questions) == 5
 
+    @pytest.mark.asyncio
     async def test_decompose_pads_to_min_3(self, decomposer):
         """If LLM returns <3 sub-questions, pad with rephrases to 3."""
         result = SimpleNamespace(sub_questions=['Only one question'])
@@ -78,6 +84,7 @@ class TestSurveyDecomposer:
         assert 'broad topic' in questions[1]
         assert 'broad topic' in questions[2]
 
+    @pytest.mark.asyncio
     async def test_decompose_fallback_on_failure(self, decomposer):
         """If LLM fails, fall back to [original_query]."""
         with patch(
@@ -88,6 +95,7 @@ class TestSurveyDecomposer:
             questions = await decomposer.decompose('my query')
         assert questions == ['my query']
 
+    @pytest.mark.asyncio
     async def test_decompose_fallback_on_empty_result(self, decomposer):
         """If LLM returns empty list, fall back to [original_query]."""
         result = SimpleNamespace(sub_questions=[])
@@ -99,6 +107,7 @@ class TestSurveyDecomposer:
             questions = await decomposer.decompose('my query')
         assert questions == ['my query']
 
+    @pytest.mark.asyncio
     async def test_decompose_filters_empty_strings(self, decomposer):
         """Empty strings in LLM output should be filtered before clamping."""
         result = SimpleNamespace(sub_questions=['Q1', '', '  ', 'Q2'])
@@ -159,6 +168,7 @@ class TestSearchServiceSurvey:
         )
         return svc
 
+    @pytest.mark.asyncio
     async def test_survey_dedup_by_unit_id(self, search_service, mock_session):
         """Duplicate memory units across sub-queries are deduplicated by ID."""
         shared_id = uuid4()
@@ -197,6 +207,7 @@ class TestSearchServiceSurvey:
         assert result.total_facts == 2
         assert result.total_notes == 1
 
+    @pytest.mark.asyncio
     async def test_survey_groups_by_note(self, search_service, mock_session):
         """Facts are grouped by their source note_id."""
         note_a = uuid4()
@@ -243,6 +254,7 @@ class TestSearchServiceSurvey:
         assert result.topics[1].note_id == note_b
         assert result.topics[1].fact_count == 1
 
+    @pytest.mark.asyncio
     async def test_survey_token_budget_truncation(self, search_service, mock_session):
         """Token budget truncation drops low-score facts and sets truncated=True."""
         note_id = uuid4()
@@ -281,6 +293,7 @@ class TestSearchServiceSurvey:
         # Should have kept only the first unit (100 tokens fits in 150)
         assert result.total_facts == 1
 
+    @pytest.mark.asyncio
     async def test_survey_no_truncation_without_budget(self, search_service, mock_session):
         """Without token_budget, all results are returned and truncated=False."""
         note_id = uuid4()
@@ -311,6 +324,7 @@ class TestSearchServiceSurvey:
         assert result.truncated is False
         assert result.total_facts == 1
 
+    @pytest.mark.asyncio
     async def test_survey_empty_results(self, search_service, mock_session):
         """Gracefully handles empty results from all sub-queries."""
         with patch('memex_core.services.search.SurveyDecomposer') as mock_decomposer_cls:
@@ -332,6 +346,7 @@ class TestSearchServiceSurvey:
         assert result.query == 'unknown topic'
         assert len(result.sub_queries) == 3
 
+    @pytest.mark.asyncio
     async def test_survey_keeps_higher_score_on_dedup(self, search_service, mock_session):
         """When deduplicating, the unit with the higher score is kept."""
         shared_id = uuid4()
@@ -365,6 +380,7 @@ class TestSearchServiceSurvey:
         assert result.total_facts == 1
         assert result.topics[0].facts[0].score == 0.9
 
+    @pytest.mark.asyncio
     async def test_survey_response_schema(self, search_service, mock_session):
         """Verify the complete output schema matches spec."""
         note_id = uuid4()
