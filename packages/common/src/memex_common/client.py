@@ -287,6 +287,8 @@ class RemoteMemexAPI:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         template: str | None = None,
+        tags: list[str] | None = None,
+        status: str | None = None,
     ) -> list[NoteListItemDTO]:
         """List all notes."""
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
@@ -299,6 +301,10 @@ class RemoteMemexAPI:
             params['before'] = before.isoformat()
         if template is not None:
             params['template'] = template
+        if tags:
+            params['tags'] = tags
+        if status is not None:
+            params['status'] = status
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
