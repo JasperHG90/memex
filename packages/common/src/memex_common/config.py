@@ -962,6 +962,31 @@ class DocumentConfig(BaseModel):
     )
 
 
+class VaultSummaryConfig(BaseModel):
+    """Configuration for vault summary generation."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable automatic vault summary patching on note ingestion.',
+    )
+    model: ModelConfig | None = Field(
+        default=None,
+        description='Model for vault summary LLM calls. If None, uses server default.',
+    )
+    batch_size: int = Field(
+        default=50,
+        ge=10,
+        le=200,
+        description='Number of notes per batch for hierarchical summarization (Tier 2/3).',
+    )
+    max_patch_log: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description='Maximum number of entries in the patch log.',
+    )
+
+
 class ServerConfig(BaseModel):
     """Configuration for the Memex API Server."""
 
@@ -1060,6 +1085,11 @@ class ServerConfig(BaseModel):
         description='Configuration for document search and processing.',
     )
 
+    vault_summary: VaultSummaryConfig = Field(
+        default_factory=VaultSummaryConfig,
+        description='Configuration for vault summary generation.',
+    )
+
     tracing: TracingConfig = Field(
         default_factory=TracingConfig,
         description='OpenTelemetry tracing configuration. Disabled by default.',
@@ -1124,6 +1154,8 @@ class ServerConfig(BaseModel):
             self.memory.contradiction.model = dm
         if self.document.model is None:
             self.document.model = dm
+        if self.vault_summary.model is None:
+            self.vault_summary.model = dm
         return self
 
 
