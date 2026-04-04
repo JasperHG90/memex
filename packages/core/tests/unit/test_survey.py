@@ -80,9 +80,30 @@ class TestSurveyDecomposer:
             questions = await decomposer.decompose('broad topic')
         assert len(questions) == 3
         assert questions[0] == 'Only one question'
-        # Padded questions should contain original topic
+        # Padded questions should contain original topic and source question
         assert 'broad topic' in questions[1]
         assert 'broad topic' in questions[2]
+        assert 'Only one question' in questions[1]
+        assert 'Only one question' in questions[2]
+        # Padded questions must be distinct (regression: idx=0 always bug)
+        assert len(set(questions)) == 3
+
+    @pytest.mark.asyncio
+    async def test_decompose_pads_two_to_three_with_cycling(self, decomposer):
+        """If LLM returns 2 sub-questions, pad cycles through them distinctly."""
+        result = SimpleNamespace(sub_questions=['Question A', 'Question B'])
+        with patch(
+            'memex_core.memory.retrieval.expansion.run_dspy_operation',
+            new_callable=AsyncMock,
+            return_value=result,
+        ):
+            questions = await decomposer.decompose('my topic')
+        assert len(questions) == 3
+        assert questions[0] == 'Question A'
+        assert questions[1] == 'Question B'
+        # Third should cycle to idx=0 (Question A)
+        assert 'my topic' in questions[2]
+        assert 'Question A' in questions[2]
 
     @pytest.mark.asyncio
     async def test_decompose_fallback_on_failure(self, decomposer):
