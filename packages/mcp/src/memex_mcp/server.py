@@ -1063,23 +1063,30 @@ def compute_staleness(
     if now is None:
         now = _dt.now(tz=_tz.utc)
 
-    age_days: int = 999  # default: treat as old
+    if confidence < 0.5:
+        return Staleness.STALE
+
     if event_date is not None and isinstance(event_date, _dt):
         if event_date.tzinfo is None:
             event_date = event_date.replace(tzinfo=_tz.utc)
         age_days = (now - event_date).days
 
-    if confidence < 0.5:
-        return Staleness.STALE
+        if age_days > 30:
+            return Staleness.STALE
 
-    if age_days > 30:
-        return Staleness.STALE
+        if age_days >= 7:
+            return Staleness.AGING
 
-    if age_days >= 7:
+        if confidence >= 0.7:
+            return Staleness.FRESH
+
         return Staleness.AGING
 
+    # No usable date — rely on confidence alone.
+    # High confidence without a date should not be penalised as STALE;
+    # treat as AGING (unknown age) so the LLM can still use the result.
     if confidence >= 0.7:
-        return Staleness.FRESH
+        return Staleness.AGING
 
     return Staleness.AGING
 
