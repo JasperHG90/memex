@@ -489,7 +489,12 @@ ingested_at: {now}
         # Transaction committed — safe to run contradiction (new session sees committed data).
         contradiction_coro = result.pop('contradiction_task', None)
         if contradiction_coro is not None:
-            await contradiction_coro
+            try:
+                await contradiction_coro
+            except Exception:
+                logger.exception(
+                    'Post-commit contradiction detection failed for note %s', note_uuid
+                )
 
         return result
 
@@ -692,7 +697,10 @@ ingested_at: {now}
 
         # Transaction committed — safe to run contradiction detection.
         for coro in _pending_contradictions:
-            await coro
+            try:
+                await coro
+            except Exception:
+                logger.exception('Post-commit contradiction detection failed in batch chunk')
 
         return processed_ids
 
