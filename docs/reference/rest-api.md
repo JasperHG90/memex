@@ -541,8 +541,10 @@ Search notes using multi-channel fusion (RRF). Returns an NDJSON stream.
 Each line is a `NoteSearchResult`:
 
 ```json
-{"note_id": "uuid", "score": 0.92, "snippets": [{"text": "..."}], "metadata": {"name": "..."}, "vault_id": "uuid", "vault_name": "my-vault", "note_status": "active", "reasoning": [{"node_uuid": "...", "reasoning": "..."}], "answer": null}
+{"note_id": "uuid", "score": 0.92, "snippets": [{"text": "..."}], "metadata": {"name": "..."}, "vault_id": "uuid", "vault_name": "my-vault", "note_status": "active", "reasoning": [{"node_uuid": "...", "reasoning": "..."}], "answer": null, "related_notes": [{"note_id": "uuid", "title": "...", "shared_entities": ["Entity A"], "strength": 0.85}], "links": [{"unit_id": "uuid", "note_id": "uuid", "note_title": "...", "relation": "causal", "weight": 1.0}]}
 ```
+
+The `related_notes` field contains notes that share entities with this result (up to 5, ranked by entity specificity). The `links` field contains memory-unit-level links (causal, temporal, semantic, etc.) aggregated to note level.
 
 ---
 
@@ -652,6 +654,62 @@ Get the provenance lineage of a note.
 #### Response (200)
 
 Returns a `LineageResponse` tree.
+
+---
+
+### `POST /api/v1/notes/related`
+
+Find notes related to the given notes via shared entities. Uses inverse-log entity specificity weighting — rarer shared entities produce stronger relations.
+
+#### Request Body
+
+```json
+{
+  "note_ids": ["550e8400-e29b-41d4-a716-446655440000"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `note_ids` | UUID[] | Yes | Note IDs to find relations for. |
+
+#### Response (200)
+
+Returns a JSON object keyed by input note ID. Each value is a list of up to 5 related notes:
+
+```json
+{
+  "550e8400-e29b-41d4-a716-446655440000": [
+    {
+      "note_id": "661e8400-e29b-41d4-a716-446655440001",
+      "title": "Architecture Decision Record - Auth",
+      "shared_entities": ["Authentication", "OAuth2"],
+      "strength": 1.0
+    },
+    {
+      "note_id": "772e8400-e29b-41d4-a716-446655440002",
+      "title": "Security Review Notes",
+      "shared_entities": ["Authentication"],
+      "strength": 0.65
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `note_id` | UUID | ID of the related note. |
+| `title` | string \| null | Title of the related note. |
+| `shared_entities` | string[] | Up to 3 most specific shared entity names. |
+| `strength` | float | Normalized relation strength (0.0-1.0). |
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/notes/related \
+  -H "Content-Type: application/json" \
+  -d '{"note_ids": ["550e8400-e29b-41d4-a716-446655440000"]}'
+```
 
 ---
 

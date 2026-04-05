@@ -578,6 +578,29 @@ Reset reflection queue items stuck in PROCESSING state longer than the configure
 
 ---
 
+## Note Relations
+
+### `get_related_notes`
+
+```python
+async def get_related_notes(self, note_ids: list[UUID]) -> dict[UUID, list[RelatedNoteDTO]]
+```
+
+Find notes related to the given notes via shared entities. Returns a dict keyed by input note ID, with each value being a list of up to 5 related notes ranked by strength.
+
+Scoring uses inverse-log weighting on entity mention count: rarer shared entities produce higher scores. Entities with more than 50 mentions are excluded as too generic. The `strength` field is normalized to `[0, 1]` relative to the highest-scoring candidate per input note.
+
+Each `RelatedNoteDTO` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `note_id` | UUID | ID of the related note. |
+| `title` | string \| None | Title of the related note. |
+| `shared_entities` | list[str] | Up to 3 most specific shared entity names. |
+| `strength` | float | Normalized relation strength (0.0-1.0). |
+
+---
+
 ## Lineage
 
 ### `get_lineage`
