@@ -267,3 +267,47 @@ async def test_memex_read_note_small_note_no_force_needed(mock_api, mcp_client):
 
     assert data['title'] == 'Small Note'
     assert data['content'] == 'Short content'
+
+
+# --- memex_note_search relation mapping tests ---
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_maps_related_notes_and_links(mock_api, mcp_client):
+    """Verify memex_note_search maps related_notes and links from NoteSearchResult to MCP models."""
+    from memex_common.schemas import MemoryLinkDTO, RelatedNoteDTO
+
+    nid = uuid4()
+    rn_id = uuid4()
+    uid = uuid4()
+
+    doc = NoteSearchResult(
+        note_id=nid,
+        metadata={'title': 'Test Doc'},
+        score=0.85,
+        related_notes=[
+            RelatedNoteDTO(note_id=rn_id, title='Related', shared_entities=['Python'], strength=0.9)
+        ],
+        links=[
+            MemoryLinkDTO(
+                unit_id=uid, note_id=rn_id, note_title='Related', relation='semantic', weight=0.8
+            )
+        ],
+    )
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    assert len(data) == 1
+    assert len(data[0]['related_notes']) == 1
+    assert data[0]['related_notes'][0]['note_id'] == str(rn_id)
+    assert data[0]['related_notes'][0]['title'] == 'Related'
+    assert data[0]['related_notes'][0]['shared_entities'] == ['Python']
+    assert data[0]['related_notes'][0]['strength'] == 0.9
+    assert len(data[0]['links']) == 1
+    assert data[0]['links'][0]['unit_id'] == str(uid)
+    assert data[0]['links'][0]['relation'] == 'semantic'
+    assert data[0]['links'][0]['weight'] == 0.8

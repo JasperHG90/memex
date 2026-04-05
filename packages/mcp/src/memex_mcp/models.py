@@ -75,6 +75,27 @@ class McpCitation(BaseModel):
     date: str | None = None
 
 
+class McpMemoryLink(BaseModel):
+    """A link between memory units."""
+
+    unit_id: UUID
+    note_id: UUID | None = None
+    note_title: str | None = None
+    relation: str
+    weight: float = 1.0
+    time: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpRelatedNote(BaseModel):
+    """A note related via shared entities."""
+
+    note_id: UUID
+    title: str | None = None
+    shared_entities: list[str] = Field(default_factory=list)
+    strength: float = 0.0
+
+
 class McpMemoryUnitBase(BaseModel):
     """Shared fields across all memory unit types."""
 
@@ -89,6 +110,7 @@ class McpMemoryUnitBase(BaseModel):
     tags: list[str] = []
     status: str = 'active'
     superseded_by: list[McpSupersession] = []
+    links: list[McpMemoryLink] = Field(default_factory=list)
     previously_returned: bool = False
 
     @field_validator('tags', mode='before')
@@ -177,6 +199,8 @@ class McpNoteSearchResult(BaseModel):
     source_uri: str | None = None
     has_assets: bool = False
     summaries: list[McpBlockSummary] = Field(default_factory=list)
+    related_notes: list[McpRelatedNote] = Field(default_factory=list)
+    links: list[McpMemoryLink] = Field(default_factory=list)
     previously_returned: bool = False
 
     @field_validator('tags', mode='before')
@@ -219,6 +243,7 @@ class McpPageIndex(BaseModel):
     metadata: McpPageMetadata
     toc: list[TOCNodeDTO]
     total_tokens: int | None = None
+    related_notes: list[McpRelatedNote] = Field(default_factory=list)
 
 
 class McpNoteMetadata(BaseModel):

@@ -39,7 +39,9 @@ from memex_mcp.models import (
     McpKVWriteResult,
     _scope_from_key,
     McpLineageNode,
+    McpMemoryLink,
     McpNode,
+    McpRelatedNote,
     McpNote,
     McpNoteContent,
     McpNoteSummary,
@@ -1056,6 +1058,10 @@ def _build_memory_unit_model(
         'superseded_by': supersessions,
     }
 
+    links_raw = unit_metadata.get('links', [])
+    links = [McpMemoryLink(**lnk) for lnk in links_raw if isinstance(lnk, dict)]
+    base_kwargs['links'] = links
+
     if fact_type == 'event':
         return McpEvent(
             **base_kwargs,
@@ -1391,6 +1397,27 @@ async def memex_note_search(
                     or 'Untitled'
                 )
                 summaries = [McpBlockSummary(**s.model_dump()) for s in doc.summaries]
+                related_notes = [
+                    McpRelatedNote(
+                        note_id=rn.note_id,
+                        title=rn.title,
+                        shared_entities=rn.shared_entities,
+                        strength=rn.strength,
+                    )
+                    for rn in getattr(doc, 'related_notes', [])
+                ]
+                links = [
+                    McpMemoryLink(
+                        unit_id=lnk.unit_id,
+                        note_id=lnk.note_id,
+                        note_title=lnk.note_title,
+                        relation=lnk.relation,
+                        weight=lnk.weight,
+                        time=lnk.time.isoformat() if lnk.time else None,
+                        metadata=lnk.metadata,
+                    )
+                    for lnk in getattr(doc, 'links', [])
+                ]
                 output.append(
                     McpNoteSearchResult(
                         note_id=doc.note_id,
@@ -1403,6 +1430,8 @@ async def memex_note_search(
                         source_uri=metadata.get('source_uri'),
                         has_assets=metadata.get('has_assets', False),
                         summaries=summaries,
+                        related_notes=related_notes,
+                        links=links,
                     )
                 )
             dedup.seen_note_ids.add(nid)
@@ -1568,6 +1597,20 @@ async def memex_get_page_indices(
                 continue  # skip invalid UUIDs and other errors
             except Exception:
                 continue
+
+        if output:
+            note_ids_for_related = [o.note_id for o in output]
+            related_map = await api.get_related_notes(note_ids_for_related)
+            for o in output:
+                o.related_notes = [
+                    McpRelatedNote(
+                        note_id=rn.note_id,
+                        title=rn.title,
+                        shared_entities=rn.shared_entities,
+                        strength=rn.strength,
+                    )
+                    for rn in related_map.get(o.note_id, [])
+                ]
 
         return output
 
