@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Memex Claude Code Plugin — SessionEnd
-# Gathers quantitative session stats and posts a lightweight marker note.
+# Gathers quantitative session stats (including edit spirals) and posts a
+# lightweight marker note. Cleans up per-session state.
 set -euo pipefail
+trap 'echo "{}"; exit 0' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
@@ -19,19 +21,43 @@ writes=0
 COUNTER_FILE="${STATE_DIR}/write_count"
 if [ -f "$COUNTER_FILE" ]; then
     writes=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-    rm -f "$COUNTER_FILE"
+fi
+
+# Count edit spirals (files edited 3+ times)
+spirals=0
+spiral_details=""
+if [ -d "$STATE_DIR/file_edits" ]; then
+    for f in "$STATE_DIR/file_edits"/*; do
+        [ -f "$f" ] || continue
+        cnt=$(head -1 "$f" | cut -d' ' -f1 2>/dev/null || echo 0)
+        fpath=$(head -1 "$f" | cut -d' ' -f2- 2>/dev/null || echo "unknown")
+        if [ "$cnt" -ge 3 ] 2>/dev/null; then
+            spirals=$((spirals + 1))
+            bname=$(basename "$fpath")
+            if [ -n "$spiral_details" ]; then
+                spiral_details="${spiral_details}, ${bname} (${cnt}x)"
+            else
+                spiral_details="${bname} (${cnt}x)"
+            fi
+        fi
+    done
 fi
 
 # Build stats summary
 stats="commits: ${commits}, file writes: ${writes}"
+if [ "$spirals" -gt 0 ]; then
+    stats="${stats}, edit spirals: ${spirals} [${spiral_details}]"
+fi
 
 # Post marker note via CLI (if memex is available)
-if command -v memex >/dev/null 2>&1; then
-    memex note add \
-        "Session ended. Stats: ${stats}." \
-        --tags "session-marker" --tags "agent-reflection" \
-        2>/dev/null || true
-fi
+memex note add \
+    "Session ended. Stats: ${stats}." \
+    --tags "session-marker" --tags "agent-reflection" \
+    2>/dev/null || true
+
+# --- Clean up per-session state ---
+rm -f "$COUNTER_FILE"
+rm -rf "$STATE_DIR/file_edits"
 
 # Output empty JSON (SessionEnd hooks do not inject context)
 echo '{}'

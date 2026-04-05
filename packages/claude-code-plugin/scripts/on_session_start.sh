@@ -8,7 +8,37 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
+
+# --- Dependency check: jq ---
+if ! command -v jq >/dev/null 2>&1; then
+    cat <<'NOJQ'
+{"systemMessage": "⚠️ jq is not installed. Memex hooks require jq for reliable JSON handling.\n\nInstall it: apt-get install jq (Debian/Ubuntu), brew install jq (macOS), or see https://jqlang.github.io/jq/download/\n\nMemex MCP tools still work, but hook context injection is degraded."}
+NOJQ
+    exit 0
+fi
+
+# --- Auto-install rules file if not present ---
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+else
+    _project_root="$PWD"
+fi
+if [ -n "$_project_root" ]; then
+    _rules_src="$PLUGIN_ROOT/rules/memex.md"
+    _rules_dst="$_project_root/.claude/rules/memex.md"
+    if [ -f "$_rules_src" ] && [ ! -f "$_rules_dst" ]; then
+        mkdir -p "$(dirname "$_rules_dst")" 2>/dev/null || true
+        cp "$_rules_src" "$_rules_dst" 2>/dev/null || true
+    fi
+fi
+
+# --- Clear stale session state ---
+STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/write_count"
+rm -rf "$STATE_DIR/file_edits"
 
 # --- Derive portable project identifier ---
 project_id=""
