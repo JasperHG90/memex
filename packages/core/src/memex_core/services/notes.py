@@ -159,6 +159,7 @@ class NoteService:
             elif status == 'active':
                 doc.superseded_by = None
                 doc.appended_to = None
+                doc.summary_version_incorporated = None
                 # Cascade: reactivate all memory units
                 from sqlmodel import select
 

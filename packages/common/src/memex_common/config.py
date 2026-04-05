@@ -986,7 +986,15 @@ class VaultSummaryConfig(BaseModel):
         default=50,
         ge=10,
         le=200,
-        description='Number of notes per batch for hierarchical summarization (Tier 2/3).',
+        description='Hard note-count cap per batch (safety limit). Token budget is the primary '
+        'batching control; this prevents any single batch from exceeding this many notes.',
+    )
+    max_batch_tokens: int = Field(
+        default=8000,
+        ge=1000,
+        le=100000,
+        description='Token budget per batch for vault summary LLM calls. Estimated from the '
+        'serialized metadata payload (title, tags, chunk summaries, etc.).',
     )
     max_patch_log: int = Field(
         default=20,

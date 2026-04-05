@@ -258,6 +258,13 @@ class Note(SQLModel, table=True):  # type: ignore
         description='ID of the note this one was appended to.',
     )
 
+    summary_version_incorporated: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description='VaultSummary.version when this note was last incorporated into the summary. '
+        'NULL or < current version means pending.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -280,6 +287,7 @@ class Note(SQLModel, table=True):  # type: ignore
             sql_text('lower(title) gin_trgm_ops'),
             postgresql_using='gin',
         ),
+        Index('idx_notes_summary_version', 'vault_id', 'summary_version_incorporated'),
     )
 
 

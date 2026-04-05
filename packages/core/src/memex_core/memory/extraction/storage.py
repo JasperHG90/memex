@@ -184,6 +184,7 @@ async def handle_document_tracking(
         'session_id': insert_stmt.excluded.session_id,
         'publish_date': insert_stmt.excluded.publish_date,
         'description': insert_stmt.excluded.description,
+        'summary_version_incorporated': None,
     }
 
     upsert_stmt = insert_stmt.on_conflict_do_update(

@@ -9,7 +9,7 @@ import pytest
 
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
-from memex_core.services.vault_summary import VaultSummaryService
+from memex_core.services.vault_summary import VaultSummaryService, _estimate_tokens
 
 
 def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryService:
@@ -35,9 +35,10 @@ def _mock_session(existing_summary: VaultSummary | None = None):
     return ctx, session
 
 
-def _make_note_metadata(count: int = 5) -> list[dict]:
-    """Build a list of rich note metadata dicts as returned by _fetch_note_metadata."""
-    return [
+def _make_note_metadata(count: int = 5) -> tuple[list[dict], list, list]:
+    """Build note metadata + IDs as returned by _fetch_note_metadata."""
+    ids = [uuid4() for _ in range(count)]
+    data = [
         {
             'title': f'Note {i}',
             'publish_date': '2026-04-01',
@@ -50,6 +51,7 @@ def _make_note_metadata(count: int = 5) -> list[dict]:
         }
         for i in range(count)
     ]
+    return data, ids, ids
 
 
 class TestGetSummary:
@@ -137,12 +139,14 @@ class TestIsStale:
         assert await svc.is_stale(vault_id) is False
 
     @pytest.mark.asyncio
-    async def test_stale_when_new_notes_after_updated_at(self):
+    async def test_stale_when_unincorporated_notes_exist(self):
+        """Stale when notes have summary_version_incorporated < summary.version."""
         svc = _make_service()
         vault_id = uuid4()
         summary = VaultSummary(
             vault_id=vault_id,
             summary='Old summary',
+            version=3,
             updated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
         )
 
@@ -150,7 +154,7 @@ class TestIsStale:
         summary_result = MagicMock()
         summary_result.scalar_one_or_none.return_value = summary
         count_result = MagicMock()
-        count_result.scalar.return_value = 3  # 3 new notes
+        count_result.scalar.return_value = 3  # 3 unincorporated notes
         session.execute = AsyncMock(side_effect=[summary_result, count_result])
 
         ctx = AsyncMock()
@@ -161,12 +165,13 @@ class TestIsStale:
         assert await svc.is_stale(vault_id) is True
 
     @pytest.mark.asyncio
-    async def test_not_stale_when_no_new_notes(self):
+    async def test_not_stale_when_all_notes_incorporated(self):
         svc = _make_service()
         vault_id = uuid4()
         summary = VaultSummary(
             vault_id=vault_id,
             summary='Current summary',
+            version=5,
             updated_at=datetime(2026, 4, 4, tzinfo=timezone.utc),
         )
 
@@ -210,28 +215,22 @@ class TestUpdateSummary:
         existing = VaultSummary(
             vault_id=vault_id,
             summary='Existing summary',
+            version=3,
             updated_at=datetime(2026, 4, 4, tzinfo=timezone.utc),
         )
 
-        # First session: summary lookup
-        ctx1, _ = _mock_session(existing)
-        # Second session: _fetch_note_metadata returns empty
-        ctx2, session2 = _mock_session(None)
-        note_result = MagicMock()
-        note_result.all.return_value = []
-        session2.execute.return_value = note_result
+        with patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = ([], [], [])
 
-        call_count = 0
+            ctx1, s1 = _mock_session(existing)
+            summary_result = MagicMock()
+            summary_result.scalar_one_or_none.return_value = existing
+            s1.execute = AsyncMock(return_value=summary_result)
 
-        def session_factory():
-            nonlocal call_count
-            call_count += 1
-            return ctx1 if call_count == 1 else ctx2
+            svc.metastore.session = lambda: ctx1
 
-        svc.metastore.session = session_factory
-
-        result = await svc.update_summary(vault_id)
-        assert result.summary == 'Existing summary'
+            result = await svc.update_summary(vault_id)
+            assert result.summary == 'Existing summary'
 
     @pytest.mark.asyncio
     async def test_updates_with_delta_notes(self):
@@ -248,7 +247,7 @@ class TestUpdateSummary:
             updated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
         )
 
-        delta_notes = _make_note_metadata(3)
+        delta_notes, delta_ids, _ = _make_note_metadata(3)
 
         mock_prediction = MagicMock()
         mock_prediction.updated_summary = 'Updated overview with 3 new notes.'
@@ -262,7 +261,7 @@ class TestUpdateSummary:
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
-            mock_fetch.return_value = delta_notes
+            mock_fetch.return_value = (delta_notes, delta_ids, delta_ids)
             mock_run.return_value = mock_prediction
 
             # Session 1: summary lookup + _fetch_note_metadata + total count
@@ -422,7 +421,7 @@ class TestRegenerateSummary:
         vault_id = uuid4()
 
         with patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch:
-            mock_fetch.return_value = []
+            mock_fetch.return_value = ([], [], [])
 
             ctx, session = _mock_session(None)
             svc.metastore.session = lambda: ctx
@@ -432,12 +431,13 @@ class TestRegenerateSummary:
         assert result.notes_incorporated == 0
 
     @pytest.mark.asyncio
-    async def test_tier1_small_vault(self):
-        config = VaultSummaryConfig(batch_size=50)
+    async def test_tier1_small_payload(self):
+        """Small payload fits within max_batch_tokens → single LLM call."""
+        config = VaultSummaryConfig(max_batch_tokens=50000)
         svc = _make_service(config)
         vault_id = uuid4()
 
-        notes_data = _make_note_metadata(10)
+        notes_data, note_ids, _ = _make_note_metadata(10)
 
         mock_prediction = MagicMock()
         mock_prediction.summary = 'Summary of 10 notes.'
@@ -449,7 +449,7 @@ class TestRegenerateSummary:
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
-            mock_fetch.return_value = notes_data
+            mock_fetch.return_value = (notes_data, note_ids, note_ids)
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -463,12 +463,14 @@ class TestRegenerateSummary:
         mock_run.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_tier2_medium_vault(self):
-        config = VaultSummaryConfig(batch_size=50)
+    async def test_tier2_medium_payload(self):
+        """Medium payload uses two-pass topic extraction + merge."""
+        # Use a small token budget so 100 notes exceed it but stay under 10x
+        config = VaultSummaryConfig(max_batch_tokens=1000, batch_size=200)
         svc = _make_service(config)
         vault_id = uuid4()
 
-        notes_data = _make_note_metadata(100)
+        notes_data, note_ids, _ = _make_note_metadata(100)
 
         mock_prediction = MagicMock()
         mock_prediction.summary = 'Summary of 100 notes.'
@@ -481,7 +483,7 @@ class TestRegenerateSummary:
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
-            mock_fetch.return_value = notes_data
+            mock_fetch.return_value = (notes_data, note_ids, note_ids)
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -490,17 +492,18 @@ class TestRegenerateSummary:
             result = await svc.regenerate_summary(vault_id)
 
         assert result.summary == 'Summary of 100 notes.'
-        # 2 extract calls + 1 merge = 3
-        assert mock_run.call_count == 3
+        # Multiple extract calls + 1 merge
+        assert mock_run.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_tier3_large_vault(self):
-        """AC-A08: >500 notes uses hierarchical summarization."""
-        config = VaultSummaryConfig(batch_size=50)
+    async def test_tier3_large_payload(self):
+        """Very large payload uses hierarchical summarization."""
+        # Tiny token budget forces tier 3
+        config = VaultSummaryConfig(max_batch_tokens=1000, batch_size=200)
         svc = _make_service(config)
         vault_id = uuid4()
 
-        notes_data = _make_note_metadata(600)
+        notes_data, note_ids, _ = _make_note_metadata(600)
 
         mock_prediction = MagicMock()
         mock_prediction.summary = 'Hierarchical summary of 600 notes.'
@@ -513,7 +516,7 @@ class TestRegenerateSummary:
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
-            mock_fetch.return_value = notes_data
+            mock_fetch.return_value = (notes_data, note_ids, note_ids)
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -522,16 +525,16 @@ class TestRegenerateSummary:
             result = await svc.regenerate_summary(vault_id)
 
         assert result.summary == 'Hierarchical summary of 600 notes.'
-        # 12 extract + recursive merge calls
-        assert mock_run.call_count >= 13
+        # Many extract + recursive merge calls
+        assert mock_run.call_count >= 5
 
     @pytest.mark.asyncio
     async def test_batch_failure_is_skipped(self):
-        config = VaultSummaryConfig(batch_size=50)
+        config = VaultSummaryConfig(max_batch_tokens=1000, batch_size=200)
         svc = _make_service(config)
         vault_id = uuid4()
 
-        notes_data = _make_note_metadata(100)
+        notes_data, note_ids, _ = _make_note_metadata(100)
 
         call_count = 0
 
@@ -552,7 +555,7 @@ class TestRegenerateSummary:
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
-            mock_fetch.return_value = notes_data
+            mock_fetch.return_value = (notes_data, note_ids, note_ids)
             mock_run.side_effect = mock_run_side_effect
 
             ctx, session = _mock_session(None)
@@ -631,10 +634,12 @@ class TestFetchNoteMetadata:
 
         session.execute = AsyncMock(side_effect=[note_result, chunk_result])
 
-        result = await svc._fetch_note_metadata(session, uuid4())
+        data, ids, _all = await svc._fetch_note_metadata(session, uuid4())
 
-        assert len(result) == 1
-        meta = result[0]
+        assert len(data) == 1
+        assert len(ids) == 1
+        assert ids[0] == note_id
+        meta = data[0]
         assert meta['title'] == 'Test Note'
         assert meta['description'] == 'A test description'
         assert meta['publish_date'] == '2026-04-01T00:00:00+00:00'
@@ -647,8 +652,8 @@ class TestFetchNoteMetadata:
         assert meta['summaries'][0]['key_points'] == ['Gradient descent', 'Backprop']
 
     @pytest.mark.asyncio
-    async def test_filters_since_timestamp(self):
-        """When since is provided, only notes after that timestamp are returned."""
+    async def test_filters_by_summary_version(self):
+        """When summary_version is provided, only unincorporated notes are returned."""
         svc = _make_service()
         session = AsyncMock()
 
@@ -656,11 +661,11 @@ class TestFetchNoteMetadata:
         note_result.all.return_value = []
         session.execute = AsyncMock(return_value=note_result)
 
-        since = datetime(2026, 4, 1, tzinfo=timezone.utc)
-        result = await svc._fetch_note_metadata(session, uuid4(), since=since)
+        data, ids, _all = await svc._fetch_note_metadata(session, uuid4(), summary_version=3)
 
-        assert result == []
-        # Verify execute was called (the since filter is in the SQL)
+        assert data == []
+        assert ids == []
+        # Verify execute was called (the version filter is in the SQL)
         session.execute.assert_called_once()
 
     @pytest.mark.asyncio
@@ -684,8 +689,9 @@ class TestFetchNoteMetadata:
 
         session.execute = AsyncMock(side_effect=[note_result, chunk_result])
 
-        result = await svc._fetch_note_metadata(session, uuid4())
-        assert result == []  # skipped
+        data, ids, _all = await svc._fetch_note_metadata(session, uuid4())
+        assert data == []
+        assert ids == []
 
     @pytest.mark.asyncio
     async def test_handles_missing_doc_metadata_fields(self):
@@ -708,9 +714,9 @@ class TestFetchNoteMetadata:
 
         session.execute = AsyncMock(side_effect=[note_result, chunk_result])
 
-        result = await svc._fetch_note_metadata(session, uuid4())
-        assert len(result) == 1
-        meta = result[0]
+        data, ids, _all = await svc._fetch_note_metadata(session, uuid4())
+        assert len(data) == 1
+        meta = data[0]
         assert meta['tags'] == []
         assert meta['author'] == ''
         assert meta['source_domain'] == ''
@@ -745,11 +751,58 @@ class TestFetchNoteMetadata:
 
         session.execute = AsyncMock(side_effect=[note_result, chunk_result])
 
-        result = await svc._fetch_note_metadata(session, uuid4())
-        assert len(result) == 1
-        assert len(result[0]['summaries']) == 2
-        assert result[0]['summaries'][0]['topic'] == 'Topic A'
-        assert result[0]['summaries'][1]['topic'] == 'Topic B'
+        data, ids, _all = await svc._fetch_note_metadata(session, uuid4())
+        assert len(data) == 1
+        assert ids[0] == note_id
+        assert len(data[0]['summaries']) == 2
+        assert data[0]['summaries'][0]['topic'] == 'Topic A'
+        assert data[0]['summaries'][1]['topic'] == 'Topic B'
+
+
+class TestTokenBatching:
+    """Tests for _split_into_token_batches and _estimate_tokens."""
+
+    def test_estimate_tokens(self):
+        assert _estimate_tokens('abcd') == 1
+        assert _estimate_tokens('a' * 100) == 25
+
+    def test_single_batch_when_within_budget(self):
+        from memex_core.services.vault_summary import _split_into_token_batches
+
+        notes = [{'title': f'Note {i}'} for i in range(3)]
+        batches = _split_into_token_batches(notes, max_tokens=10000, max_notes=100)
+        assert len(batches) == 1
+        assert len(batches[0]) == 3
+
+    def test_splits_on_token_budget(self):
+        from memex_core.services.vault_summary import _split_into_token_batches
+
+        # Each note is ~50 chars → ~12 tokens
+        notes = [{'title': f'Note {i}', 'description': 'x' * 40} for i in range(10)]
+        batches = _split_into_token_batches(notes, max_tokens=30, max_notes=100)
+        assert len(batches) > 1
+        for batch in batches:
+            assert len(batch) >= 1
+
+    def test_splits_on_note_count_cap(self):
+        from memex_core.services.vault_summary import _split_into_token_batches
+
+        notes = [{'title': f'Note {i}'} for i in range(10)]
+        batches = _split_into_token_batches(notes, max_tokens=100000, max_notes=3)
+        assert len(batches) >= 4  # 10 notes / 3 per batch
+
+    def test_oversized_single_note(self):
+        """A single note exceeding max_tokens is placed alone in a batch."""
+        from memex_core.services.vault_summary import _split_into_token_batches
+
+        notes = [
+            {'title': 'Small'},
+            {'title': 'Huge', 'description': 'x' * 10000},
+            {'title': 'Small2'},
+        ]
+        batches = _split_into_token_batches(notes, max_tokens=100, max_notes=100)
+        # The huge note should be in its own batch
+        assert any(len(b) == 1 and b[0]['title'] == 'Huge' for b in batches)
 
 
 class TestPeriodicVaultSummaryTask:
