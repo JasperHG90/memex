@@ -99,6 +99,7 @@ class NoteSearchEngine:
         self.lm = lm
         self.reranker = reranker
         _config = retrieval_config or RetrievalConfig()
+        self._relation_config = _config.relations
         self.graph_strategy = get_note_graph_strategy(
             type=_config.graph_retriever_type,
             ner_model=ner_model,
@@ -193,7 +194,8 @@ class NoteSearchEngine:
 
         # Attach structured relationship data (informational, not score-affecting).
         # Runs after reranking/trimming so we only query for the final result set.
-        if results:
+        rc = self._relation_config
+        if results and rc.top_k_related > 0:
             from memex_core.memory.retrieval.note_relations import (
                 compute_related_notes,
                 fetch_memory_links_for_notes,
@@ -201,7 +203,14 @@ class NoteSearchEngine:
 
             note_ids = [r.note_id for r in results]
             vault_ids = request.vault_ids if request.vault_ids else None
-            related_map = await compute_related_notes(session, note_ids, vault_ids=vault_ids)
+            related_map = await compute_related_notes(
+                session,
+                note_ids,
+                vault_ids=vault_ids,
+                fanout_cap=rc.entity_fanout_cap,
+                top_k=rc.top_k_related,
+                max_shared_entities=rc.max_shared_entities,
+            )
             links_map = await fetch_memory_links_for_notes(session, note_ids, vault_ids=vault_ids)
             for r in results:
                 r.related_notes = related_map.get(r.note_id, [])
