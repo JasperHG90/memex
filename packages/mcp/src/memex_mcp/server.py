@@ -1598,6 +1598,20 @@ async def memex_get_page_indices(
             except Exception:
                 continue
 
+        if output:
+            note_ids_for_related = [o.note_id for o in output]
+            related_map = await api.get_related_notes(note_ids_for_related)
+            for o in output:
+                o.related_notes = [
+                    McpRelatedNote(
+                        note_id=rn.note_id,
+                        title=rn.title,
+                        shared_entities=rn.shared_entities,
+                        strength=rn.strength,
+                    )
+                    for rn in related_map.get(o.note_id, [])
+                ]
+
         return output
 
     except ToolError:
