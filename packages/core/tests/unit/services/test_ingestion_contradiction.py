@@ -260,3 +260,104 @@ async def test_process_chunk_handles_mixed_none_tasks(ingestion_service, mock_se
     # Only the one real coroutine should have been awaited
     assert tracked['count'] == 1
     assert len(result) == 3
+
+
+@pytest.mark.asyncio
+async def test_ingest_swallows_contradiction_exception(ingestion_service, mock_session):
+    """If contradiction coroutine raises, ingest() must not fail — transaction already committed."""
+    from memex_core.memory.sql_models import Vault
+
+    async def failing_contradiction():
+        raise RuntimeError('session_factory exploded')
+
+    note, note_id = _make_note()
+
+    ingestion_service.memory.retain = AsyncMock(
+        return_value={
+            'status': 'success',
+            'contradiction_task': failing_contradiction(),
+        }
+    )
+
+    mock_vault = MagicMock(spec=Vault)
+    mock_vault.name = 'test-vault'
+    mock_session.get = AsyncMock(return_value=mock_vault)
+    mock_session.exec.return_value.first.return_value = None
+
+    with (
+        patch('memex_core.services.ingestion.AsyncTransaction') as mock_txn_cls,
+        patch(
+            'memex_core.services.ingestion.resolve_document_title',
+            new_callable=AsyncMock,
+        ) as mock_title,
+        patch('memex_core.services.ingestion.audit_event'),
+    ):
+        ctx = AsyncMock()
+        ctx.db_session = mock_session
+        mock_txn_cls.return_value.__aenter__ = AsyncMock(return_value=ctx)
+        mock_txn_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_title.return_value = 'Resolved Title'
+
+        ingestion_service._detect_overlapping_notes = AsyncMock(return_value=[])
+
+        # Must NOT raise even though contradiction coroutine fails
+        result = await ingestion_service.ingest(
+            note, vault_id=uuid4(), event_date=datetime.now(timezone.utc)
+        )
+
+    assert result['status'] == 'success'
+    assert 'contradiction_task' not in result
+
+
+@pytest.mark.asyncio
+async def test_process_chunk_swallows_contradiction_exception(ingestion_service, mock_session):
+    """If a contradiction coroutine raises in batch, _process_chunk() must not fail."""
+
+    async def failing_contradiction():
+        raise RuntimeError('DB connection refused')
+
+    note_id = uuid4()
+
+    ingestion_service.memory.retain = AsyncMock(
+        return_value={
+            'status': 'success',
+            'contradiction_task': failing_contradiction(),
+        }
+    )
+
+    note_dto = MagicMock()
+    note_dto.filename = None
+    note_dto.content_decoded = b'# Content ' + str(note_id).encode()
+    note_dto.name = f'Note {note_id}'
+    note_dto.description = 'desc'
+    note_dto.author = None
+    note_dto.tags = []
+    note_dto.files = {}
+    note_dto.user_notes = None
+
+    chunk = [(0, note_dto, note_id)]
+    note_fingerprints = [f'fp_{note_id}']
+    target_vault_id = uuid4()
+
+    with (
+        patch('memex_core.services.ingestion.AsyncTransaction') as mock_txn_cls,
+        patch(
+            'memex_core.services.ingestion.resolve_document_title',
+            new_callable=AsyncMock,
+        ) as mock_title,
+    ):
+        ctx = AsyncMock()
+        ctx.db_session = mock_session
+        mock_txn_cls.return_value.__aenter__ = AsyncMock(return_value=ctx)
+        mock_txn_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_title.return_value = 'Batch Title'
+
+        # Must NOT raise even though contradiction coroutine fails
+        result = await ingestion_service._process_chunk(
+            chunk=chunk,
+            vault_name='test-vault',
+            note_fingerprints=note_fingerprints,
+            target_vault_id=target_vault_id,
+        )
+
+    assert result == [str(note_id)]
