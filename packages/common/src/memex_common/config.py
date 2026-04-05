@@ -533,6 +533,25 @@ class ExtractionConfig(BaseModel):
         return self.text_splitting.strategy
 
 
+class RelationConfig(BaseModel):
+    """Configuration for note/unit relationship enrichment in search results."""
+
+    top_k_related: int = Field(
+        default=5,
+        description='Max related notes returned per search result. 0 = disable related notes.',
+    )
+    max_shared_entities: int = Field(
+        default=0,
+        description='Max entity names included per related note (for explainability). '
+        '0 = omit shared_entities from results (saves tokens).',
+    )
+    entity_fanout_cap: int = Field(
+        default=50,
+        description='Entities with mention_count above this are excluded from relation queries '
+        '(too generic to be informative).',
+    )
+
+
 class RetrievalConfig(BaseModel):
     """Configuration for retrieval settings."""
 
@@ -637,6 +656,10 @@ class RetrievalConfig(BaseModel):
     link_expansion_causal_threshold: float = Field(
         default=0.3,
         description='Minimum weight for causal links in link-expansion graph strategy.',
+    )
+    relations: RelationConfig = Field(
+        default_factory=RelationConfig,
+        description='Settings for note/unit relationship enrichment in search results.',
     )
 
 
