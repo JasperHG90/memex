@@ -1,10 +1,12 @@
+import logging
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
-from memex_core.memory.engine import MemoryEngine
+from memex_core.memory.engine import MemoryEngine, get_memory_engine, _build_contradiction_engine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.extraction.models import RetainContent
@@ -237,3 +239,310 @@ async def test_recall_no_queue_service_skips_resonance(
     results, resonance_task = await engine.recall(session, request)
     assert len(results) == 1
     assert resonance_task is None
+
+
+# ---------------------------------------------------------------------------
+# Contradiction pipeline: retain() early return, gate logging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retain_returns_contradiction_task_on_early_return(
+    config, mock_extraction_engine, mock_retrieval_engine
+):
+    """retain() must include contradiction_task in early return when entities are empty."""
+    mock_contradiction = MagicMock()
+    mock_contradiction.detect_contradictions = MagicMock(return_value='coro-sentinel')
+
+    mock_session_factory = MagicMock(spec=async_sessionmaker)
+
+    engine = MemoryEngine(
+        config,
+        mock_extraction_engine,
+        mock_retrieval_engine,
+        contradiction_engine=mock_contradiction,
+        session_factory=mock_session_factory,
+    )
+
+    unit_ids = [uuid4()]
+    mock_extraction_engine.extract_and_persist.return_value = (unit_ids, set())
+
+    session = AsyncMock(spec=AsyncSession)
+    contents = [RetainContent(content='test')]
+
+    result = await engine.retain(session, contents, note_id='note-1', reflect_after=False)
+
+    # Early return (empty entities) must still include contradiction_task
+    assert 'contradiction_task' in result
+    assert result['contradiction_task'] == 'coro-sentinel'
+    assert result['touched_entities'] == set()
+
+
+@pytest.mark.asyncio
+async def test_retain_contradiction_runs_with_entities(
+    config, mock_extraction_engine, mock_retrieval_engine
+):
+    """retain() runs contradiction even when entities are present (normal path)."""
+    mock_contradiction = MagicMock()
+    mock_contradiction.detect_contradictions = MagicMock(return_value='coro-sentinel')
+
+    mock_session_factory = MagicMock(spec=async_sessionmaker)
+
+    engine = MemoryEngine(
+        config,
+        mock_extraction_engine,
+        mock_retrieval_engine,
+        contradiction_engine=mock_contradiction,
+        session_factory=mock_session_factory,
+    )
+
+    unit_ids = [uuid4()]
+    entity_id = uuid4()
+    mock_extraction_engine.extract_and_persist.return_value = (unit_ids, {entity_id})
+
+    session = AsyncMock(spec=AsyncSession)
+    contents = [RetainContent(content='test')]
+
+    with patch('memex_core.memory.engine.ReflectionEngine') as MockReflection:
+        MockReflection.return_value.reflect_batch = AsyncMock(return_value=[MagicMock()])
+
+        result = await engine.retain(session, contents, note_id='note-1', reflect_after=True)
+
+    assert result['contradiction_task'] == 'coro-sentinel'
+    assert result['touched_entities'] == {entity_id}
+
+
+@pytest.mark.asyncio
+async def test_retain_gate_logging_no_engine(
+    config, mock_extraction_engine, mock_retrieval_engine, caplog
+):
+    """retain() logs WARNING when contradiction engine is None."""
+    engine = MemoryEngine(
+        config,
+        mock_extraction_engine,
+        mock_retrieval_engine,
+        contradiction_engine=None,
+        session_factory=MagicMock(spec=async_sessionmaker),
+    )
+
+    mock_extraction_engine.extract_and_persist.return_value = ([uuid4()], set())
+
+    session = AsyncMock(spec=AsyncSession)
+    contents = [RetainContent(content='test')]
+
+    with caplog.at_level(logging.WARNING, logger='memex.core.memory.engine'):
+        await engine.retain(session, contents, reflect_after=False)
+
+    assert any('engine is None' in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_retain_gate_logging_no_session_factory(
+    config, mock_extraction_engine, mock_retrieval_engine, caplog
+):
+    """retain() logs WARNING when session_factory is None."""
+    mock_contradiction = MagicMock()
+
+    engine = MemoryEngine(
+        config,
+        mock_extraction_engine,
+        mock_retrieval_engine,
+        contradiction_engine=mock_contradiction,
+        session_factory=None,
+    )
+
+    mock_extraction_engine.extract_and_persist.return_value = ([uuid4()], set())
+
+    session = AsyncMock(spec=AsyncSession)
+    contents = [RetainContent(content='test')]
+
+    with caplog.at_level(logging.WARNING, logger='memex.core.memory.engine'):
+        await engine.retain(session, contents, reflect_after=False)
+
+    assert any('no session_factory' in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_retain_gate_logging_no_units(
+    config, mock_extraction_engine, mock_retrieval_engine, caplog
+):
+    """retain() logs INFO when no units were extracted."""
+    mock_contradiction = MagicMock()
+
+    engine = MemoryEngine(
+        config,
+        mock_extraction_engine,
+        mock_retrieval_engine,
+        contradiction_engine=mock_contradiction,
+        session_factory=MagicMock(spec=async_sessionmaker),
+    )
+
+    mock_extraction_engine.extract_and_persist.return_value = ([], set())
+
+    session = AsyncMock(spec=AsyncSession)
+    contents = [RetainContent(content='test')]
+
+    with caplog.at_level(logging.INFO, logger='memex.core.memory.engine'):
+        await engine.retain(session, contents, reflect_after=False)
+
+    assert any('no units extracted' in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# get_memory_engine() session_factory forwarding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_memory_engine_forwards_session_factory(
+    mock_extraction_engine, mock_retrieval_engine
+):
+    """get_memory_engine() must forward session_factory to MemoryEngine."""
+    mock_factory = MagicMock(spec=async_sessionmaker)
+
+    with (
+        patch(
+            'memex_core.memory.models.get_embedding_model',
+            new_callable=AsyncMock,
+        ),
+        patch(
+            'memex_core.memory.models.get_reranking_model',
+            new_callable=AsyncMock,
+        ),
+        patch(
+            'memex_core.memory.models.get_ner_model',
+            new_callable=AsyncMock,
+        ),
+        patch('memex_core.memory.engine._build_contradiction_engine', return_value=None),
+    ):
+        config = MagicMock()
+
+        engine = await get_memory_engine(
+            config,
+            extraction_engine=mock_extraction_engine,
+            retrieval_engine=mock_retrieval_engine,
+            session_factory=mock_factory,
+        )
+
+    assert engine._session_factory is mock_factory
+
+
+@pytest.mark.asyncio
+async def test_get_memory_engine_defaults_session_factory_none(
+    mock_extraction_engine, mock_retrieval_engine
+):
+    """get_memory_engine() defaults session_factory to None."""
+    with (
+        patch(
+            'memex_core.memory.models.get_embedding_model',
+            new_callable=AsyncMock,
+        ),
+        patch(
+            'memex_core.memory.models.get_reranking_model',
+            new_callable=AsyncMock,
+        ),
+        patch(
+            'memex_core.memory.models.get_ner_model',
+            new_callable=AsyncMock,
+        ),
+        patch('memex_core.memory.engine._build_contradiction_engine', return_value=None),
+    ):
+        config = MagicMock()
+
+        engine = await get_memory_engine(
+            config,
+            extraction_engine=mock_extraction_engine,
+            retrieval_engine=mock_retrieval_engine,
+        )
+
+    assert engine._session_factory is None
+
+
+# ---------------------------------------------------------------------------
+# _build_contradiction_engine() success log
+# ---------------------------------------------------------------------------
+
+
+def test_build_contradiction_engine_logs_success(caplog):
+    """_build_contradiction_engine() logs INFO with model name, threshold, alpha on success."""
+    config = MagicMock()
+    config.server.memory.contradiction.enabled = True
+    config.server.memory.contradiction.model.model = 'test-model/v1'
+    config.server.memory.contradiction.model.base_url = None
+    config.server.memory.contradiction.model.api_key = None
+    config.server.memory.contradiction.similarity_threshold = 0.42
+    config.server.memory.contradiction.alpha = 0.15
+
+    with (
+        patch('memex_core.memory.engine.dspy.LM'),
+        patch('memex_core.memory.engine.ContradictionEngine'),
+        caplog.at_level(logging.INFO, logger='memex.core.memory.engine'),
+    ):
+        result = _build_contradiction_engine(config)
+
+    assert result is not None
+    log_msgs = [r.message for r in caplog.records]
+    assert any('Contradiction engine created' in m for m in log_msgs)
+
+
+# ---------------------------------------------------------------------------
+# Static verification: dead code removal
+# ---------------------------------------------------------------------------
+
+
+def test_server_ingestion_no_schedule_contradiction():
+    """Verify _schedule_contradiction and _run_contradiction are removed from server routes."""
+    import inspect
+    from memex_core.server import ingestion as server_ingestion
+
+    source = inspect.getsource(server_ingestion)
+    assert '_schedule_contradiction' not in source
+    assert '_run_contradiction' not in source
+
+
+def test_batch_no_contradiction_task():
+    """Verify contradiction_task handling is removed from batch.py."""
+    import inspect
+    from memex_core.processing import batch
+
+    source = inspect.getsource(batch)
+    assert 'contradiction_task' not in source
+
+
+# ---------------------------------------------------------------------------
+# MemexAPI startup diagnostic log (AC-008)
+# ---------------------------------------------------------------------------
+
+
+def test_memex_api_logs_warning_when_contradiction_disabled(
+    mock_metastore,
+    mock_filestore,
+    mock_config,
+    mock_embedding_model,
+    mock_reranking_model,
+    mock_ner_model,
+    patch_api_engines,
+    caplog,
+):
+    """MemexAPI.__init__ logs WARNING when contradiction engine is None (disabled)."""
+    from memex_core.api import MemexAPI
+
+    with (
+        patch(
+            'memex_core.api._build_contradiction_engine',
+            return_value=None,
+        ),
+        caplog.at_level(logging.WARNING, logger='memex.core.api'),
+    ):
+        MemexAPI(
+            embedding_model=mock_embedding_model,
+            reranking_model=mock_reranking_model,
+            ner_model=mock_ner_model,
+            metastore=mock_metastore,
+            filestore=mock_filestore,
+            config=mock_config,
+        )
+
+    assert any('contradiction detection is DISABLED' in r.message for r in caplog.records), (
+        'Expected WARNING about contradiction detection being disabled'
+    )

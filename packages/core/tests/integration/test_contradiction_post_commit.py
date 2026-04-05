@@ -1,10 +1,9 @@
 """Integration test: contradiction detection fires post-commit with real Postgres.
 
-Verifies that after ingest() commits, a new DB session (as used by
-ContradictionEngine.detect_contradictions) can see the newly created
-memory units via _load_units(). This proves READ COMMITTED visibility
-works correctly now that the service layer no longer awaits the
-contradiction task inside the transaction.
+Verifies that after ingest() commits, the contradiction_task coroutine
+is awaited by IngestionService (centralized await pattern) and can see
+the newly created memory units via a new DB session. This proves
+READ COMMITTED visibility works correctly.
 """
 
 from uuid import UUID, uuid4
@@ -25,8 +24,8 @@ def ingestion_service_with_contradiction(metastore, filestore, memex_config, fak
     new session (simulating ContradictionEngine behaviour)."""
     base_retain = fake_retain_factory
 
-    # We'll capture the unit_ids and vault_id from retain() so the
-    # contradiction task can query for them in a separate session.
+    # We'll capture the unit_ids and vault_id from retain() so we can
+    # verify what the contradiction task loaded.
     captured: dict = {}
 
     async def retain_with_contradiction(session, contents, note_id, **kwargs):
@@ -43,7 +42,8 @@ def ingestion_service_with_contradiction(metastore, filestore, memex_config, fak
                 stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(unit_ids))
                 rows = await new_session.exec(stmt)
                 loaded = list(rows.all())
-                return loaded
+                # Store what we loaded so the test can verify
+                captured['loaded_units'] = loaded
 
         result['contradiction_task'] = fake_contradiction_task()
         return result
@@ -76,9 +76,9 @@ async def test_contradiction_loads_units_after_commit(
     ingestion_service_with_contradiction,
 ):
     """After ingest() returns (transaction committed), the contradiction_task
-    coroutine must be able to load the newly created memory units from a
-    separate DB session. This was previously broken because the service layer
-    awaited the task inside the transaction (before commit)."""
+    coroutine has been awaited by IngestionService and loaded the newly
+    created memory units from a separate DB session. This proves the
+    centralized await pattern works with READ COMMITTED visibility."""
     from memex_common.config import GLOBAL_VAULT_ID
 
     svc, captured = ingestion_service_with_contradiction
@@ -110,15 +110,16 @@ async def test_contradiction_loads_units_after_commit(
 
         result = await svc.ingest(note, vault_id=GLOBAL_VAULT_ID)
 
-    # 1. Verify contradiction_task is in result (not popped by service layer)
-    assert 'contradiction_task' in result, (
-        'contradiction_task key missing from result dict after ingest()'
+    # 1. Verify contradiction_task was popped and awaited by IngestionService
+    assert 'contradiction_task' not in result, (
+        'contradiction_task key should be popped by IngestionService after awaiting'
     )
-    assert result['contradiction_task'] is not None
 
-    # 2. Await the contradiction task AFTER the transaction has committed
-    #    This simulates what _schedule_contradiction / BackgroundTasks does
-    loaded_units = await result['contradiction_task']
+    # 2. Verify the contradiction coroutine actually ran and loaded units
+    assert 'loaded_units' in captured, (
+        'Contradiction coroutine was never awaited — captured has no loaded_units'
+    )
+    loaded_units = captured['loaded_units']
 
     # 3. Verify _load_units equivalent found the committed memory units
     assert len(loaded_units) > 0, (

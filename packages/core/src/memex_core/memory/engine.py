@@ -28,6 +28,7 @@ async def get_memory_engine(
     config: MemexConfig,
     extraction_engine: ExtractionEngine | None = None,
     retrieval_engine: RetrievalEngine | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> 'MemoryEngine':
     """
     Factory method to create a MemoryEngine with dependencies.
@@ -90,6 +91,7 @@ async def get_memory_engine(
         extraction_engine=extraction_engine,
         retrieval_engine=retrieval_engine,
         contradiction_engine=contradiction_engine,
+        session_factory=session_factory,
     )
 
 
@@ -108,7 +110,14 @@ def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | No
             api_base=str(model_config.base_url) if model_config.base_url else None,
             api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
         )
-        return ContradictionEngine(lm=lm, config=contradiction_config)
+        engine = ContradictionEngine(lm=lm, config=contradiction_config)
+        logger.info(
+            'Contradiction engine created (model=%s, threshold=%.2f, alpha=%.2f)',
+            model_config.model,
+            contradiction_config.similarity_threshold,
+            contradiction_config.alpha,
+        )
+        return engine
     except (AttributeError, TypeError, ValueError, RuntimeError) as e:
         logger.warning('Failed to build contradiction engine: %s', e)
         return None
@@ -197,14 +206,38 @@ class MemoryEngine:
 
         logger.info(f'Retained {len(unit_ids)} units. Touched {len(touched_entities)} entities.')
 
+        # Determine vault_id (needed for both reflection and contradiction)
+        vault_id = contents[0].vault_id if contents else GLOBAL_VAULT_ID
+
+        # 3. Contradiction Detection — runs regardless of entity count.
+        #    Uses semantic similarity (cosine distance), not just entity overlap.
+        contradiction_task = None
+        if self.contradiction and self._session_factory and unit_ids:
+            from uuid import UUID as _UUID
+
+            contradiction_task = self.contradiction.detect_contradictions(
+                session_factory=self._session_factory,
+                document_id=note_id,
+                unit_ids=[_UUID(uid) if isinstance(uid, str) else uid for uid in unit_ids],
+                vault_id=vault_id,
+            )
+            logger.info('Contradiction detection prepared for %d units.', len(unit_ids))
+        else:
+            if not self.contradiction:
+                logger.warning(
+                    'Contradiction detection skipped: engine is None (disabled or misconfigured)'
+                )
+            elif not self._session_factory:
+                logger.warning('Contradiction detection skipped: no session_factory')
+            elif not unit_ids:
+                logger.info('Contradiction detection skipped: no units extracted')
+
         if not touched_entities:
             return {
                 'unit_ids': unit_ids,
                 'touched_entities': touched_entities,
+                'contradiction_task': contradiction_task,
             }
-
-        # Determine vault_id (assuming uniform per batch)
-        vault_id = contents[0].vault_id if contents else GLOBAL_VAULT_ID
 
         # 2. Reflection Phase (Immediate or Deferred)
         if reflect_after:
@@ -234,19 +267,6 @@ class MemoryEngine:
             )
             # Note: extract_and_persist already called queue_service.handle_extraction_event,
             # so entities are already in the queue with PENDING status.
-
-        # 3. Contradiction Detection — return as pending background work
-        #    The caller (server route) should schedule this via FastAPI BackgroundTasks
-        #    rather than asyncio.create_task, which is unreliable under multi-worker servers.
-        contradiction_task = None
-        if self.contradiction and self._session_factory and unit_ids:
-            contradiction_task = self.contradiction.detect_contradictions(
-                session_factory=self._session_factory,
-                document_id=note_id,
-                unit_ids=unit_ids,
-                vault_id=vault_id,
-            )
-            logger.info('Contradiction detection prepared for %d units.', len(unit_ids))
 
         return {
             'unit_ids': unit_ids,

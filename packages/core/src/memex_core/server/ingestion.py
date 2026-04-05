@@ -60,21 +60,6 @@ logger = logging.getLogger('memex.core.server.ingestion')
 router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_write)])
 
 
-async def _run_contradiction(coro):
-    """Await the contradiction detection coroutine."""
-    from memex_core.context import background_session
-
-    async with background_session('bg-contradiction'):
-        await coro
-
-
-def _schedule_contradiction(background_tasks: BackgroundTasks, result: dict) -> None:
-    """Schedule the contradiction detection coroutine via FastAPI BackgroundTasks if present."""
-    coro = result.pop('contradiction_task', None)
-    if coro is not None:
-        background_tasks.add_task(_run_contradiction, coro)
-
-
 def _decode_base64_dict(
     data: Mapping[str, str | bytes] | None,
     field_name: str = 'content',
@@ -162,7 +147,6 @@ async def ingest_note(
             template=request.template,
         )
         result = await api.ingest(note, vault_id=request.vault_id)
-        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
 
     except HTTPException:
@@ -208,7 +192,6 @@ async def ingest_url(
             assets=assets_bytes,
             user_notes=request.user_notes,
         )
-        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
     except HTTPException:
         raise
@@ -230,7 +213,6 @@ async def ingest_file(
             reflect_after=request.reflect_after,
             user_notes=request.user_notes,
         )
-        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File ingestion failed')
@@ -317,7 +299,6 @@ async def ingest_upload(
                     note_key=parsed_metadata.get('note_key'),
                     user_notes=parsed_metadata.get('user_notes'),
                 )
-                _schedule_contradiction(background_tasks, result)
                 return IngestResponse(**result)
             finally:
                 if os.path.exists(tmp_path):
@@ -377,7 +358,6 @@ async def ingest_upload(
             )
 
         result = await api.ingest(note, vault_id=parsed_metadata.get('vault_id'))
-        _schedule_contradiction(background_tasks, result)
         return IngestResponse(**result)
 
     except HTTPException:

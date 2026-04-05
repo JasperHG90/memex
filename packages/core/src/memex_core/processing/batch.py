@@ -289,11 +289,6 @@ class JobManager:
 
                 result = await coro_fn(**kwargs)
 
-                # Run contradiction detection inline (no BackgroundTasks available)
-                contradiction_task = result.pop('contradiction_task', None)
-                if contradiction_task is not None:
-                    await contradiction_task
-
                 note_id = result.get('note_id')
 
                 async with self.api.metastore.session() as session:
