@@ -484,6 +484,14 @@ class MemexAPI:
             config=self.config.server.vault_summary,
         )
 
+        from memex_core.services.session_briefing import SessionBriefingService
+
+        self.session_briefing = SessionBriefingService(
+            vault_summary_service=self.vault_summary,
+            entity_service=self._entities,
+            kv_service=self._kv,
+        )
+
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,
