@@ -534,7 +534,7 @@ class TestOverflowSteps:
     async def test_step1_entity_trim_activates(self):
         """Overflow step 1: entity count is reduced when data exceeds budget.
 
-        Calibrated: base content ~1600 tokens + 10 entities ~550 = ~2150 (over 2000).
+        Calibrated: >8000 chars (~2500+ tokens) to reliably exceed 2000-token budget.
         Trimming entities reduces count until it fits.
         """
         long_obs = [
@@ -554,20 +554,22 @@ class TestOverflowSteps:
         svc = _make_service(
             summary=_make_vault_summary(
                 summary='A moderately long vault summary sentence that adds tokens to fill up the budget. '
-                * 50,
+                * 80,
                 topics=[
                     {
                         'name': f'Topic{i}',
                         'note_count': i * 3,
                         'description': 'A detailed description of this topic area with many words to fill space '
-                        * 3,
+                        * 4,
                     }
                     for i in range(10)
                 ],
             ),
             entities=entities,
             kv_entries=[
-                _make_kv_entry(f'global:k{i}', f'value-data-for-key-{i}-extra-padding')
+                _make_kv_entry(
+                    f'global:k{i}', f'value-data-for-key-{i}-with-extra-padding-text-here'
+                )
                 for i in range(12)
             ],
         )
