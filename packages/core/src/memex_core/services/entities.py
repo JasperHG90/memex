@@ -23,12 +23,14 @@ class EntityWithMetadata:
 
     entity: Any
     metadata: dict[str, Any] = field(default_factory=dict)
+    observations: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _wrap_with_metadata(entity: Any, mental_model: Any | None) -> EntityWithMetadata:
     """Wrap an entity with mental model entity_metadata."""
     metadata = (mental_model.entity_metadata if mental_model else None) or {}
-    return EntityWithMetadata(entity=entity, metadata=metadata)
+    observations = (mental_model.observations if mental_model else None) or []
+    return EntityWithMetadata(entity=entity, metadata=metadata, observations=observations)
 
 
 class EntityService(BaseService):
