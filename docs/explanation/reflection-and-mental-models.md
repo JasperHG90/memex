@@ -48,6 +48,47 @@ The reflection queue uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` for a
 
 Additionally, each entity reflection acquires a PostgreSQL advisory lock (`pg_try_advisory_xact_lock`) to prevent concurrent reflection on the same entity from different workers.
 
+## Reflection Pipeline Overview
+
+```mermaid
+graph TD
+    DQ["Distributed Queue<br/>SELECT ... FOR UPDATE SKIP LOCKED<br/>Priority: 0.5×evidence + 0.2×log(mentions) + 0.3×log(retrievals)"]
+    --> LE["Leader Election<br/>pg_try_advisory_lock<br/>600s interval"]
+    --> P0
+
+    subgraph LOOP["7-Phase Hindsight Loop (per entity, per vault)"]
+        direction TB
+        P0["Phase 0: Update Existing<br/>Prune dead evidence, add new supporting<br/>evidence, flag contradictions<br/><i>1 LLM call</i>"]
+        --> P1["Phase 1: Seed<br/>Generate candidate observations<br/>from 20 most recent memories<br/><i>1 LLM call</i>"]
+        --> P2["Phase 2: Hunt<br/>pgvector similarity search per candidate<br/>+ tail sampling (5% rate)<br/><i>0 LLM calls</i>"]
+        --> P3["Phase 3: Validate<br/>LLM validates candidates against evidence<br/>Extract exact supporting quotes<br/><i>1 LLM call</i>"]
+        --> P4["Phase 4: Compare/Merge<br/>Merge new + existing observations<br/>Compute trends via temporal density<br/><i>1 LLM call</i>"]
+        --> P5["Phase 5: Finalize<br/>Persist as JSONB, increment version<br/>Embed model summary<br/><i>0 LLM calls</i>"]
+        --> P6["Phase 6: Enrich<br/>Tag contributing memory units with<br/>concepts from reflection<br/><i>1 LLM call (optional)</i>"]
+    end
+
+    P6 --> BC["Batch Commit<br/>Rescue mode on fail: one-by-one with rollback"]
+```
+
+### Trend Tracking State Machine
+
+Observations track trend state based on evidence temporal density:
+
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> Analyze: evidence spans old + recent
+    New --> Stale: no evidence (pruned)
+    Analyze --> Strengthening: ratio > 1.5
+    Analyze --> Weakening: ratio < 0.5
+    Analyze --> Stable: ratio 0.5–1.5
+    Strengthening --> Stable
+    Weakening --> Stable
+    Stale --> New: new evidence arrives
+```
+
+The ratio is `recent_evidence_density / older_evidence_density`, where the split point is 30 days.
+
 ## The Phases of Reflection
 
 When an entity is selected for reflection, it passes through the following phases:

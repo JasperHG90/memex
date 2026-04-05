@@ -58,6 +58,7 @@ Understanding-oriented articles that explain how Memex works and why it is desig
 
 | Article | Description |
 |:--------|:------------|
+| [Architecture Overview](explanation/architecture-overview.md) | System layers, package dependency graph, and database schema. |
 | [Hindsight Framework](explanation/hindsight-framework.md) | The three-phase memory architecture: Extraction, Retrieval, and Reflection. |
 | [Extraction Pipeline](explanation/extraction-pipeline.md) | How documents are chunked, facts are extracted, entities are resolved, and embeddings are generated. |
 | [Retrieval Strategies](explanation/retrieval-strategies.md) | The TEMPR system: five search strategies fused via Reciprocal Rank Fusion. |
