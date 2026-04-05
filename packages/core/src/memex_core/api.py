@@ -414,6 +414,8 @@ class MemexAPI:
         )
 
         self._contradiction = _build_contradiction_engine(self.config)
+        if self._contradiction is None:
+            logger.warning('MemexAPI: contradiction detection is DISABLED (engine not created)')
 
         self.memory = MemoryEngine(
             config=self.config,

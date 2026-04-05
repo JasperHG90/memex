@@ -68,11 +68,12 @@ class ContradictionEngine:
         ):
             new_units = await self._load_units(session, unit_ids)
             if not new_units:
+                logger.info('No units found for IDs %s — already deleted?', unit_ids)
                 return
 
             flagged_ids = await self._triage(new_units)
             if not flagged_ids:
-                logger.debug('Triage: no corrective units found among %d units', len(new_units))
+                logger.info('Triage: no corrective units found among %d units', len(new_units))
                 return
 
             flagged_units = [u for u in new_units if str(u.id) in flagged_ids]
@@ -156,6 +157,11 @@ class ContradictionEngine:
         )
 
         if not candidates:
+            logger.info(
+                'Unit %s: no candidates found (threshold=%.2f)',
+                unit.id,
+                self.config.similarity_threshold,
+            )
             return [], {}
 
         relationships = await self._classify(unit, candidates)
