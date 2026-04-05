@@ -164,6 +164,41 @@ async def test_fetch_memory_links_bidirectional(session):
 
 
 # ---------------------------------------------------------------------------
+# 15b. fetch_memory_links — both sides in input set
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_memory_links_both_sides_in_set(session):
+    """When both from_unit_id and to_unit_id are in the input set, both get link entries."""
+    vid = GLOBAL_VAULT_ID
+    nid_a, nid_b = uuid4(), uuid4()
+    uid_a, uid_b = uuid4(), uuid4()
+
+    await _seed_note(session, nid_a, vid, 'Note A')
+    await _seed_note(session, nid_b, vid, 'Note B')
+    await _seed_unit(session, uid_a, nid_a, vid, f'Fact A {uuid4()}')
+    await _seed_unit(session, uid_b, nid_b, vid, f'Fact B {uuid4()}')
+    await _seed_link(session, uid_a, uid_b, vid, 'semantic', 0.85)
+    await session.commit()
+
+    # Query with BOTH unit IDs in the input set
+    result = await fetch_memory_links(session, [uid_a, uid_b])
+
+    # uid_a should have a link pointing to uid_b
+    assert uid_a in result
+    a_links = result[uid_a]
+    assert any(lnk.unit_id == uid_b for lnk in a_links)
+    assert any(lnk.note_title == 'Note B' for lnk in a_links)
+
+    # uid_b should have a link pointing to uid_a
+    assert uid_b in result
+    b_links = result[uid_b]
+    assert any(lnk.unit_id == uid_a for lnk in b_links)
+    assert any(lnk.note_title == 'Note A' for lnk in b_links)
+
+
+# ---------------------------------------------------------------------------
 # 16. fetch_memory_links — no links
 # ---------------------------------------------------------------------------
 

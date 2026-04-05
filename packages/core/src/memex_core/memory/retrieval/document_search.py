@@ -175,20 +175,6 @@ class NoteSearchEngine:
             tags=request.tags,
         )
 
-        # Attach structured relationship data (informational, not score-affecting)
-        if results:
-            from memex_core.memory.retrieval.note_relations import (
-                compute_related_notes,
-                fetch_memory_links_for_notes,
-            )
-
-            note_ids = [r.note_id for r in results]
-            related_map = await compute_related_notes(session, note_ids)
-            links_map = await fetch_memory_links_for_notes(session, note_ids)
-            for r in results:
-                r.related_notes = related_map.get(r.note_id, [])
-                r.links = links_map.get(r.note_id, [])
-
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
             results = await self._rerank_results(request.query, results, best_chunk_text_by_note)
@@ -204,6 +190,22 @@ class NoteSearchEngine:
                 results = await self._synthesize_answer(
                     results, request.query, reasoning.section_texts, self.lm
                 )
+
+        # Attach structured relationship data (informational, not score-affecting).
+        # Runs after reranking/trimming so we only query for the final result set.
+        if results:
+            from memex_core.memory.retrieval.note_relations import (
+                compute_related_notes,
+                fetch_memory_links_for_notes,
+            )
+
+            note_ids = [r.note_id for r in results]
+            vault_ids = request.vault_ids if request.vault_ids else None
+            related_map = await compute_related_notes(session, note_ids, vault_ids=vault_ids)
+            links_map = await fetch_memory_links_for_notes(session, note_ids, vault_ids=vault_ids)
+            for r in results:
+                r.related_notes = related_map.get(r.note_id, [])
+                r.links = links_map.get(r.note_id, [])
 
         return results
 

@@ -1413,6 +1413,7 @@ async def memex_note_search(
                         note_title=lnk.note_title,
                         relation=lnk.relation,
                         weight=lnk.weight,
+                        # MemoryLinkDTO.time is datetime; McpMemoryLink.time is str (ISO 8601)
                         time=lnk.time.isoformat() if lnk.time else None,
                         metadata=lnk.metadata,
                     )
