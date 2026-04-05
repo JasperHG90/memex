@@ -43,7 +43,7 @@ rm -f "$STATE_DIR/write_count"
 rm -rf "$STATE_DIR/file_edits"
 
 # --- Generate session note key ---
-SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S)"
+SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"
 echo "$SESSION_NOTE_KEY" > "$STATE_DIR/session_note_key"
 
 # --- Derive portable project identifier ---

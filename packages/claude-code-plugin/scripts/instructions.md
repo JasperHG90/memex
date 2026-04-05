@@ -1,3 +1,7 @@
+<!-- DEPRECATED: This file is no longer injected by on_session_start.sh.
+     Behavioral rules are now maintained in rules/memex.md and delivered via
+     Claude Code's rules system. This file is kept for reference only. -->
+
 ## Memex memory integration
 
 Access Memex (long-term memory) via MCP tools. Build persistent knowledge across sessions.
