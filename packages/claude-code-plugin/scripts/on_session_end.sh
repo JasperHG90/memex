@@ -57,7 +57,9 @@ SESSION_NOTE_KEY=""
 note_args=(note add "Session ended. Stats: ${stats}." --tags "session-marker" --tags "agent-reflection")
 [ -n "$SESSION_NOTE_KEY" ] && note_args+=(--key "$SESSION_NOTE_KEY")
 
-memex "${note_args[@]}" 2>/dev/null || true
+if ! memex "${note_args[@]}" 2>/dev/null; then
+    echo "[memex] Warning: Failed to save session marker note. Memex server may be down." >&2
+fi
 
 # --- Clean up per-session state ---
 rm -f "$COUNTER_FILE"

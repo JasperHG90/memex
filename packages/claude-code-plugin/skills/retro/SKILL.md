@@ -40,8 +40,9 @@ You have been invoked via the `/retro` slash command.
    - **template**: `"agent_reflection"`
    - **background**: `false`
 
-   Synchronous ingestion ensures entities are extracted immediately, triggering
-   reflection on session learnings.
+   Synchronous ingestion ensures entities are extracted immediately and queued
+   for reflection. Reflection runs on a background schedule, but extraction
+   happens before this call returns.
 
 4. **Confirm to the user.**
    Briefly summarize the reflection and mention the note title.
