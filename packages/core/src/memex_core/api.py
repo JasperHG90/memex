@@ -20,6 +20,7 @@ from memex_common.schemas import (
     LineageDirection,
     NoteSearchResult,
     NodeDTO,
+    RelatedNoteDTO,
     SurveyResponse,
 )
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
@@ -719,6 +720,13 @@ class MemexAPI:
     async def get_notes_metadata(self, note_ids: list[UUID]) -> list[dict[str, Any]]:
         """Retrieve metadata for multiple notes. Delegates to NoteService."""
         return await self._notes.get_notes_metadata(note_ids)
+
+    async def get_related_notes(self, note_ids: list[UUID]) -> dict[UUID, list[RelatedNoteDTO]]:
+        """Get notes related to the given notes via shared entities."""
+        from memex_core.memory.retrieval.note_relations import compute_related_notes
+
+        async with self.metastore.session() as session:
+            return await compute_related_notes(session, note_ids)
 
     async def list_notes(
         self,

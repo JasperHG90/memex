@@ -39,6 +39,7 @@ from memex_mcp.models import (
     McpKVWriteResult,
     _scope_from_key,
     McpLineageNode,
+    McpMemoryLink,
     McpNode,
     McpNote,
     McpNoteContent,
@@ -1055,6 +1056,10 @@ def _build_memory_unit_model(
         'status': getattr(res, 'status', 'active'),
         'superseded_by': supersessions,
     }
+
+    links_raw = unit_metadata.get('links', [])
+    links = [McpMemoryLink(**lnk) for lnk in links_raw if isinstance(lnk, dict)]
+    base_kwargs['links'] = links
 
     if fact_type == 'event':
         return McpEvent(
