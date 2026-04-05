@@ -82,6 +82,38 @@ async def test_note_search_empty_returns_hint():
 
 
 @pytest.mark.asyncio
+async def test_note_search_nonempty_no_hint():
+    """Non-empty note_search results → no hint appended."""
+    from memex_mcp.server import memex_note_search
+    from memex_common.schemas import NoteSearchResult
+
+    note_id = UUID('12345678-1234-1234-1234-123456789abc')
+    mock_result = NoteSearchResult(
+        note_id=note_id,
+        metadata={'title': 'Real Note', 'name': 'Real Note'},
+        summaries=[],
+        score=0.85,
+    )
+
+    mock_api = AsyncMock()
+    mock_api.search_notes = AsyncMock(return_value=[mock_result])
+
+    ctx = _make_ctx()
+
+    with (
+        patch('memex_mcp.server.get_api', return_value=mock_api),
+        patch('memex_mcp.server._default_read_vaults', return_value=['vault-1']),
+        patch('memex_mcp.server._validate_vault_ids'),
+        patch('memex_mcp.server._resolve_vault_ids', new_callable=AsyncMock, return_value=['vid']),
+    ):
+        results = await memex_note_search(ctx=ctx, query='real topic')
+
+    assert len(results) == 1
+    assert results[0].note_id != _SENTINEL_UUID
+    assert 'system-hint' not in results[0].tags
+
+
+@pytest.mark.asyncio
 async def test_memory_search_nonempty_no_hint():
     """Non-empty memory_search results → no hint appended."""
     from memex_mcp.server import memex_memory_search
