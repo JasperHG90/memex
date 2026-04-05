@@ -74,7 +74,7 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
 | `source_context` | string | No | - | Filter by source context (e.g. `"user_notes"` to search only user annotations). |
 
-Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
+Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates. Each memory unit includes `links` — typed relationships (contradicts, reinforces, temporal, causes, etc.) to other units, with weight and source note metadata.
 
 All vault parameters are optional and default to the resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads).
 
@@ -96,7 +96,7 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 | `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
 
-Returns note titles, IDs, scores, snippets, and inline metadata.
+Returns note titles, IDs, scores, snippets, and inline metadata. Results include `related_notes` (notes sharing entities, ranked by specificity) and `links` (typed relationships from memory_links table). Use these to follow relationship chains without additional queries.
 
 ---
 
@@ -159,7 +159,7 @@ Returns metadata for each note, or errors for invalid/missing IDs.
 
 ### `memex_get_page_indices`
 
-Get the hierarchical page index (table of contents) for 1+ notes. Returns metadata plus section titles, summaries, token estimates, and node IDs. Use node IDs with `memex_get_nodes` to retrieve specific section text. Only call after `memex_get_notes_metadata` confirms relevance.
+Get the hierarchical page index (table of contents) for 1+ notes. Returns metadata plus section titles, summaries, token estimates, and node IDs. Includes `related_notes` — other notes sharing entities with this one, ranked by specificity. Use node IDs with `memex_get_nodes` to retrieve specific section text. Only call after `memex_get_notes_metadata` confirms relevance.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|

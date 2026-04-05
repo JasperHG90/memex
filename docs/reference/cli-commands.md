@@ -381,7 +381,7 @@ Show most recently created notes.
 memex note search QUERY [OPTIONS]
 ```
 
-Search for notes using multi-channel fusion (Reciprocal Rank Fusion).
+Search for notes using multi-channel fusion (Reciprocal Rank Fusion). Results include related notes (via shared entities) and typed links (contradicts, reinforces, etc.) when available.
 
 #### Arguments
 
