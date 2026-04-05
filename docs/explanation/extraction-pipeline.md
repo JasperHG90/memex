@@ -42,6 +42,35 @@ graph TD
 
 The pipeline is a linear sequence of stages, all within a single atomic transaction. If any stage fails, the entire transaction rolls back, ensuring no partial data enters the system.
 
+### Detailed Extraction Flow
+
+The "Extraction & Indexing" subgraph above contains several sub-stages. This diagram expands them:
+
+```mermaid
+graph TD
+    INPUT["Content Input<br/>(URL / File / Text)"] --> FMT["Format Conversion<br/>PDF/DOCX/HTML → Markdown<br/>+ Date Extraction"]
+    FMT --> HASH["Content Hashing<br/>SHA256 idempotency check<br/>+ Note Upsert"]
+
+    HASH --> CHUNK{"Chunking Strategy"}
+    CHUNK -->|"< 500 tokens"| CDC["Simple CDC<br/>Hash-based boundaries<br/>+ sentence snapping"]
+    CHUNK -->|"Large docs"| PI["PageIndex<br/>Header scan → section summary<br/>→ hierarchical TOC"]
+
+    CDC --> DIFF["Incremental Diff<br/>Hash comparison vs. existing<br/>Only extract ADDED blocks"]
+    PI --> DIFF
+
+    DIFF --> LLM["LLM Fact Extraction<br/>DSPy ExtractSemanticFacts<br/>5W framework per chunk"]
+
+    LLM --> ER["Entity Resolution<br/>Trigram + phonetic + co-occurrence<br/>+ temporal proximity (threshold: 0.65)"]
+    LLM --> DEDUP["Deduplication<br/>12h time buckets<br/>+ embedding similarity"]
+
+    ER --> EMB["Embedding Generation<br/>Thread-pool offloaded"]
+    DEDUP --> EMB
+
+    EMB --> LINK["Relationship Linking<br/>Causal · Temporal · Semantic<br/>· Cross-doc temporal"]
+    LINK --> CONTRA["Contradiction Check<br/>(async background)<br/>Classify: reinforce / weaken / contradict"]
+    CONTRA --> PERSIST["Persist to DB + Queue Reflection"]
+```
+
 ## Text Splitting Strategies
 
 The first decision in the pipeline is how to break a document into processable chunks. Memex supports two strategies, selected in configuration.
