@@ -711,6 +711,39 @@ Returns `NoteMetadataDTO[]`.
 
 ---
 
+### `POST /api/v1/notes/related`
+
+Get notes related to the given notes via shared entities.
+
+#### Request Body
+
+```json
+{
+  "note_ids": ["uuid1", "uuid2"]
+}
+```
+
+#### Response (200)
+
+Returns a JSON object mapping each input note ID to a list of related notes:
+
+```json
+{
+  "uuid1": [
+    {
+      "note_id": "uuid3",
+      "title": "Related Note Title",
+      "shared_entities": [],
+      "strength": 0.85
+    }
+  ]
+}
+```
+
+Each related note includes `strength` (0-1, normalized entity overlap) and optionally `shared_entities` (entity names explaining the relationship, if enabled via `server.memory.retrieval.relations.max_shared_entities`).
+
+---
+
 ### `POST /api/v1/nodes/batch`
 
 Get multiple page-index nodes by ID in a single request.

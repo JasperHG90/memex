@@ -233,6 +233,8 @@ IF query asks about relationships, connections, "how X fits in", "what relates t
   2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
   3. `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
   4. Read source notes via SEARCH/READ below as needed
+  Note: `memex_note_search` and `memex_memory_search` also return inline relationship data
+  (`related_notes`, `links`). For simple relationship discovery, search results may suffice.
 
 IF query asks about specific content, topics, or document lookup:
   → SEARCH
@@ -1089,6 +1091,8 @@ def _build_memory_unit_model(
     description=(
         'Search extracted facts, events, and observations across all notes (memory search). '
         'Find information about any topic. Best for broad/exploratory queries. '
+        'Each memory unit includes `links` — typed relationships (contradicts, reinforces, '
+        'temporal, causes, etc.) to other units, with weight and source note metadata. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
     ),
     tags={'search'},
@@ -1281,6 +1285,9 @@ async def memex_search_user_notes(
     description=(
         'Search and find source notes by hybrid retrieval (note search). '
         'Find notes about any topic. Returns ranked notes with 5W summaries. '
+        'Results include `related_notes` (notes sharing entities, ranked by specificity) '
+        'and `links` (typed relationships like contradicts/reinforces from memory_links). '
+        'Use these to follow relationship chains without additional queries. '
         'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
@@ -1542,7 +1549,8 @@ async def _get_single_page_index(
     name='memex_get_page_indices',
     description=(
         'Get note table of contents (TOC): section titles, summaries, node IDs, '
-        'and subtree_tokens for 1+ notes. '
+        'and subtree_tokens for 1+ notes. Includes `related_notes` — other notes sharing '
+        'entities with this one, ranked by specificity. '
         'Each node includes subtree_tokens (own + all descendant tokens) for read budgeting. '
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '

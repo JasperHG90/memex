@@ -26,8 +26,8 @@ The Memex MCP server exposes 35 tools organized into 7 categories:
 
 | Tag | Tools | Purpose |
 | :--- | :--- | :--- |
-| `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note`, `memex_search_user_notes`, `memex_survey` | Search facts/notes, fuzzy title lookup, user annotations, broad surveys |
-| `read` | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | Read note content via TOC + sections |
+| `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note`, `memex_search_user_notes`, `memex_survey` | Search facts/notes, fuzzy title lookup, user annotations, broad surveys. Search results include `related_notes` and `links` for relationship discovery. |
+| `read` | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | Read note content via TOC + sections. Page indices include `related_notes`. |
 | `write` | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_update_user_notes`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes, user annotations, and templates |
 | `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault`, `memex_get_vault_summary` | List notes, vaults, recent activity, vault summaries |
 | `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | Manage file attachments (images, PDFs) |

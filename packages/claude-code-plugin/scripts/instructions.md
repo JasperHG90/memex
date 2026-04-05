@@ -29,10 +29,12 @@ IF query asks about relationships, connections, "how X relates to Y", or landsca
 - `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts
 - `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
 - Then read source notes via Search/Read below as needed
+- Note: search results (`memex_note_search`, `memex_memory_search`) include inline relationship data (`related_notes`, `links`). For simple relationship discovery, search may suffice without entity exploration.
 
 IF query asks about specific content or document lookup:
 - **Search**: `memex_memory_search` (broad) and/or `memex_note_search` (targeted). Run in parallel.
 - **Filter**: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip.
+- **Relationships**: search results include `related_notes` (notes sharing entities) and `links` (typed unit relationships like contradicts/reinforces). Follow these to discover related content without extra queries.
 - **Read**: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
 - **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → `memex_get_resources` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER skip this step.
 
