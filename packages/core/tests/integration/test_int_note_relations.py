@@ -283,14 +283,20 @@ async def test_compute_related_notes_shared_entities(session):
     await _seed_unit_entity(session, uid_c, eid_y, vid)
     await session.commit()
 
-    result = await compute_related_notes(session, [nid_a])
-
-    assert nid_a in result
-    related = result[nid_a]
-    related_ids = {r.note_id for r in related}
+    # Default: shared_entities omitted (max_shared_entities=0)
+    result_default = await compute_related_notes(session, [nid_a])
+    assert nid_a in result_default
+    related_default = result_default[nid_a]
+    related_ids = {r.note_id for r in related_default}
     assert nid_b in related_ids
     assert nid_c in related_ids
+    for r in related_default:
+        assert r.shared_entities == []
+        assert r.strength > 0
 
+    # With shared_entities enabled
+    result = await compute_related_notes(session, [nid_a], max_shared_entities=3)
+    related = result[nid_a]
     for r in related:
         assert len(r.shared_entities) >= 1
         assert r.strength > 0

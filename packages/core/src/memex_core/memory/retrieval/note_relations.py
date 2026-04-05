@@ -171,6 +171,8 @@ async def compute_related_notes(
     note_ids: list[UUID],
     vault_ids: list[UUID] | None = None,
     fanout_cap: int = _ENTITY_FANOUT_CAP,
+    top_k: int = _TOP_K_RELATED,
+    max_shared_entities: int = 0,
 ) -> dict[UUID, list[RelatedNoteDTO]]:
     """Find notes related to the given notes via shared entities.
 
@@ -296,12 +298,14 @@ async def compute_related_notes(
                 _, mc = all_entity_ids_with_count[eid]
                 score += 1.0 / (1.0 + math.log1p(mc))
 
-            # Top 3 most specific shared entity names
-            shared_sorted = sorted(
-                shared,
-                key=lambda x: all_entity_ids_with_count[x[0]][1],
-            )
-            top_names = [name for _, name in shared_sorted[:3]]
+            # Top N most specific shared entity names (0 = omit)
+            top_names: list[str] = []
+            if max_shared_entities > 0:
+                shared_sorted = sorted(
+                    shared,
+                    key=lambda x: all_entity_ids_with_count[x[0]][1],
+                )
+                top_names = [name for _, name in shared_sorted[:max_shared_entities]]
             scored.append((cand_nid, score, top_names))
 
         # Sort by score descending, take top K
@@ -317,7 +321,7 @@ async def compute_related_notes(
                     shared_entities=top_names,
                     strength=round(score / max_score, 3) if max_score > 0 else 0.0,
                 )
-                for cand_nid, score, top_names in scored[:_TOP_K_RELATED]
+                for cand_nid, score, top_names in scored[:top_k]
             ]
 
     return related_map
