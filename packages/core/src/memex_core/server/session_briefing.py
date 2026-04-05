@@ -4,12 +4,14 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from memex_core.api import MemexAPI
 from memex_core.server.auth import require_read
 from memex_core.server.common import _handle_error, get_api
 from memex_common.exceptions import MemexError
+
+_VALID_BUDGETS = (1000, 2000)
 
 logger = logging.getLogger('memex.core.server.session_briefing')
 
@@ -30,6 +32,11 @@ async def get_session_briefing(
     project_id: str | None = Query(None, description='Optional project ID for KV scoping.'),
 ) -> dict:
     """Generate a session briefing for the given vault."""
+    if budget not in _VALID_BUDGETS:
+        raise HTTPException(
+            status_code=422,
+            detail=f'budget must be one of {_VALID_BUDGETS}, got {budget}',
+        )
     try:
         briefing = await api.session_briefing.generate(
             vault_id=vault_id,
