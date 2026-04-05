@@ -264,24 +264,27 @@ class SessionBriefingService:
         project_id: str | None,
     ) -> str:
         """Apply overflow degradation to fit within budget."""
-        # Step 1: Trim entity count 10 -> 7 -> 5
-        for entity_limit in (7, 5):
+        # Steps 1/1b only apply at budget>=2000 where initial build used 10 entities + trends.
+        # At budget<2000, _build_sections already used 5 entities without trends.
+        if budget >= 2000:
+            # Step 1: Trim entity count 10 -> 7 -> 5
+            for entity_limit in (7, 5):
+                sections = self._replace_section(
+                    sections,
+                    'entities',
+                    self._build_entities(entities[:entity_limit], include_trends=True),
+                )
+                if _estimate_tokens(self._assemble(sections)) <= budget:
+                    return self._assemble(sections)
+
+            # Step 1b: Drop observation titles (trends) from entities
             sections = self._replace_section(
                 sections,
                 'entities',
-                self._build_entities(entities[:entity_limit], include_trends=True),
+                self._build_entities(entities[:5], include_trends=False),
             )
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
-
-        # Step 1b: Drop observation titles (trends) from entities
-        sections = self._replace_section(
-            sections,
-            'entities',
-            self._build_entities(entities[:5], include_trends=False),
-        )
-        if _estimate_tokens(self._assemble(sections)) <= budget:
-            return self._assemble(sections)
 
         # Step 2: Drop topic descriptions (compact mode)
         sections = self._replace_section(

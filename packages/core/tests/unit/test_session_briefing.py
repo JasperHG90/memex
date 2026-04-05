@@ -671,3 +671,45 @@ class TestOverflowSteps:
         # If app: was dropped but user: survived, that's the correct order
         # Can't guarantee exact state, but budget must hold
         assert _estimate_tokens(result) <= 1000 * 1.05
+
+    @pytest.mark.asyncio
+    async def test_overflow_at_1000_does_not_inflate_entities(self):
+        """At budget=1000, overflow must not re-add trends or inflate entity count beyond 5.
+
+        Regression: _apply_overflow previously hardcoded include_trends=True and
+        started entity trim at 7, inflating the section before converging.
+        """
+        long_obs = [
+            {'title': 'Long observation ' * 5, 'trend': 'new', 'content': 'c'},
+            {'title': 'Another observation ' * 5, 'trend': 'stable', 'content': 'c'},
+        ]
+        entities = [_make_entity(f'Entity{i}', observations=long_obs) for i in range(10)]
+
+        svc = _make_service(
+            summary=_make_vault_summary(
+                summary='Summary. ' * 200,
+                topics=[
+                    {'name': f'Topic{i}', 'note_count': i, 'description': 'desc ' * 20}
+                    for i in range(10)
+                ],
+            ),
+            entities=entities,
+            kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}' * 20) for i in range(8)],
+        )
+        result = await svc.generate(uuid4(), budget=1000)
+
+        # Must stay within budget
+        assert _estimate_tokens(result) <= 1000 * 1.05
+
+        # Entity count must be <= 5 (the 1000-budget initial limit)
+        entity_section = (
+            result.split('## Top Entities')[-1].split('---')[0]
+            if '## Top Entities' in result
+            else ''
+        )
+        entity_lines = [ln for ln in entity_section.split('\n') if ln.strip().startswith('- ')]
+        assert len(entity_lines) <= 5, f'Expected <= 5 entities, got {len(entity_lines)}'
+
+        # No trend arrows should appear (★ ↑ ↓ → ⚠)
+        assert '\u2605' not in result  # ★
+        assert '\u2191' not in result  # ↑
