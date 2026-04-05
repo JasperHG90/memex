@@ -950,9 +950,9 @@ class RetrievalEngine:
                         )
                     unit.unit_metadata['superseded_by'] = supersession_info
 
-        # Fetch links for all hydrated units
+        # Fetch links for all hydrated units (gated by relation config)
         all_unit_ids = list(fetched_units.keys())
-        if all_unit_ids:
+        if all_unit_ids and self.retrieval_config.relations.top_k_related > 0:
             from memex_core.memory.retrieval.note_relations import fetch_memory_links
 
             links_map = await fetch_memory_links(session, all_unit_ids)
