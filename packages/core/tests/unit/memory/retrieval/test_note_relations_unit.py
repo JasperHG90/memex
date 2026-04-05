@@ -348,6 +348,78 @@ async def test_remote_memex_api_get_related_notes():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_note_search_enriches_results_with_relations():
+    """Verify NoteSearchEngine.search attaches related_notes and links to results."""
+    from memex_core.memory.retrieval.document_search import NoteSearchEngine, NoteSearchRequest
+    from memex_common.schemas import NoteSearchResult
+
+    nid_a = uuid4()
+    nid_b = uuid4()
+    uid = uuid4()
+
+    result_a = NoteSearchResult(note_id=nid_a, metadata={'title': 'Note A'}, score=0.9)
+
+    related_dto = RelatedNoteDTO(
+        note_id=nid_b, title='Note B', shared_entities=['Python'], strength=0.8
+    )
+    link_dto = MemoryLinkDTO(
+        unit_id=uid, note_id=nid_b, note_title='Note B', relation='semantic', weight=0.7
+    )
+
+    # Mock embedder to return a numpy-like array
+    mock_embedder = MagicMock()
+    mock_embed_result = MagicMock()
+    mock_embed_result.tolist.return_value = [0.1] * 384
+    mock_embedder.encode.return_value = [mock_embed_result]
+
+    engine = NoteSearchEngine(embedder=mock_embedder, ner_model=None, lm=None)
+
+    mock_session = AsyncMock()
+
+    mock_chunk = MagicMock()
+    mock_chunk.note_id = nid_a
+    mock_chunk.text = 'chunk text'
+    fake_chunks = [mock_chunk]
+
+    with (
+        patch.object(
+            engine,
+            '_search_single_query',
+            new_callable=AsyncMock,
+            return_value=fake_chunks,
+        ),
+        patch.object(engine, '_fuse_multi_query', return_value=[(mock_chunk, 0.9)]),
+        patch.object(
+            engine,
+            '_group_by_document',
+            new_callable=AsyncMock,
+            return_value=[result_a],
+        ),
+        patch(
+            'memex_core.memory.retrieval.note_relations.compute_related_notes',
+            new_callable=AsyncMock,
+            return_value={nid_a: [related_dto]},
+        ),
+        patch(
+            'memex_core.memory.retrieval.note_relations.fetch_memory_links_for_notes',
+            new_callable=AsyncMock,
+            return_value={nid_a: [link_dto]},
+        ),
+        patch('asyncio.to_thread', new_callable=AsyncMock, return_value=[mock_embed_result]),
+    ):
+        request = NoteSearchRequest(query='test', vault_ids=[uuid4()])
+        results = await engine.search(mock_session, request)
+
+    assert len(results) == 1
+    assert len(results[0].related_notes) == 1
+    assert results[0].related_notes[0].note_id == nid_b
+    assert results[0].related_notes[0].shared_entities == ['Python']
+    assert len(results[0].links) == 1
+    assert results[0].links[0].relation == 'semantic'
+    assert results[0].links[0].weight == 0.7
+
+
 def test_boost_linked_notes_removed():
     """Verify _boost_linked_notes, LINKED_NOTE_BOOST, MIN_TITLE_LENGTH are removed."""
     import memex_core.memory.retrieval.document_search as ds
