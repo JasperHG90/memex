@@ -213,10 +213,12 @@ class MemoryEngine:
         #    Uses semantic similarity (cosine distance), not just entity overlap.
         contradiction_task = None
         if self.contradiction and self._session_factory and unit_ids:
+            from uuid import UUID as _UUID
+
             contradiction_task = self.contradiction.detect_contradictions(
                 session_factory=self._session_factory,
                 document_id=note_id,
-                unit_ids=unit_ids,
+                unit_ids=[_UUID(uid) if isinstance(uid, str) else uid for uid in unit_ids],
                 vault_id=vault_id,
             )
             logger.info('Contradiction detection prepared for %d units.', len(unit_ids))
