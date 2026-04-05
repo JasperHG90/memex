@@ -56,20 +56,17 @@ async def fetch_memory_links(
         {'ids': [str(uid) for uid in unit_ids]},
     )
 
+    unit_id_set = {UUID(str(u)) for u in unit_ids}
     links_map: dict[UUID, list[MemoryLinkDTO]] = defaultdict(list)
     for row in result.mappings():
         from_uid = UUID(str(row['from_unit_id']))
         to_uid = UUID(str(row['to_unit_id']))
         linked_unit_id = UUID(
-            str(
-                row['to_unit_id']
-                if from_uid in {UUID(str(u)) for u in unit_ids}
-                else row['from_unit_id']
-            )
+            str(row['to_unit_id'] if from_uid in unit_id_set else row['from_unit_id'])
         )
 
         # Determine which queried unit_id this belongs to
-        if from_uid in {UUID(str(u)) for u in unit_ids}:
+        if from_uid in unit_id_set:
             queried_uid = from_uid
         else:
             queried_uid = to_uid
