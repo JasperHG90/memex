@@ -164,6 +164,23 @@ async def search_notes(
         raise _handle_error(e, 'Note search failed')
 
 
+class RelatedNotesRequest(BaseModel):
+    note_ids: list[UUID]
+
+
+@router.post('/notes/related', dependencies=[Depends(require_read)])
+async def get_related_notes(
+    request: RelatedNotesRequest,
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Get notes related to the given notes via shared entities."""
+    try:
+        related_map = await api.get_related_notes(request.note_ids)
+        return {str(k): [v.model_dump(mode='json') for v in vs] for k, vs in related_map.items()}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Related notes lookup failed')
+
+
 @router.get(
     '/notes/find', response_model=list[FindNoteResult], dependencies=[Depends(require_read)]
 )

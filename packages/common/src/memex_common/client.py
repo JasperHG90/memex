@@ -417,6 +417,16 @@ class RemoteMemexAPI:
         """Get metadata for multiple notes."""
         return await self._post('notes/metadata/batch', {'note_ids': [str(n) for n in note_ids]})
 
+    async def get_related_notes(self, note_ids: list[UUID]) -> dict[UUID, list[Any]]:
+        """Get notes related to the given notes via shared entities."""
+        from memex_common.schemas import RelatedNoteDTO
+
+        resp = await self._post('notes/related', {'note_ids': [str(n) for n in note_ids]})
+        result: dict[UUID, list[Any]] = {}
+        for k, vs in resp.items():
+            result[UUID(k)] = [RelatedNoteDTO(**v) for v in vs]
+        return result
+
     async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
         """Update user notes on an existing note and reprocess into memory graph."""
         return await self._patch(f'notes/{note_id}/user-notes', {'user_notes': user_notes})

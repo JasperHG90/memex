@@ -87,6 +87,37 @@ async def test_memex_get_page_indices_exception_handling(mock_api, mcp_client):
     assert data == []
 
 
+@pytest.mark.asyncio
+async def test_memex_get_page_indices_populates_related_notes(mock_api, mcp_client):
+    """Verify memex_get_page_indices enriches output with related_notes from api.get_related_notes."""
+    from memex_common.schemas import RelatedNoteDTO
+
+    doc_id = uuid4()
+    rn_id = uuid4()
+    page_index = {
+        'metadata': {'title': 'Test Note'},
+        'toc': [{'id': str(uuid4()), 'title': 'Section 1', 'level': 1, 'children': []}],
+    }
+    mock_api.get_note_page_index.return_value = page_index
+    mock_api.get_related_notes.return_value = {
+        doc_id: [
+            RelatedNoteDTO(
+                note_id=rn_id, title='Related Note', shared_entities=['AI'], strength=0.75
+            )
+        ]
+    }
+
+    result = await mcp_client.call_tool('memex_get_page_indices', {'note_ids': [str(doc_id)]})
+    data = parse_tool_result(result)
+
+    assert len(data) == 1
+    assert len(data[0]['related_notes']) == 1
+    assert data[0]['related_notes'][0]['note_id'] == str(rn_id)
+    assert data[0]['related_notes'][0]['title'] == 'Related Note'
+    assert data[0]['related_notes'][0]['shared_entities'] == ['AI']
+    assert data[0]['related_notes'][0]['strength'] == 0.75
+
+
 # ---------------------------------------------------------------------------
 # memex_get_nodes (batch)
 # ---------------------------------------------------------------------------
