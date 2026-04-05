@@ -66,6 +66,12 @@ fi
 # Structured prompt at 5+ edits (every 2nd edit)
 if [ "$file_edit_count" -ge 5 ] && [ $((file_edit_count % 2)) -eq 1 ]; then
     spiral_nudge="You've edited \`${basename_part}\` ${file_edit_count} times this session — this suggests a complex problem worth documenting. Consider \`memex_add_note\` to capture: (1) what you were trying to achieve, (2) what approaches didn't work, (3) the solution that worked."
+    # Reference session note key if available
+    SESSION_NOTE_KEY=""
+    [ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+    if [ -n "$SESSION_NOTE_KEY" ]; then
+        spiral_nudge="${spiral_nudge} Update the running session note via \`memex_add_note(note_key='${SESSION_NOTE_KEY}')\`."
+    fi
 fi
 
 # --- Build output ---
