@@ -850,6 +850,27 @@ class NoteListItemDTO(BaseModel):
     summaries: list[BlockSummaryDTO] = Field(default_factory=list)
 
 
+class MemoryLinkDTO(BaseModel):
+    """A link between memory units, surfaced in search results."""
+
+    unit_id: UUID
+    note_id: UUID | None = None
+    note_title: str | None = None
+    relation: str
+    weight: float = 1.0
+    time: dt.datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RelatedNoteDTO(BaseModel):
+    """A note related via shared entities."""
+
+    note_id: UUID
+    title: str | None = None
+    shared_entities: list[str] = Field(default_factory=list)
+    strength: float = 0.0
+
+
 class NoteSearchResult(BaseModel):
     """Result of a note search."""
 
@@ -871,6 +892,8 @@ class NoteSearchResult(BaseModel):
         default=None,
         description='Derived status: active, partially_superseded, superseded.',
     )
+    related_notes: list[RelatedNoteDTO] = Field(default_factory=list)
+    links: list[MemoryLinkDTO] = Field(default_factory=list)
 
 
 class NoteSearchRequest(BaseModel):
