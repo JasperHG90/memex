@@ -56,19 +56,20 @@ async def test_memex_note_search_returns_formatted_results(mock_api, mcp_client)
 
 @pytest.mark.asyncio
 async def test_memex_note_search_no_results(mock_api, mcp_client):
-    """When no documents are found the tool returns an empty list."""
+    """When no documents are found the tool returns a system-hint nudge."""
     mock_api.search_notes.return_value = []
 
     result = await mcp_client.call_tool(
         'memex_note_search', {'query': 'unknown topic', 'vault_ids': ['test-vault']}
     )
 
-    # Empty list may serialize as empty content or as '[]'
-    if result.content:
-        data = parse_tool_result(result)
-        assert data == [] or data is None
-    else:
-        assert result.content == []
+    data = parse_tool_result(result)
+    assert isinstance(data, list)
+    assert len(data) == 1
+    hint = data[0]
+    assert hint['note_id'] == '00000000-0000-0000-0000-000000000000'
+    assert hint['title'] == 'No results'
+    assert 'system-hint' in hint['tags']
 
 
 @pytest.mark.asyncio

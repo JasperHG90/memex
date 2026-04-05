@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from typing import Annotated, Any, List, Literal
 from uuid import UUID
 
@@ -13,6 +14,15 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_common.schemas import TOCNodeDTO
+
+
+class Staleness(str, Enum):
+    """Staleness indicator for memory search results."""
+
+    FRESH = 'fresh'
+    AGING = 'aging'
+    STALE = 'stale'
+    CONTESTED = 'contested'
 
 
 class AppContext(BaseModel):
@@ -111,6 +121,7 @@ class McpMemoryUnitBase(BaseModel):
     status: str = 'active'
     superseded_by: list[McpSupersession] = []
     links: list[McpMemoryLink] = Field(default_factory=list)
+    staleness: Staleness | None = None
     previously_returned: bool = False
 
     @field_validator('tags', mode='before')
