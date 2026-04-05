@@ -950,6 +950,18 @@ class RetrievalEngine:
                         )
                     unit.unit_metadata['superseded_by'] = supersession_info
 
+        # Fetch links for all hydrated units
+        all_unit_ids = list(fetched_units.keys())
+        if all_unit_ids:
+            from memex_core.memory.retrieval.note_relations import fetch_memory_links
+
+            links_map = await fetch_memory_links(session, all_unit_ids)
+            for uid, links_list in links_map.items():
+                if uid in fetched_units:
+                    fetched_units[uid].unit_metadata['links'] = [
+                        link.model_dump(mode='json') for link in links_list
+                    ]
+
         final_results = []
         for row in ranked_items:
             if row.type == 'unit' and row.id in fetched_units:

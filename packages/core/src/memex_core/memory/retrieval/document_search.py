@@ -74,8 +74,6 @@ class ReasoningOutput:
 K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
 MAX_RERANK_DOCS = 30
-LINKED_NOTE_BOOST = 0.15
-MIN_TITLE_LENGTH = 4
 
 
 class NoteSearchEngine:
@@ -155,11 +153,9 @@ class NoteSearchEngine:
         if not merged:
             return []
 
-        # Build best-chunk text per document for reranking,
-        # and all-chunk texts per document for note-linking boost.
+        # Build best-chunk text per document for reranking.
         best_chunk_text_by_note: dict[UUID, str] = {}
         best_chunk_score_by_note: dict[UUID, float] = {}
-        all_chunk_texts_by_note: dict[UUID, list[str]] = {}
         for chunk, score in merged:
             if (
                 chunk.note_id not in best_chunk_score_by_note
@@ -167,8 +163,6 @@ class NoteSearchEngine:
             ):
                 best_chunk_score_by_note[chunk.note_id] = score
                 best_chunk_text_by_note[chunk.note_id] = chunk.text or ''
-            if chunk.text:
-                all_chunk_texts_by_note.setdefault(chunk.note_id, []).append(chunk.text)
 
         results = await self._group_by_document(
             session,
@@ -181,9 +175,19 @@ class NoteSearchEngine:
             tags=request.tags,
         )
 
-        # Boost notes whose titles appear in other notes' chunk text
+        # Attach structured relationship data (informational, not score-affecting)
         if results:
-            results = self._boost_linked_notes(results, all_chunk_texts_by_note)
+            from memex_core.memory.retrieval.note_relations import (
+                compute_related_notes,
+                fetch_memory_links_for_notes,
+            )
+
+            note_ids = [r.note_id for r in results]
+            related_map = await compute_related_notes(session, note_ids)
+            links_map = await fetch_memory_links_for_notes(session, note_ids)
+            for r in results:
+                r.related_notes = related_map.get(r.note_id, [])
+                r.links = links_map.get(r.note_id, [])
 
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
@@ -201,49 +205,6 @@ class NoteSearchEngine:
                     results, request.query, reasoning.section_texts, self.lm
                 )
 
-        return results
-
-    @staticmethod
-    def _boost_linked_notes(
-        results: list[NoteSearchResult],
-        all_chunk_texts_by_note: dict[UUID, list[str]],
-        boost: float = LINKED_NOTE_BOOST,
-    ) -> list[NoteSearchResult]:
-        """Boost scores of notes whose titles are mentioned in other notes' chunk text.
-
-        For each pair of result notes, checks if note_j's title appears as a
-        case-insensitive substring in ANY of note_i's chunk texts. If so, note_j
-        receives a score boost. Titles shorter than MIN_TITLE_LENGTH are skipped
-        to avoid false positives.
-        """
-        # Collect titles (from metadata) for each result note
-        titles_by_id: dict[UUID, str] = {}
-        for r in results:
-            title = r.metadata.get('title', '') or ''
-            if len(title) >= MIN_TITLE_LENGTH:
-                titles_by_id[r.note_id] = title
-
-        if not titles_by_id:
-            return results
-
-        # Build set of note IDs that are referenced by another note's chunk text
-        boosted_ids: set[UUID] = set()
-        for r in results:
-            chunk_texts = all_chunk_texts_by_note.get(r.note_id, [])
-            if not chunk_texts:
-                continue
-            combined_lower = '\n'.join(chunk_texts).lower()
-            for other_id, title in titles_by_id.items():
-                if other_id != r.note_id and title.lower() in combined_lower:
-                    boosted_ids.add(other_id)
-
-        # Apply boost
-        for r in results:
-            if r.note_id in boosted_ids:
-                r.score += boost
-
-        # Re-sort by score
-        results.sort(key=lambda x: x.score, reverse=True)
         return results
 
     async def _rerank_results(
