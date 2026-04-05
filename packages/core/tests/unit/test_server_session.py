@@ -104,3 +104,30 @@ def test_middleware_respects_header(client_with_mock_db):
     assert response.status_code == 200
     assert response.headers['X-Session-ID'] == custom_id
     assert response.json()['session_id'] == custom_id
+
+
+class TestSessionBriefingEndpoint:
+    """Tests for GET /api/v1/vaults/{vault_id}/session-briefing."""
+
+    def test_invalid_budget_returns_422(self, client_with_mock_db):
+        """Budget values other than 1000/2000 are rejected with 422."""
+        from uuid import uuid4
+
+        vault_id = str(uuid4())
+        response = client_with_mock_db.get(
+            f'/api/v1/vaults/{vault_id}/session-briefing',
+            params={'budget': 500},
+        )
+        assert response.status_code == 422
+        assert 'budget' in response.json()['detail'].lower()
+
+    def test_zero_budget_returns_422(self, client_with_mock_db):
+        """Budget=0 is rejected."""
+        from uuid import uuid4
+
+        vault_id = str(uuid4())
+        response = client_with_mock_db.get(
+            f'/api/v1/vaults/{vault_id}/session-briefing',
+            params={'budget': 0},
+        )
+        assert response.status_code == 422
