@@ -136,7 +136,7 @@ class SessionBriefingService:
         sections: list[tuple[str, str]] = []
 
         # 1. Header (always included)
-        sections.append(('header', self._build_header(summary)))
+        sections.append(('header', self._build_header(summary, len(entities))))
 
         # 2. KV facts (priority 1)
         sections.append(('kv', self._build_kv_section(kv_entries)))
@@ -159,15 +159,23 @@ class SessionBriefingService:
 
         return sections
 
-    def _build_header(self, summary: Any) -> str:
-        """Build the header section with stats."""
+    def _build_header(self, summary: Any, entity_count: int) -> str:
+        """Build the header section with inline stats."""
         lines = ['# Session Briefing']
+        stat_parts: list[str] = []
         if summary and summary.stats:
-            stats = summary.stats
-            total = stats.get('total_notes', 0)
-            lines.append(f'\n**Notes**: {total}')
-            if summary.version:
-                lines.append(f' | **Summary v{summary.version}**')
+            total_notes = summary.stats.get('total_notes', 0)
+            stat_parts.append(f'{total_notes} notes')
+        if entity_count:
+            stat_parts.append(f'{entity_count} entities')
+        if summary and getattr(summary, 'updated_at', None):
+            updated = summary.updated_at
+            if hasattr(updated, 'strftime'):
+                stat_parts.append(f'Updated {updated.strftime("%Y-%m-%d")}')
+        if summary and getattr(summary, 'version', None):
+            stat_parts.append(f'v{summary.version}')
+        if stat_parts:
+            lines.append(f'\n{" | ".join(stat_parts)}')
         return ''.join(lines) + '\n'
 
     def _build_kv_section(self, kv_entries: list[Any]) -> str:
