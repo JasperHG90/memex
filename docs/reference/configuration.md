@@ -28,12 +28,16 @@ An explicit config path can be set via the `MEMEX_CONFIG_PATH` environment varia
 |:----|:-----|:--------|:------------|
 | `host` | string | `127.0.0.1` | Host to bind the API server to. |
 | `port` | int | `8000` | Port to bind the API server to. |
-| `workers` | int | `4` | Number of worker processes (Gunicorn). |
+| `workers` | int | `4` | Number of worker processes (Granian). |
 | `default_active_vault` | string | `global` | Server default vault for writing new memories. Clients can override via `vault.active`. |
-| `default_reader_vault` | string | `""` | Server default vault for read-only search. Clients can override via `vault.search`. |
+| `default_reader_vault` | string | `global` | Server default vault for read-only search. Clients can override via `vault.search`. |
 | `default_model` | [ModelConfig](#modelconfig) | `gemini/gemini-3-flash-preview` | System-wide default LLM. Sub-configs with `model: null` inherit this value. |
 | `embedding_model` | [EmbeddingBackend](#embedding-backend-serverembedding_model) | `type: onnx` | Embedding model backend. Default: built-in ONNX model. Set `type: litellm` to use any litellm-supported provider. |
 | `allow_insecure` | bool | `false` | Allow binding to non-localhost addresses without authentication. When `false` (default), the server refuses to start on a non-localhost address unless auth is enabled. |
+| `embedding_batch_size` | int | `0` | Max texts per ONNX embedding inference call. `0` = all at once (no batching). Lower values reduce peak GPU memory. |
+| `vault_summary` | object | — | Vault summary generation configuration. See [Vault Summary](#vault-summary-servervault_summary). |
+| `tracing` | object | — | OpenTelemetry tracing configuration. See [Tracing](#tracing-servertracing). |
+| `cache_dir` | string | `~/.cache/memex` | Directory for caching ML models and other artifacts. Platform-dependent via `platformdirs.user_cache_dir`. |
 | `cors` | object | — | CORS (Cross-Origin Resource Sharing) configuration. See [CORS](#cors-servercors). |
 
 ### Default Model Propagation
@@ -45,6 +49,7 @@ When the server starts, `default_model` is propagated to any sub-config whose `m
 - `server.memory.reflection.model`
 - `server.memory.contradiction.model`
 - `server.document.model`
+- `server.vault_summary.model`
 
 Set a sub-config's `model` explicitly to override the default for that subsystem.
 
@@ -386,7 +391,7 @@ Configuration for raw document (note) search and processing.
 | Key | Type | Default | Description |
 |:----|:-----|:--------|:------------|
 | `model` | [ModelConfig](#modelconfig) \| null | `null` (inherits `default_model`) | LLM for skeleton-tree reasoning and answer synthesis. |
-| `mmr_lambda` | float \| null | `null` (disabled) | Default MMR (Maximal Marginal Relevance) lambda for document search. `1.0` = pure relevance, `0.0` = max diversity. `null` disables MMR. Can be overridden per-request. |
+| `mmr_lambda` | float \| null | `0.8` | Default MMR (Maximal Marginal Relevance) lambda for document search. `1.0` = pure relevance, `0.0` = max diversity. `null` disables MMR. Can be overridden per-request. |
 
 ##### Document Search Strategies (`server.document.search_strategies`)
 
@@ -398,6 +403,34 @@ Configuration for raw document (note) search and processing.
 | `temporal` | bool | `true` | Enable temporal search. |
 
 Note: Document search does not support the `mental_model` strategy.
+
+---
+
+### Vault Summary (`server.vault_summary`)
+
+Configuration for periodic vault summary generation.
+
+| Key | Type | Default | Constraints | Description |
+|:----|:-----|:--------|:------------|:------------|
+| `enabled` | bool | `true` | — | Enable periodic vault summary generation via the scheduler. |
+| `interval_seconds` | int | `3600` | >= 60 | Interval in seconds between vault summary update checks. |
+| `model` | [ModelConfig](#modelconfig) \| null | `null` (inherits `default_model`) | — | Model for vault summary LLM calls. |
+| `batch_size` | int | `50` | 10-200 | Number of notes per batch for hierarchical summarization. |
+| `max_patch_log` | int | `20` | 1-100 | Maximum number of entries in the update log. |
+| `max_summary_tokens` | int | `750` | 100-2000 | Maximum token count for the vault summary text. |
+
+---
+
+### Tracing (`server.tracing`)
+
+OpenTelemetry tracing configuration. Disabled by default.
+
+| Key | Type | Default | Description |
+|:----|:-----|:--------|:------------|
+| `enabled` | bool | `false` | Whether OpenTelemetry tracing is enabled. |
+| `endpoint` | string | `http://localhost:6006/v1/traces` | OTLP HTTP endpoint to send traces to. |
+| `headers` | dict | `{}` | Optional headers for the OTLP exporter (e.g. auth tokens). |
+| `service_name` | string | `memex` | Service name reported in traces. |
 
 ---
 

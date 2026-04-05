@@ -10,7 +10,7 @@ This guide shows you how to connect Memex to AI assistants via the Model Context
 
 ## Progressive Disclosure
 
-By default, the MCP server uses **progressive disclosure** — `tools/list` returns 3 discovery meta-tools instead of all 31 tool schemas. This reduces context window usage from ~5-8K tokens to ~100 tokens on connect.
+The MCP server supports **progressive disclosure** (opt-in) — when enabled, `tools/list` returns 3 discovery meta-tools instead of all 35 tool schemas. This reduces context window usage from ~5-8K tokens to ~100 tokens on connect.
 
 The three discovery tools:
 
@@ -18,18 +18,18 @@ The three discovery tools:
 2. **`memex_search(query, tags=[...])`** — find tools by keyword, optionally filtered by tag
 3. **`memex_get_schema(tools=[...])`** — get parameter details for specific tools
 
-Real tools remain directly callable by name — they are hidden from `tools/list` but available via `tools/call`. To disable progressive disclosure and expose all 31 tools directly, set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=false` in the MCP server environment.
+Real tools remain directly callable by name — they are hidden from `tools/list` but available via `tools/call`. Set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=true` to enable progressive disclosure, or leave it unset to expose all 35 tools directly.
 
 ## Available MCP Tools
 
-The Memex MCP server exposes 31 tools organized into 7 categories:
+The Memex MCP server exposes 35 tools organized into 7 categories:
 
 | Tag | Tools | Purpose |
 | :--- | :--- | :--- |
-| `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note` | Search facts/notes, fuzzy title lookup |
+| `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note`, `memex_search_user_notes`, `memex_survey` | Search facts/notes, fuzzy title lookup, user annotations, broad surveys |
 | `read` | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | Read note content via TOC + sections |
-| `write` | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes and templates |
-| `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault` | List notes, vaults, recent activity |
+| `write` | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_update_user_notes`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes, user annotations, and templates |
+| `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault`, `memex_get_vault_summary` | List notes, vaults, recent activity, vault summaries |
 | `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | Manage file attachments (images, PDFs) |
 | `entities` | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | Knowledge graph exploration |
 | `storage` | `memex_kv_write`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | KV store, memory units, lineage |

@@ -176,7 +176,7 @@ server:
 server:
   memory:
     retrieval:
-      token_budget: 2000
+      token_budget: 1000
       rrf_k: 60
       candidate_pool_size: 60
       temporal_decay_days: 30.0

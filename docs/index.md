@@ -13,7 +13,7 @@ Learning-oriented guides that walk you through complete workflows from start to 
 | Guide | Description |
 |:------|:------------|
 | [Getting Started](tutorials/getting-started.md) | Install Memex, configure PostgreSQL, ingest your first document, and run a search. |
-| [AI Agent Memory](tutorials/ai-agent-memory.md) | Give an AI agent persistent long-term memory using Memex via MCP. |
+| [AI Agent Memory](tutorials/ai-agent-memory.md) | Build a Python agent with persistent long-term memory using the Memex REST API. |
 
 ---
 
@@ -45,7 +45,7 @@ Technical descriptions of every interface, command, endpoint, and configuration 
 |:----------|:------------|
 | [CLI Commands](reference/cli-commands.md) | Complete reference for all `memex` CLI commands, flags, and arguments. |
 | [REST API](reference/rest-api.md) | All HTTP endpoints, request/response schemas, status codes, and authentication. |
-| [MCP Tools](reference/mcp-tools.md) | All 31 MCP tools with parameter tables and usage workflow. |
+| [MCP Tools](reference/mcp-tools.md) | All 35 MCP tools with parameter tables and usage workflow. |
 | [MemexAPI](reference/memexapi-reference.md) | Python API class — 60+ public methods for programmatic access. |
 | [Configuration](reference/configuration.md) | Every configuration key, type, default, and environment variable mapping. |
 | [Evaluation Report](reference/evaluation-report.md) | LoCoMo benchmark results with retrieval efficiency analysis and distribution plots. |
@@ -77,7 +77,6 @@ Each package in the monorepo has its own README with package-specific details.
 | [packages/mcp](../packages/mcp/README.md) | FastMCP server for LLM integration. |
 | [packages/common](../packages/common/README.md) | Shared Pydantic models, configuration, and exceptions. |
 | [packages/eval](../packages/eval/README.md) | LoCoMo evaluation framework and benchmarks. |
-| [packages/obsidian-sync](../packages/obsidian-sync/README.md) | Watchdog-based Obsidian vault synchronization (also available as `memex note sync` in the CLI). |
 | [packages/claude-code-plugin](../packages/claude-code-plugin/README.md) | Claude Code plugin for cross-project memory integration. |
 | [packages/firefox-extension](../packages/firefox-extension/README.md) | Firefox extension for web content capture. |
 

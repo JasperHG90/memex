@@ -74,6 +74,10 @@ Ingest a note artifact. Content and files must be Base64-encoded.
 | `tags` | string[] | No | Tags for categorization. |
 | `note_key` | string | No | Unique stable key for idempotent updates. |
 | `vault_id` | UUID | No | Target vault. Uses active vault if omitted. |
+| `user_notes` | string | No | User-provided context or commentary to include in the note. |
+| `author` | string | No | Author of the note. |
+| `template` | string | No | Template slug used to create this note (e.g. `"general_note"`). |
+| `filename` | string | No | Original filename (e.g. `"report.pdf"`). When present and not `.md`, the server converts content to Markdown. |
 
 #### Query Parameters
 
@@ -358,7 +362,7 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `query` | string | Yes | - | Search query. |
-| `limit` | int | No | `5` | Maximum results. |
+| `limit` | int | No | `10` | Maximum results. |
 | `vault_ids` | UUID[] | No | - | Filter by vault IDs or names. |
 | `token_budget` | int | No | - | Maximum tokens for retrieval context. |
 | `strategies` | string[] | No | all | Strategies to use: `semantic`, `keyword`, `graph`, `temporal`, `mental_model`. |
@@ -368,6 +372,7 @@ Search the knowledge base using TEMPR retrieval strategies. Returns results as N
 | `after` | datetime | No | - | Only results after this date (ISO 8601). |
 | `before` | datetime | No | - | Only results before this date (ISO 8601). |
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
+| `source_context` | string | No | - | Filter by source context (e.g. `"user_notes"`). Only units with matching context are returned. |
 
 #### Response (200 — NDJSON)
 
@@ -468,7 +473,12 @@ List notes. Returns an NDJSON stream.
 | `limit` | int | `100` | Maximum notes to return. |
 | `offset` | int | `0` | Pagination offset. |
 | `sort` | string | - | Sort option. Use `-created_at` for most recent first. |
-| `vault_id` | UUID (list) | - | Filter by vault ID(s). Repeat for multiple. |
+| `vault_id` | UUID (list) | - | Filter by vault ID(s) or name(s). Repeat for multiple. |
+| `after` | string | - | Only notes on/after this date (ISO 8601). |
+| `before` | string | - | Only notes on/before this date (ISO 8601). |
+| `template` | string | - | Filter by template slug (e.g. `"general_note"`). |
+| `tags` | string (list) | - | Filter by tags (AND semantics). Repeat for multiple. |
+| `status` | string | - | Filter by note lifecycle status (e.g. `"active"`, `"archived"`). |
 
 #### Response (200 — NDJSON)
 
@@ -823,6 +833,78 @@ curl -X PATCH http://localhost:8000/api/v1/notes/550e8400-e29b-41d4-a716-4466554
 
 ---
 
+### `POST /api/v1/notes/{note_id}/assets`
+
+Add one or more asset files to an existing note via multipart upload.
+
+#### Request
+
+- **Content-Type**: `multipart/form-data`
+- **files**: One or more uploaded files.
+
+#### Response (200)
+
+```json
+{
+  "added_assets": ["notes/uuid/diagram.png"],
+  "skipped": [],
+  "asset_count": 1
+}
+```
+
+---
+
+### `DELETE /api/v1/notes/{note_id}/assets`
+
+Delete one or more asset files from an existing note.
+
+#### Request Body
+
+```json
+{
+  "asset_paths": ["notes/uuid/diagram.png"]
+}
+```
+
+#### Response (200)
+
+```json
+{
+  "deleted_assets": ["notes/uuid/diagram.png"],
+  "not_found": [],
+  "asset_count": 0
+}
+```
+
+---
+
+### `PATCH /api/v1/notes/{note_id}/user-notes`
+
+Update user_notes on an existing note and reprocess into the memory graph.
+
+#### Request Body
+
+```json
+{
+  "user_notes": "My commentary on this note."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_notes` | string or null | Yes | New user_notes text. Pass `null` to delete all user annotations. |
+
+#### Response (200)
+
+```json
+{
+  "units_deleted": 2,
+  "units_created": 3
+}
+```
+
+---
+
 ## Entities
 
 ### `GET /api/v1/entities`
@@ -836,7 +918,8 @@ List, search, or rank entities. Returns an NDJSON stream.
 | `limit` | int | `100` | Maximum entities to return. |
 | `q` | string | - | Search query for name-based filtering. |
 | `sort` | string | - | Sort option. Use `-mentions` for top entities by mention count. |
-| `vault_id` | UUID (list) | - | Filter by vault ID(s). Repeat for multiple. |
+| `vault_id` | UUID (list) | - | Filter by vault ID(s) or name(s). Repeat for multiple. |
+| `entity_type` | string | - | Filter by entity type: `Person`, `Organization`, `Location`, `Concept`, `Technology`, `File`, `Misc`. |
 
 #### Examples
 
@@ -1197,6 +1280,30 @@ Delete a vault.
 
 ---
 
+### `POST /api/v1/vaults/{vault_id}/truncate`
+
+Remove all content from a vault without deleting the vault itself. Deletes all notes, memory units, entities, and associated data.
+
+#### Path Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `vault_id` | UUID | The vault ID. |
+
+#### Response (200)
+
+```json
+{"status": "success", "deleted": {"notes": 42, "memory_units": 156, "entities": 23}}
+```
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `404` | Vault not found. |
+
+---
+
 ### `POST /api/v1/vaults/{identifier}/set-writer`
 
 Set the default write vault for the current server session. This is a runtime override of `server.default_active_vault`; on restart, config file values apply again.
@@ -1230,6 +1337,76 @@ Set the default reader vault for search and retrieval. This is a runtime overrid
 ```json
 {"status": "success", "default_reader_vault": "uuid"}
 ```
+
+---
+
+### `GET /api/v1/vaults/{vault_id}/summary`
+
+Get the current summary for a vault.
+
+#### Response (200)
+
+Returns a `VaultSummaryDTO`:
+
+```json
+{
+  "id": "uuid",
+  "vault_id": "uuid",
+  "summary": "This vault contains ...",
+  "topics": ["architecture", "deployment"],
+  "stats": {},
+  "version": 1,
+  "notes_incorporated": 42,
+  "created_at": "2025-01-15T10:00:00Z",
+  "updated_at": "2025-01-15T10:00:00Z"
+}
+```
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `404` | No summary exists for this vault. |
+
+---
+
+### `POST /api/v1/vaults/{vault_id}/summary/regenerate`
+
+Trigger full regeneration of the vault summary from all notes.
+
+#### Response (200)
+
+Returns a `VaultSummaryDTO`.
+
+---
+
+## Survey
+
+### `POST /api/v1/survey`
+
+Decompose a broad topic into sub-questions and return grouped results.
+
+#### Request Body
+
+```json
+{
+  "query": "What do I know about deployment practices?",
+  "vault_ids": ["uuid"],
+  "limit_per_query": 10,
+  "token_budget": null
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Broad topic or panoramic query to survey. |
+| `vault_ids` | UUID[] | No | - | Vault IDs or names to search. |
+| `limit_per_query` | int | No | `10` | Max results per sub-question. |
+| `token_budget` | int | No | - | Max token budget for all results. |
+
+#### Response (200)
+
+Returns a `SurveyResponse` with grouped results by source note.
 
 ---
 
@@ -1328,23 +1505,6 @@ Get system-wide counts for notes, memory units, entities, and reflection queue.
 
 ---
 
-### `GET /api/v1/stats/token-usage`
-
-Get daily aggregated LLM token usage.
-
-#### Response (200)
-
-```json
-{
-  "usage": [
-    {"date": "2025-01-15", "total_tokens": 45000},
-    {"date": "2025-01-14", "total_tokens": 32000}
-  ]
-}
-```
-
----
-
 ## Health & Monitoring
 
 ### `GET /api/v1/health`
@@ -1425,7 +1585,7 @@ curl -X POST http://localhost:8000/api/v1/embed \
 
 ## Key-Value Store
 
-The KV store provides a simple key-value interface for storing structured facts, preferences, and conventions. Entries can be scoped to a vault or stored globally. Semantic search is supported via embedding similarity.
+The KV store provides a simple key-value interface for storing structured facts, preferences, and conventions. Semantic search is supported via embedding similarity.
 
 ### `PUT /api/v1/kv`
 
@@ -1437,7 +1597,6 @@ Create or update a key-value entry.
 {
   "key": "preferred-language",
   "value": "Python 3.12",
-  "vault_id": "550e8400-e29b-41d4-a716-446655440000",
   "embedding": [0.0123, -0.0456, ...]
 }
 ```
@@ -1446,7 +1605,6 @@ Create or update a key-value entry.
 |-------|------|----------|-------------|
 | `key` | string | Yes | Unique key for the entry. |
 | `value` | string | Yes | Value to store. |
-| `vault_id` | string or UUID | No | Vault to scope the entry to. Global if omitted. |
 | `embedding` | float[] | No | Pre-computed embedding vector. If omitted, one is generated automatically. |
 
 #### Response (200)
@@ -1456,7 +1614,6 @@ Returns a `KVEntryDTO`:
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "vault_id": null,
   "key": "preferred-language",
   "value": "Python 3.12",
   "created_at": "2025-01-15T10:00:00Z",
@@ -1474,21 +1631,15 @@ curl -X PUT http://localhost:8000/api/v1/kv \
 
 ---
 
-### `GET /api/v1/kv/{key}`
+### `GET /api/v1/kv/get`
 
-Get a key-value entry by exact key. Checks vault-specific entries first, then falls back to global.
-
-#### Path Parameters
-
-| Name | Type | Description |
-|------|------|-------------|
-| `key` | string | The key to look up. |
+Get a key-value entry by exact key.
 
 #### Query Parameters
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `vault_id` | string | - | Vault ID or name to scope the lookup. |
+| `key` | string | *(required)* | The key to look up. |
 
 #### Response (200)
 
@@ -1503,7 +1654,7 @@ Returns a `KVEntryDTO`.
 #### Example
 
 ```bash
-curl "http://localhost:8000/api/v1/kv/preferred-language"
+curl "http://localhost:8000/api/v1/kv/get?key=preferred-language"
 ```
 
 ---
@@ -1517,16 +1668,16 @@ Semantic search over key-value entries by embedding similarity.
 ```json
 {
   "query": "what programming language do I prefer",
-  "vault_id": "550e8400-e29b-41d4-a716-446655440000",
+  "namespaces": ["global", "user"],
   "limit": 5
 }
 ```
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Search query text. |
-| `vault_id` | string or UUID | No | - | Vault to scope the search. |
-| `limit` | int | No | `5` | Maximum results to return. |
+| `query` | string | Yes | - | Search query text. Embedded automatically. |
+| `namespaces` | string[] | No | - | Namespace prefixes to filter by. |
+| `limit` | int | No | `5` | Maximum results to return (1-500). |
 
 #### Response (200)
 
@@ -1536,7 +1687,6 @@ Returns `KVEntryDTO[]`:
 [
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "vault_id": null,
     "key": "preferred-language",
     "value": "Python 3.12",
     "created_at": "2025-01-15T10:00:00Z",
@@ -1557,13 +1707,17 @@ curl -X POST http://localhost:8000/api/v1/kv/search \
 
 ### `GET /api/v1/kv`
 
-List all key-value entries. Without `vault_id`, returns global entries only. With `vault_id`, returns both vault-scoped and global entries.
+List key-value entries with optional filtering.
 
 #### Query Parameters
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `vault_id` | string | - | Vault ID or name. |
+| `limit` | int | `100` | Maximum results (1-500). |
+| `namespaces` | string | - | Comma-separated namespace prefixes to filter by (e.g. `global,user`). |
+| `exclude_prefix` | string | - | Exclude entries whose key starts with this prefix. |
+| `key_prefix` | string | - | Only include entries whose key starts with this prefix. |
+| `pattern` | string | - | Wildcard filter (e.g. `global:preferences:*`). Only trailing `*` supported. |
 
 #### Response (200)
 
@@ -1572,30 +1726,24 @@ Returns `KVEntryDTO[]`.
 #### Example
 
 ```bash
-# List global KV entries
+# List all KV entries
 curl "http://localhost:8000/api/v1/kv"
 
-# List entries for a specific vault (includes global)
-curl "http://localhost:8000/api/v1/kv?vault_id=my-project"
+# Filter by namespace
+curl "http://localhost:8000/api/v1/kv?namespaces=global,user&limit=50"
 ```
 
 ---
 
-### `DELETE /api/v1/kv/{key}`
+### `DELETE /api/v1/kv/delete`
 
 Delete a key-value entry by key.
-
-#### Path Parameters
-
-| Name | Type | Description |
-|------|------|-------------|
-| `key` | string | The key to delete. |
 
 #### Query Parameters
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `vault_id` | string | - | Vault ID or name to scope the deletion. |
+| `key` | string | *(required)* | The key to delete. |
 
 #### Response (200)
 
@@ -1612,7 +1760,7 @@ Delete a key-value entry by key.
 #### Example
 
 ```bash
-curl -X DELETE "http://localhost:8000/api/v1/kv/preferred-language"
+curl -X DELETE "http://localhost:8000/api/v1/kv/delete?key=preferred-language"
 ```
 
 ---

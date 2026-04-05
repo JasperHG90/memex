@@ -66,7 +66,7 @@ A semantic indexing algorithm that preserves document structure by building a tr
 
 2. **Initial scan**: Memex detects the document's structure:
    - *Fast path*: If the document uses Markdown headers (`#`, `##`, etc.), regex extraction builds the tree immediately.
-   - *LLM path*: For documents without clear headers, an LLM scans the text in chunks of `scan_chunk_size_tokens` (default: 6000) and infers a logical table of contents.
+   - *LLM path*: For documents without clear headers, an LLM scans the text in chunks of `scan_chunk_size_tokens` (default: 20000) and infers a logical table of contents.
 
 3. **Recursive refinement**: Sections exceeding `max_node_length_tokens` (default: 1250) are recursively subdivided using the LLM until they fit within `block_token_target` (default: 2000).
 
@@ -120,7 +120,7 @@ For a single ingested note, the pipeline produces:
 | **Note record** | Metadata, content hash, vault assignment |
 | **Chunks** | Text blocks with position and hash information |
 | **PageIndex nodes** | Hierarchical tree of sections (PageIndex only) |
-| **Memory units** | Atomic facts (type: world, event) with timestamps |
+| **Memory units** | Atomic facts (type: world, event, observation) with timestamps |
 | **Entities** | Named entities with canonical names, aliases, phonetic codes |
 | **Entity links** | Connections between memory units and entities |
 | **Memory links** | Causal, temporal, and semantic relationships between units |

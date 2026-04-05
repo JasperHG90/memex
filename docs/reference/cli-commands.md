@@ -163,7 +163,7 @@ Search the knowledge base using TEMPR retrieval strategies.
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `--vault` | `-v` | str (list) | - | Filter by vault(s). Repeatable. |
+| `--vault` | `-v` | str (list) | - | Filter by vault(s). Repeatable. Use `"*"` for all vaults. |
 | `--limit` | | int | `5` | Maximum number of results to return. |
 | `--token-budget` | `-t` | int | - | Token budget for retrieval context. |
 | `--answer` | `-a` | bool | `False` | Generate an AI-synthesized answer from results. |
@@ -174,6 +174,9 @@ Search the knowledge base using TEMPR retrieval strategies.
 | `--no-graph` | | bool | `False` | Exclude graph (entity) strategy. |
 | `--no-temporal` | | bool | `False` | Exclude temporal strategy. |
 | `--no-mental-model` | | bool | `False` | Exclude mental model strategy. |
+| `--compact` | | bool | `False` | One line per result: type + truncated text. |
+| `--include-stale` | | bool | `False` | Include stale memory units in results. |
+| `--source-context` | | str | - | Filter by source context (e.g. `"user_notes"`). |
 
 #### Examples
 
@@ -336,12 +339,17 @@ List all notes in the current vault.
 
 #### Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--limit` | int | `50` | Maximum number of notes to return. |
-| `--offset` | int | `0` | Pagination offset. |
-| `--json` | bool | `False` | Output as JSON. |
-| `--minimal` | bool | `False` | Output one note ID per line. |
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | | int | `50` | Maximum number of notes to return. |
+| `--offset` | | int | `0` | Pagination offset. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
+| `--after` | | str | - | Only notes on/after this date (ISO 8601). |
+| `--before` | | str | - | Only notes on/before this date (ISO 8601). |
+| `--json` | | bool | `False` | Output as JSON. |
+| `--minimal` | | bool | `False` | Output one note ID per line. |
+| `--compact` | | bool | `False` | One line per note: title, date, description. |
+| `--template` | | str | - | Filter by template slug (e.g. `"general_note"`). |
 
 ---
 
@@ -355,11 +363,15 @@ Show most recently created notes.
 
 #### Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--limit` | int | `10` | Maximum number of notes to return. |
-| `--json` | bool | `False` | Output as JSON. |
-| `--minimal` | bool | `False` | Output one note ID per line. |
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | | int | `10` | Maximum number of notes to return. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
+| `--after` | | str | - | Only notes on/after this date (ISO 8601). |
+| `--before` | | str | - | Only notes on/before this date (ISO 8601). |
+| `--json` | | bool | `False` | Output as JSON. |
+| `--minimal` | | bool | `False` | Output one note ID per line. |
+| `--compact` | | bool | `False` | One line per note: title, date, description. |
 
 ---
 
@@ -384,7 +396,7 @@ Search for notes using multi-channel fusion (Reciprocal Rank Fusion).
 | `--limit` | `-l` | int | `5` | Maximum number of notes to return. |
 | `--expand` | | bool | `False` | Enable LLM-powered query expansion. |
 | `--blend` | | bool | `False` | Enable position-aware blending (instead of default RRF). |
-| `--vault` | `-v` | str (list) | - | Vault(s) to search. Repeatable. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to search. Repeatable. Use `"*"` for all vaults. |
 | `--reason` | | bool | `False` | Run skeleton-tree identification; shows relevant sections with reasoning. |
 | `--summarize` | | bool | `False` | Synthesize a full answer from matched sections (implies `--reason`). |
 | `--json` | | bool | `False` | Output as JSON. |
@@ -551,7 +563,7 @@ Find notes by approximate title match (trigram similarity).
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--limit` | | int | `5` | Maximum number of results. |
-| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 | `--json` | | bool | `False` | Output as JSON. |
 
 #### Examples
@@ -664,7 +676,7 @@ Export notes (and their assets) to a local directory. Each note is written to a 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--output` | `-o` | str | `./memex-export` | Output directory path. |
-| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. |
+| `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 
 #### Examples
 
@@ -677,6 +689,43 @@ memex note export 550e8400-e29b-41d4-a716-446655440000 --output ./backup
 
 # Export from a specific vault
 memex note export --vault my-project --output ./project-backup
+```
+
+---
+
+### `note update-user-notes`
+
+```
+memex note update-user-notes NOTE_ID [OPTIONS]
+```
+
+Update user notes on an existing note. User notes are your own commentary or context attached to a note. They are extracted into the memory graph with `source_context='user_notes'`.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | Yes | UUID of the note to update. |
+
+#### Options
+
+| Option | Short | Type | Description |
+|--------|-------|------|-------------|
+| `--text TEXT` | `-t` | str | User notes text. Pass empty string to clear. |
+| `--file PATH` | `-f` | Path | Read user notes from a file. |
+| `--json` | | bool | Output as JSON. |
+
+#### Examples
+
+```bash
+# Set user notes via text
+memex note update-user-notes 550e8400-e29b-41d4-a716-446655440000 --text "Key takeaway: focus on performance"
+
+# Set user notes from a file
+memex note update-user-notes 550e8400-e29b-41d4-a716-446655440000 --file ./my-notes.md
+
+# Clear user notes
+memex note update-user-notes 550e8400-e29b-41d4-a716-446655440000 --text ""
 ```
 
 ---
@@ -1073,6 +1122,7 @@ List entities ranked by mention count, or search by name.
 |--------|-------|------|---------|-------------|
 | `--limit` | `-l` | int | `50` | Maximum number of entities to show. |
 | `--query` | `-q` | str | - | Filter entities by name (search query). |
+| `--type` | `-t` | str | - | Filter by entity type: `Person`, `Organization`, `Location`, `Concept`, `Technology`, `File`, `Misc`. |
 | `--json` | | bool | `False` | Output as JSON. |
 
 #### Examples
@@ -1459,6 +1509,43 @@ memex vault truncate my-vault --force
 
 ---
 
+### `vault summary`
+
+```
+memex vault summary [IDENTIFIER] [OPTIONS]
+```
+
+View or regenerate the vault summary.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `IDENTIFIER` | No | Name or UUID of the vault. Defaults to the active vault. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--json` | | bool | `False` | Output as JSON. |
+| `--compact` | | bool | `False` | Output as plain text. |
+| `--regenerate` | `-r` | bool | `False` | Regenerate the summary from all notes. |
+
+#### Examples
+
+```bash
+# View the summary for the active vault
+memex vault summary
+
+# Regenerate the summary
+memex vault summary --regenerate
+
+# View summary for a specific vault
+memex vault summary my-project
+```
+
+---
+
 ## `server`
 
 Manage the Memex Core API server.
@@ -1472,7 +1559,7 @@ memex server start [OPTIONS]
 Start the Memex Core API server. Runs database readiness checks and schema initialization before starting.
 
 * **Development mode** (`--reload`): Uses Uvicorn directly with auto-reload.
-* **Production mode** (default): Uses Gunicorn with Uvicorn workers.
+* **Production mode** (default): Uses Granian (Rust-based ASGI server) with configurable workers.
 
 #### Options
 
@@ -1480,10 +1567,10 @@ Start the Memex Core API server. Runs database readiness checks and schema initi
 |--------|-------|------|---------|---------|-------------|
 | `--host` | | str | `0.0.0.0` | `MEMEX_HOST` | Host to bind the server to. |
 | `--port` | | int | `8000` | `MEMEX_PORT` | Port to bind the server to. |
-| `--workers` | `-w` | int | `2` | `MEMEX_WORKERS` | Number of Gunicorn worker processes (production mode only). |
+| `--workers` | `-w` | int | `2` | `MEMEX_WORKERS` | Number of Granian worker processes (production mode only). |
 | `--config` | `-c` | str | - | `MEMEX_CONFIG_PATH` | Path to configuration file. |
 | `--reload` | | bool | `False` | - | Enable auto-reload for development (uses Uvicorn directly). |
-| `--daemon` | `-d` | bool | `False` | - | Run in the background (production/Gunicorn mode only). |
+| `--daemon` | `-d` | bool | `False` | - | Run in the background (production/Granian mode only). |
 
 #### Examples
 
