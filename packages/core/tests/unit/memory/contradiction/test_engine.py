@@ -1,5 +1,7 @@
 """Unit tests for ContradictionEngine."""
 
+import logging
+
 import pytest
 import json
 from datetime import datetime, timezone
@@ -379,3 +381,65 @@ class TestTemporalDefault:
         a = _make_unit(event_date=now)
         b = _make_unit(event_date=now)
         assert ContradictionEngine._temporal_default(a, b) == 'new'
+
+
+class TestDetectLogging:
+    """Test observability logging in _detect()."""
+
+    @pytest.mark.asyncio
+    async def test_empty_units_logs_info(self, engine, caplog):
+        """_detect() logs INFO when loaded units are empty (deleted?)."""
+        session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        session.exec.return_value = mock_result
+
+        with caplog.at_level(logging.INFO, logger='memex.core.memory.contradiction'):
+            await engine._detect(session, [uuid4()], uuid4())
+
+        assert any('already deleted' in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_triage_empty_logs_info(self, engine, caplog):
+        """_detect() logs INFO (not DEBUG) when triage returns no flagged units."""
+        unit = _make_unit()
+        session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = [unit]
+        session.exec.return_value = mock_result
+
+        mock_triage_result = MagicMock()
+        mock_triage_result.flagged_ids = []
+
+        with (
+            patch(
+                'memex_core.memory.contradiction.engine.run_dspy_operation',
+                return_value=mock_triage_result,
+            ),
+            caplog.at_level(logging.INFO, logger='memex.core.memory.contradiction'),
+        ):
+            await engine._detect(session, [unit.id], uuid4())
+
+        info_msgs = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert any('no corrective units' in r.message for r in info_msgs)
+
+    @pytest.mark.asyncio
+    async def test_no_candidates_logs_info_with_threshold(self, engine, caplog):
+        """_process_flagged_unit() logs INFO with threshold when no candidates found."""
+        unit = _make_unit()
+        vault_id = uuid4()
+
+        with (
+            patch(
+                'memex_core.memory.contradiction.engine.get_candidates',
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            caplog.at_level(logging.INFO, logger='memex.core.memory.contradiction'),
+        ):
+            links, updates = await engine._process_flagged_unit(AsyncMock(), unit, vault_id)
+
+        assert links == []
+        assert updates == {}
+        assert any('no candidates found' in r.message for r in caplog.records)
+        assert any('0.50' in r.message for r in caplog.records)  # threshold=0.5

@@ -486,6 +486,11 @@ ingested_at: {now}
                 title=resolved_title,
             )
 
+        # Transaction committed — safe to run contradiction (new session sees committed data).
+        contradiction_coro = result.pop('contradiction_task', None)
+        if contradiction_coro is not None:
+            await contradiction_coro
+
         return result
 
     async def ingest_batch_internal(
@@ -595,6 +600,7 @@ ingested_at: {now}
 
         chunk_txn_id = chunk[0][2]
         processed_ids: list[str] = []
+        _pending_contradictions: list = []
 
         async with AsyncTransaction(self.metastore, self.filestore, chunk_txn_id) as txn:
             for original_idx, note_dto, note_uuid in chunk:
@@ -680,9 +686,13 @@ ingested_at: {now}
                 )
                 _coro = retain_result.pop('contradiction_task', None)
                 if _coro is not None:
-                    _coro.close()
+                    _pending_contradictions.append(_coro)
 
                 processed_ids.append(str(note_uuid))
+
+        # Transaction committed — safe to run contradiction detection.
+        for coro in _pending_contradictions:
+            await coro
 
         return processed_ids
 
