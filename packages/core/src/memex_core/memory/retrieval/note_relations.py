@@ -29,10 +29,15 @@ async def fetch_memory_links(
 
     Returns a dict keyed by the queried unit_id, with a list of MemoryLinkDTOs
     representing links to/from that unit.
+
+    When both sides of a link are in the input set, both get an entry pointing
+    to the other side.
     """
     if not unit_ids:
         return {}
 
+    # Fetch link rows with note metadata for BOTH sides so we can resolve
+    # either direction without a lossy CASE expression.
     result = await session.execute(
         text("""
             SELECT
@@ -42,15 +47,15 @@ async def fetch_memory_links(
                 ml.weight,
                 ml.created_at,
                 ml.link_metadata,
-                mu.note_id AS linked_note_id,
-                n.title AS linked_note_title
+                mu_from.note_id AS from_note_id,
+                n_from.title    AS from_note_title,
+                mu_to.note_id   AS to_note_id,
+                n_to.title      AS to_note_title
             FROM memory_links ml
-            JOIN memory_units mu
-                ON mu.id = CASE
-                    WHEN ml.from_unit_id = ANY(:ids) THEN ml.to_unit_id
-                    ELSE ml.from_unit_id
-                END
-            LEFT JOIN notes n ON n.id = mu.note_id
+            JOIN memory_units mu_from ON mu_from.id = ml.from_unit_id
+            JOIN memory_units mu_to   ON mu_to.id   = ml.to_unit_id
+            LEFT JOIN notes n_from ON n_from.id = mu_from.note_id
+            LEFT JOIN notes n_to   ON n_to.id   = mu_to.note_id
             WHERE ml.from_unit_id = ANY(:ids) OR ml.to_unit_id = ANY(:ids)
         """),
         {'ids': [str(uid) for uid in unit_ids]},
@@ -61,26 +66,41 @@ async def fetch_memory_links(
     for row in result.mappings():
         from_uid = UUID(str(row['from_unit_id']))
         to_uid = UUID(str(row['to_unit_id']))
-        linked_unit_id = UUID(
-            str(row['to_unit_id'] if from_uid in unit_id_set else row['from_unit_id'])
-        )
+        from_in_set = from_uid in unit_id_set
+        to_in_set = to_uid in unit_id_set
 
-        # Determine which queried unit_id this belongs to
-        if from_uid in unit_id_set:
-            queried_uid = from_uid
-        else:
-            queried_uid = to_uid
+        link_type = row['link_type']
+        weight = float(row['weight'])
+        created_at = row['created_at']
+        metadata = row['link_metadata'] if row['link_metadata'] else {}
 
-        dto = MemoryLinkDTO(
-            unit_id=linked_unit_id,
-            note_id=UUID(str(row['linked_note_id'])) if row['linked_note_id'] else None,
-            note_title=row['linked_note_title'],
-            relation=row['link_type'],
-            weight=float(row['weight']),
-            time=row['created_at'],
-            metadata=row['link_metadata'] if row['link_metadata'] else {},
-        )
-        links_map[queried_uid].append(dto)
+        # from_uid is in the input set: link points to to_uid
+        if from_in_set:
+            links_map[from_uid].append(
+                MemoryLinkDTO(
+                    unit_id=to_uid,
+                    note_id=UUID(str(row['to_note_id'])) if row['to_note_id'] else None,
+                    note_title=row['to_note_title'],
+                    relation=link_type,
+                    weight=weight,
+                    time=created_at,
+                    metadata=metadata,
+                )
+            )
+
+        # to_uid is in the input set: link points to from_uid
+        if to_in_set:
+            links_map[to_uid].append(
+                MemoryLinkDTO(
+                    unit_id=from_uid,
+                    note_id=UUID(str(row['from_note_id'])) if row['from_note_id'] else None,
+                    note_title=row['from_note_title'],
+                    relation=link_type,
+                    weight=weight,
+                    time=created_at,
+                    metadata=metadata,
+                )
+            )
 
     return dict(links_map)
 
@@ -88,20 +108,34 @@ async def fetch_memory_links(
 async def fetch_memory_links_for_notes(
     session: AsyncSession,
     note_ids: list[UUID],
+    vault_ids: list[UUID] | None = None,
 ) -> dict[UUID, list[MemoryLinkDTO]]:
     """Fetch links for notes by first resolving note_ids to unit_ids, then
     aggregating and deduplicating at note level.
 
     Deduplication: same relation to same target note keeps highest weight.
+    If vault_ids is provided, only units in those vaults are considered.
     """
     if not note_ids:
         return {}
 
     # Step 1: get all unit_ids for the given note_ids
-    result = await session.execute(
-        text('SELECT id, note_id FROM memory_units WHERE note_id = ANY(:note_ids)'),
-        {'note_ids': [str(nid) for nid in note_ids]},
-    )
+    if vault_ids:
+        result = await session.execute(
+            text(
+                'SELECT id, note_id FROM memory_units'
+                ' WHERE note_id = ANY(:note_ids) AND vault_id = ANY(:vault_ids)'
+            ),
+            {
+                'note_ids': [str(nid) for nid in note_ids],
+                'vault_ids': [str(vid) for vid in vault_ids],
+            },
+        )
+    else:
+        result = await session.execute(
+            text('SELECT id, note_id FROM memory_units WHERE note_id = ANY(:note_ids)'),
+            {'note_ids': [str(nid) for nid in note_ids]},
+        )
     unit_to_note: dict[UUID, UUID] = {}
     all_unit_ids: list[UUID] = []
     for row in result.mappings():
@@ -135,19 +169,31 @@ async def fetch_memory_links_for_notes(
 async def compute_related_notes(
     session: AsyncSession,
     note_ids: list[UUID],
+    vault_ids: list[UUID] | None = None,
+    fanout_cap: int = _ENTITY_FANOUT_CAP,
 ) -> dict[UUID, list[RelatedNoteDTO]]:
     """Find notes related to the given notes via shared entities.
 
     Uses inverse-log weighting: entities with lower mention_count are more
-    specific and score higher. Entities with mention_count > _ENTITY_FANOUT_CAP
+    specific and score higher. Entities with mention_count > fanout_cap
     are excluded.
+
+    If vault_ids is provided, only memory units in those vaults are considered.
     """
     if not note_ids:
         return {}
 
     # Step 1: get entities for input notes (excluding high-fanout ones)
+    vault_filter = ' AND mu.vault_id = ANY(:vault_ids)' if vault_ids else ''
+    params: dict = {
+        'note_ids': [str(nid) for nid in note_ids],
+        'fanout_cap': fanout_cap,
+    }
+    if vault_ids:
+        params['vault_ids'] = [str(vid) for vid in vault_ids]
+
     result = await session.execute(
-        text("""
+        text(f"""
             SELECT DISTINCT
                 mu.note_id,
                 e.id AS entity_id,
@@ -159,8 +205,9 @@ async def compute_related_notes(
             JOIN entities e ON e.id = ue.entity_id
             WHERE mu.note_id = ANY(:note_ids)
               AND e.mention_count <= :fanout_cap
+              {vault_filter}
         """),
-        {'note_ids': [str(nid) for nid in note_ids], 'fanout_cap': _ENTITY_FANOUT_CAP},
+        params,
     )
 
     # Map: note_id -> set of (entity_id, canonical_name, mention_count)
@@ -184,8 +231,15 @@ async def compute_related_notes(
 
     # Step 2: find other notes sharing those entities (excluding input notes)
     note_id_strs = [str(nid) for nid in note_ids]
+    step2_params: dict = {
+        'entity_ids': [str(eid) for eid in top_entity_ids],
+        'note_ids': note_id_strs,
+    }
+    if vault_ids:
+        step2_params['vault_ids'] = [str(vid) for vid in vault_ids]
+
     result = await session.execute(
-        text("""
+        text(f"""
             SELECT DISTINCT
                 mu.note_id,
                 e.id AS entity_id,
@@ -196,11 +250,9 @@ async def compute_related_notes(
             WHERE e.id = ANY(:entity_ids)
               AND mu.note_id IS NOT NULL
               AND mu.note_id != ALL(:note_ids)
+              {vault_filter}
         """),
-        {
-            'entity_ids': [str(eid) for eid in top_entity_ids],
-            'note_ids': note_id_strs,
-        },
+        step2_params,
     )
 
     # Map: candidate_note_id -> set of (entity_id, canonical_name)

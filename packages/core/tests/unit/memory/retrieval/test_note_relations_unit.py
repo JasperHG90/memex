@@ -420,6 +420,36 @@ async def test_note_search_enriches_results_with_relations():
     assert results[0].links[0].weight == 0.7
 
 
+@pytest.mark.asyncio
+async def test_memex_api_get_related_notes_delegates_to_compute():
+    """Verify MemexAPI.get_related_notes calls compute_related_notes with the session."""
+    from memex_core.api import MemexAPI
+
+    nid = uuid4()
+    rn_id = uuid4()
+    expected = {nid: [RelatedNoteDTO(note_id=rn_id, title='R', strength=0.5)]}
+
+    mock_session = AsyncMock()
+    mock_metastore = MagicMock()
+    mock_metastore.session = MagicMock(return_value=AsyncMock())
+    # Make the context manager yield our mock session
+    mock_metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MemexAPI.__new__(MemexAPI)
+    api.metastore = mock_metastore
+
+    with patch(
+        'memex_core.memory.retrieval.note_relations.compute_related_notes',
+        new_callable=AsyncMock,
+        return_value=expected,
+    ) as mock_compute:
+        result = await api.get_related_notes([nid])
+
+    mock_compute.assert_called_once_with(mock_session, [nid])
+    assert result == expected
+
+
 def test_boost_linked_notes_removed():
     """Verify _boost_linked_notes, LINKED_NOTE_BOOST, MIN_TITLE_LENGTH are removed."""
     import memex_core.memory.retrieval.document_search as ds
