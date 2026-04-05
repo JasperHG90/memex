@@ -101,7 +101,8 @@ class TestComputeStaleness:
         )
         assert result == Staleness.CONTESTED
 
-    def test_no_event_date_treated_as_stale(self):
+    def test_no_event_date_high_confidence_is_aging(self):
+        """No date but high confidence → AGING (unknown age), not STALE."""
         result = compute_staleness(
             event_date=None,
             confidence=0.9,
@@ -109,7 +110,34 @@ class TestComputeStaleness:
             links=[],
             now=_NOW,
         )
+        assert result == Staleness.AGING
+
+    def test_no_event_date_low_confidence_is_stale(self):
+        """No date and low confidence → STALE."""
+        result = compute_staleness(
+            event_date=None,
+            confidence=0.3,
+            superseded_by=[],
+            links=[],
+            now=_NOW,
+        )
         assert result == Staleness.STALE
+
+    def test_fresh_note_no_event_date_not_penalised(self):
+        """World fact from a fresh note with no unit-level date should not be STALE.
+
+        The DTO may lack event_date/mentioned_at for world facts. A high
+        confidence score indicates the fact is still trustworthy, so it
+        should be AGING (unknown age) rather than STALE.
+        """
+        result = compute_staleness(
+            event_date=None,
+            confidence=0.95,
+            superseded_by=[],
+            links=[],
+            now=_NOW,
+        )
+        assert result == Staleness.AGING
 
     def test_exactly_7_days_is_aging(self):
         result = compute_staleness(
