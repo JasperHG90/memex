@@ -602,7 +602,7 @@ ingested_at: {now}
         processed_ids: list[str] = []
         _pending_contradictions: list = []
 
-        async with AsyncTransaction(self.metastore, self.filestore, chunk_txn_id) as txn:
+        async with AsyncTransaction(self.metastore, self.filestore, str(chunk_txn_id)) as txn:
             for original_idx, note_dto, note_uuid in chunk:
                 asset_path = f'assets/{vault_name}/{note_uuid}'
                 asset_files_list = []
