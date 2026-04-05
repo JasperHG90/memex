@@ -72,7 +72,7 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `before` | string | No | - | Only results before this ISO 8601 date (e.g. `2025-12-31`). |
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
 
-Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
+Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates. Each memory unit includes a `links` field containing its memory links (causal, temporal, semantic, etc.) to other units.
 
 All vault parameters are optional and default to the resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads).
 
@@ -93,7 +93,12 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `before` | string | No | - | Only notes before this ISO 8601 date. |
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 
-Returns note titles, IDs, scores, snippets, and inline metadata.
+Returns note titles, IDs, scores, snippets, and inline metadata. Each result also includes:
+
+- **`related_notes`** — up to 5 notes that share entities with this result, ranked by entity specificity. Each entry includes `note_id`, `title`, `shared_entities` (up to 3 names), and `strength` (0.0-1.0).
+- **`links`** — memory-unit-level links (causal, temporal, semantic, etc.) aggregated to note level. Each entry includes `unit_id`, `note_id`, `note_title`, `relation`, and `weight`.
+
+These fields enable discovery of related content without additional tool calls.
 
 ---
 
@@ -134,6 +139,8 @@ Get the hierarchical page index (table of contents) for 1+ notes. Returns metada
 | `note_ids` | string[] | Yes | - | List of Note UUIDs. |
 | `depth` | int | No | - | Max tree depth to return (0=top-level H1+H2 overview, 1+=full tree). |
 | `parent_node_id` | string | No | - | Return only the subtree under this node ID. |
+
+Each page index entry also includes a `related_notes` field — notes that share entities with this note, ranked by specificity (up to 5 per note).
 
 For large notes (total_tokens > 3000): use `depth=0` first to get top-level sections, then drill into specific sections with `parent_node_id`.
 

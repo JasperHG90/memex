@@ -100,6 +100,32 @@ memex memory lineage memory_unit <unit-uuid>
 
 This shows the full provenance chain: Memory Unit -> Chunk -> Note -> Original File.
 
+### 4. Discover Related Notes
+
+When Note Search returns results, each result includes **related notes** — other documents that share specific entities with the result. This helps you discover connections between documents without running additional searches.
+
+**Via MCP:** The `memex_note_search` tool automatically includes `related_notes` in each result. Each related note shows the shared entities and a strength score (0.0-1.0), where higher values mean more specific overlap.
+
+**Via REST API:**
+
+```bash
+# Get related notes for specific note IDs
+curl -X POST http://localhost:8000/api/v1/notes/related \
+  -H "Content-Type: application/json" \
+  -d '{"note_ids": ["<note-uuid>"]}'
+```
+
+**Via Python:**
+
+```python
+related = await api.get_related_notes([note_id])
+for note_id, related_list in related.items():
+    for r in related_list:
+        print(f"  {r.title} (strength: {r.strength}, via: {r.shared_entities})")
+```
+
+Note relations complement search — search finds documents matching a query, while relations find documents connected to a known document through their shared entities.
+
 ## Quick Reference
 
 | Feature | Note Search | Memory Search |
@@ -109,6 +135,7 @@ This shows the full provenance chain: Memory Unit -> Chunk -> Note -> Original F
 | **Output** | Document snippets with reasoning | Memory units with scores |
 | **Scope** | Per-vault or per-document | Cross-vault knowledge graph |
 | **Best for** | "Find the PDF where X is mentioned" | "What do we know about X globally?" |
+| **Relations** | Includes related notes (shared entities) | Includes memory links (causal, temporal, semantic) |
 | **CLI command** | `memex note search` | `memex memory search` |
 | **MCP tool** | `memex_note_search` | `memex_memory_search` |
 

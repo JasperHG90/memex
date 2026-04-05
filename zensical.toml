@@ -28,9 +28,11 @@ nav = [
     "reference/evaluation-report.md",
   ]},
   { "Explanation" = [
+    "explanation/architecture-overview.md",
     "explanation/hindsight-framework.md",
     "explanation/extraction-pipeline.md",
     "explanation/retrieval-strategies.md",
     "explanation/reflection-and-mental-models.md",
+    "explanation/inference-model-backends.md",
   ]},
 ]

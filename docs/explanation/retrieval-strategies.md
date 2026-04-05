@@ -6,6 +6,37 @@ Memex retrieves memories using TEMPR — five independent strategies that run in
 
 No single retrieval method works well for all queries. A keyword search for "PostgreSQL" will miss facts about "database migration" that do not mention PostgreSQL by name. A semantic search for "deployment decisions" might rank irrelevant but semantically similar content too high. By running multiple strategies and combining their results, Memex achieves robust retrieval across a wide range of query types.
 
+## Recall Pipeline Overview
+
+```mermaid
+graph TD
+    Q["Query Input + Config"] --> PRE
+
+    subgraph PRE["Query Preprocessing"]
+        QE["Query Expansion (LLM)"] --> TE["Temporal Extraction (NLP)"]
+        TE --> NER["NER Pre-extraction"]
+        NER --> EMB["Query Embedding"]
+    end
+
+    PRE --> STRATS
+
+    subgraph STRATS["5 Parallel TEMPR Strategies"]
+        direction LR
+        S1["Temporal<br/>Recency by<br/>event_date"]
+        S2["Entity/Graph<br/>2-hop traversal<br/>+ phonetic"]
+        S3["Mental Model<br/>Observation<br/>cosine search"]
+        S4["Keyword<br/>BM25-like<br/>ts_rank_cd"]
+        S5["Semantic<br/>Dense cosine<br/>pgvector HNSW"]
+    end
+
+    STRATS --> RRF["Reciprocal Rank Fusion (RRF)<br/>score = Σ weight / (k + rank)"]
+    RRF --> HYD["Hydration<br/>Load full MemoryUnit objects"]
+    HYD --> RR["Neural Reranking<br/>Cross-encoder + recency/temporal boosts"]
+    RR --> MMR["MMR Diversity Filtering<br/>0.6 × cosine + 0.4 × entity Jaccard"]
+    MMR --> TB["Token Budgeting + Session Dedup"]
+    TB --> RES["Results"]
+```
+
 ## The Five Strategies
 
 ### 1. Semantic Strategy (Dense Retrieval)
