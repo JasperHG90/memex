@@ -1035,10 +1035,23 @@ def compute_staleness(
 ) -> Staleness:
     """Determine the staleness of a memory unit.
 
-    Priority: CONTESTED > time-based (FRESH / AGING / STALE).
+    Priority: CONTESTED > confidence-based STALE > time-based (FRESH / AGING / STALE).
+
+    Date fallback chain (resolved in ``_build_memory_unit_model``):
+        1. ``event_date`` — only present on the SQL model (MemoryUnit), not on
+           MemoryUnitDTO. Will be None when the DTO comes from the HTTP API.
+        2. ``mentioned_at`` — set on observations; for world facts the server's
+           ``build_memory_unit_dto`` copies ``event_date`` into this field as a
+           fallback (see ``memex_core.server.common``), so it is normally
+           populated even for world facts.
+        3. ``occurred_start`` — set on events with a specific occurrence time.
+
+    If none of these dates are available (all None), staleness falls back to
+    confidence alone: >= 0.7 → AGING, < 0.5 → STALE. This avoids penalising
+    high-confidence world facts whose date was lost in DTO serialisation.
 
     Args:
-        event_date: When the memory unit was created/relevant.
+        event_date: Best-effort date from the fallback chain above.
         confidence: Confidence score (0.0-1.0).
         superseded_by: Units that supersede this one.
         links: Typed relationship links (may contain contradiction relations).
@@ -1131,7 +1144,10 @@ def _build_memory_unit_model(
     links = [McpMemoryLink(**lnk) for lnk in links_raw if isinstance(lnk, dict)]
     base_kwargs['links'] = links
 
-    # Staleness computation — single conversion point for all search results
+    # Staleness date fallback chain — see compute_staleness docstring for semantics.
+    # event_date: only on SQL model (None on DTO from HTTP API)
+    # mentioned_at: observations; also backfilled from event_date for world facts
+    # occurred_start: events with a specific occurrence time
     event_date = (
         getattr(res, 'event_date', None)
         or getattr(res, 'mentioned_at', None)
