@@ -149,7 +149,7 @@ Key reflection settings in `config.yaml`:
 server:
   memory:
     reflection:
-      background_reflection_enabled: false
+      background_reflection_enabled: true
       enrichment_enabled: true
       background_reflection_interval_seconds: 600
       background_reflection_batch_size: 10

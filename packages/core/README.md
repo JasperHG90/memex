@@ -33,10 +33,11 @@ Decomposed service layer, each handling a specific domain:
 | `entities` | Entity CRUD, mentions, co-occurrences, lineage. |
 | `reflection` | Reflection task scheduling, batch processing, dead letter queue. |
 | `vaults` | Vault CRUD, active vault management. |
+| `vault_summary` | Vault summary generation and regeneration. |
+| `kv` | Key-value store operations. |
 | `stats` | System statistics and token usage reporting. |
 | `lineage` | Provenance chain traversal. |
 | `audit` | Audit log queries. |
-| `webhook_service` | Webhook subscription CRUD and delivery tracking. |
 
 ### Memory Subsystems (`memex_core.memory`)
 

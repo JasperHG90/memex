@@ -179,7 +179,7 @@ Key retrieval settings in `config.yaml`:
 server:
   memory:
     retrieval:
-      token_budget: 2000                # Max tokens to pack into results
+      token_budget: 1000                # Max tokens to pack into results
       rrf_k: 60                         # RRF constant (higher = more uniform blending)
       candidate_pool_size: 60           # Candidates per strategy
       similarity_threshold: 0.3         # pg_trgm threshold for entity matching

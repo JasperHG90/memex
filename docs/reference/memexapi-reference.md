@@ -15,8 +15,8 @@ from memex_core.api import MemexAPI
 ```python
 def __init__(
     self,
-    embedding_model: FastEmbedder,
-    reranking_model: FastReranker,
+    embedding_model: EmbeddingsModel,
+    reranking_model: RerankerModel | None,
     ner_model: FastNERModel,
     metastore: AsyncBaseMetaStoreEngine,
     filestore: BaseAsyncFileStore,
@@ -54,6 +54,7 @@ async def search(
     after: datetime | None = None,
     before: datetime | None = None,
     tags: list[str] | None = None,
+    source_context: str | None = None,
 ) -> tuple[list[MemoryUnit], Any]
 ```
 
@@ -97,6 +98,20 @@ async def summarize_search_results(self, query: str, texts: list[str]) -> str
 ```
 
 Generate an AI summary with citations from search result texts.
+
+### `survey`
+
+```python
+async def survey(
+    self,
+    query: str,
+    vault_ids: list[UUID | str] | None = None,
+    limit_per_query: int = 10,
+    token_budget: int | None = None,
+) -> SurveyResponse
+```
+
+Perform a broad topic survey across vaults, returning aggregated results.
 
 ### `resolve_source_notes`
 
@@ -154,6 +169,7 @@ async def ingest_from_url(
     vault_id: UUID | str | None = None,
     reflect_after: bool = True,
     assets: dict[str, bytes] | None = None,
+    user_notes: str | None = None,
 ) -> dict[str, Any]
 ```
 
@@ -167,6 +183,8 @@ async def ingest_from_file(
     file_path: str | Path,
     vault_id: UUID | str | None = None,
     reflect_after: bool = True,
+    note_key: str | None = None,
+    user_notes: str | None = None,
 ) -> dict[str, Any]
 ```
 
@@ -228,6 +246,9 @@ async def list_notes(
     vault_ids: list[UUID] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
+    template: str | None = None,
+    tags: list[str] | None = None,
+    status: str | None = None,
 ) -> list[Any]
 ```
 
@@ -243,6 +264,7 @@ async def get_recent_notes(
     vault_ids: list[UUID] | None = None,
     after: datetime | None = None,
     before: datetime | None = None,
+    template: str | None = None,
 ) -> list[Any]
 ```
 
@@ -292,6 +314,30 @@ async def migrate_note(self, note_id: UUID, target_vault_id: UUID | str) -> dict
 ```
 
 Move a note and all associated data to a different vault.
+
+### `update_user_notes`
+
+```python
+async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]
+```
+
+Update user notes on an existing note and reprocess into the memory graph. Strips old user-notes memory units, re-extracts if non-empty, and enqueues affected entities for reflection. Returns `{note_id, units_deleted, units_created}`.
+
+### `add_note_assets`
+
+```python
+async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]
+```
+
+Add asset files to an existing note.
+
+### `delete_note_assets`
+
+```python
+async def delete_note_assets(self, note_id: UUID, asset_paths: list[str]) -> dict[str, Any]
+```
+
+Delete asset files from an existing note.
 
 ---
 
@@ -522,6 +568,14 @@ async def retry_dead_letter_item(self, item_id: UUID) -> Any
 
 Reset a dead-lettered item back to pending for re-processing.
 
+### `recover_stale_processing`
+
+```python
+async def recover_stale_processing(self) -> int
+```
+
+Reset reflection queue items stuck in PROCESSING state longer than the configured timeout.
+
 ---
 
 ## Lineage
@@ -560,6 +614,14 @@ async def delete_vault(self, vault_id: UUID) -> bool
 ```
 
 Delete a vault.
+
+### `truncate_vault`
+
+```python
+async def truncate_vault(self, vault_id: UUID) -> dict[str, int]
+```
+
+Remove all content from a vault while keeping the vault itself.
 
 ### `list_vaults`
 
@@ -610,7 +672,6 @@ Resolve a vault name or UUID string to a vault UUID.
 ```python
 async def kv_put(
     self,
-    vault_id: UUID | None,
     key: str,
     value: str,
     embedding: list[float] | None = None,
@@ -622,10 +683,10 @@ Create or update a key-value entry. Generates an embedding if not provided.
 ### `kv_get`
 
 ```python
-async def kv_get(self, key: str, vault_id: UUID | None = None) -> Any | None
+async def kv_get(self, key: str) -> Any | None
 ```
 
-Get a KV entry by exact key. Checks vault-specific first, then global.
+Get a KV entry by exact key.
 
 ### `kv_search`
 
@@ -633,7 +694,7 @@ Get a KV entry by exact key. Checks vault-specific first, then global.
 async def kv_search(
     self,
     query_embedding: list[float],
-    vault_id: UUID | None = None,
+    namespaces: list[str] | None = None,
     limit: int = 5,
 ) -> list[Any]
 ```
@@ -643,7 +704,7 @@ Semantic search over KV entries by embedding similarity.
 ### `kv_delete`
 
 ```python
-async def kv_delete(self, key: str, vault_id: UUID | None = None) -> bool
+async def kv_delete(self, key: str) -> bool
 ```
 
 Delete a KV entry by key.
@@ -651,10 +712,17 @@ Delete a KV entry by key.
 ### `kv_list`
 
 ```python
-async def kv_list(self, vault_id: UUID | None = None, limit: int = 100) -> list[Any]
+async def kv_list(
+    self,
+    namespaces: list[str] | None = None,
+    limit: int = 100,
+    exclude_prefix: str | None = None,
+    key_prefix: str | None = None,
+    pattern: str | None = None,
+) -> list[Any]
 ```
 
-List KV entries. Without `vault_id`, returns global entries only.
+List KV entries with optional namespace and key filtering.
 
 ---
 
@@ -691,11 +759,3 @@ async def get_stats_counts(
 ```
 
 Get total counts for notes, memory units, entities, and reflection queue.
-
-### `get_daily_token_usage`
-
-```python
-async def get_daily_token_usage(self) -> list[dict[str, Any]]
-```
-
-Get daily aggregated LLM token usage.

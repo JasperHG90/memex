@@ -1,16 +1,16 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 31 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 35 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
-## Progressive Disclosure (Default)
+## Progressive Disclosure (Opt-In)
 
-By default, `tools/list` returns 3 discovery meta-tools instead of all 31 tool schemas:
+When enabled, `tools/list` returns 3 discovery meta-tools instead of all 35 tool schemas:
 
 - **`memex_tags`** — browse 7 tool categories (`search`, `read`, `write`, `browse`, `assets`, `entities`, `storage`)
 - **`memex_search(query, tags=[...])`** — find tools by keyword (BM25), optionally filtered by tag
 - **`memex_get_schema(tools=[...])`** — get parameter details for specific tools
 
-Real tools remain directly callable by name via `tools/call`. Set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=false` to disable and expose all 31 tools on `tools/list`.
+Real tools remain directly callable by name via `tools/call`. Set `MEMEX_MCP_PROGRESSIVE_DISCLOSURE=true` to enable progressive disclosure (meta-tools on `tools/list`, real tools hidden but still callable).
 
 ## Running the MCP Server
 
@@ -71,6 +71,8 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `after` | string | No | - | Only results after this ISO 8601 date (e.g. `2025-01-01`). |
 | `before` | string | No | - | Only results before this ISO 8601 date (e.g. `2025-12-31`). |
 | `tags` | string[] | No | - | Only results from notes with ALL of these tags. |
+| `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
+| `source_context` | string | No | - | Filter by source context (e.g. `"user_notes"` to search only user annotations). |
 
 Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates.
 
@@ -85,15 +87,30 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `query` | string | Yes | - | The note search query. |
-| `limit` | int | No | `5` | Maximum number of notes to return. |
+| `limit` | int | No | `10` | Maximum number of notes to return. |
 | `expand_query` | bool | No | `false` | Enable multi-query expansion via LLM. |
 | `vault_ids` | string[] | No | from config | List of vault UUIDs or names to search in. Defaults to `config.read_vaults`. |
 | `strategies` | string[] | No | all | Strategies: `semantic`, `keyword`, `graph`, `temporal`. |
 | `after` | string | No | - | Only notes after this ISO 8601 date. |
 | `before` | string | No | - | Only notes before this ISO 8601 date. |
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
+| `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
 
 Returns note titles, IDs, scores, snippets, and inline metadata.
+
+---
+
+### `memex_search_user_notes`
+
+Search only your own annotations (user_notes) across all notes. Returns memory units extracted from user_notes. Use this to recall what you yourself have been thinking or annotating.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Search query. |
+| `vault_ids` | string[] | No | from config | Vault UUIDs or names. Use `"*"` for all vaults. Omit to use config defaults. |
+| `limit` | int | No | `10` | Maximum results to return. |
+
+Returns the same format as `memex_memory_search`, filtered to `source_context='user_notes'`.
 
 ---
 
@@ -108,6 +125,21 @@ Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. U
 | `limit` | int | No | `5` | Maximum results to return. |
 
 Returns note titles, IDs, similarity scores, status, and publish dates.
+
+---
+
+### `memex_survey`
+
+Survey a broad topic. Decomposes into 3-5 focused sub-questions, runs parallel searches, deduplicates, and returns facts grouped by source note. Use for panoramic queries like "what do you know about X?" instead of making many manual search calls.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | - | Broad topic or panoramic query to survey. |
+| `vault_ids` | string[] | No | from config | Vault UUIDs or names. Use `"*"` for all vaults. Omit to use config defaults. |
+| `limit_per_query` | int | No | `10` | Max results per sub-question. |
+| `token_budget` | int | No | - | Max token budget for all results. Truncates when exceeded. |
+
+Returns facts grouped by source note with sub-question decomposition.
 
 ---
 
@@ -178,6 +210,9 @@ Add a note to the Memex knowledge base. The vault parameter is optional and defa
 | `vault_id` | string | No | `config.write_vault` | UUID or name of the vault to add the note to. Defaults to resolved write vault from config. |
 | `note_key` | string | No | - | Unique stable key for incremental updates. |
 | `background` | bool | No | `false` | Queue ingestion in background. |
+| `user_notes` | string | No | - | Optional user-provided context or commentary to include in the note. |
+| `date` | string | No | - | Note date in ISO 8601 format (e.g. `2026-03-27`). Defaults to now. |
+| `template` | string | No | - | Template slug used to create this note (e.g. `"general_note"`). |
 
 On success, returns the note ID. If similar notes already exist, includes overlap warnings with note titles, similarity percentages, and IDs.
 
@@ -203,6 +238,17 @@ Rename a note. Updates title in metadata, page index, and doc_metadata.
 |-----------|------|----------|-------------|
 | `note_id` | string | Yes | The UUID of the note. |
 | `new_title` | string | Yes | The new title for the note. |
+
+---
+
+### `memex_update_user_notes`
+
+Update user_notes on an existing note and reprocess into the memory graph. Pass `null` to delete all user annotations. Old user_notes memory units are deleted and new ones extracted.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | Note UUID. |
+| `user_notes` | string | No | New user_notes text, or `null` to delete all annotations. |
 
 ---
 
@@ -268,6 +314,34 @@ Returns `Image`, `Audio`, `File`, or error strings for each path. Per-item failu
 
 ---
 
+### `memex_add_assets`
+
+Add one or more file assets to an existing note. Provide local file paths.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | Note UUID. |
+| `file_paths` | string[] | Yes | Absolute paths to asset files to attach. |
+| `vault_id` | string | No | Vault UUID or name. Omit to use config defaults. |
+
+Returns the list of added assets, skipped duplicates, and updated asset count.
+
+---
+
+### `memex_delete_assets`
+
+Delete one or more asset files from an existing note. Get paths from `memex_list_assets`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `note_id` | string | Yes | Note UUID. |
+| `asset_paths` | string[] | Yes | Asset path(s) to delete (from `memex_list_assets`). |
+| `vault_id` | string | No | Vault UUID or name. Omit to use config defaults. |
+
+Returns the list of deleted paths, not-found paths, and updated asset count.
+
+---
+
 ## Entity Tools
 
 ### `memex_list_entities`
@@ -279,6 +353,7 @@ List or search entities in the knowledge graph. Without a query, returns top ent
 | `query` | string | No | - | Search term to filter by name. |
 | `limit` | int | No | `20` | Maximum entities to return. |
 | `vault_id` | string | No | - | Vault UUID or name to filter by. |
+| `entity_type` | string | No | - | Filter by entity type: `Person`, `Organization`, `Location`, `Concept`, `Technology`, `File`, `Misc`. |
 
 ---
 
@@ -397,6 +472,9 @@ List notes with optional date filters. Use `after`/`before` for temporal queries
 | `after` | string | No | - | Only notes on/after this date (ISO 8601, e.g. `2026-01-01`). |
 | `before` | string | No | - | Only notes on/before this date (ISO 8601, e.g. `2026-12-31`). |
 | `limit` | int | No | `50` | Max notes to return. |
+| `template` | string | No | - | Filter by template slug (e.g. `"general_note"`). |
+| `tags` | string[] | No | - | Filter by tags (AND semantics). Only notes containing all specified tags. |
+| `status` | string | No | - | Filter by note lifecycle status (e.g. `"active"`, `"archived"`). |
 
 Returns note titles, IDs, creation dates, publish dates, and vault IDs.
 
@@ -422,6 +500,18 @@ Returns vault names, IDs, descriptions, and active status.
 
 ---
 
+### `memex_get_vault_summary`
+
+Get the current summary for a vault. Returns topics, stats, and a natural language overview of vault contents. Use this to orient yourself in a vault.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `vault_id` | string | No | Vault UUID or name. Omit to use the active vault. |
+
+Returns summary text, topics, stats, version, notes incorporated, and timestamps.
+
+---
+
 ### `memex_recent_notes`
 
 Browse recent notes. Defaults to all vaults. Filter by vault names/UUIDs and optional date range. Not recommended for discovery — use `memex_memory_search` or `memex_note_search` instead.
@@ -432,6 +522,7 @@ Browse recent notes. Defaults to all vaults. Filter by vault names/UUIDs and opt
 | `vault_ids` | string[] | No | - | Vault UUIDs or names. Omit for all vaults. |
 | `after` | string | No | - | Only notes on/after this date (ISO 8601). |
 | `before` | string | No | - | Only notes on/before this date (ISO 8601). |
+| `template` | string | No | - | Filter by template slug (e.g. `"general_note"`). |
 
 ---
 

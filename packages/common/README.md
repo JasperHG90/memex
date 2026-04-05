@@ -31,7 +31,7 @@ Key classes:
 ### `types.py` — Type Definitions
 
 Enumerations and type aliases:
-- `MemexTypes` — Memory unit type enumeration (fact, experience, observation).
+- `MemexTypes` — Memex type enumeration (note, knowledge, reflection).
 - `FactTypes` — Fact sub-type enumeration.
 - `ReasoningEffort` — LLM reasoning effort levels.
 

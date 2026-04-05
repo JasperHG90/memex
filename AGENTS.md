@@ -47,7 +47,7 @@ Always use `uv`, never `pip`.
 
 ## Architecture
 
-Python monorepo managed by `uv` with 8 packages.
+Python monorepo managed by `uv` with 7 packages.
 
 ### Packages
 
@@ -55,10 +55,9 @@ Python monorepo managed by `uv` with 8 packages.
 |---------|--------|---------|
 | `packages/core` | `memex_core` | Core library: storage, memory engine (extraction/retrieval/reflection), services layer, MemexAPI facade, FastAPI server |
 | `packages/cli` | `memex_cli` | Typer CLI (`memex` command) — 12 command groups: note, vault, memory, entity, kv, server, mcp, config, system, database, setup, report-bug |
-| `packages/mcp` | `memex_mcp` | FastMCP server — 31 tools for LLM integration (progressive disclosure by default) |
+| `packages/mcp` | `memex_mcp` | FastMCP server — 35 tools for LLM integration (progressive disclosure by default) |
 | `packages/common` | `memex_common` | Shared Pydantic models, config (hierarchical YAML), HTTP client, exceptions |
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
-| `packages/obsidian-sync` | `memex_obsidian_sync` | Watchdog-based Obsidian vault synchronization |
 | `packages/firefox-extension` | — | TypeScript/WebExtension for saving pages to Memex |
 | `packages/claude-code-plugin` | — | Claude Code plugin: `/remember` and `/recall` skills, session hooks, MCP server config |
 
@@ -74,7 +73,6 @@ memex-cli
 memex-mcp → memex-common
 memex-core → memex-common
 memex-eval → memex-common
-memex-obsidian-sync → memex-common
 ```
 
 ### Core architecture (packages/core)
@@ -117,7 +115,7 @@ memex_core/
 - `memex_core.memory.engine.MemoryEngine` — memory engine factory and orchestration
 - `memex_core.services.*` — domain service layer (ingestion, search, notes, reflection, lineage, entities, vaults, kv, stats, audit)
 - `memex_cli.__init__.app` — Typer CLI app
-- `memex_mcp.server.mcp` — MCP server (31 tools, progressive disclosure via `DiscoveryMode` transform)
+- `memex_mcp.server.mcp` — MCP server (35 tools, progressive disclosure via `DiscoveryMode` transform)
 
 ### Inference model backends
 

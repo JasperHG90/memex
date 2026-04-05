@@ -41,12 +41,14 @@ memex memory search "What are the key points?"
 | `memex note` | List, search, view, and delete notes; read page index and nodes. |
 | `memex entity` | List, view, delete entities; inspect mentions and related entities. |
 | `memex vault` | Create, list, and delete vaults. |
+| `memex kv` | Key-value store operations (get, write, search, list). |
 | `memex server` | Start, stop, and check status of the API server. |
 | `memex mcp` | Run the MCP server (stdio or SSE transport). |
-| `memex stats` | View system statistics and token usage. |
+| `memex system` | View system statistics and token usage. |
 | `memex config` | Show current configuration or initialize a config file. |
-| `memex db` | Database migrations via Alembic (upgrade, downgrade, history, stamp, revision). |
-| `memex setup claude-code` | Configure Claude Code integration (MCP, hooks, skills). |
+| `memex database` | Database migrations via Alembic (upgrade, downgrade, history, stamp, revision). |
+| `memex setup` | Configure Claude Code integration (MCP, hooks, skills). |
+| `memex report-bug` | Open a pre-filled GitHub issue with system info. |
 
 ## Global Options
 
