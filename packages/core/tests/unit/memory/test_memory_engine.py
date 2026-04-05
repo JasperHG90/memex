@@ -507,3 +507,42 @@ def test_batch_no_contradiction_task():
 
     source = inspect.getsource(batch)
     assert 'contradiction_task' not in source
+
+
+# ---------------------------------------------------------------------------
+# MemexAPI startup diagnostic log (AC-008)
+# ---------------------------------------------------------------------------
+
+
+def test_memex_api_logs_warning_when_contradiction_disabled(
+    mock_metastore,
+    mock_filestore,
+    mock_config,
+    mock_embedding_model,
+    mock_reranking_model,
+    mock_ner_model,
+    patch_api_engines,
+    caplog,
+):
+    """MemexAPI.__init__ logs WARNING when contradiction engine is None (disabled)."""
+    from memex_core.api import MemexAPI
+
+    with (
+        patch(
+            'memex_core.api._build_contradiction_engine',
+            return_value=None,
+        ),
+        caplog.at_level(logging.WARNING, logger='memex.core.api'),
+    ):
+        MemexAPI(
+            embedding_model=mock_embedding_model,
+            reranking_model=mock_reranking_model,
+            ner_model=mock_ner_model,
+            metastore=mock_metastore,
+            filestore=mock_filestore,
+            config=mock_config,
+        )
+
+    assert any('contradiction detection is DISABLED' in r.message for r in caplog.records), (
+        'Expected WARNING about contradiction detection being disabled'
+    )
