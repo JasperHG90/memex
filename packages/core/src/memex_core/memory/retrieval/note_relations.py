@@ -7,7 +7,7 @@ from collections import defaultdict
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.schemas import MemoryLinkDTO, RelatedNoteDTO
 
@@ -33,7 +33,7 @@ async def fetch_memory_links(
     if not unit_ids:
         return {}
 
-    result = await session.execute(
+    result = await session.exec(
         text("""
             SELECT
                 ml.from_unit_id,
@@ -101,7 +101,7 @@ async def fetch_memory_links_for_notes(
         return {}
 
     # Step 1: get all unit_ids for the given note_ids
-    result = await session.execute(
+    result = await session.exec(
         text('SELECT id, note_id FROM memory_units WHERE note_id = ANY(:note_ids)'),
         {'note_ids': [str(nid) for nid in note_ids]},
     )
@@ -149,7 +149,7 @@ async def compute_related_notes(
         return {}
 
     # Step 1: get entities for input notes (excluding high-fanout ones)
-    result = await session.execute(
+    result = await session.exec(
         text("""
             SELECT DISTINCT
                 mu.note_id,
@@ -187,7 +187,7 @@ async def compute_related_notes(
 
     # Step 2: find other notes sharing those entities (excluding input notes)
     note_id_strs = [str(nid) for nid in note_ids]
-    result = await session.execute(
+    result = await session.exec(
         text("""
             SELECT DISTINCT
                 mu.note_id,
@@ -219,7 +219,7 @@ async def compute_related_notes(
 
     # Step 3: fetch titles for candidate notes
     candidate_note_ids = list(candidate_entities.keys())
-    title_result = await session.execute(
+    title_result = await session.exec(
         text('SELECT id, title FROM notes WHERE id = ANY(:ids)'),
         {'ids': [str(nid) for nid in candidate_note_ids]},
     )
