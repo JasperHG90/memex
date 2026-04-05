@@ -763,7 +763,10 @@ class TestMemorySearchEdgeCases:
             'memex_memory_search', {'query': 'nothing', 'vault_ids': ['test-vault']}
         )
         parsed = parse_tool_result(result)
-        assert parsed == []
+        # Empty results now return a system-hint nudge
+        assert len(parsed) == 1
+        assert parsed[0]['id'] == '00000000-0000-0000-0000-000000000000'
+        assert 'system-hint' in parsed[0]['tags']
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
