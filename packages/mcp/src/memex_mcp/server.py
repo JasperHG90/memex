@@ -57,6 +57,7 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
+    Staleness,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
@@ -1024,6 +1025,65 @@ async def memex_add_note(
         raise ToolError(f'Add note failed: {e}')
 
 
+def compute_staleness(
+    *,
+    event_date: Any | None,
+    confidence: float,
+    superseded_by: list[Any] | None,
+    links: list[Any] | None,
+    now: Any | None = None,
+) -> Staleness:
+    """Determine the staleness of a memory unit.
+
+    Priority: CONTESTED > time-based (FRESH / AGING / STALE).
+
+    Args:
+        event_date: When the memory unit was created/relevant.
+        confidence: Confidence score (0.0-1.0).
+        superseded_by: Units that supersede this one.
+        links: Typed relationship links (may contain contradiction relations).
+        now: Current datetime (injectable for testing).
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    # --- Contested check (highest priority) ---
+    if superseded_by:
+        return Staleness.CONTESTED
+
+    if links:
+        contradiction_relations = {'contradicts', 'contradiction', 'weakens'}
+        for lnk in links:
+            relation = getattr(lnk, 'relation', None) or (
+                lnk.get('relation') if isinstance(lnk, dict) else None
+            )
+            if relation and relation.lower() in contradiction_relations:
+                return Staleness.CONTESTED
+
+    # --- Time-based checks ---
+    if now is None:
+        now = _dt.now(tz=_tz.utc)
+
+    age_days: int = 999  # default: treat as old
+    if event_date is not None and isinstance(event_date, _dt):
+        if event_date.tzinfo is None:
+            event_date = event_date.replace(tzinfo=_tz.utc)
+        age_days = (now - event_date).days
+
+    if confidence < 0.5:
+        return Staleness.STALE
+
+    if age_days > 30:
+        return Staleness.STALE
+
+    if age_days >= 7:
+        return Staleness.AGING
+
+    if confidence >= 0.7:
+        return Staleness.FRESH
+
+    return Staleness.AGING
+
+
 def _build_memory_unit_model(
     res: Any,
     note_titles: dict[UUID, str] | None = None,
@@ -1063,6 +1123,19 @@ def _build_memory_unit_model(
     links_raw = unit_metadata.get('links', [])
     links = [McpMemoryLink(**lnk) for lnk in links_raw if isinstance(lnk, dict)]
     base_kwargs['links'] = links
+
+    # Staleness computation — single conversion point for all search results
+    event_date = (
+        getattr(res, 'event_date', None)
+        or getattr(res, 'mentioned_at', None)
+        or getattr(res, 'occurred_start', None)
+    )
+    base_kwargs['staleness'] = compute_staleness(
+        event_date=event_date,
+        confidence=base_kwargs['confidence'],
+        superseded_by=getattr(res, 'superseded_by', None) or [],
+        links=links_raw,
+    )
 
     if fact_type == 'event':
         return McpEvent(
@@ -1197,7 +1270,17 @@ async def memex_memory_search(
         )
 
         if not results:
-            return []
+            return [
+                McpFact(
+                    id=UUID(int=0),
+                    text=(
+                        'No results found. If you learn something about this topic '
+                        'during this session, consider saving it.'
+                    ),
+                    confidence=0.0,
+                    tags=['system-hint'],
+                )
+            ]
 
         # Fetch note titles for enriched output
         note_ids = list({res.note_id for res in results if res.note_id})
@@ -1371,7 +1454,18 @@ async def memex_note_search(
         )
 
         if not results:
-            return []
+            return [
+                McpNoteSearchResult(
+                    note_id=UUID(int=0),
+                    title='No results',
+                    score=0.0,
+                    description=(
+                        'No results found. If you learn something about this topic '
+                        'during this session, consider saving it.'
+                    ),
+                    tags=['system-hint'],
+                )
+            ]
 
         # Session-level dedup
         dedup = _get_session_dedup(ctx.session_id)
