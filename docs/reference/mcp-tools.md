@@ -52,6 +52,45 @@ When unsure which to use, run both in parallel and combine results (deduplicate 
 
 Always call `memex_get_notes_metadata` before `memex_get_page_indices` to avoid wasting tokens on irrelevant notes.
 
+## Token Optimization
+
+The MCP server includes several mechanisms to reduce context window usage. Use these to keep conversations efficient, especially in long sessions.
+
+### Session-level deduplication
+
+The server tracks which notes and memory units have already been returned during a session. Both `memex_memory_search` and `memex_note_search` support an `include_seen` parameter:
+
+- **`include_seen=true`** (default) — Returns all results in full, including previously returned ones.
+- **`include_seen=false`** — Compresses previously returned results to just their ID and a `previously_returned: true` flag (no text content). New results are returned in full.
+
+Use `include_seen=false` on follow-up searches within the same session to avoid re-reading facts and notes you've already seen. This can dramatically reduce token usage when iterating on related queries.
+
+### Overlap detection on ingestion
+
+`memex_add_note` returns an `overlapping_notes` field when similar notes already exist. Each overlap includes the note title, similarity percentage, and note ID. Check these before creating duplicate content — consider updating the existing note with `memex_update_user_notes` or superseding it with `memex_set_note_status` instead.
+
+### Token budgets
+
+Both `memex_memory_search` and `memex_survey` accept a `token_budget` parameter that caps the total token count of results. The server truncates results once the budget is exceeded. Use this to bound retrieval cost when you only need a quick answer rather than exhaustive results.
+
+### Avoid redundant metadata lookups
+
+After `memex_note_search`, metadata (title, tags, token count, publish date) is already inline in each result. Do **not** call `memex_get_notes_metadata` on these results — it wastes tokens on data you already have. Only call `memex_get_notes_metadata` after `memex_memory_search`, which returns memory units without note metadata.
+
+### Use `memex_read_note` sparingly
+
+`memex_read_note` returns the full note content. Only use it for small notes (< 500 tokens). For larger notes, use `memex_get_page_indices` to get the table of contents with token estimates per section, then `memex_get_nodes` to read only the sections you need.
+
+For very large notes (> 3000 tokens), use `depth=0` on `memex_get_page_indices` first to get only top-level sections, then drill into specific sections with `parent_node_id`.
+
+### Use `memex_survey` for broad queries
+
+Instead of making multiple `memex_memory_search` calls manually, use `memex_survey` for panoramic queries ("what do you know about X?"). It decomposes the query into sub-questions, runs them in parallel, and deduplicates results — typically fewer tokens than manual iteration.
+
+### Inline relationship data
+
+Search results from `memex_memory_search` and `memex_note_search` include `related_notes` and `links` fields inline. Use these for relationship discovery instead of making separate `memex_get_entity_cooccurrences` or `memex_get_entity_mentions` calls. Only use the entity tools when you need deeper graph exploration.
+
 ---
 
 ## Search Tools
