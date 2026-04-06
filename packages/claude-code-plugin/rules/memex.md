@@ -4,7 +4,7 @@ Route by query type:
 
 - **Title known** → `memex_find_note(query="fragment")` → read via `memex_get_page_indices` + `memex_get_nodes`
 - **Relationships / connections** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions` → read source notes as needed
-- **Content / document lookup** → `memex_memory_search` (broad) and/or `memex_note_search` (targeted) in parallel → `memex_get_notes_metadata` after memory_search (skip after note_search — metadata inline) → read via `memex_get_page_indices` + `memex_get_nodes` (use `memex_read_note` only when total_tokens < 500)
+- **Content / document lookup** → ALWAYS run both `memex_memory_search` AND `memex_note_search` in parallel. `memory_search` returns individual facts/observations across notes — use it to find cross-cutting patterns, contradictions, and specific claims buried inside large documents. `note_search` returns whole notes ranked by relevance — use it to find source documents. → `memex_get_notes_metadata` after memory_search (skip after note_search — metadata inline) → read via `memex_get_page_indices` + `memex_get_nodes` (use `memex_read_note` only when total_tokens < 500)
 - **Broad / panoramic** ("what do you know about X?", "overview of X") → `memex_survey(query)` for auto-decomposed parallel search; or entity exploration AND search in parallel for manual control
 - **Vault overview** ("what's in this vault?") → `memex_get_vault_summary` + `memex_survey` in parallel
 - **Assets** → when `has_assets: true`: `memex_list_assets` → `memex_get_resources`. Use images as visual input. Reproduce diagrams as Mermaid/ASCII. NEVER skip.
