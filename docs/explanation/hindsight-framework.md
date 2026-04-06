@@ -49,6 +49,8 @@ The retention loop captures raw information as quickly as possible. When a user 
 
 The design principle is *capture everything, lose nothing*. Speed matters here — the fast path should never block the user. That is why batch and background ingestion modes exist.
 
+Notes support an optional `user_notes` field for user-provided commentary or annotations. User notes are extracted through the same pipeline as note content, with `source_context='user_notes'` for filtered retrieval. This allows users to layer their own interpretations on top of ingested content and retrieve them separately via `memex_search_user_notes`.
+
 **Practical example:** When an AI agent ingests meeting notes, the retention loop extracts facts like "The team decided to migrate to Kubernetes by Q2" and entities like "Kubernetes", "Q2", linking them together in the knowledge graph.
 
 ### 2. Recall (TEMPR)
@@ -62,6 +64,18 @@ When a user or AI agent queries Memex, the recall loop retrieves relevant inform
 - **R**anking — Keyword matching (sparse retrieval via PostgreSQL full-text search with ts_rank_cd).
 
 Each strategy contributes candidates, and RRF combines them into a single ranked list. After fusion, results pass through MMR diversity filtering (near-duplicate results are pruned using a hybrid cosine + entity Jaccard similarity kernel). The reason for multiple strategies is that no single retrieval method works best for all queries — entity-centric questions benefit from graph traversal, while conceptual questions benefit from semantic search.
+
+#### Survey-Based Retrieval
+
+For broad or panoramic queries, the survey tool (`memex_survey`) decomposes the query into 3-5 focused sub-questions, runs parallel searches, and deduplicates results by source note — reducing token usage compared to manual multi-query iteration. This is particularly useful for questions like "what do you know about X?" or "give me an overview of Y", where a single search query would only capture one facet of the topic.
+
+#### Staleness Flags
+
+Each retrieved memory unit is tagged with a staleness flag — `fresh`, `aging`, `stale`, or `contested` — based on the event date, confidence score, and contradiction state. These flags help consuming agents assess data currency without manual date arithmetic. For example, a fact with an event date over 90 days ago is flagged as `stale`, signaling that the information may need verification.
+
+#### Session Briefing
+
+A token-budgeted session briefing (`memex session`) composes vault summaries, top entities with mental model trend indicators, KV facts, and available vaults into a single markdown document within a configurable token budget (default 2000 tokens). This provides LLM agents with a curated knowledge index at session start, eliminating the need for multiple exploratory queries to orient within a vault.
 
 **Practical example:** The query "What deployment decisions did we make?" triggers:
 - *Temporal* surfaces recent deployment-related facts

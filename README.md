@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/language-Python-blue?style=flat-square" alt="Python" />
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/version-v0.0.39a-green?style=flat-square" alt="v0.0.39a" />
+  <img src="https://img.shields.io/badge/version-v0.1.6a-green?style=flat-square" alt="v0.1.6a" />
   <img src="https://img.shields.io/badge/tests-3,054%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
@@ -74,7 +74,7 @@
 <tr>
 <td valign="top">
 <p>🏦 <strong>Vaults</strong><br>
-<sub>Isolate knowledge by project, team, or topic. Policy-based ACL (reader/writer/admin) with vault-scoped API keys. Cross-vault read access for shared knowledge without write permissions.</sub></p>
+<sub>Isolate knowledge by project, team, or topic. Policy-based ACL (reader/writer/admin) with vault-scoped API keys. Cross-vault read access for shared knowledge. Auto-generated vault summaries with 3-tier regeneration.</sub></p>
 </td>
 <td valign="top">
 <p>☁️ <strong>Cloud-Native Storage &amp; Assets</strong><br>
@@ -82,7 +82,7 @@
 </td>
 <td valign="top">
 <p>🤖 <strong>AI Agent Integration</strong><br>
-<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 35 MCP tools with progressive disclosure, staleness flags on search results, note relation links, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
+<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 35 MCP tools with progressive disclosure, staleness flags on search results, note relation links, survey-based query decomposition, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
 </td>
 </tr>
 <tr>
@@ -182,6 +182,8 @@ A background reflection loop periodically reviews entities with new evidence, sy
 ### Vaults
 
 Isolate knowledge by project, team, or topic. Each vault is a self-contained scope for notes, memories, entities, and mental models. Policy-based access control (reader/writer/admin) with vault-scoped API keys lets you grant fine-grained permissions. Use `read_vault_ids` for cross-vault read access without write permissions.
+
+Each vault includes an auto-generated natural language summary describing topics, themes, and statistics. Summaries regenerate automatically via a 3-tier strategy (on ingestion after cooldown, periodic background refresh, and on-demand via CLI or API). Use `memex vault summary` to view or regenerate a vault's summary.
 
 ### Cloud-native storage and assets
 
@@ -394,10 +396,12 @@ Comprehensive guides and references are available in [`docs/`](./docs/index.md).
 - [Evaluation Report](./docs/reference/evaluation-report.md): LoCoMo benchmark results, retrieval efficiency, and per-question analysis.
 
 ### Explanation
+- [Architecture Overview](./docs/explanation/architecture-overview.md): System layers, package dependency graph, and database schema.
 - [Hindsight Framework](./docs/explanation/hindsight-framework.md): How Memex "thinks" and remembers.
 - [Extraction Pipeline](./docs/explanation/extraction-pipeline.md): Fact extraction and entity resolution.
 - [Retrieval Strategies](./docs/explanation/retrieval-strategies.md): TEMPR — five strategies fused via RRF.
 - [Reflection and Mental Models](./docs/explanation/reflection-and-mental-models.md): Background synthesis of observations.
+- [Inference Model Backends](./docs/explanation/inference-model-backends.md): Embedding and reranking model architecture: built-in ONNX models and LiteLLM provider support.
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
 
 ## Releasing

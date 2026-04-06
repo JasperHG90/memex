@@ -129,6 +129,25 @@ memex vault delete "Project Hindsight"
 
 This is destructive — it removes the vault and all its contents (notes, memories, entities). Use `--force` to skip confirmation in scripts.
 
+### 7. View Vault Summaries
+
+Each vault has an auto-generated natural language summary describing its contents — topics, themes, note count, and key patterns. Summaries help you (and AI agents) quickly understand what a vault contains without browsing individual notes.
+
+```bash
+# View the current vault summary
+memex vault summary
+
+# View summary for a specific vault
+memex vault summary my-project
+
+# Force regeneration
+memex vault summary --regenerate
+```
+
+Summaries regenerate automatically when new notes are ingested (after a cooldown period) and via periodic background refresh. You can also trigger regeneration on demand.
+
+Vault summaries are included in the [session briefing](setup-claude-code.md#session-briefing) that Claude Code receives at session start.
+
 ## Naming Conventions
 
 Vault names should use only alphanumeric characters, hyphens, underscores, and dots. Memex warns if a vault name contains special characters.

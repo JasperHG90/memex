@@ -100,7 +100,34 @@ memex memory lineage memory_unit <unit-uuid>
 
 This shows the full provenance chain: Memory Unit -> Chunk -> Note -> Original File.
 
-### 4. Discover Related Notes
+### 4. Interpret Staleness Flags
+
+Memory search results include a staleness flag on each memory unit indicating data currency:
+
+| Flag | Meaning |
+| :--- | :--- |
+| `fresh` | Recently created or reinforced by new evidence |
+| `aging` | Not seen in recent ingestions but still within normal range |
+| `stale` | No supporting evidence for a significant period — may be outdated |
+| `contested` | Contradicted by newer information — verify before relying on it |
+
+Use these flags to decide whether to trust a result directly or verify it against newer sources. When building answers from memory search results, prefer `fresh` units and flag `stale` or `contested` results for the user.
+
+### 5. Use Survey for Broad Queries
+
+For broad queries like "what do you know about X?" or "give me an overview of Y", running a single memory search may miss relevant angles. The survey tool handles this automatically:
+
+```bash
+memex memory survey "deployment strategy"
+```
+
+**Via MCP:** `memex_survey(query="deployment strategy")`
+
+Survey decomposes the query into sub-questions, runs parallel searches across them, and deduplicates the results. This gives broader coverage than a single search while avoiding redundant results.
+
+Use survey when the user asks panoramic questions. Use direct `memory search` or `note search` when the query is specific and focused.
+
+### 6. Discover Related Notes
 
 When Note Search returns results, each result includes **related notes** — other documents that share specific entities with the result. This helps you discover connections between documents without running additional searches.
 

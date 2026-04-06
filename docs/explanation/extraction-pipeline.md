@@ -156,6 +156,8 @@ For a single ingested note, the pipeline produces:
 | **Embeddings** | Vector representations for semantic search |
 | **Reflection queue entries** | Entities flagged for reflection processing |
 
+When a note includes `user_notes` (user-provided commentary), these are extracted through the same chunking and fact extraction pipeline. Resulting memory units are tagged with `source_context='user_notes'`, enabling filtered retrieval via `memex_search_user_notes`.
+
 ## Idempotency
 
 The pipeline computes a content fingerprint (hash of content + metadata) before processing. If the fingerprint matches an existing note, ingestion is skipped entirely. This makes it safe to re-ingest the same directory multiple times — only new or changed content is processed.
