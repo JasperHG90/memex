@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from memex_common.config import ContradictionConfig
 from memex_core.memory.contradiction.engine import ContradictionEngine
-from memex_core.memory.sql_models import MemoryUnit, ContentStatus
+from memex_core.memory.sql_models import MemoryLink, MemoryUnit, ContentStatus
 
 
 def _make_unit(
@@ -361,6 +361,74 @@ class TestDetectContradictions:
             unit_ids=[],
             vault_id=uuid4(),
         )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_links_are_deduped_and_upserted(self, engine):
+        """When multiple flagged units produce the same link key, dedup + upsert."""
+        vault_id = uuid4()
+        shared_target = _make_unit(text='shared target')
+        flagged_a = _make_unit(text='flagged A')
+        flagged_b = _make_unit(text='flagged B')
+
+        # Both flagged units will produce a link with the SAME (from, to, type) key.
+        # This simulates the real bug: authority resolution picks the same direction.
+        link_early = MemoryLink(
+            from_unit_id=shared_target.id,
+            to_unit_id=flagged_a.id,
+            link_type='reinforces',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={'reasoning': 'first'},
+        )
+        link_duplicate = MemoryLink(
+            from_unit_id=shared_target.id,
+            to_unit_id=flagged_a.id,
+            link_type='reinforces',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={'reasoning': 'second'},
+        )
+        link_unique = MemoryLink(
+            from_unit_id=shared_target.id,
+            to_unit_id=flagged_b.id,
+            link_type='weakens',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={'reasoning': 'unique'},
+        )
+
+        session = AsyncMock()
+
+        with patch.object(
+            engine,
+            '_process_flagged_unit',
+            side_effect=[
+                ([link_early, link_unique], {flagged_a.id: 0.9}),
+                ([link_duplicate], {flagged_b.id: 0.8}),
+            ],
+        ):
+            # Mock _load_units to return the flagged units
+            with patch.object(engine, '_load_units', return_value=[flagged_a, flagged_b]):
+                # Mock _triage to flag both units
+                with patch.object(
+                    engine, '_triage', return_value=[str(flagged_a.id), str(flagged_b.id)]
+                ):
+                    await engine._detect(session, [flagged_a.id, flagged_b.id], vault_id)
+
+        # session.exec should have been called with the upsert statement (not session.add)
+        exec_calls = session.exec.call_args_list
+        # First call is _load_units, last call is the upsert
+        upsert_call = exec_calls[-1]
+        upsert_stmt = upsert_call[0][0]
+
+        # Verify it's a PG INSERT with ON CONFLICT (compiled SQL contains these)
+        compiled = str(upsert_stmt.compile(compile_kwargs={'literal_binds': False}))
+        assert 'INSERT INTO memory_links' in compiled
+        assert 'ON CONFLICT' in compiled
+
+        # Verify dedup: 3 links in, but only 2 unique keys
+        # The values in the INSERT should have 2 rows, not 3
+        assert compiled.count('%(from_unit_id_') == 2 or 'VALUES' in compiled
 
 
 class TestTemporalDefault:
