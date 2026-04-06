@@ -490,6 +490,7 @@ class MemexAPI:
             vault_summary_service=self.vault_summary,
             entity_service=self._entities,
             kv_service=self._kv,
+            vault_service=self._vaults,
         )
 
         self._ingestion = IngestionService(
