@@ -244,8 +244,9 @@ IF query asks about specific content, topics, or document lookup:
   3. READ: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
   4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resources` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
-IF query is broad (e.g. "explain X and how it fits the architecture"):
-  → Run ENTITY EXPLORATION and SEARCH in parallel, then synthesize.
+IF query is broad (e.g. "explain X and how it fits the architecture", "what do you know about X?"):
+  → `memex_survey(query)` — auto-decomposes into sub-questions, parallel search, grouped results.
+  For manual control, use ENTITY EXPLORATION and SEARCH in parallel instead.
 
 IF storing/retrieving structured facts, preferences, or conventions:
   → KV STORE
@@ -2863,7 +2864,7 @@ async def memex_get_vault_summary(
         else:
             vid = await api.resolve_vault_identifier(vault_id)
 
-        summary = await api.vault_summary.get_summary(vid)
+        summary = await api.get_vault_summary(vid)
         if summary is None:
             return {'message': 'No summary exists for this vault. Use regenerate to create one.'}
 

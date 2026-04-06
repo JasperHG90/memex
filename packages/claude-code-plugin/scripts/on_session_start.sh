@@ -67,9 +67,6 @@ if [ -n "$project_id" ]; then
     project_vault=$(memex kv get "project:${project_id}:vault" --value-only 2>/dev/null) || true
 fi
 
-# Persist project vault for other hooks (session end, pre-compact)
-[ -n "$project_vault" ] && echo "$project_vault" > "$STATE_DIR/project_vault"
-
 # --- Build briefing CLI args ---
 briefing_args=(session --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")

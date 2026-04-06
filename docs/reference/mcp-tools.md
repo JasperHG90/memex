@@ -37,10 +37,12 @@ Follow this three-step retrieval workflow:
 
 | Tool | Best for | Returns |
 |------|----------|---------|
-| `memex_memory_search` | Broad exploration ("What do I know about X?"), factual recall ("When did Y happen?") | Individual facts, events, observations across all notes |
+| `memex_survey` | Broad / panoramic queries ("What do you know about X?", "overview of X") | Auto-decomposed sub-questions, parallel search, deduplicated facts grouped by source note |
+| `memex_memory_search` | Factual recall ("When did Y happen?"), exploratory queries | Individual facts, events, observations across all notes |
 | `memex_note_search` | Targeted document retrieval ("Which note describes X?"), deep-diving into a topic | Whole source notes ranked by relevance with snippets |
+| `memex_get_vault_summary` | Vault orientation ("What's in this vault?") | Natural language summary, topics, stats |
 
-When unsure which to use, run both in parallel and combine results (deduplicate by Note ID).
+For broad queries, prefer `memex_survey` — it decomposes, parallelizes, and deduplicates automatically. For targeted searches, run `memex_memory_search` and/or `memex_note_search` in parallel and combine results (deduplicate by Note ID). For vault overviews, run `memex_get_vault_summary` and `memex_survey` in parallel.
 
 ### When to use which reading tool
 
