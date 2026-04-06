@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Memex Claude Code Plugin — SessionStart
-# 1. Fetches vault context, KV facts, recent notes via the memex CLI.
-# 2. Resolves per-project vault from KV store.
-# 3. Injects behavioral instructions via additionalContext.
+# 1. Auto-installs/updates rules file.
+# 2. Fetches token-budgeted session briefing via single CLI call.
+# 3. Resolves per-project vault from KV store.
 #
 # Dependencies: uvx (uv), jq, git (optional)
 set -euo pipefail
@@ -14,12 +14,12 @@ source "$SCRIPT_DIR/resolve_config.sh"
 # --- Dependency check: jq ---
 if ! command -v jq >/dev/null 2>&1; then
     cat <<'NOJQ'
-{"systemMessage": "⚠️ jq is not installed. Memex hooks require jq for reliable JSON handling.\n\nInstall it: apt-get install jq (Debian/Ubuntu), brew install jq (macOS), or see https://jqlang.github.io/jq/download/\n\nMemex MCP tools still work, but hook context injection is degraded."}
+{"systemMessage": "jq is not installed. Memex hooks require jq for reliable JSON handling.\n\nInstall it: apt-get install jq (Debian/Ubuntu), brew install jq (macOS), or see https://jqlang.github.io/jq/download/\n\nMemex MCP tools still work, but hook context injection is degraded."}
 NOJQ
     exit 0
 fi
 
-# --- Auto-install rules file if not present ---
+# --- Auto-install/update rules file ---
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     _project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 else
@@ -28,9 +28,11 @@ fi
 if [ -n "$_project_root" ]; then
     _rules_src="$PLUGIN_ROOT/rules/memex.md"
     _rules_dst="$_project_root/.claude/rules/memex.md"
-    if [ -f "$_rules_src" ] && [ ! -f "$_rules_dst" ]; then
-        mkdir -p "$(dirname "$_rules_dst")" 2>/dev/null || true
-        cp "$_rules_src" "$_rules_dst" 2>/dev/null || true
+    if [ -f "$_rules_src" ]; then
+        if [ ! -f "$_rules_dst" ] || ! diff -q "$_rules_src" "$_rules_dst" >/dev/null 2>&1; then
+            mkdir -p "$(dirname "$_rules_dst")" 2>/dev/null || true
+            cp "$_rules_src" "$_rules_dst" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -39,6 +41,10 @@ STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 mkdir -p "$STATE_DIR"
 rm -f "$STATE_DIR/write_count"
 rm -rf "$STATE_DIR/file_edits"
+
+# --- Generate session note key ---
+SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"
+echo "$SESSION_NOTE_KEY" > "$STATE_DIR/session_note_key"
 
 # --- Derive portable project identifier ---
 project_id=""
@@ -55,78 +61,30 @@ if [ -z "$project_id" ]; then
     esac
 fi
 
-# --- Fetch vaults, recent notes, KV facts, and project vault (parallel) ---
-tmp_vaults=$(mktemp)
-tmp_notes=$(mktemp)
-tmp_kv=$(mktemp)
-tmp_project_vault=$(mktemp)
-trap 'rm -f "$tmp_vaults" "$tmp_notes" "$tmp_kv" "$tmp_project_vault"' EXIT
-
-# Build namespace filter args for KV list
-kv_ns_args=(-n global -n user -n "app:claude-code")
-[ -n "$project_id" ] && kv_ns_args+=(-n "project:${project_id}")
-
-memex vault list --compact > "$tmp_vaults" 2>/dev/null &
-memex note recent --compact > "$tmp_notes" 2>/dev/null &
-memex kv list --json "${kv_ns_args[@]}" > "$tmp_kv" 2>/dev/null &
+# --- Resolve project vault from KV store ---
+project_vault=""
 if [ -n "$project_id" ]; then
-    memex kv get "project:${project_id}:vault" --value-only > "$tmp_project_vault" 2>/dev/null &
+    project_vault=$(memex kv get "project:${project_id}:vault" --value-only 2>/dev/null) || true
 fi
-wait
 
-# --- Implicit health check: vaults always has >= 1 entry ---
-if [ ! -s "$tmp_vaults" ]; then
+# --- Build briefing CLI args ---
+briefing_args=(session briefing --budget 2000)
+[ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
+[ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
+
+# --- Fetch session briefing (single CLI call) ---
+tmp_briefing=$(mktemp)
+trap 'rm -f "$tmp_briefing"' EXIT
+
+if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
     cat <<'EOF'
-{"systemMessage": "⚠️ Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
+{"systemMessage": "Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
 EOF
     exit 0
 fi
 
-# --- Read project vault ---
-project_vault=""
-[ -s "$tmp_project_vault" ] && project_vault=$(cat "$tmp_project_vault")
-
-# --- Build session context ---
-vaults_md="## Memex Vaults
-
-$(cat "$tmp_vaults")"
-
-kv_md=""
-if [ -s "$tmp_kv" ]; then
-    kv_count=$(jq 'length' "$tmp_kv" 2>/dev/null) || kv_count=0
-    if [ "$kv_count" -gt 0 ] 2>/dev/null; then
-        kv_body=$(jq -r '.' "$tmp_kv" 2>/dev/null) || true
-        if [ -n "$kv_body" ] && [ "$kv_body" != "[]" ]; then
-            kv_md="## Memex KV Facts (user preferences & conventions)
-
-${kv_body}"
-        fi
-    fi
-fi
-
-notes_md=""
-[ -s "$tmp_notes" ] && notes_md="## Recent Memex Notes
-
-$(cat "$tmp_notes")"
-
-# --- Assemble context parts ---
-session_context=""
-for part in "$vaults_md" "$kv_md" "$notes_md"; do
-    if [ -n "$part" ]; then
-        if [ -n "$session_context" ]; then
-            session_context="${session_context}
-
-${part}"
-        else
-            session_context="$part"
-        fi
-    fi
-done
-
-# --- Append instructions ---
-INSTRUCTIONS_FILE="${SCRIPT_DIR}/instructions.md"
-instructions=""
-[ -f "$INSTRUCTIONS_FILE" ] && instructions=$(cat "$INSTRUCTIONS_FILE")
+# --- Build additionalContext ---
+briefing_content=$(cat "$tmp_briefing")
 
 if [ -n "$project_vault" ]; then
     vault_instruction="
@@ -140,17 +98,10 @@ else
 No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_write(key=\"project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
 fi
 
-additional_context="${session_context}
+additional_context="${briefing_content}${vault_instruction}"
 
-${instructions}${vault_instruction}"
-
-# --- Build compact status summary ---
-# Count data rows in markdown table (skip header + separator lines starting with |---)
-vault_count=$(grep -c '^|[^-]' "$tmp_vaults" 2>/dev/null || echo "0")
-vault_count=$((vault_count > 1 ? vault_count - 1 : 0))  # subtract column header row
-note_count=$(grep -c '^- ' "$tmp_notes" 2>/dev/null || echo "0")
-kv_count=$([ -s "$tmp_kv" ] && jq 'length' "$tmp_kv" 2>/dev/null || echo "0")
-status="🧠 Memex connected — ${vault_count} vaults, ${note_count} recent notes, ${kv_count} KV facts loaded"
+# --- Build status summary ---
+status="Memex connected"
 [ -n "$project_vault" ] && status="${status} (vault: ${project_vault})"
 
 # --- Output JSON ---
