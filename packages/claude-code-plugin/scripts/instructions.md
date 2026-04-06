@@ -50,7 +50,12 @@ IF query asks about specific content or document lookup:
 - **Read**: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
 - **Assets**: IF `has_assets: true` in page_index/metadata → `memex_list_assets` → `memex_get_resources` for each. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER skip this step.
 
-IF query is broad: run entity exploration AND search in parallel.
+IF query is broad / panoramic ("what do you know about X?", "overview of X"):
+- `memex_survey(query)` — auto-decomposes into sub-questions, parallel search, grouped results.
+- For manual control, use entity exploration AND search in parallel.
+
+IF checking vault overview ("what's in this vault?"):
+- `memex_get_vault_summary(vault_id)` + `memex_survey(query)` in parallel.
 
 IF storing/retrieving structured facts, preferences, or conventions:
 - `memex_kv_write(value, key)` — store a user fact or preference

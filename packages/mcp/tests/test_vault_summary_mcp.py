@@ -33,8 +33,7 @@ def _make_summary(vault_id=None):
 @pytest.mark.asyncio
 async def test_get_vault_summary_returns_data(mock_api, mock_config, mcp_client):
     summary = _make_summary(TEST_VAULT_UUID)
-    mock_api.vault_summary = AsyncMock()
-    mock_api.vault_summary.get_summary.return_value = summary
+    mock_api.get_vault_summary = AsyncMock(return_value=summary)
 
     result = await mcp_client.call_tool('memex_get_vault_summary', {})
     data = parse_tool_result(result)
@@ -48,8 +47,7 @@ async def test_get_vault_summary_returns_data(mock_api, mock_config, mcp_client)
 
 @pytest.mark.asyncio
 async def test_get_vault_summary_no_summary(mock_api, mock_config, mcp_client):
-    mock_api.vault_summary = AsyncMock()
-    mock_api.vault_summary.get_summary.return_value = None
+    mock_api.get_vault_summary = AsyncMock(return_value=None)
 
     result = await mcp_client.call_tool('memex_get_vault_summary', {})
     data = parse_tool_result(result)
@@ -62,8 +60,7 @@ async def test_get_vault_summary_no_summary(mock_api, mock_config, mcp_client):
 async def test_get_vault_summary_with_vault_id(mock_api, mock_config, mcp_client):
     vid = uuid4()
     summary = _make_summary(vid)
-    mock_api.vault_summary = AsyncMock()
-    mock_api.vault_summary.get_summary.return_value = summary
+    mock_api.get_vault_summary = AsyncMock(return_value=summary)
     mock_api.resolve_vault_identifier.return_value = vid
 
     result = await mcp_client.call_tool('memex_get_vault_summary', {'vault_id': str(vid)})
@@ -74,8 +71,7 @@ async def test_get_vault_summary_with_vault_id(mock_api, mock_config, mcp_client
 
 @pytest.mark.asyncio
 async def test_get_vault_summary_error(mock_api, mock_config, mcp_client):
-    mock_api.vault_summary = AsyncMock()
-    mock_api.vault_summary.get_summary.side_effect = RuntimeError('DB error')
+    mock_api.get_vault_summary = AsyncMock(side_effect=RuntimeError('DB error'))
 
     with pytest.raises(ToolError, match='DB error'):
         await mcp_client.call_tool('memex_get_vault_summary', {})
