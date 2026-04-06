@@ -150,6 +150,11 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 - **Use templates for consistency**: Call `memex_get_template` before saving structured notes (ADRs, tech briefs).
 - **Check the active vault**: Call `memex_list_vaults` before writing to confirm the target vault (`memex_active_vault` is deprecated).
 - **Prefer page index over full reads**: Use `memex_get_page_indices` then `memex_get_nodes` instead of `memex_read_note` for large notes.
+- **Use `include_seen=false` on follow-up searches**: The server tracks returned results per session. Setting `include_seen=false` compresses already-seen results to just an ID, saving significant tokens in iterative workflows.
+- **Check overlaps before adding notes**: `memex_add_note` returns `overlapping_notes` when similar content exists. Update or supersede the existing note instead of creating duplicates.
+- **Set `token_budget` on broad searches**: Cap retrieval cost on `memex_memory_search` and `memex_survey` when you need a quick answer, not exhaustive results.
+- **Skip `memex_get_notes_metadata` after `memex_note_search`**: Note metadata is already inline in note search results. Only call it after `memex_memory_search`.
+- **Use `memex_survey` for panoramic queries**: It decomposes, parallelizes, and deduplicates automatically — fewer tokens than manual multi-search.
 
 ## See Also
 
