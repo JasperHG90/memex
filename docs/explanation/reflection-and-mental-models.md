@@ -207,6 +207,24 @@ server:
 
 A common pattern is to use a cheaper model for extraction and a stronger model for reflection, since reflection requires more sophisticated reasoning.
 
+## Vault Summaries
+
+Vault summaries are auto-generated natural language descriptions of a vault's contents — topics, themes, note count, entity count, and key patterns. They complement mental models by providing a high-level orientation for agents encountering a vault for the first time.
+
+### Regeneration Strategy
+
+Summaries use a 3-tier regeneration strategy:
+
+1. **Ingestion-triggered**: After a note is ingested, the summary is marked stale. If the cooldown period has elapsed, regeneration runs in the background.
+2. **Periodic background**: A scheduled task checks for stale summaries and regenerates them.
+3. **On-demand**: Users or agents can trigger regeneration via `memex vault summary --regenerate` or the REST API.
+
+Regeneration uses the full set of notes and entities in the vault to produce a fresh summary via an LLM call. Summaries are versioned — each regeneration increments the version number.
+
+### Session Briefing
+
+Vault summaries feed into the token-budgeted **session briefing** (`memex session`), which composes a curated knowledge index for LLM agents at session start. The briefing includes the vault summary, top entities with mental model trend indicators (new/stable/strengthening/weakening/stale), KV facts, and available vaults — all within a configurable token budget (default 2000 tokens).
+
 ## See Also
 
 * [About the Hindsight Framework](hindsight-framework.md) — the overall architecture

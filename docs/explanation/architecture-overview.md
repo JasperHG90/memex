@@ -27,7 +27,7 @@ graph TD
         IS["Ingestion"]
         SS["Search"]
         RS["Reflection"]
-        OS["Entity · Note · KV<br/>Lineage · Vault<br/>Stats · Audit"]
+        OS["Entity · Note · KV<br/>Lineage · Vault · VaultSummary<br/>Stats · Audit"]
     end
 
     SVC --> ENG
@@ -47,6 +47,10 @@ graph TD
         FS["FileStore<br/>Local / S3 / GCS<br/>fsspec backend<br/>LRU caching"]
     end
 ```
+
+### Service Layer
+
+The service layer mediates between the MemexAPI facade and the underlying engines and storage. Key services include: Ingestion, Search, Reflection, Entity, Note, KV, Lineage, Vault, Stats, Audit, and **VaultSummaryService**. The VaultSummaryService generates and regenerates natural-language vault summaries via a 3-tier strategy (ingestion-triggered, periodic background, on-demand). See [About Reflection and Mental Models](reflection-and-mental-models.md#vault-summaries) for details on the regeneration strategy.
 
 ## Package Dependency Graph
 
@@ -97,6 +101,8 @@ erDiagram
 
     notes ||--o{ audit_log : tracked
 
+    vaults ||--o| vault_summaries : "summarized by"
+
     notes {
         uuid id PK
         string title
@@ -144,6 +150,14 @@ erDiagram
         vector embedding
         tsvector search_tsv
     }
+    vault_summaries {
+        uuid id PK
+        uuid vault_id FK
+        text summary
+        int version
+        int token_count
+        timestamp created_at
+    }
 ```
 
 ### Index Strategy
@@ -169,6 +183,10 @@ Memory links (`memory_links.link_type`) encode relationships between memory unit
 | `weakens` | X undermines Y |
 | `enables` | X makes Y possible |
 | `prevents` | X blocks Y |
+
+### Staleness Flags
+
+After retrieval and fusion, each returned memory unit is assigned a staleness flag — `fresh`, `aging`, `stale`, or `contested` — based on its event date, confidence score, and contradiction state. These flags are informational metadata that help consuming agents assess data currency without manual date arithmetic. See [About Retrieval Strategies](retrieval-strategies.md) for the full flag definitions.
 
 ## See Also
 

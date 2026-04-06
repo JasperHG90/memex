@@ -192,6 +192,27 @@ When two candidates have identical MMR scores, a temporal tiebreaker (ε=0.01 ×
 
 The top results can optionally pass through a cross-encoder reranker for more precise scoring. The reranker evaluates each (query, fact) pair directly, which is more accurate than embedding similarity but too slow to run on all candidates.
 
+### Staleness Flags
+
+After fusion and diversity filtering, each returned memory unit is assigned a staleness flag based on its event date and confidence:
+
+| Flag | Meaning |
+|---|---|
+| `fresh` | Event date within 30 days, or high-confidence fact with no event date |
+| `aging` | Event date 30-90 days ago |
+| `stale` | Event date over 90 days ago |
+| `contested` | Fact has been contradicted by a newer source |
+
+Staleness flags are informational — they do not affect ranking. They help consuming agents decide whether to trust or verify a result.
+
+### Survey: Query Decomposition
+
+For broad queries ("what do you know about X?", "overview of Y"), the survey tool decomposes the input into 3-5 focused sub-questions using an LLM, runs parallel `memory_search` calls, and deduplicates results across sub-queries by memory unit ID. Results are grouped by source note. This automates the multi-query pattern that agents would otherwise perform manually, with built-in deduplication and token budgeting.
+
+### Source Context Filtering
+
+All retrieval strategies support an optional `source_context` filter (e.g., `'user_notes'`). When set, only memory units with matching source context are returned, enabling scoped searches like "what have I annotated about X?" via `memex_search_user_notes`.
+
 ## Debug Mode
 
 When `debug=True` is passed to a search request, the retrieval engine logs detailed information about each strategy's contribution:
