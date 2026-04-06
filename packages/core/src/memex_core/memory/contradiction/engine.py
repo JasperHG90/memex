@@ -8,6 +8,7 @@ from uuid import UUID
 
 import dspy
 from sqlalchemy import update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -97,8 +98,32 @@ class ContradictionEngine:
                 all_links.extend(links)
                 confidence_updates.update(updates)
 
-            for link in all_links:
-                session.add(link)
+            if all_links:
+                deduped: dict[tuple[UUID, UUID, str], MemoryLink] = {}
+                for link in all_links:
+                    deduped[(link.from_unit_id, link.to_unit_id, link.link_type)] = link
+                rows = [
+                    {
+                        'from_unit_id': lk.from_unit_id,
+                        'to_unit_id': lk.to_unit_id,
+                        'vault_id': lk.vault_id,
+                        'link_type': lk.link_type,
+                        'entity_id': lk.entity_id,
+                        'link_metadata': lk.link_metadata,
+                        'weight': lk.weight,
+                    }
+                    for lk in deduped.values()
+                ]
+                insert_stmt = pg_insert(MemoryLink).values(rows)
+                upsert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=['from_unit_id', 'to_unit_id', 'link_type'],
+                    set_={
+                        'weight': insert_stmt.excluded.weight,
+                        'link_metadata': insert_stmt.excluded.link_metadata,
+                    },
+                )
+                await session.exec(upsert_stmt)  # type: ignore[arg-type]
+                all_links = list(deduped.values())
 
             for unit_id, new_confidence in confidence_updates.items():
                 stmt = (
