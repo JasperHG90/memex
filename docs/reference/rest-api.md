@@ -1471,6 +1471,35 @@ Returns a `VaultSummaryDTO`.
 
 ---
 
+### `GET /api/v1/vaults/{vault_id}/session-briefing`
+
+Generate a token-budgeted session briefing for LLM agents. Composes vault summary, top entities with mental model trends, KV facts, and available vaults into a single markdown document within the specified token budget.
+
+#### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `budget` | int | `2000` | Token budget. Must be 1000 or 2000. |
+| `project_id` | string | `null` | Optional project ID for KV namespace scoping. |
+
+#### Response (200)
+
+```json
+{
+  "briefing": "# Session Briefing\n42 notes | 87 entities | Updated 2026-04-04\n\n## Key-Value Facts\n...",
+  "vault_id": "uuid",
+  "budget": 2000
+}
+```
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `422` | Invalid budget value (must be 1000 or 2000). |
+
+---
+
 ## Survey
 
 ### `POST /api/v1/survey`

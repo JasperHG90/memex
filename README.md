@@ -82,7 +82,7 @@
 </td>
 <td valign="top">
 <p>🤖 <strong>AI Agent Integration</strong><br>
-<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 31 MCP tools with progressive disclosure, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
+<sub>First-class MCP support for Claude Code, Claude Desktop, and Cursor. 35 MCP tools with progressive disclosure, staleness flags on search results, note relation links, stdio/HTTP/SSE transports, slim Docker image decoupled from core.</sub></p>
 </td>
 </tr>
 <tr>
@@ -120,7 +120,7 @@
 </td>
 <td valign="top">
 <p>🧩 <strong>Claude Code Plugin</strong><br>
-<sub>One-step persistent memory across all projects. /remember and /recall skills, session lifecycle hooks, behavioral instructions, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
+<sub>One-step persistent memory across all projects. Token-budgeted session briefing, /remember, /recall, and /retro skills, data-driven session hooks, progressive session notes, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
 </td>
 <td valign="top">
 <p>📋 <strong>Audit Logging</strong><br>
@@ -171,9 +171,9 @@ Long documents are split into a structured table of contents with section-level 
 
 When you update a note (via `note_key`), Memex diffs the content against the previous version and only re-extracts changed blocks. Unchanged facts, entities, and embeddings are preserved — saving LLM calls and keeping ingestion fast for living documents.
 
-### Contradiction detection
+### Contradiction detection and note relations
 
-New facts are automatically triaged for corrections and updates. When a newer note contradicts or supersedes an older one, confidence scores are adjusted and supersession links are recorded. Retrieval naturally favors the most current information without manual cleanup.
+New facts are automatically triaged for corrections and updates. When a newer note contradicts or supersedes an older one, confidence scores are adjusted and supersession links are recorded. Retrieval naturally favors the most current information without manual cleanup. Search results include inline `related_notes` (notes sharing entities) and typed `links` (contradicts, reinforces, temporal, causes) for relationship discovery without additional queries.
 
 ### Reflection and mental models
 
@@ -196,7 +196,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 31 MCP tools with progressive disclosure (3-stage tool discovery by default) cover the full API surface. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
+First-class support for Claude Code, Claude Desktop, Cursor, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects, or use `memex setup claude-code` for per-project configuration. 35 MCP tools with progressive disclosure (3-stage tool discovery by default) cover the full API surface. Search results include staleness flags (fresh/aging/stale/contested) and inline note relation links for relationship discovery. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
 
 ### REST API and webhooks
 
@@ -230,7 +230,7 @@ A lightweight namespaced key-value store for structured facts, preferences, and 
 
 ### Claude Code plugin
 
-Give Claude Code persistent memory across all projects with a single plugin install. The plugin bundles the Memex MCP server, `/remember` and `/recall` slash commands, session lifecycle hooks (start, compaction, commit), and behavioral instructions that teach the agent when and how to capture knowledge. No per-project configuration needed.
+Give Claude Code persistent memory across all projects with a single plugin install. The plugin bundles the Memex MCP server, `/remember`, `/recall`, and `/retro` slash commands, and session lifecycle hooks with intelligent context injection. A token-budgeted session briefing (`memex session`) replaces raw data dumps with a curated knowledge index — KV facts, vault summary, top entities with trend indicators, and available vaults — all within a configurable 1000 or 2000 token budget. Data-driven pre-compact nudges reference actual session stats (write counts, edit spirals, commits), and a progressive session note persists context across compaction boundaries via `note_key`. No per-project configuration needed.
 
 ### Audit logging
 
@@ -313,7 +313,7 @@ claude plugin install memex@memex
 
 Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
 
-The plugin provides `/remember` and `/recall` slash commands, session lifecycle hooks, behavioral instructions, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+The plugin provides `/remember`, `/recall`, and `/retro` slash commands, token-budgeted session briefing, data-driven lifecycle hooks, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
 
 #### Updating the claude code plugin
 
