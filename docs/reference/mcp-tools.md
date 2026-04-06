@@ -74,7 +74,14 @@ Search memory units (facts, events, observations) via multi-strategy TEMPR retri
 | `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
 | `source_context` | string | No | - | Filter by source context (e.g. `"user_notes"` to search only user annotations). |
 
-Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates. Each memory unit includes a `links` field containing its memory links (causal, temporal, semantic, etc.) to other units.
+Returns formatted text with Unit IDs, Note IDs (with titles), scores, and dates. Each memory unit includes a `links` field containing its memory links (causal, temporal, semantic, etc.) to other units and a `staleness` field indicating data freshness:
+
+- **`fresh`** — Less than 7 days old with high confidence (>= 0.7). Safe to use as-is.
+- **`aging`** — 7-30 days old. Still relevant but consider verifying for fast-changing topics.
+- **`stale`** — Over 30 days old or low confidence (< 0.5). Verify before asserting as fact.
+- **`contested`** — A contradicting or superseding memory unit exists. Check the `links` field for the contradiction.
+
+When results are empty, a system hint is returned suggesting the agent save knowledge about the topic if learned during the session.
 
 All vault parameters are optional and default to the resolved config values (`config.write_vault` for writes, `config.read_vaults` for reads).
 

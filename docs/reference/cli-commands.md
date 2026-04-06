@@ -1546,6 +1546,39 @@ memex vault summary my-project
 
 ---
 
+## `session`
+
+Session management commands for LLM agent integration.
+
+### `session`
+
+```
+memex session [OPTIONS]
+```
+
+Generate a token-budgeted session briefing for LLM agents. Outputs raw markdown to stdout for consumption by hooks and scripts.
+
+The briefing includes (in priority order): KV facts, vault summary with topics, top entities with mental model trends, available vaults, and project vault binding. Content is trimmed via priority-based overflow degradation to fit within the specified token budget.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--vault` | `-v` | TEXT | Active vault | Vault name or UUID to generate briefing for. |
+| `--budget` | `-b` | INT | 2000 | Token budget. Must be 1000 or 2000. At 1000: compact mode (topics only, no prose, no trends). |
+| `--project-id` | `-p` | TEXT | None | Project ID for KV namespace scoping. |
+
+#### Examples
+
+```bash
+memex session                         # Standard 2000-token briefing
+memex session --budget 1000           # Compact 1000-token briefing
+memex session --vault research        # Briefing for a specific vault
+memex session -b 2000 -p github.com/org/repo  # With project scoping
+```
+
+---
+
 ## `server`
 
 Manage the Memex Core API server.
