@@ -14,6 +14,7 @@ from uuid import UUID
 from memex_core.services.entities import EntityService, EntityWithMetadata
 from memex_core.services.kv import KVService
 from memex_core.services.vault_summary import VaultSummaryService
+from memex_core.services.vaults import VaultService
 
 logger = logging.getLogger('memex.core.services.session_briefing')
 
@@ -67,10 +68,12 @@ class SessionBriefingService:
         vault_summary_service: VaultSummaryService,
         entity_service: EntityService,
         kv_service: KVService,
+        vault_service: VaultService | None = None,
     ) -> None:
         self._vault_summary = vault_summary_service
         self._entities = entity_service
         self._kv = kv_service
+        self._vaults = vault_service
 
     async def generate(
         self,
@@ -88,9 +91,11 @@ class SessionBriefingService:
         Returns:
             A markdown-formatted briefing string.
         """
-        summary, entities, kv_entries = await self._fetch_all(vault_id, project_id)
+        summary, entities, kv_entries, vaults = await self._fetch_all(vault_id, project_id)
 
-        sections = self._build_sections(summary, entities, kv_entries, vault_id, project_id, budget)
+        sections = self._build_sections(
+            summary, entities, kv_entries, vaults, vault_id, project_id, budget
+        )
 
         assembled = self._assemble(sections)
         tokens = _estimate_tokens(assembled)
@@ -112,7 +117,7 @@ class SessionBriefingService:
         self,
         vault_id: UUID,
         project_id: str | None,
-    ) -> tuple[Any, list[EntityWithMetadata], list[Any]]:
+    ) -> tuple[Any, list[EntityWithMetadata], list[Any], list[Any]]:
         """Fetch all data sources in parallel."""
         summary_coro = self._vault_summary.get_summary(vault_id)
         entities_coro = _collect_async_gen(
@@ -120,14 +125,26 @@ class SessionBriefingService:
         )
         kv_coro = self._kv.list_entries(namespaces=_build_kv_namespaces(project_id))
 
-        summary, entities, kv_entries = await asyncio.gather(summary_coro, entities_coro, kv_coro)
-        return summary, entities, kv_entries
+        if self._vaults:
+            vaults_coro = self._vaults.list_vaults_with_counts()
+        else:
+
+            async def _empty() -> list[Any]:
+                return []
+
+            vaults_coro = _empty()
+
+        summary, entities, kv_entries, vaults = await asyncio.gather(
+            summary_coro, entities_coro, kv_coro, vaults_coro
+        )
+        return summary, entities, kv_entries, vaults
 
     def _build_sections(
         self,
         summary: Any,
         entities: list[EntityWithMetadata],
         kv_entries: list[Any],
+        vaults: list[Any],
         vault_id: UUID,
         project_id: str | None,
         budget: int,
@@ -154,7 +171,10 @@ class SessionBriefingService:
         include_trends = budget >= 2000
         sections.append(('entities', self._build_entities(entities[:entity_limit], include_trends)))
 
-        # 5. Vault binding (always included)
+        # 5. Available vaults (priority 4)
+        sections.append(('vaults', self._build_vaults_section(vaults, vault_id)))
+
+        # 6. Vault binding (always included)
         sections.append(('binding', self._build_vault_binding(vault_id, project_id)))
 
         return sections
@@ -242,6 +262,27 @@ class SessionBriefingService:
 
         return '\n'.join(lines) + '\n'
 
+    def _build_vaults_section(self, vaults: list[Any], active_vault_id: UUID) -> str:
+        """Build the available vaults section."""
+        if not vaults:
+            return ''
+        lines = ['## Available Vaults\n']
+        for v in vaults:
+            vault = v.get('vault', v) if isinstance(v, dict) else v
+            name = getattr(vault, 'name', str(vault))
+            desc = getattr(vault, 'description', None) or ''
+            if len(desc) > 60:
+                desc = desc[:57] + '...'
+            note_count = (
+                v.get('note_count', 0) if isinstance(v, dict) else getattr(vault, 'note_count', 0)
+            )
+            active = ' **(active)**' if getattr(vault, 'id', None) == active_vault_id else ''
+            if desc:
+                lines.append(f'- **{name}** — {desc} ({note_count} notes){active}')
+            else:
+                lines.append(f'- **{name}** ({note_count} notes){active}')
+        return '\n'.join(lines) + '\n'
+
     def _build_vault_binding(self, vault_id: UUID, project_id: str | None) -> str:
         """Build the vault binding footer."""
         parts = [f'\n---\n*Vault: {vault_id}*']
@@ -311,6 +352,11 @@ class SessionBriefingService:
             kv_entries = filtered
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
+
+        # Step 5: Drop vaults section entirely
+        sections = self._replace_section(sections, 'vaults', '')
+        if _estimate_tokens(self._assemble(sections)) <= budget:
+            return self._assemble(sections)
 
         return self._assemble(sections)  # Best effort
 

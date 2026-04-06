@@ -101,10 +101,21 @@ async def _mock_entity_gen(*entities):
         yield e
 
 
+def _mock_vault(name: str, description: str = '', note_count: int = 0, vault_id=None):
+    """Create a mock vault dict matching VaultService.list_vaults_with_counts() output."""
+    vault = MagicMock()
+    vault.name = name
+    vault.description = description
+    vault.id = vault_id or uuid4()
+    vault.note_count = note_count
+    return {'vault': vault, 'note_count': note_count}
+
+
 def _make_service(
     summary=None,
     entities=None,
     kv_entries=None,
+    vaults=None,
 ) -> SessionBriefingService:
     """Create a SessionBriefingService with mocked dependencies."""
     vault_summary_svc = AsyncMock()
@@ -117,10 +128,14 @@ def _make_service(
     kv_svc = AsyncMock()
     kv_svc.list_entries = AsyncMock(return_value=kv_entries or [])
 
+    vault_svc = AsyncMock()
+    vault_svc.list_vaults_with_counts = AsyncMock(return_value=vaults or [])
+
     return SessionBriefingService(
         vault_summary_service=vault_summary_svc,
         entity_service=entity_svc,
         kv_service=kv_svc,
+        vault_service=vault_svc,
     )
 
 
@@ -713,3 +728,59 @@ class TestOverflowSteps:
         # No trend arrows should appear (★ ↑ ↓ → ⚠)
         assert '\u2605' not in result  # ★
         assert '\u2191' not in result  # ↑
+
+
+# ---------------------------------------------------------------------------
+# Vaults section
+# ---------------------------------------------------------------------------
+
+VAULT_ID = uuid4()
+
+
+class TestVaultsSection:
+    @pytest.mark.asyncio
+    async def test_vaults_section_appears(self):
+        vaults = [
+            _mock_vault('global', 'Default vault', 42, vault_id=VAULT_ID),
+            _mock_vault('memex', 'Memex project', 156),
+        ]
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            vaults=vaults,
+        )
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '## Available Vaults' in result
+        assert '**global**' in result
+        assert '**memex**' in result
+
+    @pytest.mark.asyncio
+    async def test_vaults_shows_note_count(self):
+        vaults = [_mock_vault('research', 'Research vault', 99)]
+        svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '99 notes' in result
+
+    @pytest.mark.asyncio
+    async def test_vaults_marks_active(self):
+        vaults = [
+            _mock_vault('global', 'Default', 10, vault_id=VAULT_ID),
+            _mock_vault('other', 'Other vault', 5),
+        ]
+        svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '**(active)**' in result
+
+    @pytest.mark.asyncio
+    async def test_empty_vaults_no_section(self):
+        svc = _make_service(summary=_make_vault_summary(), vaults=[])
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '## Available Vaults' not in result
+
+    @pytest.mark.asyncio
+    async def test_vaults_description_truncated(self):
+        long_desc = 'A' * 100
+        vaults = [_mock_vault('test', long_desc, 5)]
+        svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '...' in result
+        assert long_desc not in result
