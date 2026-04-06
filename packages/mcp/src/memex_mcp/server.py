@@ -1556,10 +1556,6 @@ async def memex_note_search(
                     )
                     for lnk in getattr(doc, 'links', [])
                 ]
-                # Remove self-links and keep only the top 5 by weight
-                links = [lnk for lnk in links if lnk.note_id != doc.note_id]
-                links.sort(key=lambda lk: lk.weight, reverse=True)
-                links = links[:5]
                 output.append(
                     McpNoteSearchResult(
                         note_id=doc.note_id,
