@@ -25,15 +25,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'notes',
-        sa.Column('summary_version_incorporated', sa.Integer(), nullable=True),
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            'SELECT 1 FROM information_schema.columns '
+            "WHERE table_name = 'notes' AND column_name = 'summary_version_incorporated'"
+        )
     )
-    op.create_index(
-        'idx_notes_summary_version',
-        'notes',
-        ['vault_id', 'summary_version_incorporated'],
+    if not result.fetchone():
+        op.add_column(
+            'notes',
+            sa.Column('summary_version_incorporated', sa.Integer(), nullable=True),
+        )
+    result = conn.execute(
+        sa.text("SELECT 1 FROM pg_indexes WHERE indexname = 'idx_notes_summary_version'")
     )
+    if not result.fetchone():
+        op.create_index(
+            'idx_notes_summary_version',
+            'notes',
+            ['vault_id', 'summary_version_incorporated'],
+        )
 
     # Backfill: mark active notes as incorporated at their vault's current
     # summary version.  Notes in vaults without a summary stay NULL (correct).
