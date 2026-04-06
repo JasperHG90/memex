@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-from memex_core.services.entities import EntityWithMetadata
+from memex_core.memory.sql_models import MentalModel
 from memex_core.services.session_briefing import (
     SessionBriefingService,
+    _compute_importance,
     _estimate_tokens,
     _sort_observations,
     _build_kv_namespaces,
@@ -54,22 +55,28 @@ def _make_vault_summary(**overrides):
     return mock
 
 
-def _make_entity(
+def _make_mental_model(
     name: str,
-    entity_type: str = 'Technology',
-    mention_count: int = 10,
+    category: str = 'Technology',
+    observation_count: int = 5,
+    description: str = '',
     observations: list[dict] | None = None,
-) -> EntityWithMetadata:
-    """Create a mock EntityWithMetadata."""
-    entity = MagicMock()
-    entity.canonical_name = name
-    entity.entity_type = entity_type
-    entity.mention_count = mention_count
-    return EntityWithMetadata(
-        entity=entity,
-        metadata={'description': f'{name} description'},
-        observations=observations or [],
-    )
+    last_refreshed: datetime | None = None,
+    vault_id=None,
+) -> MentalModel:
+    """Create a mock MentalModel."""
+    mm = MagicMock(spec=MentalModel)
+    mm.name = name
+    mm.vault_id = vault_id or uuid4()
+    mm.entity_metadata = {
+        'description': description or f'{name} description',
+        'category': category,
+        'observation_count': observation_count,
+    }
+    mm.observations = observations or []
+    mm.last_refreshed = last_refreshed or datetime(2026, 4, 1, tzinfo=timezone.utc)
+    mm.version = 1
+    return mm
 
 
 def _make_kv_entry(key: str, value: str) -> MagicMock:
@@ -81,9 +88,9 @@ def _make_kv_entry(key: str, value: str) -> MagicMock:
     return entry
 
 
-def _make_entities(count: int, with_observations: bool = False) -> list[EntityWithMetadata]:
-    """Create a list of mock entities."""
-    entities = []
+def _make_mental_models(count: int, with_observations: bool = False) -> list[MentalModel]:
+    """Create a list of mock mental models."""
+    models = []
     for i in range(count):
         obs = []
         if with_observations:
@@ -91,14 +98,14 @@ def _make_entities(count: int, with_observations: bool = False) -> list[EntityWi
                 {'title': f'Observation {i}a', 'trend': 'new', 'content': f'Content {i}a'},
                 {'title': f'Observation {i}b', 'trend': 'stable', 'content': f'Content {i}b'},
             ]
-        entities.append(_make_entity(f'Entity{i}', mention_count=100 - i, observations=obs))
-    return entities
-
-
-async def _mock_entity_gen(*entities):
-    """Create an async generator that yields entities."""
-    for e in entities:
-        yield e
+        models.append(
+            _make_mental_model(
+                f'Entity{i}',
+                observation_count=100 - i,
+                observations=obs,
+            )
+        )
+    return models
 
 
 def _mock_vault(name: str, description: str = '', note_count: int = 0, vault_id=None):
@@ -111,9 +118,26 @@ def _mock_vault(name: str, description: str = '', note_count: int = 0, vault_id=
     return {'vault': vault, 'note_count': note_count}
 
 
+def _mock_metastore(mental_models: list[MentalModel] | None = None):
+    """Create a mock metastore that returns mental models from session.exec()."""
+    metastore = MagicMock()
+    session = AsyncMock()
+
+    result_mock = MagicMock()
+    result_mock.all.return_value = mental_models or []
+    session.exec = AsyncMock(return_value=result_mock)
+
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    metastore.session.return_value = ctx
+
+    return metastore
+
+
 def _make_service(
     summary=None,
-    entities=None,
+    mental_models=None,
     kv_entries=None,
     vaults=None,
 ) -> SessionBriefingService:
@@ -121,9 +145,7 @@ def _make_service(
     vault_summary_svc = AsyncMock()
     vault_summary_svc.get_summary = AsyncMock(return_value=summary)
 
-    entity_svc = MagicMock()
-    ents = entities or []
-    entity_svc.list_entities_ranked = lambda **kwargs: _mock_entity_gen(*ents)
+    metastore = _mock_metastore(mental_models or [])
 
     kv_svc = AsyncMock()
     kv_svc.list_entries = AsyncMock(return_value=kv_entries or [])
@@ -133,7 +155,7 @@ def _make_service(
 
     return SessionBriefingService(
         vault_summary_service=vault_summary_svc,
-        entity_service=entity_svc,
+        metastore=metastore,
         kv_service=kv_svc,
         vault_service=vault_svc,
     )
@@ -154,6 +176,49 @@ class TestTokenEstimation:
     def test_realistic_text(self):
         text = 'This is a realistic piece of text for token estimation.'
         assert _estimate_tokens(text) == len(text) // 4
+
+
+# ---------------------------------------------------------------------------
+# Importance scoring
+# ---------------------------------------------------------------------------
+
+
+class TestImportanceScoring:
+    def test_new_observations_score_highest(self):
+        """Mental models with 'new' observations rank higher."""
+        mm_new = _make_mental_model(
+            'NewEntity',
+            observations=[{'trend': 'new', 'title': 'x'}],
+        )
+        mm_stable = _make_mental_model(
+            'StableEntity',
+            observations=[{'trend': 'stable', 'title': 'x'}],
+        )
+        assert _compute_importance(mm_new) > _compute_importance(mm_stable)
+
+    def test_stale_observations_score_zero(self):
+        """Stale observations contribute nothing to importance."""
+        mm = _make_mental_model(
+            'StaleEntity',
+            observations=[{'trend': 'stale', 'title': 'x'}],
+        )
+        assert _compute_importance(mm) == 0.0
+
+    def test_mixed_trends(self):
+        """Weighted sum of mixed trends."""
+        mm = _make_mental_model(
+            'MixedEntity',
+            observations=[
+                {'trend': 'new', 'title': 'a'},  # 3.0
+                {'trend': 'stable', 'title': 'b'},  # 0.5
+                {'trend': 'stale', 'title': 'c'},  # 0.0
+            ],
+        )
+        assert _compute_importance(mm) == 3.5
+
+    def test_empty_observations(self):
+        mm = _make_mental_model('Empty', observations=[])
+        assert _compute_importance(mm) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +277,7 @@ class TestSessionBriefingGenerate:
         """Output tokens <= 2000 for standard budget."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:llm_provider', 'anthropic'),
                 _make_kv_entry('user:comm_style', 'terse'),
@@ -227,7 +292,7 @@ class TestSessionBriefingGenerate:
         """Output tokens <= 1000 for compact budget."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:llm_provider', 'anthropic'),
                 _make_kv_entry('user:comm_style', 'terse'),
@@ -242,7 +307,7 @@ class TestSessionBriefingGenerate:
         """Sections appear in order: header, KV, vault summary, entities, binding."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(3, with_observations=True),
+            mental_models=_make_mental_models(3, with_observations=True),
             kv_entries=[_make_kv_entry('global:test', 'value')],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -260,7 +325,7 @@ class TestSessionBriefingGenerate:
         """At 2000 budget: prose + topic descriptions + trend indicators present."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(3, with_observations=True),
+            mental_models=_make_mental_models(3, with_observations=True),
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -280,7 +345,7 @@ class TestSessionBriefingGenerate:
         """At 1000 budget: no prose, no trends, topics compact."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(3, with_observations=True),
+            mental_models=_make_mental_models(3, with_observations=True),
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=1000)
@@ -296,16 +361,16 @@ class TestSessionBriefingGenerate:
         assert '\u2605' not in result  # ★
 
     @pytest.mark.asyncio
-    async def test_1000_limits_entities_to_5(self):
-        """At 1000 budget: max 5 entities."""
+    async def test_1000_limits_models_to_5(self):
+        """At 1000 budget: max 5 mental models."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(10),
+            mental_models=_make_mental_models(10),
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=1000)
 
-        # Count entity lines (entities named Entity0..Entity9)
+        # Count entity lines (models named Entity0..Entity9)
         entity_section = (
             result.split('## Top Entities')[-1].split('---')[0]
             if '## Top Entities' in result
@@ -319,7 +384,7 @@ class TestSessionBriefingGenerate:
     @pytest.mark.asyncio
     async def test_empty_vault(self):
         """Empty vault produces valid minimal briefing."""
-        svc = _make_service(summary=None, entities=[], kv_entries=[])
+        svc = _make_service(summary=None, mental_models=[], kv_entries=[])
         result = await svc.generate(uuid4(), budget=2000)
 
         assert '# Session Briefing' in result
@@ -330,19 +395,18 @@ class TestSessionBriefingGenerate:
 
     @pytest.mark.asyncio
     async def test_parallel_fetch(self):
-        """All three services are called during generate."""
+        """All services are called during generate."""
         vault_summary_svc = AsyncMock()
         vault_summary_svc.get_summary = AsyncMock(return_value=None)
 
-        entity_svc = MagicMock()
-        entity_svc.list_entities_ranked = lambda **kwargs: _mock_entity_gen()
+        metastore = _mock_metastore([])
 
         kv_svc = AsyncMock()
         kv_svc.list_entries = AsyncMock(return_value=[])
 
         svc = SessionBriefingService(
             vault_summary_service=vault_summary_svc,
-            entity_service=entity_svc,
+            metastore=metastore,
             kv_service=kv_svc,
         )
         vault_id = uuid4()
@@ -354,15 +418,15 @@ class TestSessionBriefingGenerate:
     @pytest.mark.asyncio
     async def test_project_id_in_binding(self):
         """Project ID appears in binding when provided."""
-        svc = _make_service(summary=None, entities=[], kv_entries=[])
+        svc = _make_service(summary=None, mental_models=[], kv_entries=[])
         result = await svc.generate(uuid4(), budget=2000, project_id='my-project')
         assert '*Project: my-project*' in result
 
     @pytest.mark.asyncio
-    async def test_entity_trend_sort_in_output(self):
-        """Entities show trend-sorted observations (new first)."""
-        entities = [
-            _make_entity(
+    async def test_trend_sort_in_output(self):
+        """Mental models show trend-sorted observations (new first)."""
+        models = [
+            _make_mental_model(
                 'TestEntity',
                 observations=[
                     {'title': 'Old thing', 'trend': 'stale', 'content': 'old'},
@@ -372,7 +436,7 @@ class TestSessionBriefingGenerate:
         ]
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=entities,
+            mental_models=models,
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -382,6 +446,49 @@ class TestSessionBriefingGenerate:
         stale_pos = result.find('\u26a0 Old thing')
         assert new_pos < stale_pos
 
+    @pytest.mark.asyncio
+    async def test_description_in_output(self):
+        """Mental model description appears in output."""
+        models = [_make_mental_model('DSPy', description='ML framework for LLM pipelines')]
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            mental_models=models,
+            kv_entries=[],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'ML framework for LLM pipelines' in result
+
+    @pytest.mark.asyncio
+    async def test_last_seen_in_output(self):
+        """Mental model last_refreshed appears in output at budget >= 2000."""
+        models = [
+            _make_mental_model(
+                'DSPy',
+                last_refreshed=datetime(2026, 4, 5, tzinfo=timezone.utc),
+                observations=[{'title': 'Active', 'trend': 'new', 'content': 'x'}],
+            )
+        ]
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            mental_models=models,
+            kv_entries=[],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'Last seen: 2026-04-05' in result
+
+    @pytest.mark.asyncio
+    async def test_category_and_obs_count_in_output(self):
+        """Category and observation count appear in output."""
+        models = [_make_mental_model('DSPy', category='Technology', observation_count=7)]
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            mental_models=models,
+            kv_entries=[],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'Technology' in result
+        assert '7 obs' in result
+
 
 # ---------------------------------------------------------------------------
 # Overflow degradation
@@ -390,9 +497,8 @@ class TestSessionBriefingGenerate:
 
 class TestOverflowDegradation:
     @pytest.mark.asyncio
-    async def test_overflow_trims_entities(self):
-        """Large entity set triggers entity count reduction."""
-        # Create a scenario that exceeds budget
+    async def test_overflow_trims_models(self):
+        """Large model set triggers model count reduction."""
         long_obs = [
             {
                 'title': 'A very long observation title that takes up tokens ' * 3,
@@ -405,7 +511,7 @@ class TestOverflowDegradation:
                 'content': 'c',
             },
         ]
-        entities = [_make_entity(f'Entity{i}', observations=long_obs) for i in range(10)]
+        models = [_make_mental_model(f'Entity{i}', observations=long_obs) for i in range(10)]
 
         svc = _make_service(
             summary=_make_vault_summary(
@@ -415,7 +521,7 @@ class TestOverflowDegradation:
                     for i in range(15)
                 ],
             ),
-            entities=entities,
+            mental_models=models,
             kv_entries=[_make_kv_entry(f'global:key{i}', 'value ' * 10) for i in range(10)],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -427,10 +533,9 @@ class TestOverflowDegradation:
     @pytest.mark.asyncio
     async def test_never_drops_header_or_binding(self):
         """Header and vault binding are never removed during overflow."""
-        # Force extreme overflow
         svc = _make_service(
             summary=_make_vault_summary(summary='x ' * 5000),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[_make_kv_entry(f'global:k{i}', 'v' * 200) for i in range(20)],
         )
         result = await svc.generate(uuid4(), budget=1000)
@@ -443,7 +548,7 @@ class TestOverflowDegradation:
         """Global KV entries survive all overflow steps."""
         svc = _make_service(
             summary=_make_vault_summary(summary='x ' * 3000),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:important', 'critical-value'),
                 _make_kv_entry('app:claude-code:setting', 'value'),
@@ -458,10 +563,9 @@ class TestOverflowDegradation:
     @pytest.mark.asyncio
     async def test_overflow_drops_kv_namespaces_in_order(self):
         """KV namespaces are dropped in order: app -> user -> project."""
-        # Create a very tight budget scenario
         svc = _make_service(
             summary=_make_vault_summary(summary='x ' * 2000),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:keep', 'keep'),
                 _make_kv_entry('app:claude-code:drop1', 'val'),
@@ -480,7 +584,7 @@ class TestOverflowDegradation:
         """Parameterized check that output respects budget for both tiers."""
         svc = _make_service(
             summary=_make_vault_summary(summary='Summary text. ' * 100),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}') for i in range(5)],
         )
         result = await svc.generate(uuid4(), budget=budget)
@@ -495,22 +599,22 @@ class TestOverflowDegradation:
 
 class TestHeaderContent:
     @pytest.mark.asyncio
-    async def test_header_includes_entity_count(self):
-        """Header shows entity count from fetched entities."""
+    async def test_header_includes_model_count(self):
+        """Header shows mental model count."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            entities=_make_entities(7),
+            mental_models=_make_mental_models(7),
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=2000)
-        assert '7 entities' in result
+        assert '7 mental models' in result
 
     @pytest.mark.asyncio
     async def test_header_includes_note_count(self):
         """Header shows note count from vault summary stats."""
         svc = _make_service(
             summary=_make_vault_summary(stats={'total_notes': 42}),
-            entities=[],
+            mental_models=[],
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -521,7 +625,7 @@ class TestHeaderContent:
         """Header shows updated_at date when available."""
         summary = _make_vault_summary()
         summary.updated_at = datetime(2026, 4, 4, tzinfo=timezone.utc)
-        svc = _make_service(summary=summary, entities=[], kv_entries=[])
+        svc = _make_service(summary=summary, mental_models=[], kv_entries=[])
         result = await svc.generate(uuid4(), budget=2000)
         assert 'Updated 2026-04-04' in result
 
@@ -530,7 +634,7 @@ class TestHeaderContent:
         """Header shows summary version."""
         svc = _make_service(
             summary=_make_vault_summary(version=5),
-            entities=[],
+            mental_models=[],
             kv_entries=[],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -546,11 +650,11 @@ class TestOverflowSteps:
     """Each test sizes data to trigger exactly one overflow boundary."""
 
     @pytest.mark.asyncio
-    async def test_step1_entity_trim_activates(self):
-        """Overflow step 1: entity count is reduced when data exceeds budget.
+    async def test_step1_model_trim_activates(self):
+        """Overflow step 1: model count is reduced when data exceeds budget.
 
         Calibrated: >8000 chars (~2500+ tokens) to reliably exceed 2000-token budget.
-        Trimming entities reduces count until it fits.
+        Trimming models reduces count until it fits.
         """
         long_obs = [
             {
@@ -564,23 +668,21 @@ class TestOverflowSteps:
                 'content': 'c',
             },
         ]
-        entities = [_make_entity(f'Entity{i}', observations=long_obs) for i in range(10)]
+        models = [_make_mental_model(f'Entity{i}', observations=long_obs) for i in range(10)]
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='A moderately long vault summary sentence that adds tokens to fill up the budget. '
-                * 80,
+                summary='A moderately long vault summary sentence that adds tokens. ' * 80,
                 topics=[
                     {
                         'name': f'Topic{i}',
                         'note_count': i * 3,
-                        'description': 'A detailed description of this topic area with many words to fill space '
-                        * 4,
+                        'description': 'A detailed description of this topic area ' * 4,
                     }
                     for i in range(10)
                 ],
             ),
-            entities=entities,
+            mental_models=models,
             kv_entries=[
                 _make_kv_entry(
                     f'global:k{i}', f'value-data-for-key-{i}-with-extra-padding-text-here'
@@ -590,24 +692,24 @@ class TestOverflowSteps:
         )
         result = await svc.generate(uuid4(), budget=2000)
 
-        # Overflow should have activated: fewer than 10 entities in output
+        # Overflow should have activated: fewer than 10 models in output
         entity_section = (
             result.split('## Top Entities')[-1].split('---')[0]
             if '## Top Entities' in result
             else ''
         )
         entity_lines = [ln for ln in entity_section.split('\n') if ln.strip().startswith('- ')]
-        assert len(entity_lines) < 10, f'Expected fewer than 10 entities, got {len(entity_lines)}'
+        assert len(entity_lines) < 10, f'Expected fewer than 10 models, got {len(entity_lines)}'
         assert _estimate_tokens(result) <= 2000 * 1.05
 
     @pytest.mark.asyncio
     async def test_step1b_drops_observation_titles(self):
-        """Overflow step 1b: observation titles dropped when trimming entities isn't enough."""
+        """Overflow step 1b: observation titles dropped when trimming isn't enough."""
         long_obs = [
             {'title': 'Long observation title ' * 5, 'trend': 'new', 'content': 'c'},
             {'title': 'Another long title ' * 5, 'trend': 'strengthening', 'content': 'c'},
         ]
-        entities = [_make_entity(f'E{i}', observations=long_obs) for i in range(10)]
+        models = [_make_mental_model(f'E{i}', observations=long_obs) for i in range(10)]
 
         svc = _make_service(
             summary=_make_vault_summary(
@@ -617,19 +719,17 @@ class TestOverflowSteps:
                     for i in range(10)
                 ],
             ),
-            entities=entities,
+            mental_models=models,
             kv_entries=[_make_kv_entry(f'global:k{i}', f'value{i}') for i in range(8)],
         )
         result = await svc.generate(uuid4(), budget=2000)
 
-        # Trend arrows should be absent if observations were dropped
-        # (they may or may not be depending on exact sizing, but budget must hold)
         assert _estimate_tokens(result) <= 2000 * 1.05
 
     @pytest.mark.asyncio
     async def test_step2_drops_topic_descriptions(self):
         """Overflow step 2: topic descriptions removed, leaving just name (count)."""
-        entities = _make_entities(10, with_observations=True)
+        models = _make_mental_models(10, with_observations=True)
 
         svc = _make_service(
             summary=_make_vault_summary(
@@ -643,7 +743,7 @@ class TestOverflowSteps:
                     for i in range(12)
                 ],
             ),
-            entities=entities,
+            mental_models=models,
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}' * 20) for i in range(8)],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -654,23 +754,21 @@ class TestOverflowSteps:
         """Overflow step 3: vault prose trimmed sentence by sentence."""
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='First sentence. Second sentence. Third sentence. Fourth sentence. ' * 50,
+                summary='First sentence. Second sentence. Third sentence. ' * 50,
                 topics=[],
             ),
-            entities=_make_entities(5),
+            mental_models=_make_mental_models(5),
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}' * 30) for i in range(10)],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert _estimate_tokens(result) <= 2000 * 1.05
-        # If prose was trimmed, the last sentence should be truncated
-        # (original has many sentences, result should have fewer)
 
     @pytest.mark.asyncio
     async def test_step4_drops_app_kv_before_user(self):
         """Overflow step 4: app: KV dropped before user: KV."""
         svc = _make_service(
             summary=_make_vault_summary(summary='x ' * 3000),
-            entities=_make_entities(10, with_observations=True),
+            mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:keep', 'important'),
                 _make_kv_entry('app:claude-code:s1', 'v' * 100),
@@ -683,22 +781,16 @@ class TestOverflowSteps:
 
         # Global must survive
         assert 'global:keep' in result
-        # If app: was dropped but user: survived, that's the correct order
-        # Can't guarantee exact state, but budget must hold
         assert _estimate_tokens(result) <= 1000 * 1.05
 
     @pytest.mark.asyncio
-    async def test_overflow_at_1000_does_not_inflate_entities(self):
-        """At budget=1000, overflow must not re-add trends or inflate entity count beyond 5.
-
-        Regression: _apply_overflow previously hardcoded include_trends=True and
-        started entity trim at 7, inflating the section before converging.
-        """
+    async def test_overflow_at_1000_does_not_inflate_models(self):
+        """At budget=1000, overflow must not re-add trends or inflate model count beyond 5."""
         long_obs = [
             {'title': 'Long observation ' * 5, 'trend': 'new', 'content': 'c'},
             {'title': 'Another observation ' * 5, 'trend': 'stable', 'content': 'c'},
         ]
-        entities = [_make_entity(f'Entity{i}', observations=long_obs) for i in range(10)]
+        models = [_make_mental_model(f'Entity{i}', observations=long_obs) for i in range(10)]
 
         svc = _make_service(
             summary=_make_vault_summary(
@@ -708,7 +800,7 @@ class TestOverflowSteps:
                     for i in range(10)
                 ],
             ),
-            entities=entities,
+            mental_models=models,
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}' * 20) for i in range(8)],
         )
         result = await svc.generate(uuid4(), budget=1000)
@@ -716,14 +808,14 @@ class TestOverflowSteps:
         # Must stay within budget
         assert _estimate_tokens(result) <= 1000 * 1.05
 
-        # Entity count must be <= 5 (the 1000-budget initial limit)
+        # Model count must be <= 5 (the 1000-budget initial limit)
         entity_section = (
             result.split('## Top Entities')[-1].split('---')[0]
             if '## Top Entities' in result
             else ''
         )
         entity_lines = [ln for ln in entity_section.split('\n') if ln.strip().startswith('- ')]
-        assert len(entity_lines) <= 5, f'Expected <= 5 entities, got {len(entity_lines)}'
+        assert len(entity_lines) <= 5, f'Expected <= 5 models, got {len(entity_lines)}'
 
         # No trend arrows should appear (★ ↑ ↓ → ⚠)
         assert '\u2605' not in result  # ★
