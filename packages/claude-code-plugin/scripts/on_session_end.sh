@@ -49,15 +49,22 @@ if [ "$spirals" -gt 0 ]; then
     stats="${stats}, edit spirals: ${spirals} [${spiral_details}]"
 fi
 
+# Read session note key
+SESSION_NOTE_KEY=""
+[ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+
 # Post marker note via CLI (if memex is available)
-memex note add \
-    "Session ended. Stats: ${stats}." \
-    --tags "session-marker" --tags "agent-reflection" \
-    2>/dev/null || true
+note_args=(note add "Session ended. Stats: ${stats}." --tags "session-marker" --tags "agent-reflection")
+[ -n "$SESSION_NOTE_KEY" ] && note_args+=(--key "$SESSION_NOTE_KEY")
+
+if ! memex "${note_args[@]}" 2>/dev/null; then
+    echo "[memex] Warning: Failed to save session marker note. Memex server may be down." >&2
+fi
 
 # --- Clean up per-session state ---
 rm -f "$COUNTER_FILE"
 rm -rf "$STATE_DIR/file_edits"
+rm -f "$STATE_DIR/session_note_key"
 
 # Output empty JSON (SessionEnd hooks do not inject context)
 echo '{}'

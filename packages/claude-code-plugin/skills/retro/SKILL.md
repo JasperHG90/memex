@@ -1,12 +1,12 @@
 ---
-name: reflect
+name: retro
 description: "Record a structured session postmortem to Memex. Captures what worked, what failed, tool performance, and improvement suggestions."
 argument-hint: "[optional: focus area or session summary]"
 ---
 
-# /reflect — Agent Session Postmortem
+# /retro — Agent Session Postmortem
 
-You have been invoked via the `/reflect` slash command.
+You have been invoked via the `/retro` slash command.
 
 ## Instructions
 
@@ -38,7 +38,11 @@ You have been invoked via the `/reflect` slash command.
    - **author**: `"claude-code"`
    - **tags**: `["agent-reflection", "session-postmortem"]` plus 1-2 topic tags.
    - **template**: `"agent_reflection"`
-   - **background**: `true`
+   - **background**: `false`
+
+   Synchronous ingestion ensures entities are extracted immediately and queued
+   for reflection. Reflection runs on a background schedule, but extraction
+   happens before this call returns.
 
 4. **Confirm to the user.**
    Briefly summarize the reflection and mention the note title.

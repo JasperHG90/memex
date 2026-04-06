@@ -182,6 +182,19 @@ class RemoteMemexAPI:
         result = await self._post(f'vaults/{vault_id}/summary/regenerate', {})
         return VaultSummaryDTO(**result)
 
+    async def get_session_briefing(
+        self,
+        vault_id: UUID,
+        budget: int = 2000,
+        project_id: str | None = None,
+    ) -> str:
+        """Generate a session briefing for a vault. Returns the briefing markdown."""
+        params: dict[str, Any] = {'budget': budget}
+        if project_id is not None:
+            params['project_id'] = project_id
+        result = await self._get(f'vaults/{vault_id}/session-briefing', params=params)
+        return result['briefing']
+
     # --- Memory ---
     async def ingest(
         self, note: NoteCreateDTO, background: bool = False
