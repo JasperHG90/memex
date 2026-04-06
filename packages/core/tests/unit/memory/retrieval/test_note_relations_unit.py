@@ -457,3 +457,83 @@ def test_boost_linked_notes_removed():
     assert not hasattr(ds, 'LINKED_NOTE_BOOST')
     assert not hasattr(ds, 'MIN_TITLE_LENGTH')
     assert not hasattr(ds.NoteSearchEngine, '_boost_linked_notes')
+
+
+# ---------------------------------------------------------------------------
+# fetch_memory_links_for_notes: self-link removal & top-k truncation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_links_for_notes_removes_self_links():
+    """Links pointing back to the same note should be excluded."""
+    from memex_core.memory.retrieval.note_relations import fetch_memory_links_for_notes
+
+    nid = uuid4()
+    other_nid = uuid4()
+    uid_a = uuid4()
+    uid_b = uuid4()
+
+    # Self-link: uid_a -> uid_b, both belong to nid
+    self_link = MemoryLinkDTO(unit_id=uid_b, note_id=nid, relation='temporal', weight=1.0)
+    # Cross-note link: uid_a -> some unit in other_nid
+    cross_link = MemoryLinkDTO(unit_id=uuid4(), note_id=other_nid, relation='semantic', weight=0.8)
+
+    mock_session = AsyncMock()
+
+    # Step 1 result: unit_ids for the note
+    unit_rows = MagicMock()
+    unit_rows.mappings.return_value = [
+        {'id': str(uid_a), 'note_id': str(nid)},
+    ]
+
+    mock_session.execute = AsyncMock(side_effect=[unit_rows])
+
+    with patch(
+        'memex_core.memory.retrieval.note_relations.fetch_memory_links',
+        new_callable=AsyncMock,
+        return_value={uid_a: [self_link, cross_link]},
+    ):
+        result = await fetch_memory_links_for_notes(mock_session, [nid])
+
+    assert nid in result
+    assert len(result[nid]) == 1
+    assert result[nid][0].note_id == other_nid
+
+
+@pytest.mark.asyncio
+async def test_fetch_links_for_notes_truncates_to_top_k():
+    """Only top_k links by weight should be returned per note."""
+    from memex_core.memory.retrieval.note_relations import fetch_memory_links_for_notes
+
+    nid = uuid4()
+    uid = uuid4()
+
+    # 10 links with different weights, all pointing to different notes
+    links = [
+        MemoryLinkDTO(
+            unit_id=uuid4(),
+            note_id=uuid4(),
+            relation='semantic',
+            weight=0.1 * (i + 1),
+        )
+        for i in range(10)
+    ]
+
+    mock_session = AsyncMock()
+    unit_rows = MagicMock()
+    unit_rows.mappings.return_value = [{'id': str(uid), 'note_id': str(nid)}]
+    mock_session.execute = AsyncMock(side_effect=[unit_rows])
+
+    with patch(
+        'memex_core.memory.retrieval.note_relations.fetch_memory_links',
+        new_callable=AsyncMock,
+        return_value={uid: links},
+    ):
+        result = await fetch_memory_links_for_notes(mock_session, [nid], top_k=5)
+
+    assert nid in result
+    assert len(result[nid]) == 5
+    weights = [lnk.weight for lnk in result[nid]]
+    assert weights == sorted(weights, reverse=True)
+    assert weights[0] == pytest.approx(1.0, abs=0.01)

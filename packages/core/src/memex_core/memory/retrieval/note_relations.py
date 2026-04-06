@@ -17,6 +17,9 @@ _ENTITY_FANOUT_CAP = 50
 # Max related notes returned per input note
 _TOP_K_RELATED = 5
 
+# Max links returned per note (highest weight first)
+_TOP_K_LINKS = 5
+
 # Max entity IDs to consider in the second query (most specific first)
 _MAX_ENTITY_IDS = 100
 
@@ -109,11 +112,14 @@ async def fetch_memory_links_for_notes(
     session: AsyncSession,
     note_ids: list[UUID],
     vault_ids: list[UUID] | None = None,
+    top_k: int = _TOP_K_LINKS,
 ) -> dict[UUID, list[MemoryLinkDTO]]:
     """Fetch links for notes by first resolving note_ids to unit_ids, then
     aggregating and deduplicating at note level.
 
     Deduplication: same relation to same target note keeps highest weight.
+    Self-links (links pointing back to the same note) are excluded.
+    Results are truncated to top_k per note, sorted by weight descending.
     If vault_ids is provided, only units in those vaults are considered.
     """
     if not note_ids:
@@ -163,7 +169,14 @@ async def fetch_memory_links_for_notes(
             if existing is None or link.weight > existing.weight:
                 note_links[nid][key] = link
 
-    return {nid: list(deduped.values()) for nid, deduped in note_links.items()}
+    output: dict[UUID, list[MemoryLinkDTO]] = {}
+    for nid, deduped in note_links.items():
+        # Remove self-links (links pointing back to the same note)
+        filtered = [lnk for lnk in deduped.values() if lnk.note_id != nid]
+        # Sort by weight descending and truncate
+        filtered.sort(key=lambda lnk: lnk.weight, reverse=True)
+        output[nid] = filtered[:top_k]
+    return output
 
 
 async def compute_related_notes(

@@ -259,54 +259,6 @@ async def test_memex_note_search_has_assets_overfetches(mock_api, mcp_client):
     assert call_kwargs['limit'] == 15
 
 
-# --- link truncation tests ---
-
-
-@pytest.mark.asyncio
-async def test_memex_note_search_links_exclude_self(mock_api, mcp_client):
-    """Self-referential links should be removed from results."""
-    note_id = uuid4()
-    other_id = uuid4()
-    links = [
-        MemoryLinkDTO(unit_id=uuid4(), note_id=note_id, relation='temporal', weight=1.0),
-        MemoryLinkDTO(unit_id=uuid4(), note_id=other_id, relation='semantic', weight=0.8),
-    ]
-    doc = _make_result(title='Self Link Doc', note_id=note_id, links=links)
-    mock_api.search_notes.return_value = [doc]
-
-    result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
-    )
-    data = parse_tool_result(result)
-
-    result_links = data[0]['links']
-    assert len(result_links) == 1
-    assert result_links[0]['note_id'] == str(other_id)
-
-
-@pytest.mark.asyncio
-async def test_memex_note_search_links_top_5(mock_api, mcp_client):
-    """Only the top 5 links by weight should be kept."""
-    note_id = uuid4()
-    links = [
-        MemoryLinkDTO(unit_id=uuid4(), note_id=uuid4(), relation='semantic', weight=0.1 * (i + 1))
-        for i in range(10)
-    ]
-    doc = _make_result(title='Many Links', note_id=note_id, links=links)
-    mock_api.search_notes.return_value = [doc]
-
-    result = await mcp_client.call_tool(
-        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
-    )
-    data = parse_tool_result(result)
-
-    result_links = data[0]['links']
-    assert len(result_links) == 5
-    weights = [lnk['weight'] for lnk in result_links]
-    assert weights == sorted(weights, reverse=True)
-    assert weights[0] == pytest.approx(1.0, abs=0.01)
-
-
 # --- memex_read_note force parameter tests ---
 
 
