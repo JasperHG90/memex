@@ -143,11 +143,12 @@ Search source notes by hybrid retrieval (semantic + keyword + graph + temporal).
 | `before` | string | No | - | Only notes before this ISO 8601 date. |
 | `tags` | string[] | No | - | Only notes with ALL of these tags. |
 | `include_seen` | bool | No | `true` | Include previously returned results in full. Set to `false` to compress already-seen results. |
+| `has_assets` | bool | No | `false` | Only return notes that have file attachments (images, PDFs, etc.). |
 
 Returns note titles, IDs, scores, snippets, and inline metadata. Each result also includes:
 
 - **`related_notes`** — up to 5 notes that share entities with this result, ranked by entity specificity. Each entry includes `note_id`, `title`, `shared_entities` (up to 3 names), and `strength` (0.0-1.0).
-- **`links`** — memory-unit-level links (causal, temporal, semantic, etc.) aggregated to note level. Each entry includes `unit_id`, `note_id`, `note_title`, `relation`, and `weight`.
+- **`links`** — top 5 linked notes by weight (self-links excluded). Each entry includes `unit_id`, `note_id`, `note_title`, `relation`, and `weight`.
 
 These fields enable discovery of related content without additional tool calls.
 

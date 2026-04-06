@@ -7,7 +7,7 @@ TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')
 
 import pytest
 from fastmcp.exceptions import ToolError
-from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
+from memex_common.schemas import BlockSummaryDTO, MemoryLinkDTO, NoteSearchResult
 
 from conftest import parse_tool_result
 
@@ -19,6 +19,8 @@ def _make_result(
     answer: str | None = None,
     note_id: UUID | None = None,
     summaries: list[BlockSummaryDTO] | None = None,
+    has_assets: bool = False,
+    links: list[MemoryLinkDTO] | None = None,
 ) -> NoteSearchResult:
     metadata: dict = {}
     if title:
@@ -26,6 +28,7 @@ def _make_result(
         metadata['name'] = title
     if source_uri:
         metadata['source_uri'] = source_uri
+    metadata['has_assets'] = has_assets
 
     return NoteSearchResult(
         note_id=note_id or uuid4(),
@@ -33,6 +36,7 @@ def _make_result(
         summaries=summaries or [],
         score=score,
         answer=answer,
+        links=links or [],
     )
 
 
@@ -203,6 +207,104 @@ async def test_memex_note_search_no_tip_text(mock_api, mcp_client):
 
     assert 'memex_get_notes_metadata' not in text
     assert 'memex_get_page_indices' not in text
+
+
+# --- has_assets filter tests ---
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_has_assets_filter(mock_api, mcp_client):
+    """has_assets=True should only return notes with assets."""
+    with_assets = _make_result(title='Has Images', has_assets=True, note_id=uuid4())
+    without_assets = _make_result(title='No Images', has_assets=False, note_id=uuid4())
+    mock_api.search_notes.return_value = [with_assets, without_assets]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search',
+        {'query': 'architecture', 'vault_ids': ['test-vault'], 'has_assets': True},
+    )
+    data = parse_tool_result(result)
+
+    assert len(data) == 1
+    assert data[0]['title'] == 'Has Images'
+    assert data[0]['has_assets'] is True
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_has_assets_false_returns_all(mock_api, mcp_client):
+    """Default has_assets=False should return all notes regardless of assets."""
+    with_assets = _make_result(title='Has Images', has_assets=True, note_id=uuid4())
+    without_assets = _make_result(title='No Images', has_assets=False, note_id=uuid4())
+    mock_api.search_notes.return_value = [with_assets, without_assets]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'architecture', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    assert len(data) == 2
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_has_assets_overfetches(mock_api, mcp_client):
+    """has_assets=True should request 3x limit from core to compensate for filtering."""
+    mock_api.search_notes.return_value = []
+
+    await mcp_client.call_tool(
+        'memex_note_search',
+        {'query': 'diagrams', 'vault_ids': ['test-vault'], 'has_assets': True, 'limit': 5},
+    )
+
+    call_kwargs = mock_api.search_notes.call_args[1]
+    assert call_kwargs['limit'] == 15
+
+
+# --- link truncation tests ---
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_links_exclude_self(mock_api, mcp_client):
+    """Self-referential links should be removed from results."""
+    note_id = uuid4()
+    other_id = uuid4()
+    links = [
+        MemoryLinkDTO(unit_id=uuid4(), note_id=note_id, relation='temporal', weight=1.0),
+        MemoryLinkDTO(unit_id=uuid4(), note_id=other_id, relation='semantic', weight=0.8),
+    ]
+    doc = _make_result(title='Self Link Doc', note_id=note_id, links=links)
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    result_links = data[0]['links']
+    assert len(result_links) == 1
+    assert result_links[0]['note_id'] == str(other_id)
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_links_top_5(mock_api, mcp_client):
+    """Only the top 5 links by weight should be kept."""
+    note_id = uuid4()
+    links = [
+        MemoryLinkDTO(unit_id=uuid4(), note_id=uuid4(), relation='semantic', weight=0.1 * (i + 1))
+        for i in range(10)
+    ]
+    doc = _make_result(title='Many Links', note_id=note_id, links=links)
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    result_links = data[0]['links']
+    assert len(result_links) == 5
+    weights = [lnk['weight'] for lnk in result_links]
+    assert weights == sorted(weights, reverse=True)
+    assert weights[0] == pytest.approx(1.0, abs=0.01)
 
 
 # --- memex_read_note force parameter tests ---
