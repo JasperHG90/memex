@@ -12,8 +12,6 @@ source "$SCRIPT_DIR/resolve_config.sh"
 # --- Read session state ---
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 
-SESSION_NOTE_KEY=""
-[ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
 PROJECT_VAULT=""
 [ -f "$STATE_DIR/project_vault" ] && PROJECT_VAULT=$(cat "$STATE_DIR/project_vault" 2>/dev/null || true)
 
@@ -33,8 +31,10 @@ if [ -n "$commit_subjects" ]; then
 fi
 
 # --- Post note via CLI ---
+# Do NOT use --key here. The agent may have already written a richer session
+# note via PreCompact using the session note key. Using the same key would
+# overwrite the agent's note with this dumber fallback.
 note_args=(note add "$(echo -e "$content")" --tag "session-marker" --tag "agent-reflection" --background)
-[ -n "$SESSION_NOTE_KEY" ] && note_args+=(--key "$SESSION_NOTE_KEY")
 [ -n "$PROJECT_VAULT" ] && note_args+=(--vault "$PROJECT_VAULT")
 
 if ! memex "${note_args[@]}" 2>/dev/null; then
