@@ -1,70 +1,60 @@
 #!/usr/bin/env bash
 # Memex Claude Code Plugin — SessionEnd
-# Gathers quantitative session stats (including edit spirals) and posts a
-# lightweight marker note. Cleans up per-session state.
+# Instructs the agent to write a session summary, then cleans up state.
 set -euo pipefail
 trap 'echo "{}"; exit 0' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
 
-# --- Gather quantitative stats ---
+if ! command -v jq >/dev/null 2>&1; then
+    echo '{}'
+    exit 0
+fi
+
+# --- Read session state ---
+STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
+
+SESSION_NOTE_KEY=""
+[ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+
+# --- Gather quantitative stats for context ---
+writes=0
+[ -f "$STATE_DIR/write_count" ] && writes=$(cat "$STATE_DIR/write_count" 2>/dev/null || echo 0)
+
 commits=0
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # Count commits made in the last 4 hours (approximate session window)
     commits=$(git log --oneline --since="4 hours ago" --author="$(git config user.name 2>/dev/null || echo '')" 2>/dev/null | wc -l | tr -d ' ') || commits=0
 fi
 
-# Count file writes from the state counter (set by on_post_write.sh)
-STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
-writes=0
-COUNTER_FILE="${STATE_DIR}/write_count"
-if [ -f "$COUNTER_FILE" ]; then
-    writes=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-fi
-
-# Count edit spirals (files edited 3+ times)
 spirals=0
-spiral_details=""
 if [ -d "$STATE_DIR/file_edits" ]; then
     for f in "$STATE_DIR/file_edits"/*; do
         [ -f "$f" ] || continue
         cnt=$(head -1 "$f" | cut -d' ' -f1 2>/dev/null || echo 0)
-        fpath=$(head -1 "$f" | cut -d' ' -f2- 2>/dev/null || echo "unknown")
-        if [ "$cnt" -ge 3 ] 2>/dev/null; then
-            spirals=$((spirals + 1))
-            bname=$(basename "$fpath")
-            if [ -n "$spiral_details" ]; then
-                spiral_details="${spiral_details}, ${bname} (${cnt}x)"
-            else
-                spiral_details="${bname} (${cnt}x)"
-            fi
-        fi
+        [ "$cnt" -ge 3 ] 2>/dev/null && spirals=$((spirals + 1))
     done
 fi
 
-# Build stats summary
-stats="commits: ${commits}, file writes: ${writes}"
-if [ "$spirals" -gt 0 ]; then
-    stats="${stats}, edit spirals: ${spirals} [${spiral_details}]"
-fi
+stats="writes: ${writes}, commits: ${commits}, edit spirals: ${spirals}"
 
-# Read session note key
-SESSION_NOTE_KEY=""
-[ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+# --- Build nudge ---
+nudge="Session is ending. Stats: ${stats}."
 
-# Post marker note via CLI (if memex is available)
-note_args=(note add "Session ended. Stats: ${stats}." --tags "session-marker" --tags "agent-reflection")
-[ -n "$SESSION_NOTE_KEY" ] && note_args+=(--key "$SESSION_NOTE_KEY")
-
-if ! memex "${note_args[@]}" 2>/dev/null; then
-    echo "[memex] Warning: Failed to save session marker note. Memex server may be down." >&2
+if [ -n "$SESSION_NOTE_KEY" ]; then
+    nudge="${nudge}\n\nUpdate the session note via \`memex_add_note(note_key=\"${SESSION_NOTE_KEY}\", background=true)\` with a 1-2 sentence summary of what was accomplished this session and any key decisions made. Keep it concise — this will be shown in the next session's briefing for continuity."
 fi
 
 # --- Clean up per-session state ---
-rm -f "$COUNTER_FILE"
+rm -f "$STATE_DIR/write_count"
 rm -rf "$STATE_DIR/file_edits"
 rm -f "$STATE_DIR/session_note_key"
+rm -f "$STATE_DIR/project_vault"
 
-# Output empty JSON (SessionEnd hooks do not inject context)
-echo '{}'
+# --- Output ---
+jq -n --arg ctx "$nudge" '{
+    hookSpecificOutput: {
+        hookEventName: "SessionEnd",
+        additionalContext: $ctx
+    }
+}'

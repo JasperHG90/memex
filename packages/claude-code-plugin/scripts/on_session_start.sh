@@ -67,6 +67,9 @@ if [ -n "$project_id" ]; then
     project_vault=$(memex kv get "project:${project_id}:vault" --value-only 2>/dev/null) || true
 fi
 
+# Persist project vault for other hooks (session end, pre-compact)
+[ -n "$project_vault" ] && echo "$project_vault" > "$STATE_DIR/project_vault"
+
 # --- Build briefing CLI args ---
 briefing_args=(session --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
@@ -98,7 +101,12 @@ else
 No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_write(key=\"project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
 fi
 
-additional_context="${briefing_content}${vault_instruction}"
+session_note_instruction="
+### Session note
+
+This session's note key is \`${SESSION_NOTE_KEY}\`. When you complete a meaningful unit of work (bug fix, feature, architectural decision), update the session note via \`memex_add_note(note_key=\"${SESSION_NOTE_KEY}\", background=true)\` with a concise summary of what was done and why. This note persists across sessions for continuity."
+
+additional_context="${briefing_content}${vault_instruction}${session_note_instruction}"
 
 # --- Build status summary ---
 status="Memex connected"
