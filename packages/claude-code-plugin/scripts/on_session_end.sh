@@ -1,48 +1,44 @@
 #!/usr/bin/env bash
 # Memex Claude Code Plugin — SessionEnd
-# Instructs the agent to write a session summary, then cleans up state.
+# Writes a session marker note with commit subjects (the most informative
+# signal available from bash). Agent may have already written a richer
+# session note via PreCompact; this is the fallback.
 set -euo pipefail
 trap 'echo "{}"; exit 0' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve_config.sh"
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo '{}'
-    exit 0
-fi
-
 # --- Read session state ---
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 
 SESSION_NOTE_KEY=""
 [ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
+PROJECT_VAULT=""
+[ -f "$STATE_DIR/project_vault" ] && PROJECT_VAULT=$(cat "$STATE_DIR/project_vault" 2>/dev/null || true)
 
-# --- Gather quantitative stats for context ---
+# --- Gather session activity ---
 writes=0
 [ -f "$STATE_DIR/write_count" ] && writes=$(cat "$STATE_DIR/write_count" 2>/dev/null || echo 0)
 
-commits=0
+commit_subjects=""
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    commits=$(git log --oneline --since="4 hours ago" --author="$(git config user.name 2>/dev/null || echo '')" 2>/dev/null | wc -l | tr -d ' ') || commits=0
+    commit_subjects=$(git log --format='- %s' --since="4 hours ago" --author="$(git config user.name 2>/dev/null || echo '')" 2>/dev/null | head -10) || true
 fi
 
-spirals=0
-if [ -d "$STATE_DIR/file_edits" ]; then
-    for f in "$STATE_DIR/file_edits"/*; do
-        [ -f "$f" ] || continue
-        cnt=$(head -1 "$f" | cut -d' ' -f1 2>/dev/null || echo 0)
-        [ "$cnt" -ge 3 ] 2>/dev/null && spirals=$((spirals + 1))
-    done
+# --- Build note content ---
+content="Session ended. File writes: ${writes}."
+if [ -n "$commit_subjects" ]; then
+    content="${content}\n\nCommits:\n${commit_subjects}"
 fi
 
-stats="writes: ${writes}, commits: ${commits}, edit spirals: ${spirals}"
+# --- Post note via CLI ---
+note_args=(note add "$(echo -e "$content")" --tag "session-marker" --tag "agent-reflection" --background)
+[ -n "$SESSION_NOTE_KEY" ] && note_args+=(--key "$SESSION_NOTE_KEY")
+[ -n "$PROJECT_VAULT" ] && note_args+=(--vault "$PROJECT_VAULT")
 
-# --- Build nudge ---
-nudge="Session is ending. Stats: ${stats}."
-
-if [ -n "$SESSION_NOTE_KEY" ]; then
-    nudge="${nudge}\n\nUpdate the session note via \`memex_add_note(note_key=\"${SESSION_NOTE_KEY}\", background=true)\` with a 1-2 sentence summary of what was accomplished this session and any key decisions made. Keep it concise — this will be shown in the next session's briefing for continuity."
+if ! memex "${note_args[@]}" 2>/dev/null; then
+    echo "[memex] Warning: Failed to save session marker note." >&2
 fi
 
 # --- Clean up per-session state ---
@@ -51,10 +47,5 @@ rm -rf "$STATE_DIR/file_edits"
 rm -f "$STATE_DIR/session_note_key"
 rm -f "$STATE_DIR/project_vault"
 
-# --- Output ---
-jq -n --arg ctx "$nudge" '{
-    hookSpecificOutput: {
-        hookEventName: "SessionEnd",
-        additionalContext: $ctx
-    }
-}'
+# Output empty JSON (SessionEnd cannot inject agent context)
+echo '{}'
