@@ -1451,6 +1451,14 @@ async def memex_note_search(
             ),
         ),
     ] = True,
+    has_assets: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=False,
+            description='Only return notes that have file attachments (images, PDFs, etc.).',
+        ),
+    ] = False,
 ) -> list[McpNoteSearchResult]:
     """Search Memex for source notes by hybrid retrieval."""
     try:
@@ -1464,9 +1472,10 @@ async def memex_note_search(
         after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
         before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
 
+        search_limit = limit * 3 if has_assets else limit
         results = await api.search_notes(
             query=query,
-            limit=limit,
+            limit=search_limit,
             expand_query=expand_query,
             reason=False,
             summarize=False,
@@ -1476,6 +1485,9 @@ async def memex_note_search(
             before=before_dt,
             tags=tags,
         )
+
+        if has_assets:
+            results = [r for r in results if (r.metadata or {}).get('has_assets', False)][:limit]
 
         if not results:
             return [
@@ -1544,6 +1556,10 @@ async def memex_note_search(
                     )
                     for lnk in getattr(doc, 'links', [])
                 ]
+                # Remove self-links and keep only the top 5 by weight
+                links = [lnk for lnk in links if lnk.note_id != doc.note_id]
+                links.sort(key=lambda lk: lk.weight, reverse=True)
+                links = links[:5]
                 output.append(
                     McpNoteSearchResult(
                         note_id=doc.note_id,
