@@ -488,7 +488,7 @@ class MemexAPI:
 
         self.session_briefing = SessionBriefingService(
             vault_summary_service=self.vault_summary,
-            entity_service=self._entities,
+            metastore=self.metastore,
             kv_service=self._kv,
             vault_service=self._vaults,
         )

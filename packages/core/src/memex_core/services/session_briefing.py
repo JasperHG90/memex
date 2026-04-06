@@ -1,6 +1,6 @@
 """Session briefing service — generates a token-budgeted briefing for LLM agents.
 
-Composes data from VaultSummaryService, EntityService, and KVService into a
+Composes data from VaultSummaryService, MentalModel, and KVService into a
 structured markdown briefing that fits within a specified token budget.
 """
 
@@ -8,17 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, TypeVar
+from typing import Any
 from uuid import UUID
 
-from memex_core.services.entities import EntityService, EntityWithMetadata
+from sqlmodel import col, select
+
+from memex_core.memory.sql_models import MentalModel
 from memex_core.services.kv import KVService
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService
+from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.session_briefing')
-
-T = TypeVar('T')
 
 _TREND_PRIORITY: dict[str, int] = {
     'new': 0,
@@ -26,6 +27,14 @@ _TREND_PRIORITY: dict[str, int] = {
     'weakening': 2,
     'stable': 3,
     'stale': 4,
+}
+
+_TREND_WEIGHTS: dict[str, float] = {
+    'new': 3.0,
+    'strengthening': 2.0,
+    'weakening': 1.5,
+    'stable': 0.5,
+    'stale': 0.0,
 }
 
 _TREND_ARROWS: dict[str, str] = {
@@ -42,9 +51,9 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-async def _collect_async_gen(gen: AsyncGenerator[T, None]) -> list[T]:
-    """Drain an async generator into a list."""
-    return [item async for item in gen]
+def _compute_importance(mm: MentalModel) -> float:
+    """Compute importance score from trend-weighted observations."""
+    return sum(_TREND_WEIGHTS.get(o.get('trend', 'stable'), 0.5) for o in (mm.observations or []))
 
 
 def _build_kv_namespaces(project_id: str | None) -> list[str]:
@@ -66,12 +75,12 @@ class SessionBriefingService:
     def __init__(
         self,
         vault_summary_service: VaultSummaryService,
-        entity_service: EntityService,
+        metastore: AsyncBaseMetaStoreEngine,
         kv_service: KVService,
         vault_service: VaultService | None = None,
     ) -> None:
         self._vault_summary = vault_summary_service
-        self._entities = entity_service
+        self._metastore = metastore
         self._kv = kv_service
         self._vaults = vault_service
 
@@ -91,10 +100,10 @@ class SessionBriefingService:
         Returns:
             A markdown-formatted briefing string.
         """
-        summary, entities, kv_entries, vaults = await self._fetch_all(vault_id, project_id)
+        summary, mental_models, kv_entries, vaults = await self._fetch_all(vault_id, project_id)
 
         sections = self._build_sections(
-            summary, entities, kv_entries, vaults, vault_id, project_id, budget
+            summary, mental_models, kv_entries, vaults, vault_id, project_id, budget
         )
 
         assembled = self._assemble(sections)
@@ -105,7 +114,7 @@ class SessionBriefingService:
                 sections,
                 budget,
                 summary,
-                entities,
+                mental_models,
                 kv_entries,
                 vault_id,
                 project_id,
@@ -117,12 +126,10 @@ class SessionBriefingService:
         self,
         vault_id: UUID,
         project_id: str | None,
-    ) -> tuple[Any, list[EntityWithMetadata], list[Any], list[Any]]:
+    ) -> tuple[Any, list[MentalModel], list[Any], list[Any]]:
         """Fetch all data sources in parallel."""
         summary_coro = self._vault_summary.get_summary(vault_id)
-        entities_coro = _collect_async_gen(
-            self._entities.list_entities_ranked(limit=10, vault_ids=[vault_id])
-        )
+        models_coro = self._fetch_mental_models(vault_id)
         kv_coro = self._kv.list_entries(namespaces=_build_kv_namespaces(project_id))
 
         if self._vaults:
@@ -134,15 +141,24 @@ class SessionBriefingService:
 
             vaults_coro = _empty()
 
-        summary, entities, kv_entries, vaults = await asyncio.gather(
-            summary_coro, entities_coro, kv_coro, vaults_coro
+        summary, mental_models, kv_entries, vaults = await asyncio.gather(
+            summary_coro, models_coro, kv_coro, vaults_coro
         )
-        return summary, entities, kv_entries, vaults
+        return summary, mental_models, kv_entries, vaults
+
+    async def _fetch_mental_models(self, vault_id: UUID) -> list[MentalModel]:
+        """Fetch mental models for the vault, sorted by importance score."""
+        async with self._metastore.session() as session:
+            stmt = select(MentalModel).where(col(MentalModel.vault_id) == vault_id)
+            result = await session.exec(stmt)
+            models = list(result.all())
+        models.sort(key=_compute_importance, reverse=True)
+        return models
 
     def _build_sections(
         self,
         summary: Any,
-        entities: list[EntityWithMetadata],
+        mental_models: list[MentalModel],
         kv_entries: list[Any],
         vaults: list[Any],
         vault_id: UUID,
@@ -153,7 +169,7 @@ class SessionBriefingService:
         sections: list[tuple[str, str]] = []
 
         # 1. Header (always included)
-        sections.append(('header', self._build_header(summary, len(entities))))
+        sections.append(('header', self._build_header(summary, len(mental_models))))
 
         # 2. KV facts (priority 1)
         sections.append(('kv', self._build_kv_section(kv_entries)))
@@ -166,10 +182,15 @@ class SessionBriefingService:
 
         sections.append(('topics', self._build_topics(summary, compact=(budget < 2000))))
 
-        # 4. Entities (priority 3)
-        entity_limit = 10 if budget >= 2000 else 5
+        # 4. Mental models (priority 3)
+        model_limit = 10 if budget >= 2000 else 5
         include_trends = budget >= 2000
-        sections.append(('entities', self._build_entities(entities[:entity_limit], include_trends)))
+        sections.append(
+            (
+                'mental_models',
+                self._build_mental_models(mental_models[:model_limit], include_trends),
+            )
+        )
 
         # 5. Available vaults (priority 4)
         sections.append(('vaults', self._build_vaults_section(vaults, vault_id)))
@@ -179,15 +200,15 @@ class SessionBriefingService:
 
         return sections
 
-    def _build_header(self, summary: Any, entity_count: int) -> str:
+    def _build_header(self, summary: Any, model_count: int) -> str:
         """Build the header section with inline stats."""
         lines = ['# Session Briefing']
         stat_parts: list[str] = []
         if summary and summary.stats:
             total_notes = summary.stats.get('total_notes', 0)
             stat_parts.append(f'{total_notes} notes')
-        if entity_count:
-            stat_parts.append(f'{entity_count} entities')
+        if model_count:
+            stat_parts.append(f'{model_count} mental models')
         if summary and getattr(summary, 'updated_at', None):
             updated = summary.updated_at
             if hasattr(updated, 'strftime'):
@@ -228,23 +249,31 @@ class SessionBriefingService:
                 lines.append(f'- **{name}** ({count}): {desc}')
         return '\n'.join(lines) + '\n'
 
-    def _build_entities(
+    def _build_mental_models(
         self,
-        entities: list[EntityWithMetadata],
+        models: list[MentalModel],
         include_trends: bool,
     ) -> str:
-        """Build the entities section with optional trend indicators."""
-        if not entities:
+        """Build the mental models section with optional trend indicators."""
+        if not models:
             return ''
         lines = ['\n## Top Entities\n']
-        for ewm in entities:
-            e = ewm.entity
-            name = e.canonical_name
-            etype = getattr(e, 'entity_type', '')
-            mentions = getattr(e, 'mention_count', 0)
+        for mm in models:
+            meta = mm.entity_metadata or {}
+            name = mm.name
+            category = meta.get('category', '')
+            obs_count = meta.get('observation_count', len(mm.observations or []))
+            description = meta.get('description', '')
+            last_seen = mm.last_refreshed
+
+            label_parts = []
+            if category:
+                label_parts.append(category)
+            label_parts.append(f'{obs_count} obs')
+            label = ', '.join(label_parts)
 
             if include_trends:
-                obs = _sort_observations(ewm.observations)
+                obs = _sort_observations(mm.observations or [])
                 trend_parts = []
                 for o in obs[:2]:
                     trend = o.get('trend', 'stable')
@@ -253,12 +282,20 @@ class SessionBriefingService:
                     if title:
                         trend_parts.append(f'{arrow} {title}')
                 trend_str = ' | '.join(trend_parts)
+
+                line = f'- **{name}** ({label})'
+                if description:
+                    line += f' — {description}'
                 if trend_str:
-                    lines.append(f'- **{name}** ({etype}, {mentions}m) — {trend_str}')
-                else:
-                    lines.append(f'- **{name}** ({etype}, {mentions}m)')
+                    line += f'\n  {trend_str}'
+                if last_seen and hasattr(last_seen, 'strftime'):
+                    line += f'\n  Last seen: {last_seen.strftime("%Y-%m-%d")}'
+                lines.append(line)
             else:
-                lines.append(f'- {name} ({etype}, {mentions}m)')
+                line = f'- {name} ({label})'
+                if description:
+                    line += f' — {description}'
+                lines.append(line)
 
         return '\n'.join(lines) + '\n'
 
@@ -299,30 +336,30 @@ class SessionBriefingService:
         sections: list[tuple[str, str]],
         budget: int,
         summary: Any,
-        entities: list[EntityWithMetadata],
+        mental_models: list[MentalModel],
         kv_entries: list[Any],
         vault_id: UUID,
         project_id: str | None,
     ) -> str:
         """Apply overflow degradation to fit within budget."""
-        # Steps 1/1b only apply at budget>=2000 where initial build used 10 entities + trends.
-        # At budget<2000, _build_sections already used 5 entities without trends.
+        # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
+        # At budget<2000, _build_sections already used 5 models without trends.
         if budget >= 2000:
-            # Step 1: Trim entity count 10 -> 7 -> 5
-            for entity_limit in (7, 5):
+            # Step 1: Trim model count 10 -> 7 -> 5
+            for model_limit in (7, 5):
                 sections = self._replace_section(
                     sections,
-                    'entities',
-                    self._build_entities(entities[:entity_limit], include_trends=True),
+                    'mental_models',
+                    self._build_mental_models(mental_models[:model_limit], include_trends=True),
                 )
                 if _estimate_tokens(self._assemble(sections)) <= budget:
                     return self._assemble(sections)
 
-            # Step 1b: Drop observation titles (trends) from entities
+            # Step 1b: Drop observation titles (trends) from models
             sections = self._replace_section(
                 sections,
-                'entities',
-                self._build_entities(entities[:5], include_trends=False),
+                'mental_models',
+                self._build_mental_models(mental_models[:5], include_trends=False),
             )
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
