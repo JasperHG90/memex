@@ -104,8 +104,8 @@ async def test_memex_note_search_includes_source_uri(mock_api, mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_includes_summaries(mock_api, mcp_client):
-    """Block summaries from core search result should appear in the output."""
+async def test_memex_note_search_description_fallback_from_summary(mock_api, mcp_client):
+    """When no description in metadata, first block summary is used as description."""
     summaries = [
         BlockSummaryDTO(
             topic='Quarterly results analysis',
@@ -120,15 +120,30 @@ async def test_memex_note_search_includes_summaries(mock_api, mcp_client):
     )
     data = parse_tool_result(result)
 
-    result_summaries = data[0]['summaries']
-    assert len(result_summaries) == 1
-    assert result_summaries[0]['topic'] == 'Quarterly results analysis'
-    assert 'Statistical methods used' in result_summaries[0]['key_points']
+    assert 'summaries' not in data[0]
+    assert data[0]['description'] == (
+        'Quarterly results analysis — Statistical methods used | Q3 2025 data'
+    )
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_no_summaries_gives_empty_list(mock_api, mcp_client):
-    """When no block summaries exist, summaries should be an empty list."""
+async def test_memex_note_search_description_fallback_topic_only(mock_api, mcp_client):
+    """When summary has no key_points, description is just the topic."""
+    summaries = [BlockSummaryDTO(topic='Conclusion', key_points=[])]
+    doc = _make_result(title='Topic Only', summaries=summaries)
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'anything', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    assert data[0]['description'] == 'Conclusion'
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_no_summaries_no_description(mock_api, mcp_client):
+    """When no summaries and no description, description is None."""
     doc = _make_result(title='No Index Doc')
     mock_api.search_notes.return_value = [doc]
 
@@ -137,18 +152,19 @@ async def test_memex_note_search_no_summaries_gives_empty_list(mock_api, mcp_cli
     )
     data = parse_tool_result(result)
 
-    assert data[0]['summaries'] == []
+    assert data[0].get('description') is None
 
 
 @pytest.mark.asyncio
-async def test_memex_note_search_multiple_summaries(mock_api, mcp_client):
-    """Multiple block summaries should all be serialized into the result."""
+async def test_memex_note_search_metadata_description_takes_precedence(mock_api, mcp_client):
+    """When metadata has a description, summaries are not used for fallback."""
     summaries = [
         BlockSummaryDTO(topic='Introduction', key_points=['Background']),
         BlockSummaryDTO(topic='Methods', key_points=['Approach A', 'Approach B']),
         BlockSummaryDTO(topic='Conclusion', key_points=[]),
     ]
     doc = _make_result(title='Multi-block Doc', summaries=summaries)
+    doc.metadata['description'] = 'Existing description from page index'
     mock_api.search_notes.return_value = [doc]
 
     result = await mcp_client.call_tool(
@@ -156,13 +172,8 @@ async def test_memex_note_search_multiple_summaries(mock_api, mcp_client):
     )
     data = parse_tool_result(result)
 
-    result_summaries = data[0]['summaries']
-    assert len(result_summaries) == 3
-    assert result_summaries[0]['topic'] == 'Introduction'
-    assert result_summaries[1]['topic'] == 'Methods'
-    assert result_summaries[1]['key_points'] == ['Approach A', 'Approach B']
-    assert result_summaries[2]['topic'] == 'Conclusion'
-    assert result_summaries[2]['key_points'] == []
+    assert data[0]['description'] == 'Existing description from page index'
+    assert 'summaries' not in data[0]
 
 
 @pytest.mark.asyncio
@@ -360,9 +371,69 @@ async def test_memex_note_search_maps_related_notes_and_links(mock_api, mcp_clie
     assert len(data[0]['related_notes']) == 1
     assert data[0]['related_notes'][0]['note_id'] == str(rn_id)
     assert data[0]['related_notes'][0]['title'] == 'Related'
-    assert data[0]['related_notes'][0]['shared_entities'] == ['Python']
+    # max_shared_entities defaults to 0, so shared_entities are omitted
+    assert data[0]['related_notes'][0]['shared_entities'] == []
     assert data[0]['related_notes'][0]['strength'] == 0.9
     assert len(data[0]['links']) == 1
     assert data[0]['links'][0]['unit_id'] == str(uid)
     assert data[0]['links'][0]['relation'] == 'semantic'
     assert data[0]['links'][0]['weight'] == 0.8
+    # Link metadata is dropped for token efficiency
+    assert data[0]['links'][0]['metadata'] == {}
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_related_notes_capped(mock_api, mcp_client):
+    """Related notes are capped at top_k_related (default 3)."""
+    from memex_common.schemas import RelatedNoteDTO
+
+    nid = uuid4()
+    doc = NoteSearchResult(
+        note_id=nid,
+        metadata={'title': 'Test Doc'},
+        score=0.85,
+        related_notes=[
+            RelatedNoteDTO(note_id=uuid4(), title=f'Related {i}', strength=0.9 - i * 0.1)
+            for i in range(6)
+        ],
+    )
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    assert len(data[0]['related_notes']) == 3
+
+
+@pytest.mark.asyncio
+async def test_memex_note_search_links_capped(mock_api, mcp_client):
+    """Memory links are capped at max_links (default 3) and metadata is dropped."""
+    nid = uuid4()
+    doc = NoteSearchResult(
+        note_id=nid,
+        metadata={'title': 'Test Doc'},
+        score=0.85,
+        links=[
+            MemoryLinkDTO(
+                unit_id=uuid4(),
+                note_id=uuid4(),
+                note_title=f'Note {i}',
+                relation='semantic',
+                weight=0.8 - i * 0.1,
+                metadata={'extra': 'data'},
+            )
+            for i in range(6)
+        ],
+    )
+    mock_api.search_notes.return_value = [doc]
+
+    result = await mcp_client.call_tool(
+        'memex_note_search', {'query': 'test', 'vault_ids': ['test-vault']}
+    )
+    data = parse_tool_result(result)
+
+    assert len(data[0]['links']) == 3
+    for link in data[0]['links']:
+        assert link['metadata'] == {}

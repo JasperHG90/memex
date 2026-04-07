@@ -194,11 +194,6 @@ class McpCooccurrence(BaseModel):
 # ── Note search & find ──
 
 
-class McpBlockSummary(BaseModel):
-    topic: str
-    key_points: list[str] = Field(default_factory=list)
-
-
 class McpNoteSearchResult(BaseModel):
     note_id: UUID
     title: str
@@ -209,7 +204,6 @@ class McpNoteSearchResult(BaseModel):
     tags: list[str] = []
     source_uri: str | None = None
     has_assets: bool = False
-    summaries: list[McpBlockSummary] = Field(default_factory=list)
     related_notes: list[McpRelatedNote] = Field(default_factory=list)
     links: list[McpMemoryLink] = Field(default_factory=list)
     previously_returned: bool = False

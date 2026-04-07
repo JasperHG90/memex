@@ -537,7 +537,7 @@ class RelationConfig(BaseModel):
     """Configuration for note/unit relationship enrichment in search results."""
 
     top_k_related: int = Field(
-        default=5,
+        default=3,
         description='Max related notes returned per search result. 0 = disable related notes.',
     )
     max_shared_entities: int = Field(
@@ -549,6 +549,10 @@ class RelationConfig(BaseModel):
         default=50,
         description='Entities with mention_count above this are excluded from relation queries '
         '(too generic to be informative).',
+    )
+    max_links: int = Field(
+        default=3,
+        description='Max memory links per note in search results. 0 = omit links.',
     )
 
 

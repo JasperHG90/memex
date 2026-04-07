@@ -51,7 +51,6 @@ from memex_mcp.models import (
     McpOverlap,
     McpPageIndex,
     McpPageMetadata,
-    McpBlockSummary,
     McpSupersession,
     McpSurveyFact,
     McpSurveyResult,
@@ -1391,7 +1390,7 @@ async def memex_search_user_notes(
     name='memex_note_search',
     description=(
         'Search and find source notes by hybrid retrieval (note search). '
-        'Find notes about any topic. Returns ranked notes with 5W summaries. '
+        'Find notes about any topic. Returns ranked notes with description. '
         'Results include `related_notes` (notes sharing entities, ranked by specificity) '
         'and `links` (typed relationships like contradicts/reinforces from memory_links). '
         'Use these to follow relationship chains without additional queries. '
@@ -1533,15 +1532,26 @@ async def memex_note_search(
                     or metadata.get('filename')
                     or 'Untitled'
                 )
-                summaries = [McpBlockSummary(**s.model_dump()) for s in doc.summaries]
+                # Use page_index description; fall back to first block summary
+                description = metadata.get('description')
+                if not description and doc.summaries:
+                    s = doc.summaries[0]
+                    description = (
+                        s.topic if not s.key_points else f'{s.topic} — {" | ".join(s.key_points)}'
+                    )
+                rc = get_config(ctx).server.memory.retrieval.relations
                 related_notes = [
                     McpRelatedNote(
                         note_id=rn.note_id,
                         title=rn.title,
-                        shared_entities=rn.shared_entities,
+                        shared_entities=(
+                            rn.shared_entities[: rc.max_shared_entities]
+                            if rc.max_shared_entities
+                            else []
+                        ),
                         strength=rn.strength,
                     )
-                    for rn in getattr(doc, 'related_notes', [])
+                    for rn in getattr(doc, 'related_notes', [])[: rc.top_k_related]
                 ]
                 links = [
                     McpMemoryLink(
@@ -1550,11 +1560,10 @@ async def memex_note_search(
                         note_title=lnk.note_title,
                         relation=lnk.relation,
                         weight=lnk.weight,
-                        # MemoryLinkDTO.time is datetime; McpMemoryLink.time is str (ISO 8601)
                         time=lnk.time.isoformat() if lnk.time else None,
-                        metadata=lnk.metadata,
+                        metadata={},
                     )
-                    for lnk in getattr(doc, 'links', [])
+                    for lnk in getattr(doc, 'links', [])[: rc.max_links]
                 ]
                 output.append(
                     McpNoteSearchResult(
@@ -1563,11 +1572,10 @@ async def memex_note_search(
                         score=doc.score,
                         vault_name=doc.vault_name,
                         status=getattr(doc, 'note_status', None),
-                        description=metadata.get('description'),
+                        description=description,
                         tags=metadata.get('tags', []),
                         source_uri=metadata.get('source_uri'),
                         has_assets=metadata.get('has_assets', False),
-                        summaries=summaries,
                         related_notes=related_notes,
                         links=links,
                     )
