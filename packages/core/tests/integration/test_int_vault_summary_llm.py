@@ -34,7 +34,6 @@ def _make_lm() -> dspy.LM:
 
 SAMPLE_NOTES = [
     NoteMetadata(
-        index=0,
         title='ReAct: Synergizing Reasoning and Acting in Language Models',
         publish_date='2023-03-10',
         tags=['ai', 'agents', 'reasoning'],
@@ -45,7 +44,6 @@ SAMPLE_NOTES = [
         summaries=[{'topic': 'Agent reasoning', 'key_points': ['ReAct pattern', 'Tool use']}],
     ),
     NoteMetadata(
-        index=1,
         title='Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks',
         publish_date='2020-05-22',
         tags=['ai', 'rag', 'retrieval'],
@@ -56,7 +54,6 @@ SAMPLE_NOTES = [
         summaries=[{'topic': 'RAG', 'key_points': ['Retrieval + generation', 'Knowledge base']}],
     ),
     NoteMetadata(
-        index=2,
         title='Building a Personal Knowledge Graph with Memex',
         publish_date='2026-03-15',
         tags=['memex', 'knowledge-graph', 'personal'],
@@ -75,7 +72,9 @@ def _validate_themes(themes: list, min_count: int = 1) -> None:
         if isinstance(t, LLMTheme):
             assert t.name, 'LLMTheme must have a name'
             assert t.description, 'LLMTheme must have a description'
-            assert isinstance(t.note_indices, list), 'note_indices must be a list'
+            assert isinstance(t.note_count, int), 'note_count must be an int'
+            assert t.trend in ('growing', 'stable', 'dormant'), f'Invalid trend: {t.trend}'
+            assert isinstance(t.representative_titles, list), 'representative_titles must be a list'
         elif isinstance(t, dict):
             assert 'name' in t, 'Theme dict must have name'
             assert 'description' in t, 'Theme dict must have description'
@@ -120,12 +119,12 @@ async def test_llm_update_signature_produces_typed_themes():
         LLMTheme(
             name='AI Agents',
             description='Research on autonomous AI agents',
-            note_indices=[0],
+            note_count=1,
+            trend='growing',
         ),
     ]
 
     new_note = NoteMetadata(
-        index=0,
         title='Toolformer: Language Models Can Teach Themselves to Use Tools',
         publish_date='2023-02-09',
         tags=['ai', 'tools', 'agents'],
@@ -189,9 +188,17 @@ async def test_llm_merge_signature_produces_typed_themes():
         BatchResult(
             batch_index=0,
             themes=[
-                LLMTheme(name='AI Agents', description='Autonomous agents', note_indices=[0, 1]),
                 LLMTheme(
-                    name='RAG', description='Retrieval-augmented generation', note_indices=[1]
+                    name='AI Agents',
+                    description='Autonomous agents',
+                    note_count=2,
+                    trend='growing',
+                ),
+                LLMTheme(
+                    name='RAG',
+                    description='Retrieval-augmented generation',
+                    note_count=1,
+                    trend='stable',
                 ),
             ],
             batch_summary='Papers on AI agents and RAG.',
@@ -199,8 +206,18 @@ async def test_llm_merge_signature_produces_typed_themes():
         BatchResult(
             batch_index=1,
             themes=[
-                LLMTheme(name='Knowledge Management', description='PKM systems', note_indices=[0]),
-                LLMTheme(name='AI Agents', description='LLM-based agents', note_indices=[0]),
+                LLMTheme(
+                    name='Knowledge Management',
+                    description='PKM systems',
+                    note_count=1,
+                    trend='stable',
+                ),
+                LLMTheme(
+                    name='AI Agents',
+                    description='LLM-based agents',
+                    note_count=1,
+                    trend='growing',
+                ),
             ],
             batch_summary='Notes on knowledge management and more agent research.',
         ),

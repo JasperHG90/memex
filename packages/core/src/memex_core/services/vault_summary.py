@@ -53,75 +53,12 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.vault_summary')
 
-
-_TREND_GROWING_THRESHOLD = 3  # notes in 30d → growing
-_TREND_STABLE_THRESHOLD = 1  # notes in 30d → stable (1-2), dormant (0)
+_SYSTEM_TAGS = frozenset({'obsidian', 'cli', 'quick-note', 'note-with-assets', 'system-hint'})
 
 
-def _build_indexed_notes(notes_data: list[dict[str, Any]]) -> list[NoteMetadata]:
-    """Convert raw note metadata dicts to indexed NoteMetadata for LLM input."""
-    return [NoteMetadata(index=i, **n) for i, n in enumerate(notes_data)]
-
-
-def _resolve_themes(
-    llm_themes: list[LLMTheme],
-    notes: list[NoteMetadata],
-) -> list[dict[str, Any]]:
-    """Resolve LLM themes into persisted dicts with deterministic trend/dates.
-
-    Maps note_indices back to titles and publish_dates, computes:
-    - note_count: number of valid indices
-    - representative_titles: titles of referenced notes (max 3)
-    - last_addition: most recent publish_date among referenced notes
-    - trend: 'growing' (3+ in last 30d), 'stable' (1-2), 'dormant' (0)
-    """
-    now = datetime.now(timezone.utc).date()
-    thirty_days_ago = now - timedelta(days=30)
-
-    resolved: list[dict[str, Any]] = []
-    for theme in llm_themes:
-        # Resolve valid indices
-        valid_notes = [notes[i] for i in theme.note_indices if 0 <= i < len(notes)]
-        note_count = len(valid_notes) if valid_notes else 1  # at least 1 if theme exists
-
-        # Extract titles (max 3)
-        titles = [n.title for n in valid_notes[:3]]
-
-        # Parse dates for trend computation
-        dates: list[datetime] = []
-        for n in valid_notes:
-            if n.publish_date:
-                try:
-                    dt = datetime.fromisoformat(n.publish_date)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    dates.append(dt)
-                except (ValueError, TypeError):
-                    pass
-
-        # Compute last_addition
-        last_addition = max(dates).date().isoformat() if dates else None
-
-        # Compute trend from date counts in last 30 days
-        recent_count = sum(1 for d in dates if d.date() >= thirty_days_ago)
-        if recent_count >= _TREND_GROWING_THRESHOLD:
-            trend = 'growing'
-        elif recent_count >= _TREND_STABLE_THRESHOLD:
-            trend = 'stable'
-        else:
-            trend = 'dormant'
-
-        resolved.append(
-            {
-                'name': theme.name,
-                'description': theme.description,
-                'note_count': note_count,
-                'trend': trend,
-                'last_addition': last_addition,
-                'representative_titles': titles,
-            }
-        )
-    return resolved
+def _themes_to_dicts(themes: list[LLMTheme | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert LLMTheme objects to dicts for JSONB persistence."""
+    return [t.model_dump() if isinstance(t, LLMTheme) else t for t in themes]
 
 
 def _estimate_tokens(text: str) -> int:
@@ -292,17 +229,10 @@ class VaultSummaryService:
         )
 
         running_narrative = current_narrative
-        running_themes = [
-            LLMTheme(name=t['name'], description=t.get('description', ''))
-            if isinstance(t, dict)
-            else t
-            for t in current_themes
-        ]
+        running_themes = [LLMTheme(**t) if isinstance(t, dict) else t for t in current_themes]
 
-        all_indexed_notes: list[NoteMetadata] = []
         for batch in batches:
-            notes = _build_indexed_notes(batch)
-            all_indexed_notes.extend(notes)
+            notes = [NoteMetadata(**n) for n in batch]
             predictor = dspy.Predict(VaultSummaryUpdateSignature)
             prediction = await run_dspy_operation(
                 lm=self.lm,
@@ -342,7 +272,7 @@ class VaultSummaryService:
                 return summary
 
             summary.narrative = running_narrative
-            summary.themes = _resolve_themes(running_themes, all_indexed_notes)
+            summary.themes = _themes_to_dicts(running_themes)
             summary.inventory = inventory
             summary.key_entities = key_entities
             summary.version += 1
@@ -511,7 +441,7 @@ class VaultSummaryService:
                         pass
 
                 for tag in doc_meta.get('tags', []):
-                    if isinstance(tag, str) and tag:
+                    if isinstance(tag, str) and tag and tag.lower() not in _SYSTEM_TAGS:
                         tag_counts[tag] += 1
 
             # Recent activity
@@ -546,18 +476,19 @@ class VaultSummaryService:
         }
 
     async def _compute_key_entities(self, vault_id: UUID, limit: int = 10) -> list[dict[str, Any]]:
-        """Fetch top entities by mention count for the vault. No LLM calls."""
+        """Fetch top entities by vault-scoped mention count. No LLM calls."""
         async with self.metastore.session() as session:
+            vault_mentions = func.count(UnitEntity.unit_id).label('vault_mentions')
             stmt = (
                 select(
                     Entity.canonical_name,
                     Entity.entity_type,
-                    Entity.mention_count,
+                    vault_mentions,
                 )
                 .join(UnitEntity, col(UnitEntity.entity_id) == col(Entity.id))
                 .where(col(UnitEntity.vault_id) == vault_id)
                 .group_by(col(Entity.id))
-                .order_by(col(Entity.mention_count).desc())
+                .order_by(vault_mentions.desc())
                 .limit(limit)
             )
             rows = (await session.execute(stmt)).all()
@@ -566,7 +497,7 @@ class VaultSummaryService:
             {
                 'name': row.canonical_name,
                 'type': row.entity_type or 'unknown',
-                'mention_count': row.mention_count,
+                'mention_count': row.vault_mentions,
             }
             for row in rows
         ]
@@ -690,7 +621,7 @@ class VaultSummaryService:
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Tier 1: single LLM call for small payloads."""
-        notes = _build_indexed_notes(notes_data)
+        notes = [NoteMetadata(**n) for n in notes_data]
         predictor = dspy.Predict(VaultSummaryFullSignature)
         prediction = await run_dspy_operation(
             lm=self.lm,
@@ -702,7 +633,7 @@ class VaultSummaryService:
             },
             operation_name='vault_summary_full',
         )
-        return prediction.narrative, _resolve_themes(prediction.themes, notes)
+        return prediction.narrative, _themes_to_dicts(prediction.themes)
 
     async def _tier2_two_pass(
         self,
@@ -746,10 +677,7 @@ class VaultSummaryService:
                     merged.append(
                         BatchResult(
                             batch_index=len(merged),
-                            themes=[
-                                LLMTheme(name=t['name'], description=t['description'])
-                                for t in themes
-                            ],
+                            themes=[LLMTheme(**t) for t in themes],
                             batch_summary=narrative,
                         )
                     )
@@ -774,7 +702,7 @@ class VaultSummaryService:
 
         for i, batch in enumerate(batches):
             try:
-                notes = _build_indexed_notes(batch)
+                notes = [NoteMetadata(**n) for n in batch]
                 predictor = dspy.Predict(VaultTopicExtractSignature)
                 prediction = await run_dspy_operation(
                     lm=self.lm,
@@ -810,12 +738,7 @@ class VaultSummaryService:
         batch_results: list[BatchResult],
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Merge batch theme results into a final narrative and theme list.
-
-        Note: merged themes have no valid note_indices (cross-batch indices
-        aren't comparable). We use the LLM's note_count estimate and fall
-        back to 'stable' trend since we can't compute it deterministically.
-        """
+        """Merge batch theme results into a final narrative and theme list."""
         predictor = dspy.Predict(VaultTopicMergeSignature)
         prediction = await run_dspy_operation(
             lm=self.lm,
@@ -826,14 +749,4 @@ class VaultSummaryService:
             },
             operation_name='vault_summary_theme_merge',
         )
-        # Merged themes have no valid indices — resolve with empty notes list
-        # This gives note_count=1, trend='dormant', no titles.
-        # Override note_count from the LLM's estimate (it saw batch counts).
-        resolved = _resolve_themes(prediction.themes, [])
-        for i, theme in enumerate(resolved):
-            if i < len(prediction.themes):
-                llm_count = len(prediction.themes[i].note_indices)
-                if llm_count > 0:
-                    theme['note_count'] = llm_count
-            theme['trend'] = 'stable'  # Can't compute without indices
-        return prediction.narrative, resolved
+        return prediction.narrative, _themes_to_dicts(prediction.themes)

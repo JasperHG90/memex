@@ -2,45 +2,37 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import dspy
 from pydantic import BaseModel, Field
-
-NOTE_INDEX_DESCRIPTION = (
-    'Zero-based integer indices into the notes list identifying which notes belong to this theme. '
-    'Example: [0, 3, 7] means the first, fourth, and eighth notes. '
-    'STRICT RULE: Only use indices that exist in the provided notes list.'
-)
 
 
 # ─── Pydantic models ───
 
 
 class LLMTheme(BaseModel):
-    """A thematic area as returned by the LLM. Contains note_indices for grounding."""
+    """A thematic area in the vault, as identified by the LLM."""
 
     name: str = Field(description='Descriptive theme name.')
     description: str = Field(description='Brief description of what the theme covers.')
-    note_indices: list[int] = Field(
-        default_factory=list,
-        description=NOTE_INDEX_DESCRIPTION,
+    note_count: int = Field(description='Number of notes related to this theme.')
+    trend: Literal['growing', 'stable', 'dormant'] = Field(
+        default='stable',
+        description='Recency trend based on publish_date of notes in this theme. '
+        'growing: 3+ notes added in last 30 days. '
+        'stable: 1-2 notes in last 30 days. '
+        'dormant: no notes added in last 30 days.',
     )
-
-
-class ResolvedTheme(BaseModel):
-    """A theme after post-processing: indices resolved to titles, trend computed from dates."""
-
-    name: str
-    description: str
-    note_count: int
-    trend: str  # 'growing', 'stable', 'dormant'
-    last_addition: str | None = None
-    representative_titles: list[str] = Field(default_factory=list)
+    representative_titles: list[str] = Field(
+        default_factory=list,
+        description='2-3 representative note titles from the input.',
+    )
 
 
 class NoteMetadata(BaseModel):
     """Rich metadata for a note, used as LLM input."""
 
-    index: int = Field(description='Zero-based index of this note in the list.')
     title: str
     publish_date: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -81,8 +73,9 @@ class VaultSummaryUpdateSignature(dspy.Signature):
     thematic synthesis (2-4 sentences, max 200 tokens) capturing what the vault
     is about and what cross-cutting patterns connect the themes.
 
-    Each note has an index field. Use note_indices to reference which notes
-    belong to each theme. Only use valid indices from the new_notes list.
+    Use publish_date fields to determine trend: growing (3+ new in 30d),
+    stable (1-2), dormant (none in 30d). Adjust note_count by adding new
+    notes that fit each theme to the existing count.
     """
 
     current_narrative: str = dspy.InputField(
@@ -97,7 +90,7 @@ class VaultSummaryUpdateSignature(dspy.Signature):
         'Capture what the vault is about and what patterns connect the themes.'
     )
     updated_themes: list[LLMTheme] = dspy.OutputField(
-        desc='Updated themes. 5-15 themes. Use note_indices to reference new notes.'
+        desc='Updated themes. 5-15 themes. Adjust note_count and trend based on new notes.'
     )
 
 
@@ -108,8 +101,9 @@ class VaultSummaryFullSignature(dspy.Signature):
     narrative. The narrative (2-4 sentences, max 200 tokens) should capture the
     overall scope of the vault and the patterns connecting its themes.
 
-    Each note has an index field. Use note_indices to reference which notes
-    belong to each theme. Only use valid indices from the notes list.
+    Use publish_date fields to determine each theme's trend: growing (3+ notes
+    added in last 30 days), stable (1-2), dormant (none in 30 days).
+    Pick 2-3 representative note titles per theme from the input.
     """
 
     notes: list[NoteMetadata] = dspy.InputField(desc='All note metadata in the vault.')
@@ -122,18 +116,13 @@ class VaultSummaryFullSignature(dspy.Signature):
         desc='Thematic synthesis of the vault, max 200 tokens. '
         '2-4 sentences: what the vault covers and what patterns connect its themes.'
     )
-    themes: list[LLMTheme] = dspy.OutputField(
-        desc='Extracted themes. Between 5-15 themes. Use note_indices to reference notes.'
-    )
+    themes: list[LLMTheme] = dspy.OutputField(desc='Extracted themes. Between 5-15 themes.')
 
 
 class VaultTopicExtractSignature(dspy.Signature):
     """Extract themes from a batch of note metadata.
 
     Given a batch of note metadata, identify the key themes covered.
-    Each note has an index field. Use note_indices to reference which notes
-    belong to each theme. Only use valid indices from the notes list.
-
     This is the first pass in hierarchical summarization for large vaults.
     """
 
@@ -141,9 +130,7 @@ class VaultTopicExtractSignature(dspy.Signature):
     batch_index: int = dspy.InputField(desc='The index of this batch (0-based).')
     total_batches: int = dspy.InputField(desc='Total number of batches being processed.')
 
-    themes: list[LLMTheme] = dspy.OutputField(
-        desc='Extracted themes from this batch. Use note_indices to reference notes.'
-    )
+    themes: list[LLMTheme] = dspy.OutputField(desc='Extracted themes from this batch.')
     batch_summary: str = dspy.OutputField(
         desc='A brief summary of this batch of notes (2-4 sentences).'
     )
@@ -156,9 +143,8 @@ class VaultTopicMergeSignature(dspy.Signature):
     merge overlapping themes and produce a unified theme list and a short narrative.
 
     Deduplicate themes that refer to the same concept under different names.
-    Keep between 5-15 final themes. Narrative must be under 200 tokens.
-    Note: note_indices from different batches cannot be combined — leave them empty
-    in the merged output.
+    Sum note_count when merging duplicate themes. Keep between 5-15 final themes.
+    Narrative must be under 200 tokens.
     """
 
     batch_results: list[BatchResult] = dspy.InputField(
@@ -171,6 +157,5 @@ class VaultTopicMergeSignature(dspy.Signature):
         '2-4 sentences: scope and cross-cutting patterns.'
     )
     themes: list[LLMTheme] = dspy.OutputField(
-        desc='Merged themes. Between 5-15 themes, duplicates merged. '
-        'note_indices should be empty (cross-batch indices are not comparable).'
+        desc='Merged themes. Between 5-15 themes, duplicates merged, note_count summed.'
     )

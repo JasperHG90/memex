@@ -240,7 +240,7 @@ async def test_update_summary_consolidates_sessions(metastore, session):
     mock_prediction = MagicMock()
     mock_prediction.updated_narrative = 'Updated summary with new research'
     mock_prediction.updated_themes = [
-        LLMTheme(name='Research', description='Research topics', note_indices=[0])
+        LLMTheme(name='Research', description='Research topics', note_count=1, trend='growing')
     ]
 
     mock_lm = MagicMock(spec=['__call__'])
