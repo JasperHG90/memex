@@ -10,6 +10,7 @@ import pytest
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
 from memex_core.services.vault_summary import VaultSummaryService, _estimate_tokens
+from memex_core.services.vault_summary_signatures import LLMTheme
 
 
 def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryService:
@@ -252,7 +253,7 @@ class TestUpdateSummary:
         mock_prediction = MagicMock()
         mock_prediction.updated_narrative = 'Updated overview with 3 new notes.'
         mock_prediction.updated_themes = [
-            {'name': 'AI', 'note_count': 8, 'description': 'AI topics expanded'},
+            LLMTheme(name='AI', description='AI topics expanded', note_indices=[0, 1, 2]),
         ]
 
         with (

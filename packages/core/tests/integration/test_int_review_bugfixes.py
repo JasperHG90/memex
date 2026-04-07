@@ -22,6 +22,7 @@ from memex_core.memory.sql_models import (
     VaultSummary,
 )
 from memex_common.types import FactTypes
+from memex_core.services.vault_summary_signatures import LLMTheme
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +239,9 @@ async def test_update_summary_consolidates_sessions(metastore, session):
     # Mock LLM
     mock_prediction = MagicMock()
     mock_prediction.updated_narrative = 'Updated summary with new research'
-    mock_prediction.updated_themes = [{'name': 'Research', 'note_count': 1}]
+    mock_prediction.updated_themes = [
+        LLMTheme(name='Research', description='Research topics', note_indices=[0])
+    ]
 
     mock_lm = MagicMock(spec=['__call__'])
     svc = VaultSummaryService(

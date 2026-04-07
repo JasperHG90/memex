@@ -15,6 +15,7 @@ from sqlmodel import col, select, text
 from memex_common.config import GLOBAL_VAULT_ID, VaultSummaryConfig
 from memex_core.memory.sql_models import Chunk, ContentStatus, Note, VaultSummary
 from memex_core.services.vault_summary import VaultSummaryService
+from memex_core.services.vault_summary_signatures import LLMTheme
 
 
 async def _insert_note(
@@ -219,7 +220,9 @@ class TestNoteMarkingAfterUpdate:
 
         mock_prediction = MagicMock()
         mock_prediction.updated_narrative = 'Updated summary with ML basics.'
-        mock_prediction.updated_themes = [{'name': 'ML', 'note_count': 1}]
+        mock_prediction.updated_themes = [
+            LLMTheme(name='ML', description='ML basics', note_indices=[0])
+        ]
 
         svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
 

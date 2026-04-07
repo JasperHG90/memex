@@ -2,8 +2,9 @@
 
 from memex_core.services.vault_summary_signatures import (
     BatchResult,
+    LLMTheme,
     NoteMetadata,
-    Theme,
+    ResolvedTheme,
     VaultStats,
     VaultSummaryFullSignature,
     VaultSummaryUpdateSignature,
@@ -15,15 +16,32 @@ from memex_core.services.vault_summary_signatures import (
 # ─── Pydantic model tests ───
 
 
-class TestThemeModel:
+class TestLLMThemeModel:
     def test_defaults(self):
-        t = Theme(name='AI', description='AI research', note_count=5)
-        assert t.trend == 'stable'
+        t = LLMTheme(name='AI', description='AI research')
+        assert t.note_indices == []
+
+    def test_with_note_indices(self):
+        t = LLMTheme(name='AI', description='AI research', note_indices=[0, 1, 2])
+        assert t.note_indices == [0, 1, 2]
+
+    def test_model_dump_roundtrip(self):
+        t = LLMTheme(name='AI', description='AI research', note_indices=[0, 3])
+        d = t.model_dump()
+        assert d['name'] == 'AI'
+        assert d['note_indices'] == [0, 3]
+        t2 = LLMTheme(**d)
+        assert t2 == t
+
+
+class TestResolvedThemeModel:
+    def test_defaults(self):
+        t = ResolvedTheme(name='AI', description='AI research', note_count=5, trend='stable')
         assert t.last_addition is None
         assert t.representative_titles == []
 
     def test_full_construction(self):
-        t = Theme(
+        t = ResolvedTheme(
             name='AI',
             description='AI research',
             note_count=5,
@@ -35,23 +53,25 @@ class TestThemeModel:
         assert len(t.representative_titles) == 2
 
     def test_model_dump_roundtrip(self):
-        t = Theme(name='AI', description='AI research', note_count=5, trend='dormant')
+        t = ResolvedTheme(name='AI', description='AI research', note_count=5, trend='dormant')
         d = t.model_dump()
         assert d['name'] == 'AI'
         assert d['trend'] == 'dormant'
-        t2 = Theme(**d)
+        t2 = ResolvedTheme(**d)
         assert t2 == t
 
 
 class TestNoteMetadataModel:
     def test_minimal(self):
-        n = NoteMetadata(title='Test')
+        n = NoteMetadata(index=0, title='Test')
         assert n.title == 'Test'
+        assert n.index == 0
         assert n.tags == []
         assert n.summaries == []
 
     def test_full(self):
         n = NoteMetadata(
+            index=3,
             title='ML Paper',
             publish_date='2026-04-01',
             tags=['ml'],
@@ -62,6 +82,7 @@ class TestNoteMetadataModel:
             summaries=[{'topic': 'ML', 'key_points': ['Point 1']}],
         )
         assert n.source_domain == 'arxiv.org'
+        assert n.index == 3
 
 
 class TestVaultStatsModel:
@@ -75,11 +96,12 @@ class TestBatchResultModel:
     def test_with_themes(self):
         br = BatchResult(
             batch_index=0,
-            themes=[Theme(name='AI', description='AI', note_count=5)],
+            themes=[LLMTheme(name='AI', description='AI', note_indices=[0, 1, 2])],
             batch_summary='AI batch',
         )
         assert len(br.themes) == 1
         assert br.themes[0].name == 'AI'
+        assert br.themes[0].note_indices == [0, 1, 2]
 
 
 # ─── Signature field tests ───
