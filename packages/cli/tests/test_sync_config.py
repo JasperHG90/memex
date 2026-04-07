@@ -25,7 +25,7 @@ class TestDefaults:
     def test_default_config(self) -> None:
         cfg = NoteSyncConfig()
         assert cfg.vault_id is None
-        assert cfg.sync.batch_size == 32
+        assert cfg.sync.batch_size == 1
         assert cfg.sync.state_file == '.memex-sync.db'
         assert '.obsidian' in cfg.sync.exclude.base
         assert cfg.sync.assets.enabled is True
@@ -58,14 +58,14 @@ class TestTomlLoading:
     def test_defaults_when_no_config(self, vault: Path) -> None:
         cfg = load_config(vault)
         assert cfg.vault_id is None
-        assert cfg.sync.batch_size == 32
+        assert cfg.sync.batch_size == 1
 
     def test_partial_toml_merges_with_defaults(self, vault: Path) -> None:
         (vault / CONFIG_FILENAME).write_text('[watch]\nmode = "poll"\n')
         cfg = load_config(vault)
         assert cfg.watch.mode == WatchMode.poll
         # Other defaults should still be present
-        assert cfg.sync.batch_size == 32
+        assert cfg.sync.batch_size == 1
 
     def test_nested_toml_sections(self, vault: Path) -> None:
         (vault / CONFIG_FILENAME).write_text(
@@ -111,7 +111,7 @@ class TestDefaultConfigToml:
         """Ensure the default config template parses without error."""
         (vault / CONFIG_FILENAME).write_text(DEFAULT_CONFIG_TOML)
         cfg = load_config(vault)
-        assert cfg.sync.batch_size == 32
+        assert cfg.sync.batch_size == 1
         assert cfg.watch.mode == WatchMode.events
 
 

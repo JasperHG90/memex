@@ -92,7 +92,7 @@ class SyncConfig(BaseModel):
         'Tracks which files have been synced, their modification times, and sync metadata.',
     )
     batch_size: int = Field(
-        default=32,
+        default=1,
         ge=1,
         le=100,
         description='Number of notes per batch when ingesting via the batch API. Range: 1-100.',
@@ -314,7 +314,7 @@ DEFAULT_CONFIG_TOML = """\
 
 [sync]
 state_file = ".memex-sync.db"
-batch_size = 32
+batch_size = 1
 note_key_prefix = "obsidian"
 default_tags = ["obsidian"]
 # File extensions to include in sync (non-.md files are converted server-side)

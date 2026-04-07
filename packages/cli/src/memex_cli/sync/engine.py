@@ -135,15 +135,15 @@ async def _poll_job(
 
         assert status is not None  # assigned in try, exception continues
 
-        if on_progress and status.progress:
+        if on_progress and (status.progress or status.total_count):
             current = status.processed_count or 0
             total = status.total_count or 0
             # Fallback: parse "Processed X/Y notes" if server lacks numeric fields
-            if not current and not total:
+            if not current and not total and status.progress:
                 m = re.search(r'(\d+)/(\d+)', status.progress)
                 if m:
                     current, total = int(m.group(1)), int(m.group(2))
-            on_progress('ingesting', current, total, status.progress)
+            on_progress('ingesting', current, total, status.progress or '')
 
             # Stale detection: warn but keep polling
             if current == last_progress_value:
