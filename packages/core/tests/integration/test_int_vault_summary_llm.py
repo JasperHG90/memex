@@ -12,8 +12,8 @@ import pytest
 from memex_core.llm import run_dspy_operation
 from memex_core.services.vault_summary_signatures import (
     BatchResult,
+    LLMTheme,
     NoteMetadata,
-    Theme,
     VaultStats,
     VaultSummaryFullSignature,
     VaultSummaryUpdateSignature,
@@ -34,6 +34,7 @@ def _make_lm() -> dspy.LM:
 
 SAMPLE_NOTES = [
     NoteMetadata(
+        index=0,
         title='ReAct: Synergizing Reasoning and Acting in Language Models',
         publish_date='2023-03-10',
         tags=['ai', 'agents', 'reasoning'],
@@ -44,6 +45,7 @@ SAMPLE_NOTES = [
         summaries=[{'topic': 'Agent reasoning', 'key_points': ['ReAct pattern', 'Tool use']}],
     ),
     NoteMetadata(
+        index=1,
         title='Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks',
         publish_date='2020-05-22',
         tags=['ai', 'rag', 'retrieval'],
@@ -54,6 +56,7 @@ SAMPLE_NOTES = [
         summaries=[{'topic': 'RAG', 'key_points': ['Retrieval + generation', 'Knowledge base']}],
     ),
     NoteMetadata(
+        index=2,
         title='Building a Personal Knowledge Graph with Memex',
         publish_date='2026-03-15',
         tags=['memex', 'knowledge-graph', 'personal'],
@@ -65,15 +68,14 @@ SAMPLE_NOTES = [
 
 
 def _validate_themes(themes: list, min_count: int = 1) -> None:
-    """Assert that themes are valid Theme objects with required fields."""
+    """Assert that themes are valid LLMTheme objects with required fields."""
     assert isinstance(themes, list), f'Expected list, got {type(themes)}'
     assert len(themes) >= min_count, f'Expected >= {min_count} themes, got {len(themes)}'
     for t in themes:
-        if isinstance(t, Theme):
-            assert t.name, 'Theme must have a name'
-            assert t.description, 'Theme must have a description'
-            assert t.note_count >= 0, 'note_count must be non-negative'
-            assert t.trend in ('growing', 'stable', 'dormant'), f'Invalid trend: {t.trend}'
+        if isinstance(t, LLMTheme):
+            assert t.name, 'LLMTheme must have a name'
+            assert t.description, 'LLMTheme must have a description'
+            assert isinstance(t.note_indices, list), 'note_indices must be a list'
         elif isinstance(t, dict):
             assert 'name' in t, 'Theme dict must have name'
             assert 'description' in t, 'Theme dict must have description'
@@ -115,17 +117,15 @@ async def test_llm_update_signature_produces_typed_themes():
     lm = _make_lm()
 
     existing_themes = [
-        Theme(
+        LLMTheme(
             name='AI Agents',
             description='Research on autonomous AI agents',
-            note_count=1,
-            trend='growing',
-            last_addition='2023-03-10',
-            representative_titles=['ReAct paper'],
+            note_indices=[0],
         ),
     ]
 
     new_note = NoteMetadata(
+        index=0,
         title='Toolformer: Language Models Can Teach Themselves to Use Tools',
         publish_date='2023-02-09',
         tags=['ai', 'tools', 'agents'],
@@ -189,16 +189,18 @@ async def test_llm_merge_signature_produces_typed_themes():
         BatchResult(
             batch_index=0,
             themes=[
-                Theme(name='AI Agents', description='Autonomous agents', note_count=2),
-                Theme(name='RAG', description='Retrieval-augmented generation', note_count=1),
+                LLMTheme(name='AI Agents', description='Autonomous agents', note_indices=[0, 1]),
+                LLMTheme(
+                    name='RAG', description='Retrieval-augmented generation', note_indices=[1]
+                ),
             ],
             batch_summary='Papers on AI agents and RAG.',
         ),
         BatchResult(
             batch_index=1,
             themes=[
-                Theme(name='Knowledge Management', description='PKM systems', note_count=1),
-                Theme(name='AI Agents', description='LLM-based agents', note_count=1),
+                LLMTheme(name='Knowledge Management', description='PKM systems', note_indices=[0]),
+                LLMTheme(name='AI Agents', description='LLM-based agents', note_indices=[0]),
             ],
             batch_summary='Notes on knowledge management and more agent research.',
         ),
@@ -218,5 +220,5 @@ async def test_llm_merge_signature_produces_typed_themes():
     assert result.narrative, 'Merged narrative must not be empty'
     _validate_themes(result.themes)
     # The merge should deduplicate "AI Agents" from both batches
-    theme_names = [t.name if isinstance(t, Theme) else t['name'] for t in result.themes]
+    theme_names = [t.name if isinstance(t, LLMTheme) else t['name'] for t in result.themes]
     assert len(theme_names) == len(set(theme_names)), f'Duplicate themes found: {theme_names}'

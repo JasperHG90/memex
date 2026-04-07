@@ -16,6 +16,7 @@ import pytest
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
 from memex_core.services.vault_summary import VaultSummaryService
+from memex_core.services.vault_summary_signatures import LLMTheme
 
 
 def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryService:
@@ -520,14 +521,7 @@ class TestStructuredFields:
             prediction = MagicMock()
             prediction.updated_narrative = 'Updated narrative'
             prediction.updated_themes = [
-                {
-                    'name': 'AI',
-                    'description': 'AI stuff',
-                    'note_count': 10,
-                    'trend': 'growing',
-                    'last_addition': '2026-04-07',
-                    'representative_titles': ['Paper A'],
-                }
+                LLMTheme(name='AI', description='AI stuff', note_indices=[0]),
             ]
             mock_llm.return_value = prediction
 
