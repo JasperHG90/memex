@@ -253,7 +253,7 @@ class TestUpdateSummary:
         mock_prediction = MagicMock()
         mock_prediction.updated_narrative = 'Updated overview with 3 new notes.'
         mock_prediction.updated_themes = [
-            LLMTheme(name='AI', description='AI topics expanded', note_indices=[0, 1, 2]),
+            LLMTheme(name='AI', description='AI topics expanded', note_count=3, trend='growing'),
         ]
 
         with (

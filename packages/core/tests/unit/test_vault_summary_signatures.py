@@ -4,7 +4,6 @@ from memex_core.services.vault_summary_signatures import (
     BatchResult,
     LLMTheme,
     NoteMetadata,
-    ResolvedTheme,
     VaultStats,
     VaultSummaryFullSignature,
     VaultSummaryUpdateSignature,
@@ -17,61 +16,43 @@ from memex_core.services.vault_summary_signatures import (
 
 
 class TestLLMThemeModel:
-    def test_defaults(self):
-        t = LLMTheme(name='AI', description='AI research')
-        assert t.note_indices == []
-
-    def test_with_note_indices(self):
-        t = LLMTheme(name='AI', description='AI research', note_indices=[0, 1, 2])
-        assert t.note_indices == [0, 1, 2]
-
-    def test_model_dump_roundtrip(self):
-        t = LLMTheme(name='AI', description='AI research', note_indices=[0, 3])
-        d = t.model_dump()
-        assert d['name'] == 'AI'
-        assert d['note_indices'] == [0, 3]
-        t2 = LLMTheme(**d)
-        assert t2 == t
-
-
-class TestResolvedThemeModel:
-    def test_defaults(self):
-        t = ResolvedTheme(name='AI', description='AI research', note_count=5, trend='stable')
-        assert t.last_addition is None
+    def test_required_fields(self):
+        t = LLMTheme(name='AI', description='AI research', note_count=5, trend='stable')
+        assert t.note_count == 5
+        assert t.trend == 'stable'
         assert t.representative_titles == []
 
-    def test_full_construction(self):
-        t = ResolvedTheme(
+    def test_with_representative_titles(self):
+        t = LLMTheme(
             name='AI',
             description='AI research',
-            note_count=5,
+            note_count=3,
             trend='growing',
-            last_addition='2026-04-06',
             representative_titles=['Paper A', 'Paper B'],
         )
+        assert t.note_count == 3
         assert t.trend == 'growing'
         assert len(t.representative_titles) == 2
 
     def test_model_dump_roundtrip(self):
-        t = ResolvedTheme(name='AI', description='AI research', note_count=5, trend='dormant')
+        t = LLMTheme(name='AI', description='AI research', note_count=5, trend='dormant')
         d = t.model_dump()
         assert d['name'] == 'AI'
+        assert d['note_count'] == 5
         assert d['trend'] == 'dormant'
-        t2 = ResolvedTheme(**d)
+        t2 = LLMTheme(**d)
         assert t2 == t
 
 
 class TestNoteMetadataModel:
     def test_minimal(self):
-        n = NoteMetadata(index=0, title='Test')
+        n = NoteMetadata(title='Test')
         assert n.title == 'Test'
-        assert n.index == 0
         assert n.tags == []
         assert n.summaries == []
 
     def test_full(self):
         n = NoteMetadata(
-            index=3,
             title='ML Paper',
             publish_date='2026-04-01',
             tags=['ml'],
@@ -82,7 +63,6 @@ class TestNoteMetadataModel:
             summaries=[{'topic': 'ML', 'key_points': ['Point 1']}],
         )
         assert n.source_domain == 'arxiv.org'
-        assert n.index == 3
 
 
 class TestVaultStatsModel:
@@ -96,12 +76,13 @@ class TestBatchResultModel:
     def test_with_themes(self):
         br = BatchResult(
             batch_index=0,
-            themes=[LLMTheme(name='AI', description='AI', note_indices=[0, 1, 2])],
+            themes=[LLMTheme(name='AI', description='AI', note_count=3, trend='growing')],
             batch_summary='AI batch',
         )
         assert len(br.themes) == 1
         assert br.themes[0].name == 'AI'
-        assert br.themes[0].note_indices == [0, 1, 2]
+        assert br.themes[0].note_count == 3
+        assert br.themes[0].trend == 'growing'
 
 
 # ─── Signature field tests ───

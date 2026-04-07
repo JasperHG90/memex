@@ -368,12 +368,12 @@ class TestComputeKeyEntities:
         row1 = MagicMock()
         row1.canonical_name = 'Claude'
         row1.entity_type = 'product'
-        row1.mention_count = 50
+        row1.vault_mentions = 50
 
         row2 = MagicMock()
         row2.canonical_name = 'RAG'
         row2.entity_type = 'concept'
-        row2.mention_count = 30
+        row2.vault_mentions = 30
 
         session = AsyncMock()
         result = MagicMock()
@@ -521,7 +521,7 @@ class TestStructuredFields:
             prediction = MagicMock()
             prediction.updated_narrative = 'Updated narrative'
             prediction.updated_themes = [
-                LLMTheme(name='AI', description='AI stuff', note_indices=[0]),
+                LLMTheme(name='AI', description='AI stuff', note_count=1, trend='growing'),
             ]
             mock_llm.return_value = prediction
 

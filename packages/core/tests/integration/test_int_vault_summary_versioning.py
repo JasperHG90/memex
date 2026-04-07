@@ -221,7 +221,7 @@ class TestNoteMarkingAfterUpdate:
         mock_prediction = MagicMock()
         mock_prediction.updated_narrative = 'Updated summary with ML basics.'
         mock_prediction.updated_themes = [
-            LLMTheme(name='ML', description='ML basics', note_indices=[0])
+            LLMTheme(name='ML', description='ML basics', note_count=1, trend='growing')
         ]
 
         svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
