@@ -14,16 +14,20 @@ class TestConfigureLogging:
     def setup_method(self):
         """Reset logging state before each test."""
         root = logging.getLogger('memex')
+        self._original_level = root.level
+        self._original_handlers = list(root.handlers)
         root.handlers.clear()
         root.setLevel(logging.WARNING)
         structlog.reset_defaults()
         structlog.contextvars.clear_contextvars()
 
     def teardown_method(self):
-        """Clean up after each test."""
+        """Restore logging state after each test."""
         root = logging.getLogger('memex')
         root.handlers.clear()
-        root.setLevel(logging.WARNING)
+        for h in self._original_handlers:
+            root.addHandler(h)
+        root.setLevel(self._original_level)
         structlog.reset_defaults()
         structlog.contextvars.clear_contextvars()
 

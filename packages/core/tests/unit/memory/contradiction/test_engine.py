@@ -436,6 +436,25 @@ class TestTemporalDefault:
         assert ContradictionEngine._temporal_default(a, b) == 'new'
 
 
+@pytest.fixture()
+def _clean_memex_logger():
+    """Remove StreamHandlers from memex logger that bypass caplog.
+
+    configure_logging() (triggered by FastAPI TestClient in integration tests)
+    adds a StreamHandler with structlog formatter. This sends records directly
+    to stderr, bypassing caplog. Strip those handlers for caplog-based tests.
+    """
+    root = logging.getLogger('memex')
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
+    root.setLevel(logging.DEBUG)
+    yield
+    root.handlers = original_handlers
+    root.setLevel(original_level)
+
+
+@pytest.mark.usefixtures('_clean_memex_logger')
 class TestDetectLogging:
     """Test observability logging in _detect()."""
 

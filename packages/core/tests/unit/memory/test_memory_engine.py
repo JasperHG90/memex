@@ -7,6 +7,26 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_core.memory.engine import MemoryEngine, get_memory_engine, _build_contradiction_engine
+
+
+@pytest.fixture(autouse=True)
+def _clean_memex_logger():
+    """Remove StreamHandlers from memex logger that bypass caplog.
+
+    configure_logging() (triggered by FastAPI TestClient in integration tests)
+    adds a StreamHandler with structlog formatter. This handler sends records
+    directly to stderr, bypassing caplog. Remove it so caplog-based tests work.
+    """
+    root = logging.getLogger('memex')
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    root.handlers = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
+    root.setLevel(logging.DEBUG)
+    yield
+    root.handlers = original_handlers
+    root.setLevel(original_level)
+
+
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.extraction.models import RetainContent
