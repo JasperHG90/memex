@@ -1339,22 +1339,31 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         ),
         description='The vault this summary describes. One summary per vault.',
     )
-    summary: str = Field(
+    narrative: str = Field(
         default='',
         sa_column=Column(Text, server_default=sql_text("''")),
-        description='1-3 paragraph natural language summary of vault contents.',
+        description='Short thematic synthesis of vault contents (~200 tokens).',
     )
-    topics: list[dict[str, Any]] = Field(
+    themes: list[dict[str, Any]] = Field(
         default_factory=list,
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description=(
-            'Extracted topics: [{name, note_count, description, representative_note_ids}].'
+            'Extracted themes: [{name, description, note_count, trend, '
+            'last_addition, representative_titles}].'
         ),
     )
-    stats: dict[str, Any] = Field(
+    inventory: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, server_default=sql_text("'{}'::jsonb")),
-        description='Aggregate stats: {total_notes, total_entities, date_range, top_entity_types}.',
+        description=(
+            'Computed content stats: {total_notes, total_entities, date_range, '
+            'by_template, by_source_domain, top_tags, recent_activity}.'
+        ),
+    )
+    key_entities: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
+        description='Top entities by mention count: [{name, type, mention_count}].',
     )
     version: int = Field(
         default=1,

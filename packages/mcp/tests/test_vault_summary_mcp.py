@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastmcp.exceptions import ToolError
 
-from conftest import parse_tool_result, TEST_VAULT_UUID
+from helpers import parse_tool_result, TEST_VAULT_UUID
 from memex_core.memory.sql_models import VaultSummary
 
 
@@ -16,9 +16,19 @@ def _make_summary(vault_id=None):
     return VaultSummary(
         id=uuid4(),
         vault_id=vault_id or uuid4(),
-        summary='This vault contains AI research.',
-        topics=[{'name': 'AI', 'note_count': 5, 'description': 'AI research'}],
-        stats={'total_notes': 5},
+        narrative='This vault tracks AI research and agent architecture.',
+        themes=[
+            {
+                'name': 'AI',
+                'description': 'AI research',
+                'note_count': 5,
+                'trend': 'growing',
+                'last_addition': '2026-04-06',
+                'representative_titles': ['ReAct paper'],
+            }
+        ],
+        inventory={'total_notes': 5, 'total_entities': 3},
+        key_entities=[{'name': 'Claude', 'type': 'product', 'mention_count': 10}],
         version=3,
         notes_incorporated=5,
         patch_log=[],
@@ -38,11 +48,14 @@ async def test_get_vault_summary_returns_data(mock_api, mock_config, mcp_client)
     result = await mcp_client.call_tool('memex_get_vault_summary', {})
     data = parse_tool_result(result)
 
-    assert data['summary'] == 'This vault contains AI research.'
+    assert data['narrative'] == 'This vault tracks AI research and agent architecture.'
     assert data['vault_id'] == str(TEST_VAULT_UUID)
     assert data['version'] == 3
     assert data['notes_incorporated'] == 5
-    assert len(data['topics']) == 1
+    assert len(data['themes']) == 1
+    assert data['themes'][0]['trend'] == 'growing'
+    assert data['inventory']['total_notes'] == 5
+    assert len(data['key_entities']) == 1
 
 
 @pytest.mark.asyncio

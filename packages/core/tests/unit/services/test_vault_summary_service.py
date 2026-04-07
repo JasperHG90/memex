@@ -59,7 +59,7 @@ class TestGetSummary:
     async def test_returns_existing_summary(self):
         svc = _make_service()
         vault_id = uuid4()
-        summary = VaultSummary(vault_id=vault_id, summary='Test summary')
+        summary = VaultSummary(vault_id=vault_id, narrative='Test summary')
         ctx, session = _mock_session(summary)
         svc.metastore.session = lambda: ctx
         result = await svc.get_summary(vault_id)
@@ -80,7 +80,7 @@ class TestDeleteSummary:
     async def test_deletes_existing(self):
         svc = _make_service()
         vault_id = uuid4()
-        summary = VaultSummary(vault_id=vault_id, summary='Test')
+        summary = VaultSummary(vault_id=vault_id, narrative='Test')
         ctx, session = _mock_session(summary)
         svc.metastore.session = lambda: ctx
         result = await svc.delete_summary(vault_id)
@@ -145,7 +145,7 @@ class TestIsStale:
         vault_id = uuid4()
         summary = VaultSummary(
             vault_id=vault_id,
-            summary='Old summary',
+            narrative='Old summary',
             version=3,
             updated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
         )
@@ -170,7 +170,7 @@ class TestIsStale:
         vault_id = uuid4()
         summary = VaultSummary(
             vault_id=vault_id,
-            summary='Current summary',
+            narrative='Current summary',
             version=5,
             updated_at=datetime(2026, 4, 4, tzinfo=timezone.utc),
         )
@@ -201,11 +201,11 @@ class TestUpdateSummary:
 
         svc.metastore.session = lambda: ctx1
         svc.regenerate_summary = AsyncMock(
-            return_value=VaultSummary(vault_id=vault_id, summary='Regenerated')
+            return_value=VaultSummary(vault_id=vault_id, narrative='Regenerated')
         )
 
         result = await svc.update_summary(vault_id)
-        assert result.summary == 'Regenerated'
+        assert result.narrative == 'Regenerated'
         svc.regenerate_summary.assert_called_once_with(vault_id)
 
     @pytest.mark.asyncio
@@ -214,7 +214,7 @@ class TestUpdateSummary:
         vault_id = uuid4()
         existing = VaultSummary(
             vault_id=vault_id,
-            summary='Existing summary',
+            narrative='Existing summary',
             version=3,
             updated_at=datetime(2026, 4, 4, tzinfo=timezone.utc),
         )
@@ -230,7 +230,7 @@ class TestUpdateSummary:
             svc.metastore.session = lambda: ctx1
 
             result = await svc.update_summary(vault_id)
-            assert result.summary == 'Existing summary'
+            assert result.narrative == 'Existing summary'
 
     @pytest.mark.asyncio
     async def test_updates_with_delta_notes(self):
@@ -238,9 +238,9 @@ class TestUpdateSummary:
         vault_id = uuid4()
         existing = VaultSummary(
             vault_id=vault_id,
-            summary='Old overview',
-            topics=[{'name': 'AI', 'note_count': 5, 'description': 'AI topics'}],
-            stats={'total_notes': 10},
+            narrative='Old overview',
+            themes=[{'name': 'AI', 'note_count': 5, 'description': 'AI topics'}],
+            inventory={'total_notes': 10},
             version=3,
             notes_incorporated=10,
             patch_log=[],
@@ -250,18 +250,20 @@ class TestUpdateSummary:
         delta_notes, delta_ids, _ = _make_note_metadata(3)
 
         mock_prediction = MagicMock()
-        mock_prediction.updated_summary = 'Updated overview with 3 new notes.'
-        mock_prediction.updated_topics_json = json.dumps(
-            [
-                {'name': 'AI', 'note_count': 8, 'description': 'AI topics expanded'},
-            ]
-        )
+        mock_prediction.updated_narrative = 'Updated overview with 3 new notes.'
+        mock_prediction.updated_themes = [
+            {'name': 'AI', 'note_count': 8, 'description': 'AI topics expanded'},
+        ]
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = (delta_notes, delta_ids, delta_ids)
+            mock_inv.return_value = {'total_notes': 13, 'total_entities': 5}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             # Session 1: summary lookup + _fetch_note_metadata + total count
@@ -288,7 +290,7 @@ class TestUpdateSummary:
 
             result = await svc.update_summary(vault_id)
 
-        assert result.summary == 'Updated overview with 3 new notes.'
+        assert result.narrative == 'Updated overview with 3 new notes.'
         assert result.version == 4
         assert len(result.patch_log) == 1
         assert result.patch_log[0]['action'] == 'update'
@@ -300,9 +302,9 @@ class TestUpdateSummary:
         vault_id = uuid4()
         existing = VaultSummary(
             vault_id=vault_id,
-            summary='Summary',
-            topics=[],
-            stats={'total_notes': 10},
+            narrative='Summary',
+            themes=[],
+            inventory={'total_notes': 10},
             version=5,
             notes_incorporated=10,
             patch_log=[
@@ -314,14 +316,18 @@ class TestUpdateSummary:
         )
 
         mock_prediction = MagicMock()
-        mock_prediction.updated_summary = 'Updated'
-        mock_prediction.updated_topics_json = '[]'
+        mock_prediction.updated_narrative = 'Updated'
+        mock_prediction.updated_themes = []
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = _make_note_metadata(1)
+            mock_inv.return_value = {'total_notes': 11}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             # Session 1: summary lookup + _fetch_note_metadata + total count
@@ -356,9 +362,9 @@ class TestUpdateSummary:
         vault_id = uuid4()
         existing = VaultSummary(
             vault_id=vault_id,
-            summary='Old overview',
-            topics=[],
-            stats={'total_notes': 10},
+            narrative='Old overview',
+            themes=[],
+            inventory={'total_notes': 10},
             version=3,
             notes_incorporated=10,
             patch_log=[],
@@ -366,14 +372,18 @@ class TestUpdateSummary:
         )
 
         mock_prediction = MagicMock()
-        mock_prediction.updated_summary = 'Should not be persisted'
-        mock_prediction.updated_topics_json = '[]'
+        mock_prediction.updated_narrative = 'Should not be persisted'
+        mock_prediction.updated_themes = []
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = _make_note_metadata(1)
+            mock_inv.return_value = {'total_notes': 11}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             # Session 1: return version=3
@@ -387,9 +397,9 @@ class TestUpdateSummary:
             # Session 2 (persist): return version=5 (bumped by concurrent update)
             concurrent_summary = VaultSummary(
                 vault_id=vault_id,
-                summary='Concurrently updated',
-                topics=[],
-                stats={'total_notes': 12},
+                narrative='Concurrently updated',
+                themes=[],
+                inventory={'total_notes': 12},
                 version=5,
                 notes_incorporated=12,
                 patch_log=[],
@@ -410,7 +420,7 @@ class TestUpdateSummary:
             result = await svc.update_summary(vault_id)
 
         # Should return the concurrent version, NOT apply our LLM prediction
-        assert result.summary == 'Concurrently updated'
+        assert result.narrative == 'Concurrently updated'
         assert result.version == 5
 
 
@@ -427,7 +437,7 @@ class TestRegenerateSummary:
             svc.metastore.session = lambda: ctx
 
             result = await svc.regenerate_summary(vault_id)
-        assert result.summary == 'This vault is empty.'
+        assert result.narrative == 'This vault is empty.'
         assert result.notes_incorporated == 0
 
     @pytest.mark.asyncio
@@ -440,16 +450,20 @@ class TestRegenerateSummary:
         notes_data, note_ids, _ = _make_note_metadata(10)
 
         mock_prediction = MagicMock()
-        mock_prediction.summary = 'Summary of 10 notes.'
-        mock_prediction.topics_json = json.dumps(
+        mock_prediction.narrative = 'Summary of 10 notes.'
+        mock_prediction.themes_json = json.dumps(
             [{'name': 'General', 'note_count': 10, 'description': 'General topics'}]
         )
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = (notes_data, note_ids, note_ids)
+            mock_inv.return_value = {'total_notes': 10}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -457,7 +471,7 @@ class TestRegenerateSummary:
 
             result = await svc.regenerate_summary(vault_id)
 
-        assert result.summary == 'Summary of 10 notes.'
+        assert result.narrative == 'Summary of 10 notes.'
         assert result.notes_incorporated == 10
         assert result.patch_log == []
         mock_run.assert_called_once()
@@ -473,17 +487,21 @@ class TestRegenerateSummary:
         notes_data, note_ids, _ = _make_note_metadata(100)
 
         mock_prediction = MagicMock()
-        mock_prediction.summary = 'Summary of 100 notes.'
-        mock_prediction.topics_json = json.dumps(
+        mock_prediction.narrative = 'Summary of 100 notes.'
+        mock_prediction.themes_json = json.dumps(
             [{'name': 'T', 'note_count': 100, 'description': 'T'}]
         )
         mock_prediction.batch_summary = 'Batch summary'
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = (notes_data, note_ids, note_ids)
+            mock_inv.return_value = {'total_notes': 100}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -491,7 +509,7 @@ class TestRegenerateSummary:
 
             result = await svc.regenerate_summary(vault_id)
 
-        assert result.summary == 'Summary of 100 notes.'
+        assert result.narrative == 'Summary of 100 notes.'
         # Multiple extract calls + 1 merge
         assert mock_run.call_count >= 2
 
@@ -506,17 +524,21 @@ class TestRegenerateSummary:
         notes_data, note_ids, _ = _make_note_metadata(600)
 
         mock_prediction = MagicMock()
-        mock_prediction.summary = 'Hierarchical summary of 600 notes.'
-        mock_prediction.topics_json = json.dumps(
+        mock_prediction.narrative = 'Hierarchical summary of 600 notes.'
+        mock_prediction.themes_json = json.dumps(
             [{'name': 'T', 'note_count': 600, 'description': 'T'}]
         )
         mock_prediction.batch_summary = 'Batch summary'
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = (notes_data, note_ids, note_ids)
+            mock_inv.return_value = {'total_notes': 600}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(None)
@@ -524,7 +546,7 @@ class TestRegenerateSummary:
 
             result = await svc.regenerate_summary(vault_id)
 
-        assert result.summary == 'Hierarchical summary of 600 notes.'
+        assert result.narrative == 'Hierarchical summary of 600 notes.'
         # Many extract + recursive merge calls
         assert mock_run.call_count >= 5
 
@@ -544,8 +566,8 @@ class TestRegenerateSummary:
             if call_count == 1:
                 raise RuntimeError('Batch 0 failed')
             prediction = MagicMock()
-            prediction.summary = 'Partial summary.'
-            prediction.topics_json = json.dumps(
+            prediction.narrative = 'Partial summary.'
+            prediction.themes_json = json.dumps(
                 [{'name': 'T', 'note_count': 50, 'description': 'T'}]
             )
             prediction.batch_summary = 'Batch summary'
@@ -553,9 +575,13 @@ class TestRegenerateSummary:
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = (notes_data, note_ids, note_ids)
+            mock_inv.return_value = {'total_notes': 100}
+            mock_ke.return_value = []
             mock_run.side_effect = mock_run_side_effect
 
             ctx, session = _mock_session(None)
@@ -563,7 +589,7 @@ class TestRegenerateSummary:
 
             result = await svc.regenerate_summary(vault_id)
 
-        assert result.summary == 'Partial summary.'
+        assert result.narrative == 'Partial summary.'
 
     @pytest.mark.asyncio
     async def test_regeneration_resets_patch_log(self):
@@ -571,20 +597,24 @@ class TestRegenerateSummary:
         vault_id = uuid4()
         existing = VaultSummary(
             vault_id=vault_id,
-            summary='Old',
+            narrative='Old',
             patch_log=[{'action': 'update'}],
             version=5,
         )
 
         mock_prediction = MagicMock()
-        mock_prediction.summary = 'Fresh summary.'
-        mock_prediction.topics_json = '[]'
+        mock_prediction.narrative = 'Fresh summary.'
+        mock_prediction.themes_json = '[]'
 
         with (
             patch.object(svc, '_fetch_note_metadata', new_callable=AsyncMock) as mock_fetch,
+            patch.object(svc, '_compute_inventory', new_callable=AsyncMock) as mock_inv,
+            patch.object(svc, '_compute_key_entities', new_callable=AsyncMock) as mock_ke,
             patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run,
         ):
             mock_fetch.return_value = _make_note_metadata(5)
+            mock_inv.return_value = {'total_notes': 5}
+            mock_ke.return_value = []
             mock_run.return_value = mock_prediction
 
             ctx, session = _mock_session(existing)

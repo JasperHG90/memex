@@ -22,9 +22,10 @@ def _summary_to_dto(summary: VaultSummary) -> VaultSummaryDTO:
     return VaultSummaryDTO(
         id=summary.id,
         vault_id=summary.vault_id,
-        summary=summary.summary,
-        topics=summary.topics,
-        stats=summary.stats,
+        narrative=summary.narrative,
+        themes=summary.themes,
+        inventory=summary.inventory,
+        key_entities=summary.key_entities,
         version=summary.version,
         notes_incorporated=summary.notes_incorporated,
         created_at=summary.created_at,

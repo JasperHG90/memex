@@ -222,7 +222,7 @@ async def test_update_summary_consolidates_sessions(metastore, session):
 
     # Create initial summary with an older updated_at
     old_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    summary = VaultSummary(vault_id=vault_id, summary='Old summary', version=1)
+    summary = VaultSummary(vault_id=vault_id, narrative='Old summary', version=1)
     session.add(summary)
     await session.commit()
     # Force updated_at to the past so new notes appear as delta
@@ -237,8 +237,8 @@ async def test_update_summary_consolidates_sessions(metastore, session):
 
     # Mock LLM
     mock_prediction = MagicMock()
-    mock_prediction.updated_summary = 'Updated summary with new research'
-    mock_prediction.updated_topics_json = '[{"name": "Research", "note_count": 1}]'
+    mock_prediction.updated_narrative = 'Updated summary with new research'
+    mock_prediction.updated_themes = [{'name': 'Research', 'note_count': 1}]
 
     mock_lm = MagicMock(spec=['__call__'])
     svc = VaultSummaryService(
@@ -251,7 +251,7 @@ async def test_update_summary_consolidates_sessions(metastore, session):
         mock_run.return_value = mock_prediction
         result = await svc.update_summary(vault_id)
 
-    assert result.summary == 'Updated summary with new research'
+    assert result.narrative == 'Updated summary with new research'
     assert result.version == 2
     assert len(result.patch_log) == 1
     assert result.patch_log[0]['action'] == 'update'
@@ -261,7 +261,7 @@ async def test_update_summary_consolidates_sessions(metastore, session):
         db_summary = (
             await s.execute(select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id))
         ).scalar_one()
-        assert db_summary.summary == 'Updated summary with new research'
+        assert db_summary.narrative == 'Updated summary with new research'
         assert db_summary.version == 2
 
 
@@ -277,7 +277,7 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
     # Create initial summary at version 3 with old timestamp
     old_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
     summary = VaultSummary(
-        vault_id=vault_id, summary='Version 3 summary', version=3, notes_incorporated=10
+        vault_id=vault_id, narrative='Version 3 summary', version=3, notes_incorporated=10
     )
     session.add(summary)
     await session.commit()
@@ -298,8 +298,8 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
     )
 
     mock_prediction = MagicMock()
-    mock_prediction.updated_summary = 'Should NOT be persisted'
-    mock_prediction.updated_topics_json = '[]'
+    mock_prediction.updated_narrative = 'Should NOT be persisted'
+    mock_prediction.updated_themes = []
 
     async def _bump_version_during_llm(**kwargs):
         """Simulate a concurrent update bumping the version during the LLM call."""
@@ -307,7 +307,7 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
             row = (
                 await s.execute(select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id))
             ).scalar_one()
-            row.summary = 'Concurrently updated'
+            row.narrative = 'Concurrently updated'
             row.version = 5
             s.add(row)
             await s.commit()
@@ -318,7 +318,7 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
         result = await svc.update_summary(vault_id)
 
     # Should return the concurrently updated version, not our LLM result
-    assert result.summary == 'Concurrently updated'
+    assert result.narrative == 'Concurrently updated'
     assert result.version == 5
 
     # DB should also reflect the concurrent version
@@ -326,7 +326,7 @@ async def test_update_summary_version_conflict_skips_write(metastore, session):
         db_summary = (
             await s.execute(select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id))
         ).scalar_one()
-        assert db_summary.summary == 'Concurrently updated'
+        assert db_summary.narrative == 'Concurrently updated'
         assert db_summary.version == 5
 
 
@@ -339,7 +339,7 @@ async def test_update_summary_no_delta_returns_existing(metastore, session):
 
     vault_id = await _create_vault(session)
 
-    summary = VaultSummary(vault_id=vault_id, summary='Current summary', version=2)
+    summary = VaultSummary(vault_id=vault_id, narrative='Current summary', version=2)
     session.add(summary)
     await session.commit()
 
@@ -355,5 +355,5 @@ async def test_update_summary_no_delta_returns_existing(metastore, session):
         result = await svc.update_summary(vault_id)
         mock_run.assert_not_called()
 
-    assert result.summary == 'Current summary'
+    assert result.narrative == 'Current summary'
     assert result.version == 2

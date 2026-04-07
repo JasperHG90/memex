@@ -5,7 +5,7 @@ from uuid import uuid4, UUID
 
 from fastmcp import Client
 from memex_mcp.server import mcp
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 from memex_common.schemas import MemoryUnitDTO, FactTypes, NoteDTO
 
 TEST_VAULT_UUID = UUID('00000000-0000-0000-0000-000000000001')

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from uuid import UUID
 
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 from memex_common.schemas import (
     EntityDTO,
     MemoryUnitDTO,

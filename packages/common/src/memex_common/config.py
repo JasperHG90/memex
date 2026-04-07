@@ -1029,11 +1029,11 @@ class VaultSummaryConfig(BaseModel):
         le=100,
         description='Maximum number of entries in the update log.',
     )
-    max_summary_tokens: int = Field(
-        default=750,
-        ge=100,
-        le=2000,
-        description='Maximum token count for the vault summary text.',
+    max_narrative_tokens: int = Field(
+        default=200,
+        ge=50,
+        le=500,
+        description='Maximum token count for the vault narrative text.',
     )
 
 

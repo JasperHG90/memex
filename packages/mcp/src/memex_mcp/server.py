@@ -2865,8 +2865,8 @@ async def memex_survey(
 
 @mcp.tool(
     name='memex_get_vault_summary',
-    description='Get the current summary for a vault. Returns topics, stats, and a natural '
-    'language overview of vault contents. Use this to orient yourself in a vault.',
+    description='Get the structured summary for a vault. Returns inventory (computed stats), '
+    'themes (with trends), key entities, and a short narrative. Use this to orient yourself.',
     tags={'browse'},
     annotations={'readOnlyHint': True},
 )
@@ -2891,9 +2891,10 @@ async def memex_get_vault_summary(
         return {
             'id': str(summary.id),
             'vault_id': str(summary.vault_id),
-            'summary': summary.summary,
-            'topics': summary.topics,
-            'stats': summary.stats,
+            'narrative': summary.narrative,
+            'themes': summary.themes,
+            'inventory': summary.inventory,
+            'key_entities': summary.key_entities,
             'version': summary.version,
             'notes_incorporated': summary.notes_incorporated,
             'created_at': summary.created_at.isoformat() if summary.created_at else None,

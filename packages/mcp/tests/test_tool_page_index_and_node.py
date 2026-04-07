@@ -5,7 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 from fastmcp.exceptions import ToolError
 from memex_common.schemas import NodeDTO
 

@@ -969,11 +969,18 @@ class VaultSummaryDTO(BaseModel):
 
     id: UUID = Field(description='Unique identifier for the vault summary.')
     vault_id: UUID = Field(description='The vault this summary describes.')
-    summary: str = Field(description='Natural language summary of vault contents.')
-    topics: list[dict[str, Any]] = Field(
-        description='Extracted topics: [{name, note_count, description}].'
+    narrative: str = Field(description='Short thematic synthesis of vault contents.')
+    themes: list[dict[str, Any]] = Field(
+        description='Extracted themes: [{name, description, note_count, trend, '
+        'last_addition, representative_titles}].'
     )
-    stats: dict[str, Any] = Field(description='Aggregate vault statistics.')
+    inventory: dict[str, Any] = Field(
+        description='Computed content stats: total_notes, total_entities, date_range, '
+        'by_template, by_source_domain, top_tags, recent_activity.'
+    )
+    key_entities: list[dict[str, Any]] = Field(
+        description='Top entities by mention count: [{name, type, mention_count}].'
+    )
     version: int = Field(description='Summary version number.')
     notes_incorporated: int = Field(description='Number of notes incorporated.')
     created_at: dt.datetime = Field(description='When the summary was created.')

@@ -3,13 +3,13 @@
 import logging
 
 import pytest
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from memex_common.config import ContradictionConfig
 from memex_core.memory.contradiction.engine import ContradictionEngine
+from memex_core.memory.contradiction.signatures import ContradictionRelationship
 from memex_core.memory.sql_models import MemoryLink, MemoryUnit, ContentStatus
 
 
@@ -89,34 +89,6 @@ class TestTriage:
         assert str(new_fact.id) not in result
 
     @pytest.mark.asyncio
-    async def test_triage_handles_string_response(self, engine):
-        """Triage should handle flagged_ids returned as JSON string."""
-        unit = _make_unit()
-
-        mock_result = MagicMock()
-        mock_result.flagged_ids = json.dumps([str(unit.id)])
-
-        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = mock_result
-            result = await engine._triage([unit])
-
-        assert str(unit.id) in result
-
-    @pytest.mark.asyncio
-    async def test_triage_handles_invalid_string(self, engine):
-        """Triage should return empty list on unparseable string."""
-        unit = _make_unit()
-
-        mock_result = MagicMock()
-        mock_result.flagged_ids = 'not valid json {'
-
-        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = mock_result
-            result = await engine._triage([unit])
-
-        assert result == []
-
-    @pytest.mark.asyncio
     async def test_triage_handles_none_flagged(self, engine):
         """Triage should handle None flagged_ids gracefully."""
         unit = _make_unit()
@@ -129,6 +101,26 @@ class TestTriage:
             result = await engine._triage([unit])
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_triage_passes_pydantic_models(self, engine):
+        """Triage should pass TriageUnit Pydantic models, not JSON strings."""
+        from memex_core.memory.contradiction.signatures import TriageUnit
+
+        units = [_make_unit(text='Fact A'), _make_unit(text='Fact B')]
+
+        mock_result = MagicMock()
+        mock_result.flagged_ids = []
+
+        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
+            mock_op.return_value = mock_result
+            await engine._triage(units)
+
+        call_kwargs = mock_op.call_args[1]['input_kwargs']
+        assert 'units' in call_kwargs
+        assert all(isinstance(u, TriageUnit) for u in call_kwargs['units'])
+        assert call_kwargs['units'][0].id == str(units[0].id)
+        assert call_kwargs['units'][0].text == units[0].text
 
 
 class TestConfidenceAdjustment:
@@ -230,16 +222,12 @@ class TestClassify:
 
         mock_result = MagicMock()
         mock_result.relationships = [
-            {
-                'existing_id': str(candidates[0].id),
-                'relation': 'neutral',
-                'reasoning': 'unrelated',
-            },
-            {
-                'existing_id': str(candidates[0].id),
-                'relation': 'contradict',
-                'reasoning': 'directly contradicts',
-            },
+            ContradictionRelationship(
+                existing_id=str(candidates[0].id),
+                relation='contradict',
+                authoritative='new',
+                reasoning='directly contradicts',
+            ),
         ]
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
@@ -247,46 +235,7 @@ class TestClassify:
             result = await engine._classify(unit, candidates)
 
         assert len(result) == 1
-        assert result[0]['relation'] == 'contradict'
-
-    @pytest.mark.asyncio
-    async def test_classify_handles_string_response(self, engine):
-        """Classify should handle relationships returned as JSON string."""
-        unit = _make_unit()
-        candidates = [_make_unit()]
-
-        mock_result = MagicMock()
-        mock_result.relationships = json.dumps(
-            [
-                {
-                    'existing_id': str(candidates[0].id),
-                    'relation': 'weaken',
-                    'reasoning': 'partially outdated',
-                },
-            ]
-        )
-
-        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = mock_result
-            result = await engine._classify(unit, candidates)
-
-        assert len(result) == 1
-        assert result[0]['relation'] == 'weaken'
-
-    @pytest.mark.asyncio
-    async def test_classify_empty_on_invalid_json(self, engine):
-        """If LLM returns garbage, classify should return empty."""
-        unit = _make_unit()
-        candidates = [_make_unit()]
-
-        mock_result = MagicMock()
-        mock_result.relationships = 'not valid json {'
-
-        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
-            mock_op.return_value = mock_result
-            result = await engine._classify(unit, candidates)
-
-        assert result == []
+        assert result[0].relation == 'contradict'
 
     @pytest.mark.asyncio
     async def test_classify_returns_all_valid_relations(self, engine):
@@ -297,9 +246,24 @@ class TestClassify:
 
         mock_result = MagicMock()
         mock_result.relationships = [
-            {'existing_id': str(c1.id), 'relation': 'reinforce', 'reasoning': 'agrees'},
-            {'existing_id': str(c2.id), 'relation': 'weaken', 'reasoning': 'partial'},
-            {'existing_id': str(c3.id), 'relation': 'contradict', 'reasoning': 'opposite'},
+            ContradictionRelationship(
+                existing_id=str(c1.id),
+                relation='reinforce',
+                authoritative='new',
+                reasoning='agrees',
+            ),
+            ContradictionRelationship(
+                existing_id=str(c2.id),
+                relation='weaken',
+                authoritative='new',
+                reasoning='partial',
+            ),
+            ContradictionRelationship(
+                existing_id=str(c3.id),
+                relation='contradict',
+                authoritative='new',
+                reasoning='opposite',
+            ),
         ]
 
         with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
@@ -307,7 +271,7 @@ class TestClassify:
             result = await engine._classify(unit, candidates)
 
         assert len(result) == 3
-        relations = {r['relation'] for r in result}
+        relations = {r.relation for r in result}
         assert relations == {'reinforce', 'weaken', 'contradict'}
 
     @pytest.mark.asyncio
@@ -324,6 +288,27 @@ class TestClassify:
             result = await engine._classify(unit, candidates)
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_classify_passes_pydantic_models(self, engine):
+        """Classify should pass CandidateUnit Pydantic models, not JSON strings."""
+        from memex_core.memory.contradiction.signatures import CandidateUnit
+
+        unit = _make_unit()
+        candidates = [_make_unit()]
+
+        mock_result = MagicMock()
+        mock_result.relationships = []
+
+        with patch('memex_core.memory.contradiction.engine.run_dspy_operation') as mock_op:
+            mock_op.return_value = mock_result
+            await engine._classify(unit, candidates)
+
+        call_kwargs = mock_op.call_args[1]['input_kwargs']
+        assert 'candidates' in call_kwargs
+        assert all(isinstance(c, CandidateUnit) for c in call_kwargs['candidates'])
+        assert call_kwargs['candidates'][0].id == str(candidates[0].id)
+        assert call_kwargs['candidates'][0].text == candidates[0].text
 
 
 class TestDetectContradictions:

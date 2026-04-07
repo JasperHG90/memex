@@ -9,7 +9,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from memex_common.schemas import BlockSummaryDTO, MemoryLinkDTO, NoteSearchResult
 
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 
 
 def _make_result(

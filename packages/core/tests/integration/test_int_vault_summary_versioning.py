@@ -170,7 +170,7 @@ class TestIsStaleVersionBased:
     async def test_stale_when_unincorporated_notes_exist(self, metastore):
         async with metastore.session() as session:
             await _insert_note(session, title='New note')  # NULL version
-            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, summary='Old', version=3)
+            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, narrative='Old', version=3)
             session.add(summary)
             await session.commit()
 
@@ -181,7 +181,7 @@ class TestIsStaleVersionBased:
     async def test_not_stale_when_all_incorporated(self, metastore):
         async with metastore.session() as session:
             await _insert_note(session, title='Inc note', summary_version_incorporated=3)
-            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, summary='Current', version=3)
+            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, narrative='Current', version=3)
             session.add(summary)
             await session.commit()
 
@@ -192,7 +192,7 @@ class TestIsStaleVersionBased:
     async def test_stale_when_old_version_notes_exist(self, metastore):
         async with metastore.session() as session:
             await _insert_note(session, title='Old note', summary_version_incorporated=2)
-            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, summary='Current', version=5)
+            summary = VaultSummary(vault_id=GLOBAL_VAULT_ID, narrative='Current', version=5)
             session.add(summary)
             await session.commit()
 
@@ -212,14 +212,14 @@ class TestNoteMarkingAfterUpdate:
             n1_id = n1.id
             await _insert_chunk_with_summary(session, n1.id, topic='ML basics')
             summary = VaultSummary(
-                vault_id=GLOBAL_VAULT_ID, summary='Existing', version=3, topics=[]
+                vault_id=GLOBAL_VAULT_ID, narrative='Existing', version=3, themes=[]
             )
             session.add(summary)
             await session.commit()
 
         mock_prediction = MagicMock()
-        mock_prediction.updated_summary = 'Updated summary with ML basics.'
-        mock_prediction.updated_topics_json = json.dumps([{'name': 'ML', 'note_count': 1}])
+        mock_prediction.updated_narrative = 'Updated summary with ML basics.'
+        mock_prediction.updated_themes = [{'name': 'ML', 'note_count': 1}]
 
         svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
 
@@ -251,8 +251,8 @@ class TestNoteMarkingAfterUpdate:
             await session.commit()
 
         mock_prediction = MagicMock()
-        mock_prediction.summary = 'Full summary.'
-        mock_prediction.topics_json = json.dumps([])
+        mock_prediction.narrative = 'Full summary.'
+        mock_prediction.themes_json = json.dumps([])
 
         svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
 
@@ -284,14 +284,14 @@ class TestNoteMarkingAfterUpdate:
             await _insert_chunk_with_summary(session, n2.id, topic='New topic')
 
             summary = VaultSummary(
-                vault_id=GLOBAL_VAULT_ID, summary='Current', version=3, topics=[]
+                vault_id=GLOBAL_VAULT_ID, narrative='Current', version=3, themes=[]
             )
             session.add(summary)
             await session.commit()
 
         mock_prediction = MagicMock()
-        mock_prediction.updated_summary = 'Updated with only new note.'
-        mock_prediction.updated_topics_json = '[]'
+        mock_prediction.updated_narrative = 'Updated with only new note.'
+        mock_prediction.updated_themes = []
 
         svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
 
@@ -299,8 +299,8 @@ class TestNoteMarkingAfterUpdate:
             mock_run.return_value = mock_prediction
             result = await svc.update_summary(GLOBAL_VAULT_ID)
 
-        # Only 1 note in the delta (the new one)
-        assert result.stats['new_since_last'] == 1
+        # Patch log records that 1 note was in the delta
+        assert result.patch_log[-1]['notes_added'] == 1
 
         async with metastore.session() as session:
             note = await session.get(Note, n2_id)
@@ -404,7 +404,7 @@ class TestSaUpdateWithSessionAdd:
         async with metastore.session() as session:
             # ORM-style add
             summary = VaultSummary(
-                vault_id=GLOBAL_VAULT_ID, summary='Mixed test summary', version=1
+                vault_id=GLOBAL_VAULT_ID, narrative='Mixed test summary', version=1
             )
             session.add(summary)
 
@@ -424,4 +424,4 @@ class TestSaUpdateWithSessionAdd:
                 select(VaultSummary).where(col(VaultSummary.vault_id) == GLOBAL_VAULT_ID)
             )
             vs = result.scalar_one()
-            assert vs.summary == 'Mixed test summary'
+            assert vs.narrative == 'Mixed test summary'

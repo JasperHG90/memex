@@ -33,7 +33,7 @@ async def test_vault_summary_cascade_delete(metastore):
         )
 
         # Create a VaultSummary for that vault
-        summary = VaultSummary(vault_id=vault_id, summary='Test summary')
+        summary = VaultSummary(vault_id=vault_id, narrative='Test summary')
         session.add(summary)
         await session.commit()
 

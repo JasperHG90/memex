@@ -45,6 +45,12 @@ _TREND_ARROWS: dict[str, str] = {
     'stale': '\u26a0',  # ⚠
 }
 
+_THEME_TREND_ARROWS: dict[str, str] = {
+    'growing': '\u2191',  # ↑
+    'stable': '\u2192',  # →
+    'dormant': '\u26a0',  # ⚠
+}
+
 
 def _estimate_tokens(text: str) -> int:
     """Rough chars-to-tokens estimate (÷4)."""
@@ -116,8 +122,6 @@ class SessionBriefingService:
                 summary,
                 mental_models,
                 kv_entries,
-                vault_id,
-                project_id,
             )
 
         return assembled
@@ -174,15 +178,11 @@ class SessionBriefingService:
         # 2. KV facts (priority 1)
         sections.append(('kv', self._build_kv_section(kv_entries)))
 
-        # 3. Vault summary (priority 2)
-        if budget >= 2000 and summary:
-            sections.append(('vault_prose', self._build_vault_prose(summary)))
-        else:
-            sections.append(('vault_prose', ''))
+        # 3. Vault overview (priority 2 — narrative + compact themes in one section)
+        sections.append(
+            ('vault_overview', self._build_vault_overview(summary, compact=(budget < 2000)))
+        )
 
-        sections.append(('topics', self._build_topics(summary, compact=(budget < 2000))))
-
-        # 4. Mental models (priority 3)
         model_limit = 10 if budget >= 2000 else 5
         include_trends = budget >= 2000
         sections.append(
@@ -201,12 +201,19 @@ class SessionBriefingService:
         return sections
 
     def _build_header(self, summary: Any, model_count: int) -> str:
-        """Build the header section with inline stats."""
+        """Build the header section with inline stats from inventory."""
         lines = ['# Session Briefing']
         stat_parts: list[str] = []
-        if summary and summary.stats:
-            total_notes = summary.stats.get('total_notes', 0)
+        if summary and summary.inventory:
+            inv = summary.inventory
+            total_notes = inv.get('total_notes', 0)
             stat_parts.append(f'{total_notes} notes')
+            total_entities = inv.get('total_entities', 0)
+            if total_entities:
+                stat_parts.append(f'{total_entities} entities')
+            recent = inv.get('recent_activity', {})
+            if recent.get('7d', 0):
+                stat_parts.append(f'{recent["7d"]} added this week')
         if model_count:
             stat_parts.append(f'{model_count} mental models')
         if summary and getattr(summary, 'updated_at', None):
@@ -228,26 +235,32 @@ class SessionBriefingService:
             lines.append(f'- `{entry.key}`: {entry.value}')
         return '\n'.join(lines) + '\n'
 
-    def _build_vault_prose(self, summary: Any) -> str:
-        """Build the vault summary prose section (2000-budget only)."""
-        if not summary or not summary.summary:
+    def _build_vault_overview(self, summary: Any, compact: bool = False) -> str:
+        """Build a single vault overview section: narrative + themes."""
+        if not summary:
             return ''
-        return f'\n## Vault Summary\n\n{summary.summary}\n'
+        parts: list[str] = ['\n## Vault Overview\n']
 
-    def _build_topics(self, summary: Any, compact: bool = False) -> str:
-        """Build the topics section."""
-        if not summary or not summary.topics:
-            return ''
-        lines = ['\n## Topics\n']
-        for topic in summary.topics:
-            name = topic.get('name', '')
-            count = topic.get('note_count', 0)
-            desc = topic.get('description', '')
-            if compact or not desc:
-                lines.append(f'- {name} ({count})')
-            else:
-                lines.append(f'- **{name}** ({count}): {desc}')
-        return '\n'.join(lines) + '\n'
+        # Narrative (short synthesis)
+        if summary.narrative:
+            parts.append(summary.narrative)
+            parts.append('')
+
+        # Themes with trend indicators
+        if summary.themes:
+            for theme in summary.themes:
+                name = theme.get('name', '')
+                count = theme.get('note_count', 0)
+                desc = theme.get('description', '')
+                trend = theme.get('trend', 'stable')
+                arrow = _THEME_TREND_ARROWS.get(trend, '')
+
+                if compact or not desc:
+                    parts.append(f'- {arrow} {name} ({count})')
+                else:
+                    parts.append(f'- {arrow} **{name}** ({count}): {desc}')
+
+        return '\n'.join(parts) + '\n'
 
     def _build_mental_models(
         self,
@@ -338,8 +351,6 @@ class SessionBriefingService:
         summary: Any,
         mental_models: list[MentalModel],
         kv_entries: list[Any],
-        vault_id: UUID,
-        project_id: str | None,
     ) -> str:
         """Apply overflow degradation to fit within budget."""
         # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
@@ -364,17 +375,17 @@ class SessionBriefingService:
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
-        # Step 2: Drop topic descriptions (compact mode)
+        # Step 2: Compact vault overview (drop theme descriptions)
         sections = self._replace_section(
             sections,
-            'topics',
-            self._build_topics(summary, compact=True),
+            'vault_overview',
+            self._build_vault_overview(summary, compact=True),
         )
         if _estimate_tokens(self._assemble(sections)) <= budget:
             return self._assemble(sections)
 
-        # Step 3: Trim vault prose sentence by sentence
-        sections = self._trim_prose(sections, budget)
+        # Step 3: Drop vault overview entirely
+        sections = self._replace_section(sections, 'vault_overview', '')
         if _estimate_tokens(self._assemble(sections)) <= budget:
             return self._assemble(sections)
 
@@ -390,7 +401,7 @@ class SessionBriefingService:
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
-        # Step 5: Drop vaults section entirely
+        # Step 7: Drop vaults section entirely
         sections = self._replace_section(sections, 'vaults', '')
         if _estimate_tokens(self._assemble(sections)) <= budget:
             return self._assemble(sections)
@@ -405,41 +416,3 @@ class SessionBriefingService:
     ) -> list[tuple[str, str]]:
         """Replace a named section's content."""
         return [(n, new_content if n == name else c) for n, c in sections]
-
-    def _trim_prose(
-        self,
-        sections: list[tuple[str, str]],
-        budget: int,
-    ) -> list[tuple[str, str]]:
-        """Trim vault prose sentence by sentence from the end."""
-        prose_content = ''
-        for name, content in sections:
-            if name == 'vault_prose':
-                prose_content = content
-                break
-
-        if not prose_content:
-            return sections
-
-        # Extract the prose text (strip the header)
-        header = '\n## Vault Summary\n\n'
-        if prose_content.startswith(header):
-            text = prose_content[len(header) :].rstrip('\n')
-        else:
-            text = prose_content
-
-        sentences = text.split('. ')
-        while sentences:
-            sentences.pop()
-            trimmed_text = '. '.join(sentences)
-            if trimmed_text and not trimmed_text.endswith('.'):
-                trimmed_text += '.'
-            if trimmed_text:
-                new_prose = f'{header}{trimmed_text}\n'
-            else:
-                new_prose = ''
-            new_sections = self._replace_section(sections, 'vault_prose', new_prose)
-            if _estimate_tokens(self._assemble(new_sections)) <= budget:
-                return new_sections
-
-        return self._replace_section(sections, 'vault_prose', '')

@@ -1,9 +1,12 @@
 """Service for vault summary generation and maintenance.
 
-Vault summaries provide a high-level overview of a vault's contents. Notes are
-tracked via ``summary_version_incorporated`` — each note records the summary
-version that last included it.  Staleness is determined by comparing this
-column to ``VaultSummary.version``.
+Vault summaries provide a structured overview of a vault's contents, split into:
+- **Computed fields** (inventory, key_entities): derived from DB aggregates, always fresh
+- **Synthesized fields** (themes, narrative): LLM-generated, updated incrementally
+
+Notes are tracked via ``summary_version_incorporated`` — each note records the
+summary version that last included it.  Staleness is determined by comparing
+this column to ``VaultSummary.version``.
 
 Batching uses a **token budget** on the serialized metadata payload rather than
 a fixed note count, so notes with dense chunk summaries are batched more
@@ -16,7 +19,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -27,8 +31,19 @@ from sqlmodel import col, func, select
 
 from memex_common.config import VaultSummaryConfig
 from memex_core.llm import run_dspy_operation
-from memex_core.memory.sql_models import Chunk, ContentStatus, Note, VaultSummary
+from memex_core.memory.sql_models import (
+    Chunk,
+    ContentStatus,
+    Entity,
+    Note,
+    UnitEntity,
+    VaultSummary,
+)
 from memex_core.services.vault_summary_signatures import (
+    BatchResult,
+    NoteMetadata,
+    Theme,
+    VaultStats,
     VaultSummaryFullSignature,
     VaultSummaryUpdateSignature,
     VaultTopicExtractSignature,
@@ -75,21 +90,6 @@ def _split_into_token_batches(
     if current_batch:
         batches.append(current_batch)
     return batches
-
-
-_MARK_CHUNK_SIZE = 5000
-
-
-async def _mark_notes_chunked(session: Any, note_ids: list[UUID], version: int) -> None:
-    """Mark notes as incorporated, chunking large ID lists to avoid query overhead."""
-    for i in range(0, len(note_ids), _MARK_CHUNK_SIZE):
-        chunk = note_ids[i : i + _MARK_CHUNK_SIZE]
-        mark_stmt = (
-            sa_update(Note)
-            .where(col(Note.id).in_(chunk))
-            .values(summary_version_incorporated=version)
-        )
-        await session.execute(mark_stmt)
 
 
 class VaultSummaryService:
@@ -166,7 +166,7 @@ class VaultSummaryService:
         Fetches notes whose ``summary_version_incorporated`` is NULL or behind
         the current summary version. Uses token-based batching: if the delta
         exceeds the token budget, it is split into sequential batches — each
-        batch updates the running summary and marks its notes.
+        batch updates the running themes/narrative and marks its notes.
 
         If no summary exists, falls back to ``regenerate_summary()``.
         """
@@ -179,8 +179,8 @@ class VaultSummaryService:
             if summary is None:
                 return await self.regenerate_summary(vault_id)
 
-            current_summary_text = summary.summary
-            current_topics = list(summary.topics)
+            current_narrative = summary.narrative
+            current_themes = list(summary.themes)
             current_version = summary.version
 
             notes_data, _included_ids, all_fetched_ids = await self._fetch_note_metadata(
@@ -190,7 +190,17 @@ class VaultSummaryService:
             if not notes_data:
                 # Mark skipped notes so they don't perpetually appear as pending
                 if all_fetched_ids:
-                    await _mark_notes_chunked(session, all_fetched_ids, current_version)
+                    mark_stmt = (
+                        sa_update(Note)
+                        .where(col(Note.vault_id) == vault_id)
+                        .where(col(Note.status) == 'active')
+                        .where(
+                            (col(Note.summary_version_incorporated).is_(None))
+                            | (col(Note.summary_version_incorporated) < current_version)
+                        )
+                        .values(summary_version_incorporated=current_version)
+                    )
+                    await session.execute(mark_stmt)
                     await session.commit()
                 return summary
 
@@ -202,41 +212,41 @@ class VaultSummaryService:
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
-        # Phase 2: LLM call(s) outside any DB session — token-batched
+        # Phase 2: Compute inventory + key_entities (pure SQL, no LLM)
+        inventory = await self._compute_inventory(vault_id)
+        key_entities = await self._compute_key_entities(vault_id)
+
+        # Phase 3: LLM call(s) outside any DB session — token-batched
         batches = _split_into_token_batches(
             notes_data, self.config.max_batch_tokens, self.config.batch_size
         )
 
-        running_summary = current_summary_text
-        running_topics = current_topics
+        running_narrative = current_narrative
+        running_themes = [Theme(**t) if isinstance(t, dict) else t for t in current_themes]
 
         for batch in batches:
+            notes = [NoteMetadata(**n) for n in batch]
             predictor = dspy.Predict(VaultSummaryUpdateSignature)
             prediction = await run_dspy_operation(
                 lm=self.lm,
                 predictor=predictor,
                 input_kwargs={
-                    'current_summary': running_summary,
-                    'current_topics_json': json.dumps(running_topics),
-                    'new_notes_json': json.dumps(batch, default=str),
-                    'vault_stats_json': json.dumps(
-                        {
-                            'total_notes': total_notes,
-                            'new_since_last': len(batch),
-                            'max_summary_tokens': self.config.max_summary_tokens,
-                        }
+                    'current_narrative': running_narrative,
+                    'current_themes': running_themes,
+                    'new_notes': notes,
+                    'vault_stats': VaultStats(
+                        total_notes=total_notes,
+                        new_since_last=len(batch),
+                        max_narrative_tokens=self.config.max_narrative_tokens,
                     ),
                 },
                 operation_name='vault_summary_update',
             )
 
-            running_summary = prediction.updated_summary
-            try:
-                running_topics = json.loads(prediction.updated_topics_json)
-            except (json.JSONDecodeError, AttributeError):
-                pass  # Keep previous topics on parse failure
+            running_narrative = prediction.updated_narrative
+            running_themes = prediction.updated_themes
 
-        # Phase 3: Persist with SELECT FOR UPDATE to prevent concurrent overwrites
+        # Phase 4: Persist with SELECT FOR UPDATE to prevent concurrent overwrites
         async with self.metastore.session() as session:
             stmt = (
                 select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id).with_for_update()
@@ -254,11 +264,12 @@ class VaultSummaryService:
                 )
                 return summary
 
-            summary.summary = running_summary
-            summary.topics = running_topics
+            summary.narrative = running_narrative
+            summary.themes = [t.model_dump() if isinstance(t, Theme) else t for t in running_themes]
+            summary.inventory = inventory
+            summary.key_entities = key_entities
             summary.version += 1
             summary.notes_incorporated = total_notes
-            summary.stats = {'total_notes': total_notes, 'new_since_last': len(notes_data)}
 
             patch_entry = {
                 'action': 'update',
@@ -273,10 +284,18 @@ class VaultSummaryService:
 
             session.add(summary)
 
-            # Mark all fetched notes (processed + skipped) so skipped notes
-            # don't perpetually appear as pending.
-            if all_fetched_ids:
-                await _mark_notes_chunked(session, all_fetched_ids, summary.version)
+            # Mark ALL active notes in the vault with the new version.
+            # The updated summary incorporates everything (previous summary + delta),
+            # so every active note is now incorporated.  Marking only the delta
+            # notes would leave previously-incorporated notes behind the new
+            # version, causing an infinite stale→update loop.
+            mark_all_stmt = (
+                sa_update(Note)
+                .where(col(Note.vault_id) == vault_id)
+                .where(col(Note.status) == 'active')
+                .values(summary_version_incorporated=summary.version)
+            )
+            await session.execute(mark_all_stmt)
 
             await session.commit()
             await session.refresh(summary)
@@ -288,7 +307,7 @@ class VaultSummaryService:
         Uses 3-tier strategy based on **token budget** of the serialized
         metadata payload:
         - Tier 1 (≤ max_batch_tokens): single LLM call
-        - Tier 2 (≤ max_batch_tokens * 10): two-pass topic clustering
+        - Tier 2 (≤ max_batch_tokens * 10): two-pass theme clustering
         - Tier 3 (> max_batch_tokens * 10): recursive hierarchical merge
         """
         async with self.metastore.session() as session:
@@ -300,15 +319,20 @@ class VaultSummaryService:
         if note_count == 0:
             return await self._create_empty_summary(vault_id)
 
+        # Compute structured fields (pure SQL, no LLM)
+        inventory = await self._compute_inventory(vault_id)
+        key_entities = await self._compute_key_entities(vault_id)
+
+        # LLM-synthesized fields
         total_payload_tokens = _estimate_tokens(json.dumps(notes_data, default=str))
         max_tokens = self.config.max_batch_tokens
 
         if total_payload_tokens <= max_tokens:
-            summary_text, topics = await self._tier1_single_call(notes_data, note_count)
+            narrative, themes = await self._tier1_single_call(notes_data, note_count)
         elif total_payload_tokens <= max_tokens * 10:
-            summary_text, topics = await self._tier2_two_pass(notes_data, note_count)
+            narrative, themes = await self._tier2_two_pass(notes_data, note_count)
         else:
-            summary_text, topics = await self._tier3_hierarchical(notes_data, note_count)
+            narrative, themes = await self._tier3_hierarchical(notes_data, note_count)
 
         # Persist
         async with self.metastore.session() as session:
@@ -320,20 +344,155 @@ class VaultSummaryService:
                 summary = VaultSummary(vault_id=vault_id)
                 session.add(summary)
 
-            summary.summary = summary_text
-            summary.topics = topics
-            summary.stats = {'total_notes': note_count}
+            summary.narrative = narrative
+            summary.themes = themes
+            summary.inventory = inventory
+            summary.key_entities = key_entities
             summary.version = (summary.version or 0) + 1
             summary.notes_incorporated = note_count
             summary.patch_log = []
 
-            # Mark all fetched notes (processed + skipped) with the new version
-            if all_fetched_ids:
-                await _mark_notes_chunked(session, all_fetched_ids, summary.version)
+            # Mark ALL active notes with the new version
+            mark_all_stmt = (
+                sa_update(Note)
+                .where(col(Note.vault_id) == vault_id)
+                .where(col(Note.status) == 'active')
+                .values(summary_version_incorporated=summary.version)
+            )
+            await session.execute(mark_all_stmt)
 
             await session.commit()
             await session.refresh(summary)
             return summary
+
+    # ------------------------------------------------------------------ #
+    # Computed fields (no LLM)
+    # ------------------------------------------------------------------ #
+
+    async def _compute_inventory(self, vault_id: UUID) -> dict[str, Any]:
+        """Compute content inventory from DB aggregates. No LLM calls."""
+        async with self.metastore.session() as session:
+            now = datetime.now(timezone.utc)
+
+            # Total active notes
+            total_stmt = (
+                select(func.count())
+                .select_from(Note)
+                .where(col(Note.vault_id) == vault_id)
+                .where(col(Note.status) == 'active')
+            )
+            total_notes = (await session.execute(total_stmt)).scalar() or 0
+
+            # Total entities (via unit_entities join)
+            entity_count_stmt = select(func.count(func.distinct(UnitEntity.entity_id))).where(
+                col(UnitEntity.vault_id) == vault_id
+            )
+            total_entities = (await session.execute(entity_count_stmt)).scalar() or 0
+
+            # Date range
+            date_range_stmt = (
+                select(func.min(Note.publish_date), func.max(Note.publish_date))
+                .where(col(Note.vault_id) == vault_id)
+                .where(col(Note.status) == 'active')
+                .where(col(Note.publish_date).isnot(None))
+            )
+            date_row = (await session.execute(date_range_stmt)).one_or_none()
+            date_range: dict[str, str | None] = {'earliest': None, 'latest': None}
+            if date_row and date_row[0]:
+                date_range = {
+                    'earliest': date_row[0].isoformat() if date_row[0] else None,
+                    'latest': date_row[1].isoformat() if date_row[1] else None,
+                }
+
+            # Template distribution, source domains, tags — from doc_metadata JSONB
+            meta_stmt = (
+                select(Note.doc_metadata)
+                .where(col(Note.vault_id) == vault_id)
+                .where(col(Note.status) == 'active')
+                .where(col(Note.doc_metadata).isnot(None))
+            )
+            meta_rows = (await session.execute(meta_stmt)).all()
+
+            template_counts: Counter[str] = Counter()
+            domain_counts: Counter[str] = Counter()
+            tag_counts: Counter[str] = Counter()
+
+            for (doc_meta,) in meta_rows:
+                if not isinstance(doc_meta, dict):
+                    continue
+                template = doc_meta.get('template', '')
+                if template:
+                    template_counts[template] += 1
+
+                source_uri = doc_meta.get('source_uri', '')
+                if source_uri:
+                    try:
+                        domain = urlparse(source_uri).netloc
+                        if domain:
+                            domain_counts[domain] += 1
+                    except Exception:
+                        pass
+
+                for tag in doc_meta.get('tags', []):
+                    if isinstance(tag, str) and tag:
+                        tag_counts[tag] += 1
+
+            # Recent activity
+            recent_7d = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Note)
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                    .where(col(Note.created_at) >= now - timedelta(days=7))
+                )
+            ).scalar() or 0
+
+            recent_30d = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Note)
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                    .where(col(Note.created_at) >= now - timedelta(days=30))
+                )
+            ).scalar() or 0
+
+        return {
+            'total_notes': total_notes,
+            'total_entities': total_entities,
+            'date_range': date_range,
+            'by_template': dict(template_counts.most_common(10)),
+            'by_source_domain': dict(domain_counts.most_common(10)),
+            'top_tags': dict(tag_counts.most_common(15)),
+            'recent_activity': {'7d': recent_7d, '30d': recent_30d},
+        }
+
+    async def _compute_key_entities(self, vault_id: UUID, limit: int = 10) -> list[dict[str, Any]]:
+        """Fetch top entities by mention count for the vault. No LLM calls."""
+        async with self.metastore.session() as session:
+            stmt = (
+                select(
+                    Entity.canonical_name,
+                    Entity.entity_type,
+                    Entity.mention_count,
+                )
+                .join(UnitEntity, col(UnitEntity.entity_id) == col(Entity.id))
+                .where(col(UnitEntity.vault_id) == vault_id)
+                .group_by(col(Entity.id))
+                .order_by(col(Entity.mention_count).desc())
+                .limit(limit)
+            )
+            rows = (await session.execute(stmt)).all()
+
+        return [
+            {
+                'name': row.canonical_name,
+                'type': row.entity_type or 'unknown',
+                'mention_count': row.mention_count,
+            }
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -436,9 +595,10 @@ class VaultSummaryService:
                 summary = VaultSummary(vault_id=vault_id)
                 session.add(summary)
 
-            summary.summary = 'This vault is empty.'
-            summary.topics = []
-            summary.stats = {'total_notes': 0}
+            summary.narrative = 'This vault is empty.'
+            summary.themes = []
+            summary.inventory = {'total_notes': 0, 'total_entities': 0}
+            summary.key_entities = []
             summary.version = (summary.version or 0) + 1
             summary.notes_incorporated = 0
             summary.patch_log = []
@@ -453,33 +613,31 @@ class VaultSummaryService:
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Tier 1: single LLM call for small payloads."""
+        notes = [NoteMetadata(**n) for n in notes_data]
         predictor = dspy.Predict(VaultSummaryFullSignature)
         prediction = await run_dspy_operation(
             lm=self.lm,
             predictor=predictor,
             input_kwargs={
-                'notes_json': json.dumps(notes_data, default=str),
+                'notes': notes,
                 'vault_note_count': note_count,
-                'max_summary_tokens': self.config.max_summary_tokens,
+                'max_narrative_tokens': self.config.max_narrative_tokens,
             },
             operation_name='vault_summary_full',
         )
-        try:
-            topics = json.loads(prediction.topics_json)
-        except (json.JSONDecodeError, AttributeError):
-            topics = []
-        return prediction.summary, topics
+        themes = [t.model_dump() if isinstance(t, Theme) else t for t in prediction.themes]
+        return prediction.narrative, themes
 
     async def _tier2_two_pass(
         self,
         notes_data: list[dict[str, Any]],
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Tier 2: topic extraction per token-batch + synthesis."""
+        """Tier 2: theme extraction per token-batch + synthesis."""
         batches = _split_into_token_batches(
             notes_data, self.config.max_batch_tokens, self.config.batch_size
         )
-        batch_results = await self._extract_topics_from_batches(batches)
+        batch_results = await self._extract_themes_from_batches(batches)
         return await self._merge_batch_results(batch_results, note_count)
 
     async def _tier3_hierarchical(
@@ -487,7 +645,7 @@ class VaultSummaryService:
         notes_data: list[dict[str, Any]],
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Tier 3: topic extraction + recursive merge for very large vaults.
+        """Tier 3: theme extraction + recursive merge for very large vaults.
 
         Unlike Tier 2 which merges all batch results in a single LLM call,
         Tier 3 recursively merges batch results in groups until the result set
@@ -497,7 +655,7 @@ class VaultSummaryService:
         batches = _split_into_token_batches(
             notes_data, self.config.max_batch_tokens, self.config.batch_size
         )
-        batch_results = await self._extract_topics_from_batches(batches)
+        batch_results: list[BatchResult] = await self._extract_themes_from_batches(batches)
 
         merge_group_size = self.config.batch_size
         while len(batch_results) > merge_group_size:
@@ -505,16 +663,16 @@ class VaultSummaryService:
                 batch_results[i : i + merge_group_size]
                 for i in range(0, len(batch_results), merge_group_size)
             ]
-            merged: list[dict[str, Any]] = []
+            merged: list[BatchResult] = []
             for group in merge_groups:
                 try:
-                    summary_text, topics = await self._merge_batch_results(group, note_count)
+                    narrative, themes = await self._merge_batch_results(group, note_count)
                     merged.append(
-                        {
-                            'batch_index': len(merged),
-                            'topics': topics,
-                            'batch_summary': summary_text,
-                        }
+                        BatchResult(
+                            batch_index=len(merged),
+                            themes=[Theme(**t) if isinstance(t, dict) else t for t in themes],
+                            batch_summary=narrative,
+                        )
                     )
                 except Exception:
                     logger.warning(
@@ -527,68 +685,62 @@ class VaultSummaryService:
 
         return await self._merge_batch_results(batch_results, note_count)
 
-    async def _extract_topics_from_batches(
+    async def _extract_themes_from_batches(
         self,
         batches: list[list[dict[str, Any]]],
-    ) -> list[dict[str, Any]]:
-        """Extract topics from each batch via LLM calls."""
+    ) -> list[BatchResult]:
+        """Extract themes from each batch via LLM calls."""
         total_batches = len(batches)
-        results: list[dict[str, Any]] = []
+        results: list[BatchResult] = []
 
         for i, batch in enumerate(batches):
             try:
+                notes = [NoteMetadata(**n) for n in batch]
                 predictor = dspy.Predict(VaultTopicExtractSignature)
                 prediction = await run_dspy_operation(
                     lm=self.lm,
                     predictor=predictor,
                     input_kwargs={
-                        'notes_json': json.dumps(batch, default=str),
+                        'notes': notes,
                         'batch_index': i,
                         'total_batches': total_batches,
                     },
-                    operation_name='vault_summary_topic_extract',
+                    operation_name='vault_summary_theme_extract',
                 )
-                try:
-                    topics = json.loads(prediction.topics_json)
-                except (json.JSONDecodeError, AttributeError):
-                    topics = []
                 results.append(
-                    {
-                        'batch_index': i,
-                        'topics': topics,
-                        'batch_summary': getattr(prediction, 'batch_summary', ''),
-                    }
+                    BatchResult(
+                        batch_index=i,
+                        themes=prediction.themes,
+                        batch_summary=getattr(prediction, 'batch_summary', ''),
+                    )
                 )
             except Exception:
-                logger.warning('Failed to extract topics from batch %d, skipping', i, exc_info=True)
+                logger.warning('Failed to extract themes from batch %d, skipping', i, exc_info=True)
                 results.append(
-                    {
-                        'batch_index': i,
-                        'topics': [],
-                        'batch_summary': f'Batch {i} failed to process.',
-                    }
+                    BatchResult(
+                        batch_index=i,
+                        themes=[],
+                        batch_summary=f'Batch {i} failed to process.',
+                    )
                 )
 
         return results
 
     async def _merge_batch_results(
         self,
-        batch_results: list[dict[str, Any]],
+        batch_results: list[BatchResult],
         note_count: int,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Merge batch topic results into a final summary and topic list."""
+        """Merge batch theme results into a final narrative and theme list."""
         predictor = dspy.Predict(VaultTopicMergeSignature)
         prediction = await run_dspy_operation(
             lm=self.lm,
             predictor=predictor,
             input_kwargs={
-                'batch_topics_json': json.dumps(batch_results),
+                'batch_results': batch_results,
                 'vault_note_count': note_count,
             },
-            operation_name='vault_summary_topic_merge',
+            operation_name='vault_summary_theme_merge',
         )
-        try:
-            topics = json.loads(prediction.topics_json)
-        except (json.JSONDecodeError, AttributeError):
-            topics = []
-        return prediction.summary, topics
+        themes = [t.model_dump() if isinstance(t, Theme) else t for t in prediction.themes]
+        return prediction.narrative, themes
