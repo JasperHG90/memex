@@ -9,7 +9,7 @@ import json
 from uuid import uuid4
 
 import pytest
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 
 from memex_mcp.server import _coerce_bool, _coerce_int, _coerce_list
 

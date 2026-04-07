@@ -25,9 +25,18 @@ def mock_summary(vault_id):
     return VaultSummary(
         id=uuid4(),
         vault_id=vault_id,
-        summary='This vault contains AI research notes.',
-        topics=[{'name': 'AI', 'note_count': 5, 'description': 'AI research'}],
-        stats={'total_notes': 5},
+        narrative='This vault contains AI research notes.',
+        themes=[
+            {
+                'name': 'AI',
+                'description': 'AI research',
+                'note_count': 5,
+                'trend': 'growing',
+                'last_addition': '2026-04-06',
+                'representative_titles': ['Paper A'],
+            }
+        ],
+        inventory={'total_notes': 5, 'total_entities': 3},
         version=3,
         notes_incorporated=5,
         patch_log=[],
@@ -63,12 +72,12 @@ class TestGetVaultSummary:
         response = client.get(f'/api/v1/vaults/{vault_id}/summary')
         assert response.status_code == 200
         data = response.json()
-        assert data['summary'] == 'This vault contains AI research notes.'
+        assert data['narrative'] == 'This vault contains AI research notes.'
         assert data['vault_id'] == str(vault_id)
         assert data['version'] == 3
         assert data['notes_incorporated'] == 5
-        assert len(data['topics']) == 1
-        assert data['topics'][0]['name'] == 'AI'
+        assert len(data['themes']) == 1
+        assert data['themes'][0]['name'] == 'AI'
 
     def test_returns_404_when_no_summary(self, client, vault_id, mock_api):
         mock_api.vault_summary.get_summary.return_value = None
@@ -86,7 +95,7 @@ class TestRegenerateVaultSummary:
         response = client.post(f'/api/v1/vaults/{vault_id}/summary/regenerate')
         assert response.status_code == 200
         data = response.json()
-        assert data['summary'] == 'This vault contains AI research notes.'
+        assert data['narrative'] == 'This vault contains AI research notes.'
         mock_api.vault_summary.regenerate_summary.assert_called_once_with(vault_id)
 
     def test_regenerate_returns_500_on_error(self, client, vault_id, mock_api):

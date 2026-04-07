@@ -3,7 +3,7 @@
 import pytest
 from uuid import uuid4
 
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 
 
 @pytest.mark.asyncio

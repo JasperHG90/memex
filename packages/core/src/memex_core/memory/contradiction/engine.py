@@ -1,7 +1,6 @@
 """Contradiction detection engine — Hindsight Retain-Time."""
 
 import asyncio
-import json
 import logging
 from typing import Any
 from uuid import UUID
@@ -17,8 +16,11 @@ from memex_core.llm import run_dspy_operation
 from memex_core.tracing import trace_span
 from memex_core.memory.contradiction.candidates import get_candidates
 from memex_core.memory.contradiction.signatures import (
+    CandidateUnit,
     ClassifyRelationships,
+    ContradictionRelationship,
     TriageNewUnits,
+    TriageUnit,
 )
 from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
 
@@ -149,21 +151,16 @@ class ContradictionEngine:
 
     async def _triage(self, units: list[MemoryUnit]) -> list[str]:
         """Single LLM call to identify corrective units."""
-        units_json = json.dumps([{'id': str(u.id), 'text': u.text} for u in units])
+        triage_units = [TriageUnit(id=str(u.id), text=u.text) for u in units]
 
         result = await run_dspy_operation(
             lm=self.lm,
             predictor=self.triage_predictor,
-            input_kwargs={'units': units_json},
+            input_kwargs={'units': triage_units},
             operation_name='contradiction.triage',
         )
 
         flagged = result.flagged_ids
-        if isinstance(flagged, str):
-            try:
-                flagged = json.loads(flagged)
-            except (json.JSONDecodeError, TypeError):
-                flagged = []
         return [str(fid) for fid in (flagged or [])]
 
     async def _process_flagged_unit(
@@ -195,11 +192,11 @@ class ContradictionEngine:
         confidence_updates: dict[UUID, float] = {}
 
         for rel in relationships:
-            relation = rel['relation']
-            authoritative_hint = rel.get('authoritative', 'new')
-            reasoning = rel.get('reasoning', '')
+            relation = rel.relation
+            authoritative_hint = rel.authoritative
+            reasoning = rel.reasoning
 
-            existing_unit = next((c for c in candidates if str(c.id) == rel['existing_id']), None)
+            existing_unit = next((c for c in candidates if str(c.id) == rel.existing_id), None)
             if existing_unit is None:
                 continue
 
@@ -249,18 +246,16 @@ class ContradictionEngine:
 
     async def _classify(
         self, unit: MemoryUnit, candidates: list[MemoryUnit]
-    ) -> list[dict[str, Any]]:
+    ) -> list[ContradictionRelationship]:
         """Classify relationships between unit and candidates."""
-        candidates_json = json.dumps(
-            [
-                {
-                    'id': str(c.id),
-                    'text': c.text,
-                    'date': c.event_date.isoformat() if c.event_date else 'unknown',
-                }
-                for c in candidates
-            ]
-        )
+        candidate_models = [
+            CandidateUnit(
+                id=str(c.id),
+                text=c.text,
+                date=c.event_date.isoformat() if c.event_date else 'unknown',
+            )
+            for c in candidates
+        ]
 
         result = await run_dspy_operation(
             lm=self.lm,
@@ -268,20 +263,14 @@ class ContradictionEngine:
             input_kwargs={
                 'new_unit_text': unit.text,
                 'new_unit_date': (unit.event_date.isoformat() if unit.event_date else 'unknown'),
-                'candidates': candidates_json,
+                'candidates': candidate_models,
             },
             operation_name='contradiction.classify',
         )
 
-        relationships = result.relationships
-        if isinstance(relationships, str):
-            try:
-                relationships = json.loads(relationships)
-            except (json.JSONDecodeError, TypeError):
-                relationships = []
-
+        relationships: list[ContradictionRelationship] = result.relationships or []
         valid_relations = {'reinforce', 'weaken', 'contradict'}
-        return [r for r in (relationships or []) if r.get('relation') in valid_relations]
+        return [r for r in relationships if r.relation in valid_relations]
 
     def _resolve_authority(
         self,

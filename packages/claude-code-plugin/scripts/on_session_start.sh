@@ -96,6 +96,8 @@ else
 ### Per-project vault
 
 No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_write(key=\"project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
+
+    status="${status} · No vault set — tell me which vault to use for this project"
 fi
 
 session_note_instruction="
@@ -106,7 +108,7 @@ This session's note key is \`${SESSION_NOTE_KEY}\`. When you complete a meaningf
 additional_context="${briefing_content}${vault_instruction}${session_note_instruction}"
 
 # --- Build status summary ---
-status="Memex connected"
+status="🧠 Memex connected"
 [ -n "$project_vault" ] && status="${status} (vault: ${project_vault})"
 
 # --- Output JSON ---

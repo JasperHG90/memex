@@ -4,7 +4,7 @@ and malformed input that happy-path tests miss."""
 import datetime as dt
 
 import pytest
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 from fastmcp.exceptions import ToolError
 from uuid import uuid4, UUID
 

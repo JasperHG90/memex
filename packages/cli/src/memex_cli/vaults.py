@@ -285,9 +285,9 @@ async def vault_summary(
         return
 
     if compact:
-        console.print(summary.summary)
-        if summary.topics:
-            console.print(f'\nTopics: {", ".join(t["name"] for t in summary.topics)}')
+        console.print(summary.narrative)
+        if summary.themes:
+            console.print(f'\nThemes: {", ".join(t["name"] for t in summary.themes)}')
         return
 
     # Rich display
@@ -296,28 +296,59 @@ async def vault_summary(
 
     console.print(
         Panel(
-            Markdown(summary.summary),
+            Markdown(summary.narrative),
             title=f'Vault Summary — {vault_name} (v{summary.version})',
             subtitle=f'{summary.notes_incorporated} notes incorporated',
             border_style='cyan',
         )
     )
 
-    if summary.topics:
-        topic_table = Table(title='Topics')
-        topic_table.add_column('Name', style='cyan')
-        topic_table.add_column('Notes', style='dim', justify='right')
-        topic_table.add_column('Description', style='white')
-        for t in summary.topics:
-            topic_table.add_row(
-                t.get('name', ''), str(t.get('note_count', '')), t.get('description', '')
+    if summary.themes:
+        theme_table = Table(title='Themes')
+        theme_table.add_column('Name', style='cyan')
+        theme_table.add_column('Notes', style='dim', justify='right')
+        theme_table.add_column('Trend', style='yellow')
+        theme_table.add_column('Description', style='white')
+        for t in summary.themes:
+            theme_table.add_row(
+                t.get('name', ''),
+                str(t.get('note_count', '')),
+                t.get('trend', ''),
+                t.get('description', ''),
             )
-        console.print(topic_table)
+        console.print(theme_table)
 
-    if summary.stats:
-        stat_table = Table(title='Stats', show_header=False, box=None, padding=(0, 2))
-        stat_table.add_column(style='dim')
-        stat_table.add_column(style='bold')
-        for k, v in summary.stats.items():
-            stat_table.add_row(k.replace('_', ' ').title(), str(v))
-        console.print(stat_table)
+    if summary.inventory:
+        inv = summary.inventory
+        inv_table = Table(title='Inventory', show_header=False, box=None, padding=(0, 2))
+        inv_table.add_column(style='dim')
+        inv_table.add_column(style='bold')
+        inv_table.add_row('Total Notes', str(inv.get('total_notes', 0)))
+        inv_table.add_row('Total Entities', str(inv.get('total_entities', 0)))
+        date_range = inv.get('date_range', {})
+        if date_range.get('earliest'):
+            inv_table.add_row(
+                'Date Range', f'{date_range["earliest"]} to {date_range.get("latest", "?")}'
+            )
+        recent = inv.get('recent_activity', {})
+        if recent:
+            inv_table.add_row(
+                'Recent (7d / 30d)', f'{recent.get("7d", 0)} / {recent.get("30d", 0)}'
+            )
+        by_template = inv.get('by_template', {})
+        if by_template:
+            inv_table.add_row(
+                'Content Types', ', '.join(f'{v} {k}' for k, v in by_template.items())
+            )
+        console.print(inv_table)
+
+    if summary.key_entities:
+        ent_table = Table(title='Key Entities')
+        ent_table.add_column('Name', style='cyan')
+        ent_table.add_column('Type', style='dim')
+        ent_table.add_column('Mentions', style='bold', justify='right')
+        for ent in summary.key_entities[:10]:
+            ent_table.add_row(
+                ent.get('name', ''), ent.get('type', ''), str(ent.get('mention_count', 0))
+            )
+        console.print(ent_table)

@@ -14,9 +14,9 @@ class TestVaultSummaryModel:
         vs = VaultSummary(vault_id=vault_id)
         assert vs.id is not None
         assert vs.vault_id == vault_id
-        assert vs.summary == ''
-        assert vs.topics == []
-        assert vs.stats == {}
+        assert vs.narrative == ''
+        assert vs.themes == []
+        assert vs.inventory == {}
         assert vs.version == 1
         assert vs.notes_incorporated == 0
         assert vs.patch_log == []
@@ -25,23 +25,32 @@ class TestVaultSummaryModel:
         vault_id = uuid4()
         note_id = uuid4()
         now = datetime.now(timezone.utc)
-        topics = [{'name': 'AI', 'note_count': 5, 'description': 'AI topics'}]
-        stats = {'total_notes': 10, 'total_entities': 25}
+        themes = [
+            {
+                'name': 'AI',
+                'description': 'AI research',
+                'note_count': 5,
+                'trend': 'growing',
+                'last_addition': '2026-04-06',
+                'representative_titles': ['Paper A'],
+            }
+        ]
+        inventory = {'total_notes': 10, 'total_entities': 25}
         patch_log = [{'note_id': str(note_id), 'action': 'patch', 'timestamp': now.isoformat()}]
 
         vs = VaultSummary(
             vault_id=vault_id,
-            summary='This vault contains AI research notes.',
-            topics=topics,
-            stats=stats,
+            narrative='This vault contains AI research notes.',
+            themes=themes,
+            inventory=inventory,
             version=3,
             notes_incorporated=10,
             patch_log=patch_log,
         )
 
-        assert vs.summary == 'This vault contains AI research notes.'
-        assert vs.topics == topics
-        assert vs.stats == stats
+        assert vs.narrative == 'This vault contains AI research notes.'
+        assert vs.themes == themes
+        assert vs.inventory == inventory
         assert vs.version == 3
         assert vs.notes_incorporated == 10
         assert vs.patch_log == patch_log

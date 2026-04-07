@@ -75,6 +75,7 @@ markers = [
   "llm_mock: marks tests using the mock_dspy_lm fixture (no real LLM)",
   "benchmark: marks performance benchmark tests",
 ]
+pythonpath = ["packages/mcp/tests"]
 cache_dir = "/home/vscode/.cache/pytest"
 asyncio_mode = "auto"
 

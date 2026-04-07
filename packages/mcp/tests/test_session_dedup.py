@@ -14,7 +14,7 @@ from memex_mcp.server import (
     SessionDedup,
     _SESSION_DEDUP_TTL,
 )
-from conftest import parse_tool_result
+from helpers import parse_tool_result
 
 
 def _make_search_result(note_id=None, unit_id=None):

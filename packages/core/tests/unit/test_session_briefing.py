@@ -26,25 +26,43 @@ def _make_vault_summary(**overrides):
     """Create a mock VaultSummary object."""
     defaults = {
         'vault_id': uuid4(),
-        'summary': 'This vault tracks research into memory systems and knowledge graphs.',
-        'topics': [
+        'narrative': 'This vault tracks research into memory systems and knowledge graphs.',
+        'themes': [
             {
                 'name': 'Memory systems',
-                'note_count': 12,
                 'description': 'Research on memory architectures',
+                'note_count': 12,
+                'trend': 'growing',
+                'last_addition': '2026-04-06',
+                'representative_titles': ['Memory Architecture Design'],
             },
             {
                 'name': 'Entity extraction',
-                'note_count': 8,
                 'description': 'NER pipelines and methods',
+                'note_count': 8,
+                'trend': 'stable',
+                'last_addition': '2026-04-01',
+                'representative_titles': ['NER Pipeline Overview'],
             },
             {
                 'name': 'Retrieval',
-                'note_count': 5,
                 'description': 'Search and retrieval strategies',
+                'note_count': 5,
+                'trend': 'growing',
+                'last_addition': '2026-04-05',
+                'representative_titles': ['TEMPR Strategy'],
             },
         ],
-        'stats': {'total_notes': 42},
+        'inventory': {
+            'total_notes': 42,
+            'total_entities': 15,
+            'date_range': {'earliest': '2024-01-01', 'latest': '2026-04-06'},
+            'recent_activity': {'7d': 3, '30d': 10},
+        },
+        'key_entities': [
+            {'name': 'Memory Systems', 'type': 'concept', 'mention_count': 12},
+            {'name': 'DSPy', 'type': 'technology', 'mention_count': 8},
+        ],
         'version': 5,
         'notes_incorporated': 42,
     }
@@ -304,7 +322,7 @@ class TestSessionBriefingGenerate:
 
     @pytest.mark.asyncio
     async def test_section_order(self):
-        """Sections appear in order: header, KV, vault summary, entities, binding."""
+        """Sections appear in order: header, KV, vault overview, entities, binding."""
         svc = _make_service(
             summary=_make_vault_summary(),
             mental_models=_make_mental_models(3, with_observations=True),
@@ -314,15 +332,15 @@ class TestSessionBriefingGenerate:
 
         header_pos = result.find('# Session Briefing')
         kv_pos = result.find('## Key-Value Facts')
-        vault_pos = result.find('## Vault Summary')
+        vault_pos = result.find('## Vault Overview')
         entity_pos = result.find('## Top Entities')
         binding_pos = result.find('*Vault:')
 
         assert header_pos < kv_pos < vault_pos < entity_pos < binding_pos
 
     @pytest.mark.asyncio
-    async def test_2000_includes_prose_and_trends(self):
-        """At 2000 budget: prose + topic descriptions + trend indicators present."""
+    async def test_2000_includes_narrative_and_trends(self):
+        """At 2000 budget: narrative + theme descriptions + trend indicators present."""
         svc = _make_service(
             summary=_make_vault_summary(),
             mental_models=_make_mental_models(3, with_observations=True),
@@ -330,19 +348,22 @@ class TestSessionBriefingGenerate:
         )
         result = await svc.generate(uuid4(), budget=2000)
 
-        # Prose section present
-        assert '## Vault Summary' in result
+        # Vault overview section present with narrative
+        assert '## Vault Overview' in result
         assert 'memory systems and knowledge graphs' in result
 
-        # Topic descriptions present
+        # Theme descriptions present (non-compact mode)
         assert 'Research on memory architectures' in result
 
-        # Trend arrows present (★ for new)
+        # Theme trend arrows present (↑ for growing)
+        assert '\u2191' in result
+
+        # Mental model trend arrows present (★ for new observations)
         assert '\u2605' in result
 
     @pytest.mark.asyncio
-    async def test_1000_topics_only_no_trends(self):
-        """At 1000 budget: no prose, no trends, topics compact."""
+    async def test_1000_compact_vault_overview_no_entity_trends(self):
+        """At 1000 budget: compact vault overview (no theme descriptions), no entity trends."""
         svc = _make_service(
             summary=_make_vault_summary(),
             mental_models=_make_mental_models(3, with_observations=True),
@@ -350,14 +371,12 @@ class TestSessionBriefingGenerate:
         )
         result = await svc.generate(uuid4(), budget=1000)
 
-        # No prose section
-        assert '## Vault Summary' not in result
-
-        # Topics present but compact (no descriptions)
+        # Vault overview present with compact themes (no descriptions)
+        assert '## Vault Overview' in result
         assert 'Memory systems (12)' in result
         assert 'Research on memory architectures' not in result
 
-        # No trend arrows
+        # No entity trend arrows (★ for new observations)
         assert '\u2605' not in result  # ★
 
     @pytest.mark.asyncio
@@ -389,8 +408,9 @@ class TestSessionBriefingGenerate:
 
         assert '# Session Briefing' in result
         assert '*Vault:' in result
-        # Should not have entity/topic/kv sections
+        # Should not have entity/vault overview/kv sections
         assert '## Top Entities' not in result
+        assert '## Vault Overview' not in result
         assert '## Key-Value Facts' not in result
 
     @pytest.mark.asyncio
@@ -515,9 +535,16 @@ class TestOverflowDegradation:
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='A very detailed summary. ' * 50,
-                topics=[
-                    {'name': f'Topic{i}', 'note_count': i, 'description': 'desc ' * 20}
+                narrative='A very detailed summary. ' * 50,
+                themes=[
+                    {
+                        'name': f'Theme{i}',
+                        'description': 'desc ' * 20,
+                        'note_count': i,
+                        'trend': 'growing',
+                        'last_addition': '2026-04-06',
+                        'representative_titles': [f'Title {i}'],
+                    }
                     for i in range(15)
                 ],
             ),
@@ -534,7 +561,7 @@ class TestOverflowDegradation:
     async def test_never_drops_header_or_binding(self):
         """Header and vault binding are never removed during overflow."""
         svc = _make_service(
-            summary=_make_vault_summary(summary='x ' * 5000),
+            summary=_make_vault_summary(narrative='x ' * 5000),
             mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[_make_kv_entry(f'global:k{i}', 'v' * 200) for i in range(20)],
         )
@@ -547,7 +574,7 @@ class TestOverflowDegradation:
     async def test_never_drops_global_kv(self):
         """Global KV entries survive all overflow steps."""
         svc = _make_service(
-            summary=_make_vault_summary(summary='x ' * 3000),
+            summary=_make_vault_summary(narrative='x ' * 3000),
             mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:important', 'critical-value'),
@@ -564,7 +591,7 @@ class TestOverflowDegradation:
     async def test_overflow_drops_kv_namespaces_in_order(self):
         """KV namespaces are dropped in order: app -> user -> project."""
         svc = _make_service(
-            summary=_make_vault_summary(summary='x ' * 2000),
+            summary=_make_vault_summary(narrative='x ' * 2000),
             mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:keep', 'keep'),
@@ -583,7 +610,7 @@ class TestOverflowDegradation:
     async def test_token_budget_compliance(self, budget: int):
         """Parameterized check that output respects budget for both tiers."""
         svc = _make_service(
-            summary=_make_vault_summary(summary='Summary text. ' * 100),
+            summary=_make_vault_summary(narrative='Summary text. ' * 100),
             mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}') for i in range(5)],
         )
@@ -611,9 +638,16 @@ class TestHeaderContent:
 
     @pytest.mark.asyncio
     async def test_header_includes_note_count(self):
-        """Header shows note count from vault summary stats."""
+        """Header shows note count from vault summary inventory."""
         svc = _make_service(
-            summary=_make_vault_summary(stats={'total_notes': 42}),
+            summary=_make_vault_summary(
+                inventory={
+                    'total_notes': 42,
+                    'total_entities': 15,
+                    'date_range': {'earliest': '2024-01-01', 'latest': '2026-04-06'},
+                    'recent_activity': {'7d': 3, '30d': 10},
+                }
+            ),
             mental_models=[],
             kv_entries=[],
         )
@@ -672,12 +706,15 @@ class TestOverflowSteps:
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='A moderately long vault summary sentence that adds tokens. ' * 80,
-                topics=[
+                narrative='A moderately long vault summary sentence that adds tokens. ' * 80,
+                themes=[
                     {
-                        'name': f'Topic{i}',
+                        'name': f'Theme{i}',
+                        'description': 'A detailed description of this theme area ' * 4,
                         'note_count': i * 3,
-                        'description': 'A detailed description of this topic area ' * 4,
+                        'trend': 'growing',
+                        'last_addition': '2026-04-06',
+                        'representative_titles': [f'Title {i}'],
                     }
                     for i in range(10)
                 ],
@@ -713,9 +750,16 @@ class TestOverflowSteps:
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='Detailed. ' * 150,
-                topics=[
-                    {'name': f'T{i}', 'note_count': i, 'description': 'detailed desc ' * 10}
+                narrative='Detailed. ' * 150,
+                themes=[
+                    {
+                        'name': f'T{i}',
+                        'description': 'detailed desc ' * 10,
+                        'note_count': i,
+                        'trend': 'growing',
+                        'last_addition': '2026-04-06',
+                        'representative_titles': [f'Title {i}'],
+                    }
                     for i in range(10)
                 ],
             ),
@@ -727,18 +771,21 @@ class TestOverflowSteps:
         assert _estimate_tokens(result) <= 2000 * 1.05
 
     @pytest.mark.asyncio
-    async def test_step2_drops_topic_descriptions(self):
-        """Overflow step 2: topic descriptions removed, leaving just name (count)."""
+    async def test_step2_drops_theme_descriptions(self):
+        """Overflow step 2: theme descriptions removed, leaving just name (count)."""
         models = _make_mental_models(10, with_observations=True)
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='Very long summary. ' * 200,
-                topics=[
+                narrative='Very long summary. ' * 200,
+                themes=[
                     {
-                        'name': f'Topic{i}',
-                        'note_count': i,
+                        'name': f'Theme{i}',
                         'description': 'very long description ' * 15,
+                        'note_count': i,
+                        'trend': 'growing',
+                        'last_addition': '2026-04-06',
+                        'representative_titles': [f'Title {i}'],
                     }
                     for i in range(12)
                 ],
@@ -750,12 +797,12 @@ class TestOverflowSteps:
         assert _estimate_tokens(result) <= 2000 * 1.05
 
     @pytest.mark.asyncio
-    async def test_step3_trims_prose(self):
-        """Overflow step 3: vault prose trimmed sentence by sentence."""
+    async def test_step3_drops_vault_overview(self):
+        """Overflow step 3: vault overview dropped entirely."""
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='First sentence. Second sentence. Third sentence. ' * 50,
-                topics=[],
+                narrative='First sentence. Second sentence. Third sentence. ' * 50,
+                themes=[],
             ),
             mental_models=_make_mental_models(5),
             kv_entries=[_make_kv_entry(f'global:k{i}', f'v{i}' * 30) for i in range(10)],
@@ -767,7 +814,7 @@ class TestOverflowSteps:
     async def test_step4_drops_app_kv_before_user(self):
         """Overflow step 4: app: KV dropped before user: KV."""
         svc = _make_service(
-            summary=_make_vault_summary(summary='x ' * 3000),
+            summary=_make_vault_summary(narrative='x ' * 3000),
             mental_models=_make_mental_models(10, with_observations=True),
             kv_entries=[
                 _make_kv_entry('global:keep', 'important'),
@@ -794,9 +841,16 @@ class TestOverflowSteps:
 
         svc = _make_service(
             summary=_make_vault_summary(
-                summary='Summary. ' * 200,
-                topics=[
-                    {'name': f'Topic{i}', 'note_count': i, 'description': 'desc ' * 20}
+                narrative='Summary. ' * 200,
+                themes=[
+                    {
+                        'name': f'Theme{i}',
+                        'description': 'desc ' * 20,
+                        'note_count': i,
+                        'trend': 'growing',
+                        'last_addition': '2026-04-06',
+                        'representative_titles': [f'Title {i}'],
+                    }
                     for i in range(10)
                 ],
             ),
@@ -817,9 +871,18 @@ class TestOverflowSteps:
         entity_lines = [ln for ln in entity_section.split('\n') if ln.strip().startswith('- ')]
         assert len(entity_lines) <= 5, f'Expected <= 5 models, got {len(entity_lines)}'
 
-        # No trend arrows should appear (★ ↑ ↓ → ⚠)
-        assert '\u2605' not in result  # ★
-        assert '\u2191' not in result  # ↑
+        # No entity observation trend arrows should appear (★ for new, ↓ for weakening)
+        # Note: ↑ is now used for theme trends (growing) in vault overview, so we check
+        # entity-specific indicators instead
+        assert '\u2605' not in result  # ★ (new observation)
+        # Verify no observation trend lines in entity section (indented trend text)
+        if '## Top Entities' in result:
+            entity_section = result.split('## Top Entities')[-1].split('---')[0]
+            # Trend lines are indented with 2 spaces and contain trend arrows
+            trend_lines = [
+                ln for ln in entity_section.split('\n') if ln.startswith('  ') and ln.strip()
+            ]
+            assert len(trend_lines) == 0, f'Expected no trend lines, got {trend_lines}'
 
 
 # ---------------------------------------------------------------------------
