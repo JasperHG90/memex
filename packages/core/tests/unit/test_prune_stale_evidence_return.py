@@ -1,6 +1,7 @@
 """Unit tests for prune_stale_evidence return value (affected entity IDs)."""
 
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock
 from uuid import uuid4
 
@@ -12,21 +13,23 @@ from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
 
 def _make_model(entity_id, vault_id, observations):
     """Build a MentalModel with the given observations (list of Observation dicts)."""
-    model = MentalModel(
+    return MentalModel(
         entity_id=entity_id,
         vault_id=vault_id,
+        name=f'Entity-{entity_id.hex[:8]}',
+        last_refreshed=datetime.now(timezone.utc),
         observations=[obs.model_dump(mode='json') for obs in observations],
     )
-    return model
 
 
 def _make_observation(unit_ids):
     """Build an Observation with evidence pointing to the given unit_ids."""
     return Observation(
-        id=uuid4(),
-        title='test observation title',
+        title='Test observation',
         content='test observation',
-        evidence=[EvidenceItem(memory_id=uid, snippet='evidence snippet') for uid in unit_ids],
+        evidence=[
+            EvidenceItem(memory_id=uid, quote='evidence snippet', relevance=1.0) for uid in unit_ids
+        ],
     )
 
 
