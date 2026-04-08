@@ -125,7 +125,8 @@ class NoteService:
     ) -> dict[str, Any]:
         """Set a note's lifecycle status and optionally link to another note.
 
-        When status is 'superseded' or 'archived', marks all memory units as stale.
+        When status is 'superseded' or 'archived', marks all memory units as stale
+        and prunes mental model evidence + queues affected entities for reflection.
         When status is 'active', reactivates all memory units (sets them back to active).
         """
         from memex_core.memory.sql_models import MemoryUnit, Note
@@ -134,31 +135,21 @@ class NoteService:
         if status not in valid_statuses:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
+        note_vault_id: UUID | None = None
+
         async with self.metastore.session() as session:
             doc = await session.get(Note, note_id)
             if not doc:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 
+            note_vault_id = doc.vault_id
             doc.status = status
+            assert note_vault_id is not None
             if status == 'superseded':
                 doc.superseded_by = linked_note_id
-                # Cascade: mark all memory units as stale
-                from sqlmodel import select
-
-                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
-                units = (await session.exec(units_stmt)).all()
-                for unit in units:
-                    unit.status = 'stale'
-                    session.add(unit)
+                await self._deactivate_note_units(session, note_id, note_vault_id)
             elif status == 'archived':
-                # Cascade: mark all memory units as stale (same as superseded)
-                from sqlmodel import select
-
-                units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
-                units = (await session.exec(units_stmt)).all()
-                for unit in units:
-                    unit.status = 'stale'
-                    session.add(unit)
+                await self._deactivate_note_units(session, note_id, note_vault_id)
             elif status == 'appended':
                 doc.appended_to = linked_note_id
             elif status == 'active':
@@ -176,14 +167,66 @@ class NoteService:
 
             session.add(doc)
             await session.commit()
-            audit_event(
-                self._audit_service, 'note.status_changed', 'note', str(note_id), status=status
+
+        # Mark vault summary for regeneration after commit (fire-and-forget)
+        if status in ('superseded', 'archived') and note_vault_id and self._vault_summary_service:
+            task = asyncio.create_task(
+                self._vault_summary_service.mark_needs_regeneration(note_vault_id)
             )
-            return {
-                'note_id': str(note_id),
-                'status': status,
-                'linked_note_id': str(linked_note_id) if linked_note_id else None,
-            }
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
+        audit_event(self._audit_service, 'note.status_changed', 'note', str(note_id), status=status)
+        return {
+            'note_id': str(note_id),
+            'status': status,
+            'linked_note_id': str(linked_note_id) if linked_note_id else None,
+        }
+
+    async def _deactivate_note_units(
+        self,
+        session: Any,
+        note_id: UUID,
+        vault_id: UUID,
+    ) -> None:
+        """Mark note's memory units as stale, prune evidence, and queue for reflection.
+
+        Shared by both 'superseded' and 'archived' status transitions.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit, UnitEntity
+
+        units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+        units = (await session.exec(units_stmt)).all()
+        unit_ids: list[UUID] = []
+        for unit in units:
+            unit.status = 'stale'
+            session.add(unit)
+            unit_ids.append(unit.id)
+
+        if not unit_ids:
+            return
+
+        # Collect entity IDs linked to these units
+        entity_stmt = select(UnitEntity.entity_id).where(col(UnitEntity.unit_id).in_(unit_ids))
+        entity_result = await session.exec(entity_stmt)
+        entity_ids: set[UUID] = set(entity_result.all())
+
+        if not entity_ids:
+            return
+
+        # Prune stale evidence from mental models
+        from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
+        affected_entity_ids = await prune_stale_evidence(session, entity_ids, unit_ids, vault_id)
+
+        # Queue affected entities for urgent re-reflection
+        if affected_entity_ids:
+            from memex_core.memory.reflect.queue_service import ReflectionQueueService
+
+            queue_svc = ReflectionQueueService(self.config.server.memory.reflection)
+            await queue_svc.handle_deletion_event(session, affected_entity_ids, vault_id)
 
     async def update_note_date(self, note_id: UUID, new_date: datetime) -> dict[str, Any]:
         """Update the publish_date of a note, cascading delta to all memory unit timestamps."""
