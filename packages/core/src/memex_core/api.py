@@ -435,11 +435,6 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
-        self._stats = StatsService(
-            metastore=self.metastore,
-            filestore=self.filestore,
-            config=self.config,
-        )
         self._lineage = LineageService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -477,6 +472,12 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
             vaults=self._vaults,
+            vault_summary_service=self.vault_summary,
+        )
+        self._stats = StatsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
             vault_summary_service=self.vault_summary,
         )
         self._kv = KVService(
