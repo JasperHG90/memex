@@ -131,11 +131,29 @@ class VaultSummaryService:
             await session.commit()
             return True
 
+    async def mark_needs_regeneration(self, vault_id: UUID) -> None:
+        """Flag the vault summary for full regeneration.
+
+        Sets ``needs_regeneration = True`` on the existing summary row.
+        No-op if no summary exists yet (regeneration will happen naturally
+        when the first summary is created).
+        """
+        async with self.metastore.session() as session:
+            stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
+            result = await session.execute(stmt)
+            summary = result.scalar_one_or_none()
+            if summary is None:
+                return
+            summary.needs_regeneration = True
+            session.add(summary)
+            await session.commit()
+
     async def is_stale(self, vault_id: UUID) -> bool:
         """Check if the vault summary needs updating.
 
         Returns True if:
         - No summary exists and the vault has active notes
+        - ``needs_regeneration`` flag is set
         - Active notes exist with ``summary_version_incorporated`` that is NULL
           or less than the current summary version
         """
@@ -153,6 +171,9 @@ class VaultSummaryService:
                 )
                 count = (await session.execute(count_stmt)).scalar() or 0
                 return count > 0
+
+            if summary.needs_regeneration:
+                return True
 
             count_stmt = (
                 select(func.count())
@@ -358,6 +379,7 @@ class VaultSummaryService:
             summary.version = (summary.version or 0) + 1
             summary.notes_incorporated = note_count
             summary.patch_log = []
+            summary.needs_regeneration = False
 
             # Mark ALL active notes with the new version
             mark_all_stmt = (
