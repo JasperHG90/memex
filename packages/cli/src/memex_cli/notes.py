@@ -700,7 +700,12 @@ async def migrate_note(
             handle_api_error(e)
             return
 
-    console.print(f'[green]Note {note_id} migrated successfully.[/green]')
+    if result.get('status') == 'noop':
+        console.print(
+            f'[yellow]Note {note_id} is already in vault "{target_vault}". No changes made.[/yellow]'
+        )
+    else:
+        console.print(f'[green]Note {note_id} migrated successfully.[/green]')
     console.print(f'  Source vault: {result.get("source_vault_id")}')
     console.print(f'  Target vault: {result.get("target_vault_id")}')
     console.print(f'  Entities affected: {result.get("entities_affected", 0)}')

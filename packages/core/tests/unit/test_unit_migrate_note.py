@@ -76,22 +76,31 @@ async def test_migrate_note_not_found(note_service):
 
 
 @pytest.mark.asyncio
-async def test_migrate_note_same_vault_raises(note_service):
-    """Raises ValueError when source and target vault are identical."""
+async def test_migrate_note_same_vault_noop(note_service):
+    """Same-vault migration returns noop status without destructive cleanup."""
     note_id = uuid4()
     vault_id = uuid4()
 
     mock_note = MagicMock()
     mock_note.vault_id = vault_id
+    mock_note.filestore_path = f'assets/test/{note_id}'
+    mock_note.assets = [f'assets/test/{note_id}/image.png']
 
-    session = _make_txn_session(get_side_effects=[mock_note])
+    mock_vault = MagicMock()
+    mock_vault.name = 'test'
+
+    session = _make_txn_session(get_side_effects=[mock_note, mock_vault, mock_vault])
 
     with patch('memex_core.services.notes.AsyncTransaction') as mock_txn:
         mock_txn.return_value.__aenter__ = AsyncMock(return_value=MagicMock(db_session=session))
         mock_txn.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with pytest.raises(ValueError, match='same'):
-            await note_service.migrate_note(note_id, vault_id)
+        result = await note_service.migrate_note(note_id, vault_id)
+
+    assert result['status'] == 'noop'
+    assert result['note_id'] == str(note_id)
+    assert result['source_vault_id'] == str(vault_id)
+    assert result['target_vault_id'] == str(vault_id)
 
 
 @pytest.mark.asyncio

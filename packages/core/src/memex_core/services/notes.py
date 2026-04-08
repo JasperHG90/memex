@@ -900,8 +900,7 @@ class NoteService:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 
             source_vault_id = note.vault_id
-            if source_vault_id == target_vault_id:
-                raise ValueError('Source and target vault are the same.')
+            same_vault = source_vault_id == target_vault_id
 
             # Validate target vault exists
             target_vault = await session.get(Vault, target_vault_id)
@@ -977,7 +976,8 @@ class NoteService:
                 )
 
             # --- Cleanup EntityCooccurrence in source vault for affected entities ---
-            if entity_ids_for_cleanup:
+            # Skip destructive cleanup when source == target (note isn't leaving)
+            if not same_vault and entity_ids_for_cleanup:
                 for eid in entity_ids_for_cleanup:
                     co_stmt = select(EntityCooccurrence).where(
                         col(EntityCooccurrence.vault_id) == source_vault_id,
@@ -990,7 +990,7 @@ class NoteService:
 
             # --- Cleanup orphaned MentalModels in source vault ---
             # --- Prune cross-vault evidence from surviving models ---
-            if entity_ids_for_cleanup:
+            if not same_vault and entity_ids_for_cleanup:
                 await session.flush()
                 surviving_entity_ids: set[UUID] = set()
                 for eid in entity_ids_for_cleanup:
@@ -1021,12 +1021,12 @@ class NoteService:
                         session, surviving_entity_ids, unit_ids, source_vault_id
                     )
 
-        # After transaction commits: move files in filestore
-        if await self.filestore.exists(old_prefix):
+        # After transaction commits: move files in filestore (skip if paths are identical)
+        if old_prefix != new_prefix and await self.filestore.exists(old_prefix):
             await self.filestore.move_file(old_prefix, new_prefix)
 
         # Mark vault summaries for regeneration in both vaults (fire-and-forget)
-        if self._vault_summary_service:
+        if not same_vault and self._vault_summary_service:
             task = asyncio.create_task(
                 self._vault_summary_service.mark_needs_regeneration(source_vault_id)
             )
@@ -1046,7 +1046,7 @@ class NoteService:
             target_vault=str(target_vault_id),
         )
         return {
-            'status': 'success',
+            'status': 'noop' if same_vault else 'success',
             'note_id': str(note_id),
             'source_vault_id': str(source_vault_id),
             'target_vault_id': str(target_vault_id),
