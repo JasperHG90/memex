@@ -616,3 +616,210 @@ async def test_migrate_back_and_forth(
             )
         ).first()
         assert row.vault_id == source_vault.id
+
+
+# ---------------------------------------------------------------------------
+# Cross-vault evidence pruning during migration
+# ---------------------------------------------------------------------------
+
+
+async def _seed_note_with_evidence(
+    session: AsyncSession,
+    vault: Vault,
+    entity: Entity,
+    *,
+    n_units: int = 2,
+) -> dict:
+    """Seed a note whose units are linked to *entity*, returning references.
+
+    Unlike ``_seed_full_note`` this does NOT create its own entities or mental
+    models — callers wire those up explicitly so evidence references are
+    controllable.
+    """
+    note_id = uuid4()
+    vault_id = vault.id
+
+    note = Note(
+        id=note_id,
+        vault_id=vault_id,
+        original_text=f'Evidence test note {uuid4().hex}',
+        content_hash=uuid4().hex,
+        title='Evidence test note',
+    )
+    session.add(note)
+
+    units: list[MemoryUnit] = []
+    for i in range(n_units):
+        unit = MemoryUnit(
+            id=uuid4(),
+            vault_id=vault_id,
+            note_id=note_id,
+            text=f'Extracted fact {i} {uuid4().hex}',
+            fact_type=FactTypes.WORLD,
+            embedding=EMBEDDING,
+            event_date=NOW,
+            status=ContentStatus.ACTIVE,
+        )
+        session.add(unit)
+        units.append(unit)
+
+    await session.flush()
+
+    for unit in units:
+        ue = UnitEntity(
+            unit_id=unit.id,
+            entity_id=entity.id,
+            vault_id=vault_id,
+        )
+        session.add(ue)
+
+    await session.commit()
+    return {'note': note, 'units': units}
+
+
+def _make_observation(unit_ids: list[UUID]) -> dict:
+    """Build a serialised Observation dict with evidence pointing to *unit_ids*."""
+    from memex_core.memory.sql_models import EvidenceItem, Observation
+
+    evidence = [EvidenceItem(memory_id=uid, quote='test quote', relevance=1.0) for uid in unit_ids]
+    obs = Observation(
+        title='Test observation',
+        content='Observation content',
+        evidence=evidence,
+    )
+    return obs.model_dump(mode='json')
+
+
+async def test_migrate_note_prunes_evidence_from_surviving_models(
+    svc: NoteService, session: AsyncSession, source_vault: Vault, target_vault: Vault
+):
+    """AC-001: Surviving mental models in the source vault have stale evidence pruned."""
+    # Shared entity
+    entity = Entity(id=uuid4(), canonical_name=f'Entity-{uuid4().hex[:8]}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    # Two notes for the same entity in the source vault
+    data1 = await _seed_note_with_evidence(session, source_vault, entity, n_units=2)
+    data2 = await _seed_note_with_evidence(session, source_vault, entity, n_units=2)
+
+    # Mental model citing units from BOTH notes
+    note1_unit_ids = [u.id for u in data1['units']]
+    note2_unit_ids = [u.id for u in data2['units']]
+    obs1 = _make_observation(note1_unit_ids)
+    obs2 = _make_observation(note2_unit_ids)
+
+    mm = MentalModel(
+        id=uuid4(),
+        vault_id=source_vault.id,
+        entity_id=entity.id,
+        name=entity.canonical_name,
+        observations=[obs1, obs2],
+        last_refreshed=NOW,
+    )
+    session.add(mm)
+    await session.commit()
+
+    # Migrate note 1 -> target vault
+    await svc.migrate_note(data1['note'].id, target_vault.id)
+
+    # Reload mental model
+    refreshed_mm = await _fresh_get(session, MentalModel, mm.id)
+    assert refreshed_mm is not None, 'Model should survive (note 2 still in source vault)'
+
+    # Evidence from note 1 should be gone, note 2 evidence intact
+    from memex_core.memory.sql_models import Observation as ObsModel
+
+    remaining_obs = [ObsModel(**o) for o in refreshed_mm.observations]
+    remaining_evidence_ids = {ev.memory_id for obs in remaining_obs for ev in obs.evidence}
+
+    for uid in note1_unit_ids:
+        assert uid not in remaining_evidence_ids, f'Unit {uid} from note 1 should be pruned'
+    for uid in note2_unit_ids:
+        assert uid in remaining_evidence_ids, f'Unit {uid} from note 2 should be intact'
+
+
+async def test_migrate_note_deletes_model_when_all_evidence_migrated(
+    svc: NoteService, session: AsyncSession, source_vault: Vault, target_vault: Vault
+):
+    """AC-002: Model deleted when all its evidence came from migrated note."""
+    entity = Entity(id=uuid4(), canonical_name=f'Entity-{uuid4().hex[:8]}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    # Two notes for the same entity so the entity survives in source vault
+    data1 = await _seed_note_with_evidence(session, source_vault, entity, n_units=2)
+    await _seed_note_with_evidence(session, source_vault, entity, n_units=1)
+
+    # Mental model only cites note 1's units
+    note1_unit_ids = [u.id for u in data1['units']]
+    obs = _make_observation(note1_unit_ids)
+
+    mm = MentalModel(
+        id=uuid4(),
+        vault_id=source_vault.id,
+        entity_id=entity.id,
+        name=entity.canonical_name,
+        observations=[obs],
+        last_refreshed=NOW,
+    )
+    session.add(mm)
+    await session.commit()
+
+    # Migrate note 1
+    await svc.migrate_note(data1['note'].id, target_vault.id)
+
+    # Entity still has units in source vault (from note 2), but model should be deleted
+    # because all observations lost all evidence
+    refreshed_mm = await _fresh_get(session, MentalModel, mm.id)
+    assert refreshed_mm is None, 'Model should be deleted when all evidence is pruned'
+
+    # Verify entity still has units in source vault
+    remaining = (
+        await _fresh_query(
+            session,
+            select(UnitEntity.unit_id).where(
+                col(UnitEntity.entity_id) == entity.id,
+                col(UnitEntity.vault_id) == source_vault.id,
+            ),
+        )
+    ).all()
+    assert len(remaining) > 0, 'Entity should still have units from note 2'
+
+
+async def test_migrate_note_leaves_unrelated_evidence_intact(
+    svc: NoteService, session: AsyncSession, source_vault: Vault, target_vault: Vault
+):
+    """AC-003: Mental models citing only non-migrated notes are unaffected."""
+    entity = Entity(id=uuid4(), canonical_name=f'Entity-{uuid4().hex[:8]}', mention_count=2)
+    session.add(entity)
+    await session.flush()
+
+    # Two notes for the same entity
+    data1 = await _seed_note_with_evidence(session, source_vault, entity, n_units=1)
+    data2 = await _seed_note_with_evidence(session, source_vault, entity, n_units=2)
+
+    # Mental model only cites note 2's units
+    note2_unit_ids = [u.id for u in data2['units']]
+    obs = _make_observation(note2_unit_ids)
+
+    mm = MentalModel(
+        id=uuid4(),
+        vault_id=source_vault.id,
+        entity_id=entity.id,
+        name=entity.canonical_name,
+        observations=[obs],
+        last_refreshed=NOW,
+    )
+    session.add(mm)
+    await session.commit()
+
+    # Capture original observations for comparison
+    original_observations = list(mm.observations)
+
+    # Migrate note 1 (model only cites note 2 — should be unaffected)
+    await svc.migrate_note(data1['note'].id, target_vault.id)
+
+    refreshed_mm = await _fresh_get(session, MentalModel, mm.id)
+    assert refreshed_mm is not None, 'Model should survive'
+    assert refreshed_mm.observations == original_observations, 'Observations should be unchanged'
