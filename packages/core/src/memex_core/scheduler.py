@@ -55,13 +55,25 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
 
 
 async def periodic_vault_summary_task(api: 'MemexAPI'):
-    """Check each vault for staleness and update summaries."""
+    """Check each vault for staleness and update summaries.
+
+    Routes to ``regenerate_summary()`` when the ``needs_regeneration`` flag
+    is set (content was deleted/archived), otherwise falls through to
+    ``update_summary()`` for incremental updates (new notes added).
+    """
     async with background_session('bg-sched-vault-summary'):
         logger.info('Scheduler: Running vault summary check...')
         try:
             vaults = await api.list_vaults()
             for vault in vaults:
-                if await api.vault_summary.is_stale(vault.id):
+                summary = await api.vault_summary.get_summary(vault.id)
+                if summary and summary.needs_regeneration:
+                    logger.info(
+                        f'Scheduler: Regenerating summary for vault {vault.name} '
+                        '(needs_regeneration flag set)'
+                    )
+                    await api.vault_summary.regenerate_summary(vault.id)
+                elif await api.vault_summary.is_stale(vault.id):
                     logger.info(f'Scheduler: Updating stale summary for vault {vault.name}')
                     await api.vault_summary.update_summary(vault.id)
         except (OSError, RuntimeError, ValueError) as e:
