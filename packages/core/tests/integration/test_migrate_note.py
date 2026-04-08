@@ -529,22 +529,125 @@ async def test_migrate_note_not_found_raises(svc: NoteService, target_vault: Vau
         await svc.migrate_note(uuid4(), target_vault.id)
 
 
-async def test_migrate_same_vault_raises(svc: NoteService, session, source_vault: Vault):
-    """ValueError when source and target vault are the same."""
+async def test_migrate_same_vault_noop(svc: NoteService, session, source_vault: Vault):
+    """Same-vault migration returns noop without destructive side-effects."""
     data = await _seed_full_note(
         session,
         source_vault,
-        n_units=0,
-        with_entities=False,
-        with_links=False,
-        with_chunks=False,
-        with_nodes=False,
-        with_mental_models=False,
-        with_cooccurrences=False,
+        n_units=2,
+        with_entities=True,
+        with_cooccurrences=True,
+        with_mental_models=True,
     )
 
-    with pytest.raises(ValueError, match='same'):
-        await svc.migrate_note(data['note'].id, source_vault.id)
+    # Capture pre-migration state
+    co_before = (
+        await _fresh_query(
+            session,
+            select(EntityCooccurrence).where(col(EntityCooccurrence.vault_id) == source_vault.id),
+        )
+    ).all()
+    mm_before = (
+        await _fresh_query(
+            session,
+            select(MentalModel).where(col(MentalModel.vault_id) == source_vault.id),
+        )
+    ).all()
+
+    result = await svc.migrate_note(data['note'].id, source_vault.id)
+
+    assert result['status'] == 'noop'
+    assert result['source_vault_id'] == str(source_vault.id)
+    assert result['target_vault_id'] == str(source_vault.id)
+
+    # Cooccurrences must NOT be deleted (note isn't leaving)
+    co_after = (
+        await _fresh_query(
+            session,
+            select(EntityCooccurrence).where(col(EntityCooccurrence.vault_id) == source_vault.id),
+        )
+    ).all()
+    assert len(co_after) == len(co_before)
+
+    # Mental models must NOT be deleted
+    mm_after = (
+        await _fresh_query(
+            session,
+            select(MentalModel).where(col(MentalModel.vault_id) == source_vault.id),
+        )
+    ).all()
+    assert len(mm_after) == len(mm_before)
+
+
+async def test_migrate_same_vault_repairs_stale_child_records(
+    svc: NoteService, session, source_vault: Vault, target_vault: Vault
+):
+    """Same-vault migration repairs child records with stale vault_ids."""
+    data = await _seed_full_note(session, source_vault, n_units=2)
+    note = data['note']
+
+    # Corrupt child records to simulate a partially-applied previous migration
+    # (use target_vault as the stale vault so FK constraints are satisfied)
+    stale_vault_id = target_vault.id
+    for chunk in data['chunks']:
+        chunk.vault_id = stale_vault_id
+        session.add(chunk)
+    for node in data['nodes']:
+        node.vault_id = stale_vault_id
+        session.add(node)
+    for unit in data['units']:
+        unit.vault_id = stale_vault_id
+        session.add(unit)
+    for ue in data['unit_entities']:
+        ue.vault_id = stale_vault_id
+        session.add(ue)
+    for link in data['links']:
+        link.vault_id = stale_vault_id
+        session.add(link)
+    await session.commit()
+
+    # Migrate to same vault — should repair all child records
+    result = await svc.migrate_note(note.id, source_vault.id)
+
+    assert result['status'] == 'noop'
+
+    # All child records should now have the correct vault_id
+    for chunk in data['chunks']:
+        c = await _fresh_get(session, Chunk, chunk.id)
+        assert c.vault_id == source_vault.id, f'Chunk {chunk.id} not repaired'
+
+    for node in data['nodes']:
+        n = await _fresh_get(session, Node, node.id)
+        assert n.vault_id == source_vault.id, f'Node {node.id} not repaired'
+
+    for unit in data['units']:
+        u = await _fresh_get(session, MemoryUnit, unit.id)
+        assert u.vault_id == source_vault.id, f'MemoryUnit {unit.id} not repaired'
+
+    for ue in data['unit_entities']:
+        row = (
+            await _fresh_query(
+                session,
+                select(UnitEntity).where(
+                    col(UnitEntity.unit_id) == ue.unit_id,
+                    col(UnitEntity.entity_id) == ue.entity_id,
+                ),
+            )
+        ).first()
+        assert row.vault_id == source_vault.id, 'UnitEntity not repaired'
+
+    for link in data['links']:
+        row = (
+            await _fresh_query(
+                session,
+                select(MemoryLink).where(
+                    col(MemoryLink.from_unit_id) == link.from_unit_id,
+                    col(MemoryLink.to_unit_id) == link.to_unit_id,
+                    col(MemoryLink.link_type) == link.link_type,
+                ),
+            )
+        ).first()
+        assert row.vault_id == source_vault.id, 'MemoryLink not repaired'
 
 
 async def test_migrate_target_vault_not_found_raises(
