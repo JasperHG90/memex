@@ -20,6 +20,7 @@ class TestVaultSummaryModel:
         assert vs.version == 1
         assert vs.notes_incorporated == 0
         assert vs.patch_log == []
+        assert vs.needs_regeneration is False
 
     def test_create_with_all_fields(self):
         vault_id = uuid4()
