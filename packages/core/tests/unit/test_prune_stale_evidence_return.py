@@ -45,40 +45,46 @@ async def test_returns_empty_set_when_no_deleted_units():
 
 
 @pytest.mark.asyncio
-async def test_returns_affected_entity_ids():
+async def test_returns_affected_entity_id_when_evidence_pruned():
+    """Entity whose model has evidence pruned should be in the returned set."""
     session = AsyncMock(spec=AsyncSession)
     vault_id = uuid4()
-    entity_a = uuid4()
-    entity_b = uuid4()
+    entity_id = uuid4()
     deleted_unit = uuid4()
     surviving_unit = uuid4()
 
-    # Entity A: has evidence pointing to deleted_unit -> will be affected
-    obs_a = _make_observation([deleted_unit, surviving_unit])
-    model_a = _make_model(entity_a, vault_id, [obs_a])
+    obs = _make_observation([deleted_unit, surviving_unit])
+    model = _make_model(entity_id, vault_id, [obs])
 
-    # Entity B: only has evidence pointing to surviving_unit -> NOT affected
-    obs_b = _make_observation([surviving_unit])
-    model_b = _make_model(entity_b, vault_id, [obs_b])
+    mock_result = MagicMock()
+    mock_result.all.return_value = [model]
+    session.exec = AsyncMock(return_value=mock_result)
 
-    call_count = 0
+    result = await prune_stale_evidence(session, {entity_id}, [deleted_unit], vault_id)
 
-    def mock_exec(stmt):
-        nonlocal call_count
-        mock_result = MagicMock()
-        if call_count == 0:
-            mock_result.all.return_value = [model_a]
-        else:
-            mock_result.all.return_value = [model_b]
-        call_count += 1
-        return mock_result
+    assert entity_id in result
+    # Model should still exist (has surviving evidence)
+    session.delete.assert_not_awaited()
 
-    session.exec = AsyncMock(side_effect=mock_exec)
 
-    result = await prune_stale_evidence(session, {entity_a, entity_b}, [deleted_unit], vault_id)
+@pytest.mark.asyncio
+async def test_returns_empty_when_no_evidence_pruned():
+    """Entity whose model has no evidence matching deleted units should not be affected."""
+    session = AsyncMock(spec=AsyncSession)
+    vault_id = uuid4()
+    entity_id = uuid4()
+    surviving_unit = uuid4()
 
-    assert entity_a in result
-    assert entity_b not in result
+    obs = _make_observation([surviving_unit])
+    model = _make_model(entity_id, vault_id, [obs])
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [model]
+    session.exec = AsyncMock(return_value=mock_result)
+
+    result = await prune_stale_evidence(session, {entity_id}, [uuid4()], vault_id)
+
+    assert entity_id not in result
 
 
 @pytest.mark.asyncio

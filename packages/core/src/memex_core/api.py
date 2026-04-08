@@ -467,21 +467,22 @@ class MemexAPI:
             doc_search=self._doc_search,
             vaults=self._vaults,
         )
+        self.vault_summary = VaultSummaryService(
+            metastore=self.metastore,
+            lm=self.lm,
+            config=self.config.server.vault_summary,
+        )
         self._notes = NoteService(
             metastore=self.metastore,
             filestore=self.filestore,
             config=self.config,
             vaults=self._vaults,
+            vault_summary_service=self.vault_summary,
         )
         self._kv = KVService(
             metastore=self.metastore,
             filestore=self.filestore,
             config=self.config,
-        )
-        self.vault_summary = VaultSummaryService(
-            metastore=self.metastore,
-            lm=self.lm,
-            config=self.config.server.vault_summary,
         )
 
         from memex_core.services.session_briefing import SessionBriefingService
