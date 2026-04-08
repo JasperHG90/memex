@@ -918,8 +918,10 @@ class NoteService:
                         await session.delete(co)
 
             # --- Cleanup orphaned MentalModels in source vault ---
+            # --- Prune cross-vault evidence from surviving models ---
             if entity_ids_for_cleanup:
                 await session.flush()
+                surviving_entity_ids: set[UUID] = set()
                 for eid in entity_ids_for_cleanup:
                     remaining = await session.exec(
                         select(UnitEntity.unit_id)
@@ -937,6 +939,16 @@ class NoteService:
                         mm_result = await session.exec(mm_stmt)
                         for mm in mm_result.all():
                             await session.delete(mm)
+                    else:
+                        surviving_entity_ids.add(eid)
+
+                # Prune evidence referencing migrated units from surviving models
+                if surviving_entity_ids and unit_ids:
+                    from memex_core.services.mental_model_cleanup import prune_stale_evidence
+
+                    await prune_stale_evidence(
+                        session, surviving_entity_ids, unit_ids, source_vault_id
+                    )
 
         # After transaction commits: move files in filestore
         if await self.filestore.exists(old_prefix):
