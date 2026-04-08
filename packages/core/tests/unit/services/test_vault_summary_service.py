@@ -852,6 +852,12 @@ class TestPeriodicVaultSummaryTask:
         vault2.name = 'vault2'
 
         api.list_vaults = AsyncMock(return_value=[vault1, vault2])
+        # get_summary returns summaries without needs_regeneration flag
+        summary1 = MagicMock()
+        summary1.needs_regeneration = False
+        summary2 = MagicMock()
+        summary2.needs_regeneration = False
+        api.vault_summary.get_summary = AsyncMock(side_effect=[summary1, summary2])
         api.vault_summary.is_stale = AsyncMock(side_effect=[True, False])
         api.vault_summary.update_summary = AsyncMock()
 
