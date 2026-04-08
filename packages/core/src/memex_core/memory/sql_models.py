@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     Column,
     Computed,
     ForeignKey,
@@ -1377,6 +1378,14 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         default_factory=list,
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description='Last 20 patches: [{note_id, action, timestamp, delta}].',
+    )
+    needs_regeneration: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=sql_text('false'), nullable=False),
+        description=(
+            'Set when notes are deleted/archived; triggers full regeneration '
+            'on next scheduler cycle.'
+        ),
     )
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
