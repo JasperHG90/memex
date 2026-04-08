@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlmodel import col
 
 from memex_common.exceptions import MemoryUnitNotFoundError
 
+from memex_core.config import MemexConfig
 from memex_core.services.base import BaseService
 from memex_core.services.notes import _cleanup_entities_after_delete
+from memex_core.storage.filestore import BaseAsyncFileStore
+from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
+
+if TYPE_CHECKING:
+    from memex_core.services.vault_summary import VaultSummaryService
 
 logger = logging.getLogger('memex.core.services.stats')
 
@@ -28,6 +34,16 @@ async def await_background_tasks() -> None:
 
 class StatsService(BaseService):
     """Aggregate statistics and memory unit CRUD."""
+
+    def __init__(
+        self,
+        metastore: AsyncBaseMetaStoreEngine,
+        filestore: BaseAsyncFileStore,
+        config: MemexConfig,
+        vault_summary_service: VaultSummaryService | None = None,
+    ) -> None:
+        super().__init__(metastore=metastore, filestore=filestore, config=config)
+        self._vault_summary_service = vault_summary_service
 
     async def get_stats_counts(
         self,
@@ -98,10 +114,20 @@ class StatsService(BaseService):
             entity_ids = set(entity_result.all())
 
             # Prune stale evidence from mental models before deleting the unit.
+            affected_entity_ids: set[UUID] = set()
             if entity_ids:
                 from memex_core.services.mental_model_cleanup import prune_stale_evidence
 
-                await prune_stale_evidence(session, entity_ids, [unit_id], vault_id)
+                affected_entity_ids = await prune_stale_evidence(
+                    session, entity_ids, [unit_id], vault_id
+                )
+
+            # Queue affected entities for urgent re-reflection
+            if affected_entity_ids:
+                from memex_core.memory.reflect.queue_service import ReflectionQueueService
+
+                queue_svc = ReflectionQueueService(self.config.server.memory.reflection)
+                await queue_svc.handle_deletion_event(session, affected_entity_ids, vault_id)
 
             await session.delete(unit)
             await session.commit()
@@ -109,6 +135,14 @@ class StatsService(BaseService):
         # Fire-and-forget entity cleanup in background (orphan removal + recount).
         if entity_ids:
             task = asyncio.create_task(_cleanup_entities_after_delete(self.metastore, entity_ids))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
+        # Mark vault summary for regeneration (fire-and-forget, outside transaction)
+        if self._vault_summary_service:
+            task = asyncio.create_task(
+                self._vault_summary_service.mark_needs_regeneration(vault_id)
+            )
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 
