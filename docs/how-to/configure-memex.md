@@ -248,5 +248,6 @@ This prints the resolved configuration with all sources merged.
 
 ## See Also
 
+* [Server Configuration Templates](server-configuration-templates.md) — five ready-to-use YAML configs for common deployments
 * [Organizing with Vaults](organize-with-vaults.md) — vault configuration
 * [Configuration Reference](../reference/configuration.md) — full list of all settings
