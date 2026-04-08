@@ -216,6 +216,10 @@ class NoteService:
         if not entity_ids:
             return
 
+        # Flush stale-status changes before evidence pruning (defensive consistency
+        # with migrate_note's flush at line 989)
+        await session.flush()
+
         # Prune stale evidence from mental models
         from memex_core.services.mental_model_cleanup import prune_stale_evidence
 
@@ -799,6 +803,7 @@ class NoteService:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 
             note_vault_id = doc.vault_id
+            assert note_vault_id is not None, f'Note {note_id} has no vault_id'
 
             # Collect entity_ids linked to this note's memory units before deletion.
             unit_ids_stmt = select(MemoryUnit.id).where(col(MemoryUnit.note_id) == note_id)
@@ -1019,6 +1024,19 @@ class NoteService:
         # After transaction commits: move files in filestore
         if await self.filestore.exists(old_prefix):
             await self.filestore.move_file(old_prefix, new_prefix)
+
+        # Mark vault summaries for regeneration in both vaults (fire-and-forget)
+        if self._vault_summary_service:
+            task = asyncio.create_task(
+                self._vault_summary_service.mark_needs_regeneration(source_vault_id)
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+            task = asyncio.create_task(
+                self._vault_summary_service.mark_needs_regeneration(target_vault_id)
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
         audit_event(
             self._audit_service,
