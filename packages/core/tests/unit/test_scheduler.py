@@ -1,13 +1,17 @@
 import asyncio
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from memex_core.config import (
     MemexConfig,
     ReflectionConfig,
     PostgresMetaStoreConfig,
     PostgresInstanceConfig,
 )
-from memex_core.scheduler import run_scheduler_with_leader_election, periodic_reflection_task
+from memex_core.scheduler import (
+    run_scheduler_with_leader_election,
+    periodic_reflection_task,
+    periodic_vault_summary_task,
+)
 
 
 # Mock MemexAPI
@@ -124,3 +128,110 @@ async def test_scheduler_recovers_stale_before_claiming(mock_api):
 
     assert call_order == ['recover', 'claim']
     mock_api.recover_stale_processing.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_calls_regenerate_when_flag_set(mock_bg_session):
+    """Scheduler should call regenerate_summary() when needs_regeneration is set."""
+    # Mock background_session context manager
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    vault = MagicMock()
+    vault.id = 'vault-1'
+    vault.name = 'test-vault'
+    api.list_vaults = AsyncMock(return_value=[vault])
+
+    # Summary exists and needs_regeneration is True
+    summary = MagicMock()
+    summary.needs_regeneration = True
+    api.vault_summary.get_summary = AsyncMock(return_value=summary)
+    api.vault_summary.regenerate_summary = AsyncMock()
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.is_stale = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    api.vault_summary.get_summary.assert_awaited_once_with('vault-1')
+    api.vault_summary.regenerate_summary.assert_awaited_once_with('vault-1')
+    api.vault_summary.update_summary.assert_not_awaited()
+    api.vault_summary.is_stale.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_calls_update_when_stale_but_no_flag(mock_bg_session):
+    """Scheduler should call update_summary() when stale but needs_regeneration is not set."""
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    vault = MagicMock()
+    vault.id = 'vault-1'
+    vault.name = 'test-vault'
+    api.list_vaults = AsyncMock(return_value=[vault])
+
+    # Summary exists but needs_regeneration is False
+    summary = MagicMock()
+    summary.needs_regeneration = False
+    api.vault_summary.get_summary = AsyncMock(return_value=summary)
+    api.vault_summary.is_stale = AsyncMock(return_value=True)
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.regenerate_summary = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    api.vault_summary.update_summary.assert_awaited_once_with('vault-1')
+    api.vault_summary.regenerate_summary.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_skips_when_not_stale(mock_bg_session):
+    """Scheduler should skip when no flag set and not stale."""
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    vault = MagicMock()
+    vault.id = 'vault-1'
+    vault.name = 'test-vault'
+    api.list_vaults = AsyncMock(return_value=[vault])
+
+    summary = MagicMock()
+    summary.needs_regeneration = False
+    api.vault_summary.get_summary = AsyncMock(return_value=summary)
+    api.vault_summary.is_stale = AsyncMock(return_value=False)
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.regenerate_summary = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    api.vault_summary.update_summary.assert_not_awaited()
+    api.vault_summary.regenerate_summary.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_no_summary_falls_through_to_is_stale(mock_bg_session):
+    """When no summary exists, fall through to is_stale() check."""
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    vault = MagicMock()
+    vault.id = 'vault-1'
+    vault.name = 'test-vault'
+    api.list_vaults = AsyncMock(return_value=[vault])
+
+    api.vault_summary.get_summary = AsyncMock(return_value=None)
+    api.vault_summary.is_stale = AsyncMock(return_value=True)
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.regenerate_summary = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    api.vault_summary.update_summary.assert_awaited_once_with('vault-1')
+    api.vault_summary.regenerate_summary.assert_not_awaited()
