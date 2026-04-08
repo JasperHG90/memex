@@ -25,6 +25,7 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 |:------|:------------|
 | [Set Up Claude Code](how-to/setup-claude-code.md) | Configure Claude Code to use Memex as long-term memory with one command. |
 | [Configure Memex](how-to/configure-memex.md) | Set up YAML config files, environment variables, and model providers. |
+| [Server Configuration Templates](how-to/server-configuration-templates.md) | Five ready-to-use configs for common deployment scenarios. |
 | [Organize with Vaults](how-to/organize-with-vaults.md) | Create vaults, set the active writer vault, and attach read-only vaults for multi-project workflows. |
 | [Using MCP](how-to/using-mcp.md) | Connect Memex to Claude Desktop, Claude Code, and other MCP-compatible AI assistants. |
 | [Batch Ingestion](how-to/batch-ingestion.md) | Ingest folders of documents, URLs, and file batches efficiently. |
