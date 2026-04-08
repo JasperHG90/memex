@@ -171,3 +171,97 @@ async def test_phase_0_preserves_naturally_empty_evidence_observations():
     # obs_with_dead should be pruned away, but obs_naturally_empty should survive
     assert len(result) == 1
     assert result[0].title == 'Naturally empty'
+
+
+@pytest.mark.asyncio
+async def test_phase_0_prunes_out_of_vault_evidence():
+    """AC-004: Evidence citing a unit in a *different* vault is treated as dead."""
+    vault_a = uuid4()
+    unit_in_vault_b = uuid4()
+
+    obs = Observation(
+        title='Cross-vault evidence',
+        content='Evidence points to a unit in vault B',
+        evidence=[
+            EvidenceItem(memory_id=unit_in_vault_b, quote='from vault B', relevance=1.0),
+        ],
+    )
+
+    model = MentalModel(
+        entity_id=uuid4(),
+        name='Test Entity',
+        observations=[obs.model_dump(mode='json')],
+    )
+
+    engine = _make_engine()
+
+    # The liveness query now filters by vault_id. The unit exists in the DB
+    # but in vault_b, so the vault-filtered query returns nothing.
+    captured_stmts: list = []
+
+    async def mock_exec(stmt):
+        captured_stmts.append(stmt)
+        result = MagicMock()
+        # Return empty: the unit exists but not in vault_a or GLOBAL
+        result.all.return_value = []
+        return result
+
+    engine.session.exec = AsyncMock(side_effect=mock_exec)
+
+    with patch(
+        'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
+    ) as mock_run:
+        mock_run.return_value = (None, None)
+        result = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
+
+    # The unit from vault B should be treated as dead -> observation pruned
+    assert len(result) == 0
+
+    # Verify the liveness query was issued with vault filtering
+    assert len(captured_stmts) == 1
+    compiled = captured_stmts[0].compile(compile_kwargs={'literal_binds': True})
+    sql_text = str(compiled)
+    assert 'vault_id' in sql_text, 'Liveness query must filter by vault_id'
+
+
+@pytest.mark.asyncio
+async def test_phase_0_keeps_global_vault_evidence():
+    """AC-005: Evidence citing a unit in GLOBAL_VAULT_ID passes the liveness check."""
+    vault_a = uuid4()
+    global_unit_id = uuid4()
+
+    obs = Observation(
+        title='Global vault evidence',
+        content='Evidence points to a unit in the global vault',
+        evidence=[
+            EvidenceItem(memory_id=global_unit_id, quote='global fact', relevance=1.0),
+        ],
+    )
+
+    model = MentalModel(
+        entity_id=uuid4(),
+        name='Test Entity',
+        observations=[obs.model_dump(mode='json')],
+    )
+
+    engine = _make_engine()
+
+    # The unit is in GLOBAL_VAULT_ID — the vault-filtered query should return it
+    async def mock_exec(stmt):
+        result = MagicMock()
+        # Unit is in global vault, so it passes the filter
+        result.all.return_value = [global_unit_id]
+        return result
+
+    engine.session.exec = AsyncMock(side_effect=mock_exec)
+
+    with patch(
+        'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
+    ) as mock_run:
+        mock_run.return_value = (None, None)
+        result = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
+
+    # Evidence should survive — global vault units are always live
+    assert len(result) == 1
+    assert len(result[0].evidence) == 1
+    assert result[0].evidence[0].memory_id == global_unit_id

@@ -588,7 +588,11 @@ class ReflectionEngine:
                 all_evidence_ids.add(ev.memory_id)
 
         if all_evidence_ids:
-            live_stmt = select(MemoryUnit.id).where(col(MemoryUnit.id).in_(list(all_evidence_ids)))
+            live_stmt = select(MemoryUnit.id).where(
+                col(MemoryUnit.id).in_(list(all_evidence_ids)),
+                (col(MemoryUnit.vault_id) == vault_id)
+                | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID),
+            )
             live_result = await self.session.exec(live_stmt)
             live_ids = set(live_result.all())
             dead_ids = all_evidence_ids - live_ids
