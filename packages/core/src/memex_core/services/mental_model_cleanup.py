@@ -19,18 +19,22 @@ async def prune_stale_evidence(
     entity_ids: set[UUID],
     deleted_unit_ids: list[UUID],
     vault_id: UUID,
-) -> None:
+) -> set[UUID]:
     """Remove evidence citing deleted memory units from MentalModel observations.
 
     For each entity_id, queries MentalModels in the given vault, deserializes
     observations, removes evidence whose memory_id is in deleted_unit_ids,
     drops observations with zero evidence, deletes models with zero observations,
     otherwise updates JSONB + flag_modified + sets embedding = None.
+
+    Returns the set of entity IDs whose mental models were actually modified
+    (evidence pruned or model deleted).
     """
     if not entity_ids or not deleted_unit_ids:
-        return
+        return set()
 
     deleted_set = set(deleted_unit_ids)
+    affected_entity_ids: set[UUID] = set()
 
     for entity_id in entity_ids:
         stmt = select(MentalModel).where(
@@ -63,9 +67,13 @@ async def prune_stale_evidence(
             if not pruned:
                 continue
 
+            affected_entity_ids.add(entity_id)
+
             if not observations:
                 await session.delete(model)
             else:
                 model.observations = [obs.model_dump(mode='json') for obs in observations]
                 model.embedding = None
                 flag_modified(model, 'observations')
+
+    return affected_entity_ids
