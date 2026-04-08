@@ -87,6 +87,42 @@ class ReflectionQueueService:
 
         await session.flush()
 
+    async def handle_deletion_event(
+        self,
+        session: AsyncSession,
+        entity_ids: set[UUID],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """Queue entities for urgent reflection after evidence deletion.
+
+        Uses priority 1.0 (maximum) to bypass min_priority threshold,
+        since these models have lost evidence and need immediate re-reflection.
+        Does NOT increment accumulated_evidence (evidence was removed, not added).
+        """
+        if not entity_ids:
+            return
+
+        # Ensure queue rows exist for all affected entities
+        await self._ensure_queue_items(session, entity_ids, vault_id)
+
+        # Fetch and update all queue items for affected entities
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.entity_id).in_(entity_ids))
+            .where(col(ReflectionQueue.vault_id) == vault_id)
+        )
+        results = await session.exec(stmt)
+
+        now = datetime.now(timezone.utc)
+        for queue_item in results.all():
+            queue_item.priority_score = 1.0
+            queue_item.status = ReflectionStatus.PENDING
+            queue_item.retry_count = 0
+            queue_item.last_queued_at = now
+            session.add(queue_item)
+
+        await session.flush()
+
     async def handle_retrieval_event(
         self,
         session: AsyncSession,
