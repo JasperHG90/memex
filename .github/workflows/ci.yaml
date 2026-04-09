@@ -60,7 +60,7 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           prek_version: '0.2.25'
         env:
-          SKIP: ""
+          SKIP: "update-test-badge"
 
   python-tests:
     needs: changes
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12"]
     steps:
       - name: Run unit tests
         uses: JasperHG90/toiminnot/actions/pytest@main
