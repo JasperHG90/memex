@@ -33,8 +33,22 @@ def _ingest_note(client: TestClient, name: str | None = None) -> dict:
     return {'raw_id': raw_id, 'uuid_id': uuid_id}
 
 
-def _query_audit(postgres_url: str, action: str, resource_id: str | None = None) -> list[dict]:
-    """Query audit_logs table via asyncpg."""
+def _query_audit(
+    postgres_url: str,
+    action: str,
+    resource_id: str | None = None,
+    *,
+    retries: int = 10,
+    delay: float = 0.05,
+) -> list[dict]:
+    """Query audit_logs table via asyncpg.
+
+    Audit writes are fire-and-forget (asyncio.create_task), so they may not
+    have landed by the time the sync TestClient returns.  Retry briefly to
+    allow the background task to flush.
+    """
+    import time
+
     dsn = postgres_url.replace('postgresql+asyncpg://', 'postgresql://')
 
     async def _fetch():
@@ -67,11 +81,16 @@ def _query_audit(postgres_url: str, action: str, resource_id: str | None = None)
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_fetch())
-    finally:
-        loop.close()
+    for attempt in range(retries):
+        loop = asyncio.new_event_loop()
+        try:
+            entries = loop.run_until_complete(_fetch())
+        finally:
+            loop.close()
+        if entries:
+            return entries
+        time.sleep(delay)
+    return []
 
 
 @pytest.mark.integration
