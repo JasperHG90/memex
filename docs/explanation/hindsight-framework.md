@@ -75,7 +75,7 @@ Each retrieved memory unit is tagged with a staleness flag — `fresh`, `aging`,
 
 #### Session Briefing
 
-A token-budgeted session briefing (`memex session`) composes vault summaries, top entities with mental model trend indicators, KV facts, and available vaults into a single markdown document within a configurable token budget (default 2000 tokens). This provides LLM agents with a curated knowledge index at session start, eliminating the need for multiple exploratory queries to orient within a vault.
+A token-budgeted session briefing (`memex briefing`) composes vault summaries, top entities with mental model trend indicators, KV facts, and available vaults into a single markdown document within a configurable token budget (default 2000 tokens). This provides LLM agents with a curated knowledge index at session start, eliminating the need for multiple exploratory queries to orient within a vault.
 
 **Practical example:** The query "What deployment decisions did we make?" triggers:
 - *Temporal* surfaces recent deployment-related facts

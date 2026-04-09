@@ -1550,10 +1550,10 @@ memex vault summary my-project
 
 Session management commands for LLM agent integration.
 
-### `session`
+### `briefing`
 
 ```
-memex session [OPTIONS]
+memex briefing [OPTIONS]
 ```
 
 Generate a token-budgeted session briefing for LLM agents. Outputs raw markdown to stdout for consumption by hooks and scripts.
@@ -1571,10 +1571,10 @@ The briefing includes (in priority order): KV facts, vault summary with topics, 
 #### Examples
 
 ```bash
-memex session                         # Standard 2000-token briefing
-memex session --budget 1000           # Compact 1000-token briefing
-memex session --vault research        # Briefing for a specific vault
-memex session -b 2000 -p github.com/org/repo  # With project scoping
+memex briefing                         # Standard 2000-token briefing
+memex briefing --budget 1000           # Compact 1000-token briefing
+memex briefing --vault research        # Briefing for a specific vault
+memex briefing -b 2000 -p github.com/org/repo  # With project scoping
 ```
 
 ---

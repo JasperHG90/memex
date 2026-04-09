@@ -124,14 +124,14 @@ By default, Memex connects to `http://127.0.0.1:8000`. If your server runs on a 
 
 The session briefing provides a token-budgeted knowledge index at the start of each Claude Code session. It composes vault summaries, top entities with mental model trend indicators, KV facts, and available vaults into a single markdown document.
 
-The Claude Code plugin runs `memex session` automatically via a hook at session start. You can also run it manually:
+The Claude Code plugin runs `memex briefing` automatically via a hook at session start. You can also run it manually:
 
 ```bash
 # Default 2000-token budget
-memex session
+memex briefing
 
 # Smaller budget for faster startup
-memex session --budget 1000
+memex briefing --budget 1000
 ```
 
 The briefing includes:

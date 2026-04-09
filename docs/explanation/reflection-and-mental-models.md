@@ -223,7 +223,7 @@ Regeneration uses the full set of notes and entities in the vault to produce a f
 
 ### Session Briefing
 
-Vault summaries feed into the token-budgeted **session briefing** (`memex session`), which composes a curated knowledge index for LLM agents at session start. The briefing includes the vault summary, top entities with mental model trend indicators (new/stable/strengthening/weakening/stale), KV facts, and available vaults — all within a configurable token budget (default 2000 tokens).
+Vault summaries feed into the token-budgeted **session briefing** (`memex briefing`), which composes a curated knowledge index for LLM agents at session start. The briefing includes the vault summary, top entities with mental model trend indicators (new/stable/strengthening/weakening/stale), KV facts, and available vaults — all within a configurable token budget (default 2000 tokens).
 
 ## See Also
 
