@@ -2,13 +2,10 @@
   "mcpServers": {
     "memex": {
       "type": "stdio",
-      "command": "uvx",
+      "command": "bash",
       "args": [
-        "--from",
-        "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli",
-        "memex",
-        "mcp",
-        "run"
+        "-c",
+        "uvx --from \"memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@${MEMEX_PLUGIN_VERSION:-latest}#subdirectory=packages/cli\" memex mcp run"
       ]
     }
   }

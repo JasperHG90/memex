@@ -11,4 +11,17 @@ EOF
     exit 0
 fi
 
-memex() { uvx --from memex-cli memex "$@"; }
+_memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
+_memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
+
+# Validate ref exists when user overrides the default
+if [ "$_memex_ref" != "latest" ]; then
+    if ! git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_memex_ref" 2>/dev/null | grep -q .; then
+        cat <<EOF
+{"systemMessage": "❌ MEMEX_PLUGIN_VERSION='${_memex_ref}' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)."}
+EOF
+        exit 0
+    fi
+fi
+
+memex() { uvx --from "$_memex_pkg" memex "$@"; }

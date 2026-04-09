@@ -85,6 +85,7 @@ fi
 
 # --- Build additionalContext ---
 briefing_content=$(cat "$tmp_briefing")
+status="🧠 Memex connected"
 
 if [ -n "$project_vault" ]; then
     vault_instruction="
@@ -107,8 +108,6 @@ This session's note key is \`${SESSION_NOTE_KEY}\`. When you complete a meaningf
 
 additional_context="${briefing_content}${vault_instruction}${session_note_instruction}"
 
-# --- Build status summary ---
-status="🧠 Memex connected"
 [ -n "$project_vault" ] && status="${status} (vault: ${project_vault})"
 
 # --- Output JSON ---
