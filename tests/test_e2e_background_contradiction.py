@@ -13,6 +13,8 @@ from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.extraction.models import ExtractedFact, ChunkMetadata
 
 
+@pytest.mark.integration
+@pytest.mark.llm
 @pytest.mark.asyncio
 async def test_background_upload_awaits_contradiction_task(client: TestClient):
     """
