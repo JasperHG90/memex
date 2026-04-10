@@ -78,6 +78,10 @@ async def test_e2e_page_index_strategy(client: TestClient, db_session):
         patch(
             'memex_core.memory.extraction.embedding_processor.generate_embeddings_batch'
         ) as mock_embed,
+        patch(
+            'memex_core.memory.contradiction.engine.ContradictionEngine.detect_contradictions',
+            return_value=None,
+        ),
     ):
         mock_index_doc.return_value = mock_output
         mock_extract.return_value = (mock_facts, [('Content of section 1.', 1)])
