@@ -28,6 +28,12 @@
 > [!IMPORTANT]
 > **Memex is in beta.** It is functional and actively used, but expect rough edges, breaking changes between versions, and incomplete documentation. Feedback and bug reports are welcome — run `memex report-bug` or open an issue.
 
+## Vision
+
+Memex exists because organizing knowledge shouldn't be your job. It is a self-organizing, self-reflecting knowledge system: you feed it raw material — articles, meeting notes, documents, web pages — and it extracts the facts, builds the connections, flags the contradictions, and synthesizes what it all means. When you need something, you ask, and the knowledge is already structured, cross-referenced, and ready. No filing. No tagging. No maintenance. Your knowledge compounds on its own so you can focus on the work that actually matters.
+
+Memex is deliberately not an agent. It provides the storage, extraction, and retrieval — your agent of choice provides the synthesis and the judgment to call the right tool at the right moment. This separation of concerns means Memex works with any LLM agent that speaks MCP or REST, rather than locking you into a single interface. Conceptually, Memex overlaps with Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
 ---
 
 **[Requirements](#requirements)** · **[Features](#features)** · **[Quick Start](#-quick-start)** · **[Claude Code Plugin](#claude-code-plugin)** · **[See it in action](#see-it-in-action)** · **[Documentation](#-documentation)** · **[Releasing](#releasing)** · **[FAQ](./FAQ.md)**
