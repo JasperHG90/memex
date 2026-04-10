@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Memex</h1>
-<h3 align="center">Long-Term Memory for LLMs</h3>
+<h3 align="center">A Knowledge Base for LLMs</h3>
 
 <p align="center">
   The knowledge layer your AI agents are missing.<br/>
