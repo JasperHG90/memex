@@ -33,7 +33,6 @@ class MockAsyncClientContext:
         from memex_core.storage.metastore import get_metastore
         from memex_core.storage.filestore import get_filestore
         from memex_core.api import MemexAPI
-        from memex_core.memory.models import get_embedding_model, get_reranking_model, get_ner_model
 
         config = parse_memex_config()
         # Ensure extraction config uses mock model
@@ -45,29 +44,72 @@ class MockAsyncClientContext:
 
         config.server.memory.reflection.background_reflection_enabled = False
 
-        # We need to await these here to ensure they are ready and (possibly) patched
+        mock_embedder = MockEmbedder()
+
+        # Patch model factory functions at both import locations so any caller
+        # (whether importing from memex_core.memory.models or from the submodule)
+        # gets the mock. Also patch dspy.LM to bypass LLM validation.
+        self.patches = [
+            patch('dspy.LM', return_value=MagicMock()),
+            patch(
+                'memex_core.memory.models.get_embedding_model',
+                new_callable=AsyncMock,
+                return_value=mock_embedder,
+            ),
+            patch(
+                'memex_core.memory.models.embedding.get_embedding_model',
+                new_callable=AsyncMock,
+                return_value=mock_embedder,
+            ),
+            patch(
+                'memex_core.memory.models.get_reranking_model',
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                'memex_core.memory.models.reranking.get_reranking_model',
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                'memex_core.memory.models.get_ner_model',
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch(
+                'memex_core.memory.models.ner.get_ner_model',
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+        ]
+
+        for p in self.patches:
+            p.start()
+
+        from memex_core.memory.models import get_embedding_model, get_reranking_model, get_ner_model
+
         embedding_model = await get_embedding_model()
         reranking_model = await get_reranking_model()
         ner_model = await get_ner_model()
 
-        # Patch dspy.LM globally during API init to bypass validation
-        with patch('dspy.LM', return_value=MagicMock()):
-            api = MemexAPI(
-                embedding_model=embedding_model,
-                reranking_model=reranking_model,
-                ner_model=ner_model,
-                metastore=metastore,
-                filestore=filestore,
-                config=config,
-            )
-            await api.initialize()
-            server_app.state.api = api
+        api = MemexAPI(
+            embedding_model=embedding_model,
+            reranking_model=reranking_model,
+            ner_model=ner_model,
+            metastore=metastore,
+            filestore=filestore,
+            config=config,
+        )
+        await api.initialize()
+        server_app.state.api = api
 
         self.client = AsyncClient(transport=ASGITransport(app=server_app), base_url=self.base_url)
         await self.client.__aenter__()
         return self.client
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        for p in reversed(self.patches):
+            p.stop()
         await self.client.__aexit__(exc_type, exc_val, exc_tb)
         if hasattr(server_app.state, 'api'):
             await server_app.state.api.metastore.close()
@@ -103,9 +145,6 @@ async def test_cli_memory_add(db_session: AsyncSession, setup_cli_e2e):
     # Patch run_dspy_operation where it is used in extraction core
     with (
         patch('memex_cli.utils.httpx.AsyncClient', side_effect=MockAsyncClientContext),
-        patch(
-            'memex_core.memory.models.embedding.get_embedding_model', return_value=MockEmbedder()
-        ),
         patch(
             'memex_core.memory.extraction.core.run_dspy_operation', new_callable=AsyncMock
         ) as mock_run_dspy,
@@ -144,9 +183,6 @@ async def test_cli_memory_search(db_session: AsyncSession, setup_cli_e2e):
     # Patch run_dspy_operation where it is used in API
     with (
         patch('memex_cli.utils.httpx.AsyncClient', side_effect=MockAsyncClientContext),
-        patch(
-            'memex_core.memory.retrieval.engine.get_embedding_model', return_value=MockEmbedder()
-        ),
         patch(
             'memex_core.services.search.run_dspy_operation', new_callable=AsyncMock
         ) as mock_run_dspy,
