@@ -1,6 +1,6 @@
 ---
 name: retro
-description: "Record a structured session postmortem to Memex. Captures what worked, what failed, tool performance, and improvement suggestions."
+description: "Record a structured session postmortem to Memex and propose durable learnings for CLAUDE.md."
 argument-hint: "[optional: focus area or session summary]"
 ---
 
@@ -44,5 +44,44 @@ You have been invoked via the `/retro` slash command.
    for reflection. Reflection runs on a background schedule, but extraction
    happens before this call returns.
 
-4. **Confirm to the user.**
-   Briefly summarize the reflection and mention the note title.
+4. **Extract durable learnings for CLAUDE.md.**
+   Review the filled-in retro — specifically **What Worked**, **What Failed**,
+   **Key Decisions**, and **Improvement Suggestions** — and extract learnings that are:
+
+   - **Durable**: Will remain relevant across future sessions (not one-off fixes).
+   - **Actionable**: Can be expressed as a concrete instruction or constraint
+     (e.g., "always X when Y", "never do Z because W").
+   - **Non-redundant**: Not already covered by existing CLAUDE.md content.
+
+   Exclude learnings that are:
+   - Derivable from reading the code or git history.
+   - Specific to a single bug fix or transient situation.
+   - Already captured by existing CLAUDE.md instructions.
+
+   Read the project CLAUDE.md (`CLAUDE.md` in the repo root) to check for overlap.
+
+5. **Propose CLAUDE.md additions to the user.**
+   If you identified durable learnings in Step 4, present them to the user as a
+   numbered list. For each, show:
+   - The proposed instruction text (concise, imperative style).
+   - A one-line rationale from the session (why this matters).
+
+   Ask the user which ones (if any) they want added. Accepted formats:
+   - "all" — add everything proposed.
+   - "1, 3" — add specific items by number.
+   - "none" — skip CLAUDE.md updates entirely.
+
+   If no durable learnings were identified, skip this step and tell the user.
+
+6. **Append approved learnings to CLAUDE.md.**
+   For approved items:
+   - Read the current CLAUDE.md.
+   - If a `## Learnings` section exists, append to it.
+   - If not, create a `## Learnings` section at the end of the file.
+   - Format each learning as a bullet point: `- <instruction> — <rationale>`.
+   - Do NOT modify any other part of CLAUDE.md.
+
+7. **Confirm to the user.**
+   Briefly summarize:
+   - The reflection note title (saved to Memex).
+   - How many learnings were added to CLAUDE.md (if any), or that none were added.
