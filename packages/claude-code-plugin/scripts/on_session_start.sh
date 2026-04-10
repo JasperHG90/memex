@@ -68,7 +68,7 @@ if [ -n "$project_id" ]; then
 fi
 
 # --- Build briefing CLI args ---
-briefing_args=(session --budget 2000)
+briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 

@@ -343,12 +343,14 @@ class McpKVEntry(BaseModel):
     value: str
     scope: str
     updated_at: datetime
+    expires_at: datetime | None = None
 
 
 class McpKVWriteResult(BaseModel):
     key: str
     value: str
     scope: str
+    expires_at: datetime | None = None
 
 
 def _scope_from_key(key: str) -> str:

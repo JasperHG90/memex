@@ -228,6 +228,158 @@ async def test_kv_search_with_namespace_filter(kv):
 
 
 # ---------------------------------------------------------------------------
+# KV TTL support
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_put_with_ttl_and_get(kv):
+    """Put with ttl_seconds, verify expires_at is set and entry is retrievable."""
+    unique = str(uuid4())[:8]
+    key = f'global:test:ttl:{unique}'
+
+    entry = await kv.put(key=key, value='ephemeral', ttl_seconds=3600)
+    assert entry.expires_at is not None
+
+    # Should be roughly 1 hour in the future
+    from datetime import datetime, timezone
+
+    delta = entry.expires_at - datetime.now(timezone.utc)
+    assert 3500 < delta.total_seconds() < 3700
+
+    # Should be retrievable
+    retrieved = await kv.get(key=key)
+    assert retrieved is not None
+    assert retrieved.value == 'ephemeral'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_expired_entry_hidden(kv, session):
+    """Expired entries should be deleted on read and return None."""
+    from sqlalchemy import text
+
+    unique = str(uuid4())[:8]
+    key = f'global:test:expired:{unique}'
+
+    await kv.put(key=key, value='will-expire', ttl_seconds=3600)
+
+    # Manually expire the entry via raw SQL
+    await session.exec(  # type: ignore[call-overload]
+        text("UPDATE kv_entries SET expires_at = now() - interval '1 hour' WHERE key = :key"),
+        params={'key': key},
+    )
+    await session.commit()
+
+    # get() should delete and return None
+    result = await kv.get(key=key)
+    assert result is None
+
+    # Verify it's physically deleted
+    from memex_core.memory.sql_models import KVEntry
+    from sqlmodel import col, select
+
+    async with kv.metastore.session() as s:
+        stmt = select(KVEntry).where(col(KVEntry.key) == key)
+        r = await s.exec(stmt)
+        assert r.first() is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_upsert_clears_ttl(kv):
+    """Re-putting a key without ttl should clear expires_at."""
+    unique = str(uuid4())[:8]
+    key = f'global:test:clear-ttl:{unique}'
+
+    # Put with TTL
+    entry = await kv.put(key=key, value='temp', ttl_seconds=3600)
+    assert entry.expires_at is not None
+
+    # Re-put without TTL
+    entry2 = await kv.put(key=key, value='permanent')
+    assert entry2.expires_at is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_cleanup_expired(kv, session):
+    """cleanup_expired() should physically delete expired rows."""
+    from sqlalchemy import text
+
+    unique = str(uuid4())[:8]
+    key = f'global:test:cleanup:{unique}'
+
+    await kv.put(key=key, value='to-cleanup', ttl_seconds=3600)
+
+    # Manually expire
+    await session.exec(  # type: ignore[call-overload]
+        text("UPDATE kv_entries SET expires_at = now() - interval '1 hour' WHERE key = :key"),
+        params={'key': key},
+    )
+    await session.commit()
+
+    count = await kv.cleanup_expired()
+    assert count >= 1
+
+    # Verify it's gone
+    result = await kv.get(key=key)
+    assert result is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_search_excludes_expired(kv, session):
+    """Expired entries should not appear in search results."""
+    from sqlalchemy import text
+
+    unique = str(uuid4())[:8]
+    emb = [0.5] * 384
+
+    await kv.put(
+        key=f'global:test:search-ttl:{unique}', value='expired', embedding=emb, ttl_seconds=3600
+    )
+    await kv.put(key=f'global:test:search-live:{unique}', value='alive', embedding=emb)
+
+    # Expire the first entry
+    await session.exec(  # type: ignore[call-overload]
+        text("UPDATE kv_entries SET expires_at = now() - interval '1 hour' WHERE key = :key"),
+        params={'key': f'global:test:search-ttl:{unique}'},
+    )
+    await session.commit()
+
+    results = await kv.search(query_embedding=emb, limit=10)
+    keys = [r.key for r in results]
+    assert f'global:test:search-ttl:{unique}' not in keys
+    assert f'global:test:search-live:{unique}' in keys
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_list_excludes_expired(kv, session):
+    """Expired entries should not appear in list results."""
+    from sqlalchemy import text
+
+    unique = str(uuid4())[:8]
+
+    await kv.put(key=f'global:test:list-ttl:{unique}', value='expired', ttl_seconds=3600)
+    await kv.put(key=f'global:test:list-live:{unique}', value='alive')
+
+    # Expire the first entry
+    await session.exec(  # type: ignore[call-overload]
+        text("UPDATE kv_entries SET expires_at = now() - interval '1 hour' WHERE key = :key"),
+        params={'key': f'global:test:list-ttl:{unique}'},
+    )
+    await session.commit()
+
+    entries = await kv.list_entries()
+    keys = [e.key for e in entries]
+    assert f'global:test:list-ttl:{unique}' not in keys
+    assert f'global:test:list-live:{unique}' in keys
+
+
+# ---------------------------------------------------------------------------
 # find_notes_by_title (trigram search)
 # ---------------------------------------------------------------------------
 

@@ -1303,6 +1303,12 @@ class KVEntry(SQLModel, table=True):  # type: ignore
         description='Optional embedding vector for semantic search over values.',
     )
 
+    expires_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='When this entry expires. NULL means never.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -1313,6 +1319,12 @@ class KVEntry(SQLModel, table=True):  # type: ignore
             'key',
             postgresql_using='btree',
             postgresql_ops={'key': 'text_pattern_ops'},
+        ),
+        Index(
+            'idx_kv_expires_at',
+            'expires_at',
+            postgresql_using='btree',
+            postgresql_where=sql_text('expires_at IS NOT NULL'),
         ),
     )
 

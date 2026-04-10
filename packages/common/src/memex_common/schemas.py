@@ -1037,6 +1037,7 @@ class KVEntryDTO(BaseModel):
     id: UUID
     key: str
     value: str
+    expires_at: dt.datetime | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -1047,6 +1048,7 @@ class KVPutRequest(BaseModel):
     key: str
     value: str
     embedding: list[float] | None = None
+    ttl_seconds: int | None = None
 
 
 class KVSearchRequest(BaseModel):

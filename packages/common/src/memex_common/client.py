@@ -833,12 +833,14 @@ class RemoteMemexAPI:
         value: str,
         key: str,
         embedding: list[float] | None = None,
+        ttl_seconds: int | None = None,
     ) -> KVEntryDTO:
         """Create or update a key-value entry."""
         request = KVPutRequest(
             key=key,
             value=value,
             embedding=embedding,
+            ttl_seconds=ttl_seconds,
         )
         result = await self._put('kv', request)
         return KVEntryDTO(**result)

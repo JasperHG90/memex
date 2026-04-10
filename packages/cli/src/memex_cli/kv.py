@@ -34,6 +34,10 @@ async def kv_write(
             help='Namespaced key (must start with global:, user:, project:, or app:).',
         ),
     ],
+    ttl: Annotated[
+        int | None,
+        typer.Option('--ttl', help='Time-to-live in seconds. Omit for no expiration.'),
+    ] = None,
 ):
     """
     Write a fact to the KV store. Key must be namespace-prefixed.
@@ -42,11 +46,13 @@ async def kv_write(
 
     async with get_api_context(config) as api:
         try:
-            entry = await api.kv_put(value=value, key=key)
+            entry = await api.kv_put(value=value, key=key, ttl_seconds=ttl)
         except Exception as e:
             handle_api_error(e)
 
     console.print(f'[green]Stored:[/green] {entry.key} = {entry.value}')
+    if entry.expires_at:
+        console.print(f'[dim]Expires: {entry.expires_at}[/dim]')
 
 
 @app.command('get')
@@ -80,6 +86,8 @@ async def kv_get(
 
     console.print(f'[bold cyan]{entry.key}[/bold cyan] = {entry.value}')
     console.print(f'[dim]Updated: {entry.updated_at}[/dim]')
+    if entry.expires_at:
+        console.print(f'[dim]Expires: {entry.expires_at}[/dim]')
 
 
 @app.command('search')
@@ -118,10 +126,12 @@ async def kv_search(
     table.add_column('Value', style='white', ratio=3)
     table.add_column('Namespace', style='dim')
     table.add_column('Updated', style='dim')
+    table.add_column('Expires', style='dim')
 
     for entry in results:
         ns = entry.key.split(':', 1)[0] if ':' in entry.key else '?'
-        table.add_row(entry.key, entry.value, ns, str(entry.updated_at))
+        expires = str(entry.expires_at) if entry.expires_at else '-'
+        table.add_row(entry.key, entry.value, ns, str(entry.updated_at), expires)
 
     console.print(table)
 
@@ -166,10 +176,12 @@ async def kv_list(
     table.add_column('Value', style='white', ratio=3)
     table.add_column('Namespace', style='dim')
     table.add_column('Updated', style='dim')
+    table.add_column('Expires', style='dim')
 
     for entry in entries:
         ns = entry.key.split(':', 1)[0] if ':' in entry.key else '?'
-        table.add_row(entry.key, entry.value, ns, str(entry.updated_at))
+        expires = str(entry.expires_at) if entry.expires_at else '-'
+        table.add_row(entry.key, entry.value, ns, str(entry.updated_at), expires)
 
     console.print(table)
 

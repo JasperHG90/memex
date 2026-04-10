@@ -51,6 +51,7 @@ async def kv_put(
             key=request.key,
             value=request.value,
             embedding=request.embedding,
+            ttl_seconds=request.ttl_seconds,
         )
         return KVEntryDTO.model_validate(entry, from_attributes=True)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

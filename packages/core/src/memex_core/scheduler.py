@@ -80,6 +80,17 @@ async def periodic_vault_summary_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: Vault summary task failed: {e}', exc_info=True)
 
 
+async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
+    """Delete expired KV entries."""
+    async with background_session('bg-sched-kv-ttl'):
+        try:
+            count = await api.kv_cleanup_expired()
+            if count:
+                logger.info(f'Scheduler: Deleted {count} expired KV entries.')
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: KV TTL cleanup failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -113,6 +124,11 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         @clock.task(trigger=Every(seconds=vs_interval))
         async def run_vault_summary_job():
             await periodic_vault_summary_task(api)
+
+    # KV TTL cleanup — purge expired entries every 5 minutes
+    @clock.task(trigger=Every(seconds=300))
+    async def run_kv_ttl_cleanup():
+        await periodic_kv_ttl_cleanup_task(api)
 
     # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
     sa_url = make_url(config.server.meta_store.instance.connection_string)

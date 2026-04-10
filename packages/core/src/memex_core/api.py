@@ -1245,9 +1245,12 @@ class MemexAPI:
         key: str,
         value: str,
         embedding: list[float] | None = None,
+        ttl_seconds: int | None = None,
     ) -> Any:
         """Upsert a KV entry. Delegates to KVService."""
-        return await self._kv.put(key=key, value=value, embedding=embedding)
+        return await self._kv.put(
+            key=key, value=value, embedding=embedding, ttl_seconds=ttl_seconds
+        )
 
     async def kv_get(self, key: str) -> Any | None:
         """Get a KV entry by key. Delegates to KVService."""
@@ -1284,3 +1287,7 @@ class MemexAPI:
             key_prefix=key_prefix,
             pattern=pattern,
         )
+
+    async def kv_cleanup_expired(self) -> int:
+        """Delete expired KV entries. Returns count of deleted rows."""
+        return await self._kv.cleanup_expired()

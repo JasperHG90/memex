@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -42,6 +43,16 @@ def _validate_namespace(key: str) -> None:
         )
 
 
+def _not_expired_filter() -> Any:
+    """SQL filter that excludes expired KV entries."""
+    from memex_core.memory.sql_models import KVEntry
+
+    return or_(
+        col(KVEntry.expires_at).is_(None),  # type: ignore[union-attr]
+        col(KVEntry.expires_at) > text('now()'),  # type: ignore[union-attr]
+    )
+
+
 class KVService(BaseService):
     """Key-value store operations: put, get, search, delete, list."""
 
@@ -50,6 +61,7 @@ class KVService(BaseService):
         key: str,
         value: str,
         embedding: list[float] | None = None,
+        ttl_seconds: int | None = None,
     ) -> Any:
         """Upsert a KV entry. Uses INSERT ... ON CONFLICT DO UPDATE."""
         from sqlalchemy.dialects.postgresql import insert
@@ -59,15 +71,23 @@ class KVService(BaseService):
         key = _normalize_key(key)
         _validate_namespace(key)
 
+        expires_at_val: datetime | None = None
+        if ttl_seconds is not None:
+            if ttl_seconds <= 0:
+                raise ValueError('ttl_seconds must be a positive integer')
+            expires_at_val = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+
         async with self.metastore.session() as session:
             stmt = insert(KVEntry).values(
                 key=key,
                 value=value,
                 embedding=embedding,
+                expires_at=expires_at_val,
             )
             update_set = {
                 'value': stmt.excluded.value,
                 'embedding': stmt.excluded.embedding,
+                'expires_at': stmt.excluded.expires_at,
                 'updated_at': text('now()'),
             }
             stmt = stmt.on_conflict_do_update(
@@ -88,7 +108,7 @@ class KVService(BaseService):
             return entry
 
     async def get(self, key: str) -> Any | None:
-        """Exact key lookup."""
+        """Exact key lookup. Expired entries are deleted on read."""
         from memex_core.memory.sql_models import KVEntry
 
         key = _normalize_key(key)
@@ -96,7 +116,17 @@ class KVService(BaseService):
         async with self.metastore.session() as session:
             stmt = select(KVEntry).where(col(KVEntry.key) == key)
             result = await session.exec(stmt)
-            return result.first()
+            entry = result.first()
+
+            if entry is None:
+                return None
+
+            if entry.expires_at is not None and entry.expires_at <= datetime.now(timezone.utc):
+                await session.delete(entry)
+                await session.commit()
+                return None
+
+            return entry
 
     async def search(
         self,
@@ -111,7 +141,10 @@ class KVService(BaseService):
         from memex_core.memory.sql_models import KVEntry
 
         async with self.metastore.session() as session:
-            filters: list[Any] = [col(KVEntry.embedding).is_not(None)]  # type: ignore[union-attr]
+            filters: list[Any] = [
+                col(KVEntry.embedding).is_not(None),  # type: ignore[union-attr]
+                _not_expired_filter(),
+            ]
             if namespaces:
                 prefix_conditions = [
                     col(KVEntry.key).startswith(f'{ns}:')  # type: ignore[union-attr]
@@ -169,7 +202,7 @@ class KVService(BaseService):
         from memex_core.memory.sql_models import KVEntry
 
         async with self.metastore.session() as session:
-            stmt = select(KVEntry)
+            stmt = select(KVEntry).where(_not_expired_filter())
             if namespaces:
                 prefix_conditions = [
                     col(KVEntry.key).startswith(f'{ns}:')  # type: ignore[union-attr]
@@ -187,3 +220,13 @@ class KVService(BaseService):
             stmt = stmt.order_by(col(KVEntry.key)).limit(limit)
             result = await session.exec(stmt)
             return list(result.all())
+
+    async def cleanup_expired(self) -> int:
+        """Delete all expired KV entries. Returns the count of deleted rows."""
+        async with self.metastore.session() as session:
+            stmt = text(
+                'DELETE FROM kv_entries WHERE expires_at IS NOT NULL AND expires_at <= now()'
+            )
+            result = await session.exec(stmt)  # type: ignore[arg-type]
+            await session.commit()
+            return result.rowcount  # type: ignore[union-attr]

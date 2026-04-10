@@ -1,5 +1,6 @@
 """Unit tests for KVService CRUD operations."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -119,6 +120,7 @@ async def test_get_entry(kv_service, mock_session):
     mock_entry = MagicMock(spec=KVEntry)
     mock_entry.key = 'global:tool:python:pkg_mgr'
     mock_entry.value = 'uv'
+    mock_entry.expires_at = None
 
     mock_result = MagicMock()
     mock_result.first.return_value = mock_entry
@@ -297,3 +299,131 @@ async def test_list_with_pattern(kv_service, mock_session):
 
     result = await kv_service.list_entries(pattern='global:*')
     assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# TTL support
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_with_ttl_sets_expires_at(kv_service, mock_session):
+    """put() with ttl_seconds should compute an expires_at value."""
+    from memex_core.memory.sql_models import KVEntry
+
+    entry_id = uuid4()
+    mock_entry = MagicMock(spec=KVEntry)
+    mock_entry.id = entry_id
+    mock_entry.key = 'global:test:ttl'
+    mock_entry.value = 'ephemeral'
+    mock_entry.expires_at = datetime.now(timezone.utc) + timedelta(seconds=3600)
+
+    mock_row = MagicMock()
+    mock_row.id = entry_id
+    mock_result = MagicMock()
+    mock_result.first.return_value = mock_row
+    mock_session.exec.return_value = mock_result
+    mock_session.get.return_value = mock_entry
+
+    result = await kv_service.put(key='global:test:ttl', value='ephemeral', ttl_seconds=3600)
+
+    assert result.expires_at is not None
+    # Should be roughly 1 hour in the future
+    delta = result.expires_at - datetime.now(timezone.utc)
+    assert 3500 < delta.total_seconds() < 3700
+
+
+@pytest.mark.asyncio
+async def test_put_without_ttl_sets_null(kv_service, mock_session):
+    """put() without ttl_seconds should set expires_at=None."""
+    from memex_core.memory.sql_models import KVEntry
+
+    entry_id = uuid4()
+    mock_entry = MagicMock(spec=KVEntry)
+    mock_entry.id = entry_id
+    mock_entry.key = 'global:test:no-ttl'
+    mock_entry.value = 'permanent'
+    mock_entry.expires_at = None
+
+    mock_row = MagicMock()
+    mock_row.id = entry_id
+    mock_result = MagicMock()
+    mock_result.first.return_value = mock_row
+    mock_session.exec.return_value = mock_result
+    mock_session.get.return_value = mock_entry
+
+    result = await kv_service.put(key='global:test:no-ttl', value='permanent')
+    assert result.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_put_zero_ttl_raises(kv_service):
+    """put() with ttl_seconds=0 should raise ValueError."""
+    with pytest.raises(ValueError, match='ttl_seconds must be a positive integer'):
+        await kv_service.put(key='global:k', value='v', ttl_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_put_negative_ttl_raises(kv_service):
+    """put() with negative ttl_seconds should raise ValueError."""
+    with pytest.raises(ValueError, match='ttl_seconds must be a positive integer'):
+        await kv_service.put(key='global:k', value='v', ttl_seconds=-10)
+
+
+@pytest.mark.asyncio
+async def test_get_deletes_expired_entry(kv_service, mock_session):
+    """get() should delete an expired entry and return None."""
+    from memex_core.memory.sql_models import KVEntry
+
+    mock_entry = MagicMock(spec=KVEntry)
+    mock_entry.key = 'global:expired'
+    mock_entry.value = 'old'
+    mock_entry.expires_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    mock_result = MagicMock()
+    mock_result.first.return_value = mock_entry
+    mock_session.exec.return_value = mock_result
+    mock_session.delete = AsyncMock()
+
+    result = await kv_service.get(key='global:expired')
+    assert result is None
+    mock_session.delete.assert_called_once_with(mock_entry)
+    mock_session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_returns_non_expired_entry(kv_service, mock_session):
+    """get() should return an entry that has not yet expired."""
+    from memex_core.memory.sql_models import KVEntry
+
+    mock_entry = MagicMock(spec=KVEntry)
+    mock_entry.key = 'global:fresh'
+    mock_entry.value = 'still valid'
+    mock_entry.expires_at = datetime.now(timezone.utc) + timedelta(seconds=3600)
+
+    mock_result = MagicMock()
+    mock_result.first.return_value = mock_entry
+    mock_session.exec.return_value = mock_result
+
+    result = await kv_service.get(key='global:fresh')
+    assert result is not None
+    assert result.value == 'still valid'
+
+
+@pytest.mark.asyncio
+async def test_get_returns_entry_with_null_expires(kv_service, mock_session):
+    """get() should return entries with expires_at=None (never expires)."""
+    from memex_core.memory.sql_models import KVEntry
+
+    mock_entry = MagicMock(spec=KVEntry)
+    mock_entry.key = 'global:permanent'
+    mock_entry.value = 'forever'
+    mock_entry.expires_at = None
+
+    mock_result = MagicMock()
+    mock_result.first.return_value = mock_entry
+    mock_session.exec.return_value = mock_result
+
+    result = await kv_service.get(key='global:permanent')
+    assert result is not None
+    assert result.value == 'forever'

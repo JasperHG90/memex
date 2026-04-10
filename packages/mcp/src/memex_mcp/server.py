@@ -2631,6 +2631,16 @@ async def memex_kv_write(
             ),
         ),
     ],
+    ttl_seconds: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                'Optional time-to-live in seconds. Entry expires after this duration. '
+                'Omit or pass null for no expiration.'
+            ),
+        ),
+    ] = None,
 ) -> McpKVWriteResult:
     """Write a fact to the KV store with embedding generation."""
     try:
@@ -2643,10 +2653,13 @@ async def memex_kv_write(
             value=value,
             key=key,
             embedding=embedding,
+            ttl_seconds=ttl_seconds,
         )
 
         scope = _scope_from_key(entry.key)
-        return McpKVWriteResult(key=entry.key, value=entry.value, scope=scope)
+        return McpKVWriteResult(
+            key=entry.key, value=entry.value, scope=scope, expires_at=entry.expires_at
+        )
 
     except ToolError:
         raise
@@ -2679,6 +2692,7 @@ async def memex_kv_get(
             value=entry.value,
             scope=_scope_from_key(entry.key),
             updated_at=entry.updated_at,
+            expires_at=entry.expires_at,
         )
 
     except ToolError:
@@ -2722,6 +2736,7 @@ async def memex_kv_search(
                 value=entry.value,
                 scope=_scope_from_key(entry.key),
                 updated_at=entry.updated_at,
+                expires_at=entry.expires_at,
             )
             for entry in results
         ]
@@ -2771,6 +2786,7 @@ async def memex_kv_list(
                 value=entry.value,
                 scope=_scope_from_key(entry.key),
                 updated_at=entry.updated_at,
+                expires_at=entry.expires_at,
             )
             for entry in entries
         ]

@@ -10,8 +10,8 @@ from memex_common.config import MemexConfig
 from memex_cli.utils import async_command, get_api_context, handle_api_error
 
 app = typer.Typer(
-    name='session',
-    help='Session management commands.',
+    name='briefing',
+    help='Generate a session briefing for LLM agents.',
     no_args_is_help=True,
 )
 
