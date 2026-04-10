@@ -1,6 +1,6 @@
 import pytest
 import base64
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from uuid import UUID
 from sqlmodel import select
@@ -78,6 +78,16 @@ async def test_e2e_page_index_strategy(client: TestClient, db_session):
         patch(
             'memex_core.memory.extraction.embedding_processor.generate_embeddings_batch'
         ) as mock_embed,
+        patch(
+            'memex_core.services.ingestion.extract_document_date',
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            'memex_core.services.ingestion.resolve_document_title',
+            new_callable=AsyncMock,
+            return_value='Page Index Doc',
+        ),
         patch(
             'memex_core.memory.contradiction.engine.ContradictionEngine.detect_contradictions',
             return_value=None,
