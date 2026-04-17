@@ -23,6 +23,7 @@ from memex_common.schemas import (
     DeadLetterItemDTO,
     DefaultVaultsResponse,
     FindNoteResult,
+    MemoryLinkDTO,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -646,6 +647,32 @@ class RemoteMemexAPI:
             if e.response.status_code == 404:
                 return False
             raise
+
+    async def get_memory_links(
+        self,
+        unit_id: UUID,
+        link_type: str | None = None,
+        limit: int = 20,
+    ) -> list[MemoryLinkDTO]:
+        """Get typed relationship links for a memory unit."""
+        params: dict[str, Any] = {'limit': limit}
+        if link_type:
+            params['link_type'] = link_type
+        result = await self._get(f'memories/{unit_id}/links', params=params)
+        return [MemoryLinkDTO(**lnk) for lnk in result]
+
+    async def get_note_links(
+        self,
+        note_id: UUID,
+        link_type: str | None = None,
+        limit: int = 20,
+    ) -> list[MemoryLinkDTO]:
+        """Get typed relationship links for a note."""
+        params: dict[str, Any] = {'limit': limit}
+        if link_type:
+            params['link_type'] = link_type
+        result = await self._get(f'notes/{note_id}/links', params=params)
+        return [MemoryLinkDTO(**lnk) for lnk in result]
 
     # --- Reflection ---
     async def reflect(self, request: ReflectionRequest) -> ReflectionResultDTO:

@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     FindNoteResult,
+    MemoryLinkDTO,
     NoteDTO,
     NoteListItemDTO,
     NoteSearchRequest,
@@ -421,3 +422,23 @@ async def update_user_notes(
         return await api.update_user_notes(note_id, request.user_notes)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to update user notes')
+
+
+@router.get(
+    '/notes/{note_id}/links',
+    response_model=list[MemoryLinkDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_note_links(
+    note_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    link_type: str | None = Query(None, description='Filter by link type (e.g. contradicts).'),
+    limit: int = Query(20, ge=1, le=200, description='Max links to return.'),
+) -> list[MemoryLinkDTO]:
+    """Get typed relationship links for a note (aggregated from its memory units)."""
+    try:
+        link_types = [link_type] if link_type else None
+        links_map = await api.get_note_links([note_id], link_types=link_types, limit=limit)
+        return links_map.get(note_id, [])
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to get links for note {note_id}')
