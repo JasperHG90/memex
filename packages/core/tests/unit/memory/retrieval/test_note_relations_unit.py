@@ -255,12 +255,17 @@ async def test_hydrate_results_attaches_links():
 # ---------------------------------------------------------------------------
 
 
-def test_build_memory_unit_model_extracts_links():
-    """Verify _build_memory_unit_model extracts links from unit_metadata."""
+def test_build_memory_unit_model_extracts_contradiction_links_only():
+    """Verify _build_memory_unit_model only inlines contradiction/weakens links."""
     from memex_mcp.server import _build_memory_unit_model
 
     uid = uuid4()
-    link_data = {
+    contradiction_link = {
+        'unit_id': str(uuid4()),
+        'relation': 'contradicts',
+        'weight': 0.9,
+    }
+    temporal_link = {
         'unit_id': str(uuid4()),
         'relation': 'temporal',
         'weight': 0.8,
@@ -275,7 +280,7 @@ def test_build_memory_unit_model_extracts_links():
     mock_unit.note_id = None
     mock_unit.node_ids = []
     mock_unit.status = 'active'
-    mock_unit.metadata = {'tags': [], 'links': [link_data]}
+    mock_unit.metadata = {'tags': [], 'links': [contradiction_link, temporal_link]}
     mock_unit.superseded_by = []
     mock_unit.occurred_start = None
     mock_unit.occurred_end = None
@@ -283,9 +288,10 @@ def test_build_memory_unit_model_extracts_links():
 
     result = _build_memory_unit_model(mock_unit)
 
+    # Only contradiction links are inlined; temporal is filtered out
     assert len(result.links) == 1
-    assert result.links[0].relation == 'temporal'
-    assert result.links[0].weight == 0.8
+    assert result.links[0].relation == 'contradicts'
+    assert result.links[0].weight == 0.9
 
 
 def test_build_memory_unit_model_no_links():

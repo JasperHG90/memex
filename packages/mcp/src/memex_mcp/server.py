@@ -233,8 +233,8 @@ IF query asks about relationships, connections, "how X fits in", "what relates t
   2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
   3. `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
   4. Read source notes via SEARCH/READ below as needed
-  Note: `memex_note_search` and `memex_memory_search` also return inline relationship data
-  (`related_notes`, `links`). For simple relationship discovery, search results may suffice.
+  Note: search results include `related_notes` and contradiction `links`.
+  For full relationship links (temporal, semantic, causal), use `memex_get_memory_links`.
 
 IF query asks about specific content, topics, or document lookup:
   → SEARCH
@@ -1141,8 +1141,14 @@ def _build_memory_unit_model(
     }
 
     links_raw = unit_metadata.get('links', [])
-    links = [McpMemoryLink(**lnk) for lnk in links_raw if isinstance(lnk, dict)]
-    base_kwargs['links'] = links
+    # Only inline contradiction/weakens links; other types available via memex_get_memory_links
+    _contradiction_types = {'contradicts', 'weakens'}
+    contradiction_links = [
+        McpMemoryLink(**lnk)
+        for lnk in links_raw
+        if isinstance(lnk, dict) and lnk.get('relation') in _contradiction_types
+    ]
+    base_kwargs['links'] = contradiction_links
 
     # Staleness date fallback chain — see compute_staleness docstring for semantics.
     # event_date: only on SQL model (None on DTO from HTTP API)
@@ -1187,8 +1193,8 @@ def _build_memory_unit_model(
     description=(
         'Search extracted facts, events, and observations across all notes (memory search). '
         'Find information about any topic. Best for broad/exploratory queries. '
-        'Each memory unit includes `links` — typed relationships (contradicts, reinforces, '
-        'temporal, causes, etc.) to other units, with weight and source note metadata. '
+        'Contradiction links are always included on returned units. '
+        'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
     ),
     tags={'search'},
@@ -1392,8 +1398,8 @@ async def memex_search_user_notes(
         'Search and find source notes by hybrid retrieval (note search). '
         'Find notes about any topic. Returns ranked notes with description. '
         'Results include `related_notes` (notes sharing entities, ranked by specificity) '
-        'and `links` (typed relationships like contradicts/reinforces from memory_links). '
-        'Use these to follow relationship chains without additional queries. '
+        'and contradiction `links` (contradicts/weakens only). '
+        'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
     ),
@@ -1553,6 +1559,9 @@ async def memex_note_search(
                     )
                     for rn in getattr(doc, 'related_notes', [])[: rc.top_k_related]
                 ]
+                # Only inline contradiction/weakens links; other types via
+                # memex_get_memory_links
+                _contradiction_types = {'contradicts', 'weakens'}
                 links = [
                     McpMemoryLink(
                         unit_id=lnk.unit_id,
@@ -1563,8 +1572,9 @@ async def memex_note_search(
                         time=lnk.time.isoformat() if lnk.time else None,
                         metadata={},
                     )
-                    for lnk in getattr(doc, 'links', [])[: rc.max_links]
-                ]
+                    for lnk in getattr(doc, 'links', [])
+                    if lnk.relation in _contradiction_types
+                ][: rc.max_links]
                 output.append(
                     McpNoteSearchResult(
                         note_id=doc.note_id,
@@ -2544,6 +2554,75 @@ async def memex_get_memory_units(
     except Exception as e:
         logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_memory_links',
+    description=(
+        'Get typed relationship links for memory units. Returns temporal, semantic, '
+        'causal, contradiction, and other links. Filter by link_type for specific '
+        'relationships. Use after search to explore relationship chains.'
+    ),
+    tags={'storage'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_memory_links(
+    ctx: Context,
+    unit_ids: Annotated[
+        list[str], BeforeValidator(_coerce_list), Field(description='List of memory unit UUIDs.')
+    ],
+    link_type: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Filter by link type: contradicts, temporal, semantic, causal, etc.',
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(description='Max links per unit.'),
+    ] = 20,
+) -> list[McpMemoryLink]:
+    """Retrieve relationship links for memory units."""
+    try:
+        api = get_api(ctx)
+        uuids: list[UUID] = []
+        for uid_str in unit_ids:
+            try:
+                uuids.append(UUID(uid_str))
+            except ValueError:
+                continue
+
+        if not uuids:
+            return []
+
+        link_types = [link_type] if link_type else None
+        links_map = await api.get_memory_links(uuids, link_types=link_types)
+
+        output: list[McpMemoryLink] = []
+        for uid in uuids:
+            for lnk in links_map.get(uid, [])[:limit]:
+                output.append(
+                    McpMemoryLink(
+                        unit_id=lnk.unit_id,
+                        note_id=lnk.note_id,
+                        note_title=lnk.note_title,
+                        relation=lnk.relation,
+                        weight=lnk.weight,
+                        time=lnk.time.isoformat() if lnk.time else None,
+                        metadata=lnk.metadata or {},
+                    )
+                )
+
+        return output
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Get memory links failed: {e}', exc_info=True)
+        raise ToolError(f'Get memory links failed: {e}')
 
 
 @mcp.tool(

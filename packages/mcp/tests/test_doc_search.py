@@ -356,8 +356,19 @@ async def test_memex_note_search_maps_related_notes_and_links(mock_api, mcp_clie
         ],
         links=[
             MemoryLinkDTO(
-                unit_id=uid, note_id=rn_id, note_title='Related', relation='semantic', weight=0.8
-            )
+                unit_id=uid,
+                note_id=rn_id,
+                note_title='Related',
+                relation='contradicts',
+                weight=0.8,
+            ),
+            MemoryLinkDTO(
+                unit_id=uuid4(),
+                note_id=rn_id,
+                note_title='Related',
+                relation='semantic',
+                weight=0.7,
+            ),
         ],
     )
     mock_api.search_notes.return_value = [doc]
@@ -374,9 +385,10 @@ async def test_memex_note_search_maps_related_notes_and_links(mock_api, mcp_clie
     # max_shared_entities defaults to 0, so shared_entities are omitted
     assert data[0]['related_notes'][0]['shared_entities'] == []
     assert data[0]['related_notes'][0]['strength'] == 0.9
+    # Only contradiction links are inlined; semantic is filtered out
     assert len(data[0]['links']) == 1
     assert data[0]['links'][0]['unit_id'] == str(uid)
-    assert data[0]['links'][0]['relation'] == 'semantic'
+    assert data[0]['links'][0]['relation'] == 'contradicts'
     assert data[0]['links'][0]['weight'] == 0.8
     # Link metadata is dropped for token efficiency
     assert data[0]['links'][0]['metadata'] == {}
@@ -409,22 +421,35 @@ async def test_memex_note_search_related_notes_capped(mock_api, mcp_client):
 
 @pytest.mark.asyncio
 async def test_memex_note_search_links_capped(mock_api, mcp_client):
-    """Memory links are capped at max_links (default 3) and metadata is dropped."""
+    """Contradiction links are capped at max_links (default 3), metadata dropped,
+    and non-contradiction links are filtered out."""
     nid = uuid4()
     doc = NoteSearchResult(
         note_id=nid,
         metadata={'title': 'Test Doc'},
         score=0.85,
         links=[
+            # 6 contradiction links (only first 3 should be returned due to max_links=3)
             MemoryLinkDTO(
                 unit_id=uuid4(),
                 note_id=uuid4(),
                 note_title=f'Note {i}',
-                relation='semantic',
+                relation='contradicts',
                 weight=0.8 - i * 0.1,
                 metadata={'extra': 'data'},
             )
             for i in range(6)
+        ]
+        + [
+            # semantic links should be filtered out entirely
+            MemoryLinkDTO(
+                unit_id=uuid4(),
+                note_id=uuid4(),
+                note_title='Semantic',
+                relation='semantic',
+                weight=0.9,
+                metadata={'extra': 'data'},
+            ),
         ],
     )
     mock_api.search_notes.return_value = [doc]
@@ -437,3 +462,4 @@ async def test_memex_note_search_links_capped(mock_api, mcp_client):
     assert len(data[0]['links']) == 3
     for link in data[0]['links']:
         assert link['metadata'] == {}
+        assert link['relation'] == 'contradicts'

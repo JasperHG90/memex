@@ -552,7 +552,8 @@ class RelationConfig(BaseModel):
     )
     max_links: int = Field(
         default=3,
-        description='Max memory links per note in search results. 0 = omit links.',
+        description='Max contradiction links inlined per search result. '
+        '0 = omit all inline links (including contradictions).',
     )
 
 
