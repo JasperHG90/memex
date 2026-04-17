@@ -18,6 +18,7 @@ from memex_common.exceptions import (
 from memex_common.schemas import (
     LineageResponse,
     LineageDirection,
+    MemoryLinkDTO,
     NoteSearchResult,
     NodeDTO,
     RelatedNoteDTO,
@@ -740,6 +741,42 @@ class MemexAPI:
 
         async with self.metastore.session() as session:
             return await compute_related_notes(session, note_ids)
+
+    async def get_memory_links(
+        self,
+        unit_ids: list[UUID],
+        link_types: list[str] | None = None,
+    ) -> dict[UUID, list[MemoryLinkDTO]]:
+        """Get typed relationship links for memory units.
+
+        Delegates to fetch_memory_links in note_relations.py.
+        """
+        from memex_core.memory.retrieval.note_relations import fetch_memory_links
+
+        async with self.metastore.session() as session:
+            return await fetch_memory_links(session, unit_ids, link_types=link_types)
+
+    async def get_note_links(
+        self,
+        note_ids: list[UUID],
+        link_types: list[str] | None = None,
+        limit: int = 20,
+    ) -> dict[UUID, list[MemoryLinkDTO]]:
+        """Get typed relationship links for notes (aggregated from their memory units).
+
+        Delegates to fetch_memory_links_for_notes in note_relations.py.
+        """
+        from memex_core.memory.retrieval.note_relations import (
+            fetch_memory_links_for_notes,
+        )
+
+        async with self.metastore.session() as session:
+            return await fetch_memory_links_for_notes(
+                session,
+                note_ids,
+                top_k=limit,
+                link_types=link_types,
+            )
 
     async def list_notes(
         self,
