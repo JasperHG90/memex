@@ -69,6 +69,7 @@ class SearchService:
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
         source_context: str | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
@@ -102,6 +103,7 @@ class SearchService:
             before=before,
             tags=tags,
             source_context=source_context,
+            reference_date=reference_date,
         )
 
         async with self.metastore.session() as session:
@@ -134,6 +136,7 @@ class SearchService:
         reason: bool = False,
         summarize: bool = False,
         mmr_lambda: float | None = None,
+        reference_date: dt.datetime | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
@@ -172,6 +175,8 @@ class SearchService:
             kwargs['before'] = before
         if tags is not None:
             kwargs['tags'] = tags
+        if reference_date is not None:
+            kwargs['reference_date'] = reference_date
 
         request = NoteSearchRequest(
             query=query,
