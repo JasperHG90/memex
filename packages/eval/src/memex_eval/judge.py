@@ -30,6 +30,39 @@ class RetrievalRelevance(dspy.Signature):
     reasoning: str = dspy.OutputField(desc='Brief explanation of the judgment.')
 
 
+class AbstentionCorrectness(dspy.Signature):
+    """Judge whether a hypothesis correctly abstains from answering.
+
+    Used for LongMemEval ``*_abs`` questions: the ground-truth answer is
+    missing/null, so correctness is defined as the hypothesis explicitly
+    declining to answer (e.g. "I do not know based on the available
+    memory"). Paraphrase is acceptable; hallucinating any specific answer
+    is INCORRECT.
+    """
+
+    question: str = dspy.InputField(desc='The question that was asked.')
+    model_response: str = dspy.InputField(desc='The model/system response to evaluate.')
+    is_correct_abstention: bool = dspy.OutputField(
+        desc='Whether the response correctly abstains (declines to answer).'
+    )
+    reasoning: str = dspy.OutputField(desc='Brief explanation of the judgment.')
+
+
+class AbstentionClassifier(dspy.Signature):
+    """Classify whether a hypothesis *itself* is an abstention.
+
+    Independent of ground-truth or correctness — this is a pure labelling
+    task over the hypothesis text. Used as the denominator for abstention
+    precision so that metric is not definitionally coupled to correctness.
+    """
+
+    model_response: str = dspy.InputField(desc='The model/system response to classify.')
+    is_abstention: bool = dspy.OutputField(
+        desc='True iff the response declines to answer / says it does not know.'
+    )
+    reasoning: str = dspy.OutputField(desc='Brief explanation.')
+
+
 class GradedCorrectness(dspy.Signature):
     """Judge model response correctness on a graded scale."""
 
@@ -57,6 +90,8 @@ class Judge:
         self._correctness = dspy.ChainOfThought(BinaryCorrectness)
         self._relevance = dspy.ChainOfThought(RetrievalRelevance)
         self._graded = dspy.ChainOfThought(GradedCorrectness)
+        self._abstention_correctness = dspy.ChainOfThought(AbstentionCorrectness)
+        self._abstention_classifier = dspy.ChainOfThought(AbstentionClassifier)
 
     def judge_correctness(self, question: str, expected: str, response: str) -> tuple[bool, str]:
         """Judge whether a response correctly answers a question.
@@ -89,6 +124,29 @@ class Judge:
         except (ValueError, TypeError):
             score = 0.0
         return score, result.reasoning
+
+    def judge_abstention_correctness(self, question: str, response: str) -> tuple[bool, str]:
+        """Judge whether a hypothesis correctly abstains.
+
+        Used when the ground-truth answer is missing/null (LongMemEval
+        ``*_abs`` questions). Returns (is_correct, reasoning).
+        """
+        with dspy.context(lm=self.lm):
+            result = self._abstention_correctness(
+                question=question,
+                model_response=response,
+            )
+        return result.is_correct_abstention, result.reasoning
+
+    def classify_abstention(self, response: str) -> tuple[bool, str]:
+        """Classify a hypothesis as abstention vs attempted-answer.
+
+        Returns (is_abstention, reasoning). Pure labelling; does not
+        consult the ground truth.
+        """
+        with dspy.context(lm=self.lm):
+            result = self._abstention_classifier(model_response=response)
+        return result.is_abstention, result.reasoning
 
     def judge_relevance(self, query: str, expected: str, search_result: str) -> tuple[bool, str]:
         """Judge whether a search result is relevant.

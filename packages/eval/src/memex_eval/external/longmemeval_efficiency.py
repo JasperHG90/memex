@@ -1,7 +1,8 @@
-"""LoCoMo efficiency analysis: latency, token cost, tool usage patterns.
+"""LongMemEval efficiency analysis: latency, token cost, tool usage patterns.
 
-Analyzes answer records and session trace files to produce distribution
-metrics for duration, tokens, turns, tool calls, and retrieval token cost.
+Ported from locomo_efficiency.py — analyzes answer records and session trace
+files to produce distribution metrics for duration, tokens, turns, tool calls,
+and retrieval token cost.
 """
 
 from __future__ import annotations
@@ -17,9 +18,9 @@ import tiktoken
 from rich.console import Console
 from rich.table import Table
 
-from memex_eval.external.locomo_common import read_jsonl
+from memex_eval.external.longmemeval_common import read_jsonl
 
-logger = logging.getLogger('memex_eval.locomo_efficiency')
+logger = logging.getLogger('memex_eval.longmemeval_efficiency')
 console = Console()
 
 _MEMEX_TOOL_PREFIX = 'mcp__memex__'
@@ -123,7 +124,7 @@ def analyze_efficiency(
     """Analyze efficiency metrics from answers and session traces.
 
     Args:
-        answers_path: Path to answers.jsonl from Phase 2.
+        answers_path: Path to hypotheses.jsonl from Phase 2.
         output_path: Path to write the efficiency report JSON.
         traces_dir: Directory containing per-question trace JSONL files.
 
@@ -152,11 +153,12 @@ def analyze_efficiency(
     n_with_traces = 0
 
     for a in answers:
-        qid = a['id']
-        duration = a.get('duration_s', 0.0)
-        tokens = a.get('tokens', {})
-        input_tokens = tokens.get('input', 0)
-        output_tokens = tokens.get('output', 0)
+        qid = a.get('question_id', a.get('id', ''))
+        duration = (
+            a.get('latency_ms', 0.0) / 1000.0 if 'latency_ms' in a else a.get('duration_s', 0.0)
+        )
+        input_tokens = a.get('input_tokens', 0)
+        output_tokens = a.get('output_tokens', 0)
         tool_calls = a.get('tool_calls', [])
 
         durations.append(duration)
@@ -168,7 +170,7 @@ def analyze_efficiency(
         for tc in tool_calls:
             name = tc.get('name', '')
             tool_counter[name] += 1
-            tool_per_question[name] += 1  # will divide later
+            tool_per_question[name] += 1
 
         # Retrieval tokens from trace
         trace_file = traces_path / f'{qid}.jsonl'
@@ -209,7 +211,7 @@ def analyze_efficiency(
     }
 
     report: dict[str, Any] = {
-        'benchmark': 'LoCoMo-Efficiency',
+        'benchmark': 'LongMemEval-Efficiency',
         'answers_file': answers_path,
         'traces_dir': traces_dir,
         'n_questions': n_questions,
@@ -232,7 +234,7 @@ def analyze_efficiency(
 def _print_report(report: dict[str, Any]) -> None:
     """Print a rich terminal summary of the efficiency report."""
     console.print()
-    console.rule('[bold]LoCoMo Efficiency Report[/bold]')
+    console.rule('[bold]LongMemEval Efficiency Report[/bold]')
     console.print()
     console.print(f'[dim]{report["n_questions"]} questions analyzed[/dim]')
     console.print()

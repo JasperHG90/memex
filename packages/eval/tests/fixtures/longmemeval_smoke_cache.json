@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "description": "Cached judge responses for the LongMemEval smoke-tier test. Keys are question_id; values describe the deterministic judge verdict for that hypothesis. ``is_abstention_hypothesis`` reflects what the LM abstention classifier would have returned. Placeholder values — recorded against synthetic fixture questions, not the upstream dataset.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "prompt_template_version": "2026-04-15.v1"
+  },
+  "smoke-q-001": {
+    "correct": true,
+    "reasoning": "Hypothesis matches the ground truth.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "is_abstention_hypothesis": false
+  },
+  "smoke-q-002": {
+    "correct": true,
+    "reasoning": "Hypothesis matches the ground truth.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "is_abstention_hypothesis": false
+  },
+  "smoke-q-003": {
+    "correct": false,
+    "reasoning": "Hypothesis missed the date constraint.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "is_abstention_hypothesis": false
+  },
+  "smoke-q-004_abs": {
+    "correct": true,
+    "reasoning": "Abstention question; hypothesis correctly abstained.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "is_abstention_hypothesis": true
+  },
+  "smoke-q-005": {
+    "correct": true,
+    "reasoning": "Hypothesis matches the ground truth.",
+    "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
+    "is_abstention_hypothesis": false
+  }
+}
