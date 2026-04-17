@@ -68,7 +68,7 @@ class TestTemporalConcretization:
             event_date=datetime(2024, 6, 10, 10, 0, 0, tzinfo=timezone.utc),
         )
         # Seed a memory unit dated 2024-01-01 (well outside the range)
-        _unit_out_of_range = await self._seed_memory(
+        unit_out_of_range = await self._seed_memory(
             session,
             embedder,
             f'Old architecture decision from January {uuid4()}',
@@ -88,6 +88,9 @@ class TestTemporalConcretization:
         assert unit_in_range.id in result_ids, (
             'Memory from 2024-06-10 should be within "last week" of 2024-06-15'
         )
+        assert unit_out_of_range.id not in result_ids, (
+            'Memory from 2024-01-01 should be outside "last week" of 2024-06-15'
+        )
 
     # -----------------------------------------------------------------
     # Test 2: existing regex patterns still work
@@ -100,7 +103,7 @@ class TestTemporalConcretization:
             f'March project update and review {uuid4()}',
             event_date=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
         )
-        _unit_july = await self._seed_memory(
+        unit_july = await self._seed_memory(
             session,
             embedder,
             f'July status report {uuid4()}',
@@ -119,6 +122,9 @@ class TestTemporalConcretization:
         assert unit_march.id in result_ids, (
             'Memory from March 2024 should be found by regex extraction'
         )
+        assert unit_july.id not in result_ids, (
+            'Memory from July 2024 should be outside "in March 2024" filter'
+        )
 
     # -----------------------------------------------------------------
     # Test 3: LLM fallback fires on ambiguous temporal queries
@@ -134,7 +140,7 @@ class TestTemporalConcretization:
             f'Onboarding documentation and setup {uuid4()}',
             event_date=datetime(2024, 2, 1, 10, 0, 0, tzinfo=timezone.utc),
         )
-        _unit_dec = await self._seed_memory(
+        unit_dec = await self._seed_memory(
             session,
             embedder,
             f'December holiday planning notes {uuid4()}',
@@ -176,6 +182,9 @@ class TestTemporalConcretization:
         result_ids = {u.id for u in results}
         assert unit_feb.id in result_ids, (
             'Memory from Feb 2024 should be found via LLM concretization'
+        )
+        assert unit_dec.id not in result_ids, (
+            'Memory from Dec 2024 should be outside LLM-concretized range (Jan-Feb 2024)'
         )
 
     # -----------------------------------------------------------------
