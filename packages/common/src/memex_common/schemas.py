@@ -196,6 +196,15 @@ class RetrievalRequest(BaseModel):
         default=None, description='Only return results from notes with ALL of these tags.'
     )
 
+    # Temporal concretization
+    reference_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Reference point for resolving relative temporal expressions '
+            '(e.g. "last week"). Defaults to now (UTC) when None.'
+        ),
+    )
+
     # Source context filtering
     source_context: str | None = Field(
         default=None,
@@ -914,6 +923,13 @@ class NoteSearchRequest(BaseModel):
     )
     tags: list[str] | None = Field(
         default=None, description='Only return notes with ALL of these tags.'
+    )
+    reference_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Reference point for resolving relative temporal expressions '
+            '(e.g. "last week"). Defaults to now (UTC) when None.'
+        ),
     )
     reason: bool = Field(
         default=False,

@@ -285,6 +285,7 @@ class RemoteMemexAPI:
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
         source_context: str | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> list[MemoryUnitDTO]:
         """Search for memories."""
         request = RetrievalRequest(
@@ -300,6 +301,7 @@ class RemoteMemexAPI:
             before=before,
             tags=tags,
             source_context=source_context,
+            reference_date=reference_date,
         )
         result = await self._post('memories/search', request)
         return [MemoryUnitDTO(**r) for r in result]
@@ -354,6 +356,7 @@ class RemoteMemexAPI:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> list[NoteSearchResult]:
         """Search for notes."""
         kwargs: dict[str, Any] = {}
@@ -367,6 +370,8 @@ class RemoteMemexAPI:
             kwargs['before'] = before
         if tags is not None:
             kwargs['tags'] = tags
+        if reference_date is not None:
+            kwargs['reference_date'] = reference_date
         request = NoteSearchRequest(
             query=query,
             limit=limit,

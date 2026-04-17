@@ -52,6 +52,7 @@ async def search_memories(
             before=request.before,
             tags=request.tags,
             source_context=request.source_context,
+            reference_date=request.reference_date,
         )
         t_search = time.monotonic() - t0
 

@@ -899,6 +899,7 @@ class MemexAPI:
         before: datetime | None = None,
         tags: list[str] | None = None,
         source_context: str | None = None,
+        reference_date: datetime | None = None,
     ) -> tuple[list[MemoryUnit], Any]:
         """Search with reranking. Delegates to SearchService."""
         return await self._search.search(
@@ -914,6 +915,7 @@ class MemexAPI:
             before=before,
             tags=tags,
             source_context=source_context,
+            reference_date=reference_date,
         )
 
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
@@ -935,6 +937,7 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         tags: list[str] | None = None,
+        reference_date: datetime | None = None,
     ) -> list[NoteSearchResult]:
         """Search notes. Delegates to SearchService."""
         return await self._search.search_notes(
@@ -951,6 +954,7 @@ class MemexAPI:
             after=after,
             before=before,
             tags=tags,
+            reference_date=reference_date,
         )
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
