@@ -571,8 +571,13 @@ class EntityResolver:
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
                 + stmt.excluded.cooccurrence_count,
                 'last_cooccurred': stmt.excluded.last_cooccurred,
-                # Keep the earliest valid_from: LEAST(existing, new), treating NULL as open-start
-                'valid_from': func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
+                # Keep the earliest valid_from. LEAST(x, NULL) returns NULL in
+                # Postgres, so wrap in COALESCE to preserve the non-NULL side.
+                'valid_from': func.coalesce(
+                    func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
+                    EntityCooccurrence.valid_from,
+                    stmt.excluded.valid_from,
+                ),
             },
         )
         await session.exec(stmt)
