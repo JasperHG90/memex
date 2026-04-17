@@ -622,13 +622,6 @@ class RetrievalConfig(BaseModel):
             'extractor cannot resolve (e.g. "during the onboarding").'
         ),
     )
-    temporal_concretization_model: 'ModelConfig | None' = Field(
-        default=None,
-        description=(
-            'Model override for temporal concretization LLM calls. '
-            'If None, uses the default DSPy LM from the retrieval engine.'
-        ),
-    )
     fact_type_partitioned_rrf: bool = Field(
         default=False,
         description='Run RRF independently per fact type, then interleave results.',
