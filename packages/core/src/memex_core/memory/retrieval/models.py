@@ -84,6 +84,13 @@ class RetrievalRequest(SQLModel):
     before: datetime | None = Field(
         default=None, description='Only return results before this date.'
     )
+    reference_date: datetime | None = Field(
+        default=None,
+        description=(
+            'Reference point for resolving relative temporal expressions '
+            '(e.g. "last week"). Defaults to now (UTC) when None.'
+        ),
+    )
 
     # Source context filtering
     source_context: str | None = Field(

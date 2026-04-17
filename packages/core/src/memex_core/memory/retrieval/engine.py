@@ -32,6 +32,10 @@ from memex_core.memory.retrieval.strategies import (
 )
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
+from memex_core.memory.retrieval.temporal_concretizer import (
+    TemporalConcretizer,
+    has_ambiguous_temporal_expression,
+)
 from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
@@ -141,6 +145,11 @@ class RetrievalEngine:
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
+        self.concretizer: TemporalConcretizer | None = (
+            TemporalConcretizer(lm=self.lm)
+            if self.lm and self.retrieval_config.temporal_concretization_enabled
+            else None
+        )
         self._session_factory = session_factory
 
         # Source RRF constants from config
@@ -256,7 +265,25 @@ class RetrievalEngine:
             and 'start_date' not in filters
             and 'end_date' not in filters
         ):
-            temporal_range = extract_temporal_constraint(request.query)
+            temporal_range = extract_temporal_constraint(
+                request.query, reference_date=request.reference_date
+            )
+            # LLM fallback: if regex found nothing but query sounds temporal
+            if (
+                temporal_range is None
+                and self.concretizer is not None
+                and has_ambiguous_temporal_expression(request.query)
+            ):
+                temporal_range = await self.concretizer.concretize(
+                    request.query, reference_date=request.reference_date
+                )
+                if temporal_range is not None:
+                    logger.debug(
+                        'Temporal concretization (LLM): %s -> %s to %s',
+                        request.query,
+                        temporal_range[0],
+                        temporal_range[1],
+                    )
             if temporal_range is not None:
                 filters['start_date'] = temporal_range[0]
                 filters['end_date'] = temporal_range[1]
