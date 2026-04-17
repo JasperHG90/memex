@@ -296,6 +296,10 @@ class RetrievalEngine:
         if request.before:
             filters['end_date'] = request.before
 
+        # Thread as_of for entity graph temporal validity filtering
+        if request.as_of:
+            filters['as_of'] = request.as_of
+
         debug_ctx: DebugContext | None = DebugContext() if request.debug else None
 
         use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
