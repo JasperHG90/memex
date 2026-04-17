@@ -4,7 +4,18 @@ import logging
 from typing import Protocol, Any, runtime_checkable
 from uuid import UUID
 
-from sqlalchemy import func, desc, literal, or_, text, cast, String, union_all, distinct
+from sqlalchemy import (
+    func,
+    desc,
+    literal,
+    literal_column,
+    or_,
+    text,
+    cast,
+    String,
+    union_all,
+    distinct,
+)
 from sqlalchemy.sql import Select, CompoundSelect
 from sqlalchemy.sql.expression import CTE
 from sqlmodel import select, col
@@ -23,6 +34,12 @@ from memex_core.memory.sql_models import (
 from memex_core.memory.sql_models import MentalModel
 
 logger = logging.getLogger('memex.core.memory.retrieval.strategies')
+
+# Maximum exponent magnitude for temporal decay to prevent Postgres NUMERIC underflow.
+# power(2, -996) ~ 1e-300 which is near the minimum representable NUMERIC value.
+# Without clamping, historic dates (e.g. 1970-01-01) produce exponents like -687
+# which cause NumericValueOutOfRangeError.
+_MAX_DECAY_EXPONENT = -996
 
 
 def apply_date_filters(statement: Select, date_column: Any, **kwargs: Any) -> Select:
@@ -480,7 +497,10 @@ class EntityCooccurrenceGraphStrategy:
         # But let's stick to simple decay for now.
 
         temporal_score = func.power(
-            self.temporal_decay_base, -(days_diff / self.temporal_decay_days)
+            self.temporal_decay_base,
+            func.greatest(
+                -(days_diff / self.temporal_decay_days), literal_column(str(_MAX_DECAY_EXPONENT))
+            ),
         )
 
         first_order = (
@@ -656,7 +676,10 @@ class EntityCooccurrenceNoteGraphStrategy:
             func.extract('epoch', func.now()) - func.extract('epoch', col(MemoryUnit.event_date))
         ) / 86400.0
         temporal_score = func.power(
-            self.temporal_decay_base, -(days_diff / self.temporal_decay_days)
+            self.temporal_decay_base,
+            func.greatest(
+                -(days_diff / self.temporal_decay_days), literal_column(str(_MAX_DECAY_EXPONENT))
+            ),
         )
 
         include_stale = kwargs.get('include_stale', False)
@@ -806,7 +829,9 @@ class CausalGraphStrategy:
         ) / 86400.0
         temporal_score = func.power(
             self.temporal_decay_base,
-            -(days_diff / self.temporal_decay_days),
+            func.greatest(
+                -(days_diff / self.temporal_decay_days), literal_column(str(_MAX_DECAY_EXPONENT))
+            ),
         )
 
         first_order = (
@@ -912,7 +937,9 @@ class CausalNoteGraphStrategy:
         ) / 86400.0
         temporal_score = func.power(
             self.temporal_decay_base,
-            -(days_diff / self.temporal_decay_days),
+            func.greatest(
+                -(days_diff / self.temporal_decay_days), literal_column(str(_MAX_DECAY_EXPONENT))
+            ),
         )
 
         first_order = (
