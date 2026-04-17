@@ -1276,6 +1276,16 @@ async def memex_memory_search(
             ),
         ),
     ] = None,
+    reference_date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'ISO-8601 timestamp. Relative dates in the query (e.g. "last week") '
+                'resolve against this instead of now(). Use for historical queries.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1288,6 +1298,9 @@ async def memex_memory_search(
 
         after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
         before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
+        ref_dt = (
+            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+        )
 
         results = await api.search(
             query=query,
@@ -1300,6 +1313,7 @@ async def memex_memory_search(
             before=before_dt,
             tags=tags,
             source_context=source_context,
+            reference_date=ref_dt,
         )
 
         if not results:
@@ -1468,6 +1482,16 @@ async def memex_note_search(
             description='Only return notes that have file attachments (images, PDFs, etc.).',
         ),
     ] = False,
+    reference_date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'ISO-8601 timestamp. Relative dates in the query (e.g. "last week") '
+                'resolve against this instead of now(). Use for historical queries.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpNoteSearchResult]:
     """Search Memex for source notes by hybrid retrieval."""
     try:
@@ -1480,6 +1504,9 @@ async def memex_note_search(
 
         after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
         before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
+        ref_dt = (
+            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+        )
 
         search_limit = limit * 3 if has_assets else limit
         results = await api.search_notes(
@@ -1493,6 +1520,7 @@ async def memex_note_search(
             after=after_dt,
             before=before_dt,
             tags=tags,
+            reference_date=ref_dt,
         )
 
         if has_assets:
