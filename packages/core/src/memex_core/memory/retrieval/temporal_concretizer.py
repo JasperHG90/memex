@@ -115,6 +115,24 @@ class TemporalConcretizer:
                 logger.debug('Temporal concretization returned start >= end: %s >= %s', start, end)
                 return None
 
+            # Bounds: range must not exceed 10 years
+            max_range_days = 365 * 10
+            if (end - start).days > max_range_days:
+                logger.debug('Temporal concretization range exceeds 10 years: %s to %s', start, end)
+                return None
+
+            # Bounds: neither date more than 100 years from reference_date
+            max_distance_days = 365 * 100
+            for dt, label in [(start, 'start'), (end, 'end')]:
+                if abs((dt - reference_date).days) > max_distance_days:
+                    logger.debug(
+                        'Temporal concretization %s date too far from reference: %s vs %s',
+                        label,
+                        dt,
+                        reference_date,
+                    )
+                    return None
+
             return (start, end)
 
         except (ValueError, RuntimeError, OSError, KeyError) as e:

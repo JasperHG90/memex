@@ -165,3 +165,39 @@ class TestTemporalConcretizer:
         concretizer = TemporalConcretizer(lm=object())  # type: ignore[arg-type]
         result = await concretizer.concretize('during the onboarding', reference_date=REF)
         assert result is None
+
+    @pytest.mark.usefixtures('_patch_dspy')
+    async def test_concretize_rejects_range_exceeding_10_years(self) -> None:
+        """Date ranges spanning more than 10 years are rejected."""
+        self.mock_run.return_value = SimpleNamespace(
+            start_date='2000-01-01T00:00:00+00:00',
+            end_date='2024-06-15T23:59:59+00:00',
+        )
+        concretizer = TemporalConcretizer(lm=object())  # type: ignore[arg-type]
+        result = await concretizer.concretize('during the project', reference_date=REF)
+        assert result is None
+
+    @pytest.mark.usefixtures('_patch_dspy')
+    async def test_concretize_rejects_date_too_far_from_reference(self) -> None:
+        """Dates more than 100 years from reference_date are rejected."""
+        self.mock_run.return_value = SimpleNamespace(
+            start_date='1900-01-01T00:00:00+00:00',
+            end_date='1900-12-31T23:59:59+00:00',
+        )
+        concretizer = TemporalConcretizer(lm=object())  # type: ignore[arg-type]
+        result = await concretizer.concretize('during that era', reference_date=REF)
+        assert result is None
+
+    @pytest.mark.usefixtures('_patch_dspy')
+    async def test_concretize_accepts_range_within_bounds(self) -> None:
+        """A reasonable date range within bounds is accepted."""
+        self.mock_run.return_value = SimpleNamespace(
+            start_date='2024-01-01T00:00:00+00:00',
+            end_date='2024-06-01T23:59:59+00:00',
+        )
+        concretizer = TemporalConcretizer(lm=object())  # type: ignore[arg-type]
+        result = await concretizer.concretize('during the project', reference_date=REF)
+        assert result is not None
+        start, end = result
+        assert start.year == 2024 and start.month == 1
+        assert end.year == 2024 and end.month == 6
