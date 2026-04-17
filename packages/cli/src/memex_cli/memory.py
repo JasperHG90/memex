@@ -424,6 +424,16 @@ async def search_memory(
             help='Filter by source context (e.g. "user_notes").',
         ),
     ] = None,
+    reference_date: Annotated[
+        str | None,
+        typer.Option(
+            '--reference-date',
+            help=(
+                'ISO-8601 timestamp for resolving relative dates '
+                '(e.g. "last week"). Defaults to now.'
+            ),
+        ),
+    ] = None,
 ):
     """
     Search for memories.
@@ -453,6 +463,10 @@ async def search_memory(
     else:
         vault_ids = config.read_vaults
 
+    from datetime import datetime as _dt, timezone as _tz
+
+    ref_dt = _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+
     async with get_api_context(config) as api:
         try:
             results = await api.search(
@@ -463,6 +477,7 @@ async def search_memory(
                 vault_ids=vault_ids,
                 include_stale=include_stale,
                 source_context=source_context,
+                reference_date=ref_dt,
             )
         except Exception as e:
             handle_api_error(e)
