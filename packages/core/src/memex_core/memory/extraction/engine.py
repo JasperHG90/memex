@@ -1505,10 +1505,13 @@ class ExtractionEngine:
         unit_timestamps: dict[str, datetime] = {}
         for data, entity_id in zip(entities_data, resolved_ids):
             unit_entity_pairs.append((data['unit_id'], entity_id))
-            # Populate unit_timestamps from event_date (occurred_start or mentioned_at)
+            # Populate unit_timestamps from event_date (occurred_start or mentioned_at).
+            # Keep the earliest timestamp per unit.
             event_dt = data.get('event_date')
-            if event_dt is not None and data['unit_id'] not in unit_timestamps:
-                unit_timestamps[data['unit_id']] = event_dt
+            if event_dt is not None:
+                existing = unit_timestamps.get(data['unit_id'])
+                if existing is None or event_dt < existing:
+                    unit_timestamps[data['unit_id']] = event_dt
 
         try:
             await self.entity_resolver.link_units_to_entities_batch(
