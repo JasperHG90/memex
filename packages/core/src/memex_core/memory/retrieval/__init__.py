@@ -22,6 +22,10 @@ from memex_core.memory.retrieval.strategies import (
     CAUSAL_LINK_TYPES,
 )
 from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
+from memex_core.memory.retrieval.temporal_concretizer import (
+    TemporalConcretizer,
+    has_ambiguous_temporal_expression,
+)
 
 __all__ = [
     'RetrievalEngine',
@@ -45,4 +49,6 @@ __all__ = [
     'build_semantic_seed_cte',
     'CAUSAL_LINK_TYPES',
     'extract_temporal_constraint',
+    'TemporalConcretizer',
+    'has_ambiguous_temporal_expression',
 ]
