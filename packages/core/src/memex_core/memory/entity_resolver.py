@@ -11,6 +11,7 @@ import math
 import itertools
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import func
 from sqlmodel import col, text, update, select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from pydantic import BaseModel
@@ -493,6 +494,7 @@ class EntityResolver:
         session: AsyncSession,
         unit_entity_pairs: list[tuple[str, str]],
         vault_id: PyUUID = GLOBAL_VAULT_ID,
+        unit_timestamps: dict[str, datetime] | None = None,
     ):
         """
         1. Create Unit-Entity links (Bulk Insert).
@@ -532,6 +534,21 @@ class EntityResolver:
             return
 
         now = datetime.now(timezone.utc)
+
+        # Derive the earliest timestamp across units that contribute to each pair.
+        # This becomes valid_from: the earliest known time the relation was observed.
+        pair_valid_from: dict[tuple[str, str], datetime | None] = {}
+        if unit_timestamps:
+            for uid, entities in unit_to_entities.items():
+                ts = unit_timestamps.get(uid)
+                if ts is None:
+                    continue
+                sorted_entities = sorted(list(entities))
+                for e1, e2 in itertools.combinations(sorted_entities, 2):
+                    existing = pair_valid_from.get((e1, e2))
+                    if existing is None or ts < existing:
+                        pair_valid_from[(e1, e2)] = ts
+
         co_pairs_data = [
             {
                 'entity_id_1': e1,
@@ -539,11 +556,13 @@ class EntityResolver:
                 'vault_id': vault_id,
                 'cooccurrence_count': count,  # Batch total
                 'last_cooccurred': now,
+                'valid_from': pair_valid_from.get((e1, e2)),
             }
             for (e1, e2), count in pair_counts.items()
         ]
 
-        # Upsert: Add the batch count to the existing DB count
+        # Upsert: Add the batch count to the existing DB count.
+        # On conflict, keep the earliest valid_from (do NOT overwrite with a later value).
         stmt = pg_insert(EntityCooccurrence).values(co_pairs_data)
         stmt = stmt.on_conflict_do_update(
             index_elements=['entity_id_1', 'entity_id_2'],
@@ -552,6 +571,8 @@ class EntityResolver:
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
                 + stmt.excluded.cooccurrence_count,
                 'last_cooccurred': stmt.excluded.last_cooccurred,
+                # Keep the earliest valid_from: LEAST(existing, new), treating NULL as open-start
+                'valid_from': func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
             },
         )
         await session.exec(stmt)
