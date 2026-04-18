@@ -260,12 +260,17 @@ class RetrievalEngine:
             if temporal_range is not None:
                 filters['start_date'] = temporal_range[0]
                 filters['end_date'] = temporal_range[1]
+                _nlp_temporal_applied = True
                 logger.debug(
                     'Temporal extraction: %s -> %s to %s',
                     request.query,
                     temporal_range[0],
                     temporal_range[1],
                 )
+            else:
+                _nlp_temporal_applied = False
+        else:
+            _nlp_temporal_applied = False
         t_temporal = _t() - t0
 
         # 4. Perform Retrieval (Fused across all queries)
@@ -300,14 +305,18 @@ class RetrievalEngine:
 
         use_partitioned = self.retrieval_config.fact_type_partitioned_rrf
 
+        # Convert embeddings to plain lists once; used for RRF and possible temporal fallback
+        all_embeddings_list = [e.tolist() for e in all_embeddings]
+        del all_embeddings  # Free numpy arrays early
+
         t0 = _t()
         all_ranked_items = []
-        for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
+        for q, q_emb, q_weight in zip(queries, all_embeddings_list, query_weights):
             if use_partitioned:
                 items = await self._perform_partitioned_rrf(
                     session,
                     q,
-                    q_emb.tolist(),
+                    q_emb,
                     candidate_depth,
                     filters,
                     strategies=request.strategies,
@@ -318,7 +327,7 @@ class RetrievalEngine:
                 items = await self._perform_rrf_retrieval(
                     session,
                     q,
-                    q_emb.tolist(),
+                    q_emb,
                     candidate_depth,
                     filters,
                     strategies=request.strategies,
@@ -329,14 +338,50 @@ class RetrievalEngine:
             all_ranked_items.append((items, q_weight))
         t_rrf = _t() - t0
 
-        # Free embedding arrays — can be ~100KB+ and no longer needed
-        del all_embeddings
-
         if not all_ranked_items:
             return ([], None)
 
         # 5. Multi-Query RRF Fusion (Final Blend)
         fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
+
+        # 5b. Zero-result fallback: if NLP temporal filter produced no results,
+        # retry without the temporal constraint so relevance-ranked results come through.
+        if not fused_items and _nlp_temporal_applied:
+            logger.info(
+                'Temporal filter produced zero results — retrying without temporal constraint.'
+            )
+            filters_relaxed = {
+                k: v for k, v in filters.items() if k not in ('start_date', 'end_date')
+            }
+            all_ranked_items = []
+            for q, q_emb, q_weight in zip(queries, all_embeddings_list, query_weights):
+                if use_partitioned:
+                    items = await self._perform_partitioned_rrf(
+                        session,
+                        q,
+                        q_emb,
+                        candidate_depth,
+                        filters_relaxed,
+                        strategies=request.strategies,
+                        strategy_weights=request.strategy_weights,
+                        debug_ctx=debug_ctx,
+                    )
+                else:
+                    items = await self._perform_rrf_retrieval(
+                        session,
+                        q,
+                        q_emb,
+                        candidate_depth,
+                        filters_relaxed,
+                        strategies=request.strategies,
+                        strategy_weights=request.strategy_weights,
+                        debug_ctx=debug_ctx,
+                    )
+                all_ranked_items.append((items, q_weight))
+            fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
+
+        # Free embedding lists — no longer needed after RRF + fallback
+        del all_embeddings_list
 
         if not fused_items:
             return ([], None)
