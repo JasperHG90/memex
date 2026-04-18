@@ -377,6 +377,7 @@ class MemexAPI:
                 api_base=str(model_config.base_url) if model_config.base_url else None,
                 api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
                 timeout=model_config.timeout,
+                num_retries=model_config.num_retries,
             )
             dspy.settings.configure(lm=self.lm)
         else:

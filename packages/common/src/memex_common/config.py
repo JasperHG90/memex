@@ -264,6 +264,11 @@ class ModelConfig(BaseModel):
             '(e.g. ollama.com). Default: 120s.'
         ),
     )
+    num_retries: int = Field(
+        default=3,
+        ge=1,
+        description='Number of retries for LLM calls on failure (e.g. schema validation errors). Default: 3.',
+    )
 
     @field_serializer('reasoning_effort')
     def serialize_reasoning_effort(self, value: ReasoningEffort | None) -> str | None:
