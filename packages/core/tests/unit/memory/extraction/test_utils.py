@@ -48,12 +48,21 @@ class TestParseDatetime:
 class TestNormalizeTimestamp:
     """Tests for normalize_timestamp utility."""
 
-    def test_none_input(self) -> None:
-        """Test None input returns min datetime in UTC."""
+    def test_none_input_with_fallback(self) -> None:
+        """Test None input uses fallback (document event_date)."""
+        from memex_core.memory.extraction.utils import normalize_timestamp
+
+        fallback = dt.datetime(2023, 6, 1, tzinfo=dt.timezone.utc)
+        res = normalize_timestamp(None, fallback=fallback)
+        assert res == fallback
+
+    def test_none_input_no_fallback(self) -> None:
+        """Test None input without fallback returns now() (not datetime.min)."""
         from memex_core.memory.extraction.utils import normalize_timestamp
 
         res = normalize_timestamp(None)
-        assert res == dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        # Should be recent, not year 1
+        assert res.year >= 2020
 
     def test_naive_input(self) -> None:
         """Test naive datetime becomes UTC."""

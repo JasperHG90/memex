@@ -282,6 +282,7 @@ class ExtractionEngine:
                 )
 
             # --- Full extraction path (simple strategy or no page_index LM) ---
+            event_date = contents[0].event_date if contents else None
             extracted_facts, chunks = await self._extract_facts(contents, agent_name)
 
             if chunks:
@@ -303,7 +304,11 @@ class ExtractionEngine:
 
             # Deduplication
             is_duplicate = await deduplication.check_duplicates_batch(
-                session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
+                session,
+                processed_facts,
+                storage.check_duplicates_in_window,
+                vault_id=vault_id,
+                event_date=event_date,
             )
 
             # Filter duplicates from both lists to maintain parallelism
@@ -355,7 +360,9 @@ class ExtractionEngine:
             touched_entity_ids = await self._resolve_entities(
                 session, unit_ids, processed_facts, vault_id=vault_id
             )
-            await create_links(session, unit_ids, processed_facts, vault_id=vault_id)
+            await create_links(
+                session, unit_ids, processed_facts, vault_id=vault_id, event_date=event_date
+            )
 
             # Update Reflection Queue Priorities
             await enqueue_for_reflection(session, touched_entity_ids, vault_id, self.queue_service)
@@ -557,7 +564,11 @@ class ExtractionEngine:
 
                 # Deduplication
                 is_duplicate = await deduplication.check_duplicates_batch(
-                    session, processed_facts, storage.check_duplicates_in_window, vault_id=vault_id
+                    session,
+                    processed_facts,
+                    storage.check_duplicates_in_window,
+                    vault_id=vault_id,
+                    event_date=event_date,
                 )
 
                 final_processed = [
@@ -594,7 +605,9 @@ class ExtractionEngine:
                     touched_entity_ids = await self._resolve_entities(
                         session, unit_ids, final_processed, vault_id=vault_id
                     )
-                    await create_links(session, unit_ids, final_processed, vault_id=vault_id)
+                    await create_links(
+                        session, unit_ids, final_processed, vault_id=vault_id, event_date=event_date
+                    )
 
         # 5. Reconciliation (single TX scope — caller manages commit)
         # RETAINED: update chunk_index
@@ -864,7 +877,13 @@ class ExtractionEngine:
                         touched_entity_ids = await self._resolve_entities(
                             session, unit_ids, final_processed, vault_id=vault_id
                         )
-                        await create_links(session, unit_ids, final_processed, vault_id=vault_id)
+                        await create_links(
+                            session,
+                            unit_ids,
+                            final_processed,
+                            vault_id=vault_id,
+                            event_date=event_date,
+                        )
 
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
