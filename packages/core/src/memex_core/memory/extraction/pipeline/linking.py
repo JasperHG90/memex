@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -32,6 +33,7 @@ async def create_links(
     unit_ids: list[str],
     facts: list[ProcessedFact],
     vault_id: UUID = GLOBAL_VAULT_ID,
+    event_date: datetime | None = None,
 ) -> None:
     """Create Temporal, Causal, and Semantic links between memory units.
 
@@ -70,7 +72,9 @@ async def create_links(
     # 2. Temporal Links
     sorted_indices = sorted(
         range(len(facts)),
-        key=lambda i: normalize_timestamp(facts[i].occurred_start or facts[i].mentioned_at),
+        key=lambda i: normalize_timestamp(
+            facts[i].occurred_start or facts[i].mentioned_at, fallback=event_date
+        ),
     )
     for k in range(len(sorted_indices) - 1):
         idx_a = sorted_indices[k]
@@ -125,7 +129,7 @@ async def create_links(
         await session.exec(stmt)
 
     # 4. Cross-Document Temporal Linking
-    await create_cross_doc_links(session, unit_ids, facts, vault_id=vault_id)
+    await create_cross_doc_links(session, unit_ids, facts, vault_id=vault_id, event_date=event_date)
 
 
 async def create_cross_doc_links(
@@ -133,6 +137,7 @@ async def create_cross_doc_links(
     unit_ids: list[str],
     facts: list[ProcessedFact],
     vault_id: UUID = GLOBAL_VAULT_ID,
+    event_date: datetime | None = None,
 ) -> None:
     """Link the new batch of facts to the existing timeline in the DB.
 
@@ -151,7 +156,9 @@ async def create_cross_doc_links(
     # Identify the temporal bounds of the new batch
     sorted_facts = sorted(
         zip(unit_ids, facts),
-        key=lambda x: normalize_timestamp(x[1].occurred_start or x[1].mentioned_at),
+        key=lambda x: normalize_timestamp(
+            x[1].occurred_start or x[1].mentioned_at, fallback=event_date
+        ),
     )
 
     earliest_id, earliest_fact = sorted_facts[0]

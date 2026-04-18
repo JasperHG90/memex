@@ -38,10 +38,15 @@ def parse_iso_datetime(date_str: str) -> datetime | None:
         return None
 
 
-def normalize_timestamp(dt_val: datetime | None) -> datetime:
-    """Normalize datetime to UTC, treating None as min datetime."""
+def normalize_timestamp(dt_val: datetime | None, fallback: datetime | None = None) -> datetime:
+    """Normalize datetime to UTC, falling back to event_date or now().
+
+    The fallback parameter should be the document's event_date. Used by
+    temporal sorting and linking where a concrete date is needed even
+    when the fact has no per-fact timestamp.
+    """
     if dt_val is None:
-        return datetime.min.replace(tzinfo=timezone.utc)
+        dt_val = fallback or datetime.now(timezone.utc)
     if dt_val.tzinfo is None:
         return dt_val.replace(tzinfo=timezone.utc)
     return dt_val
