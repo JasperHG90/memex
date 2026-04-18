@@ -134,6 +134,9 @@ def _load_data(
             'question': hyp.hypothesis[:120] if hyp else '',
             'reasoning': j.judge_reasoning[:120] if j.judge_reasoning else '',
             'is_abstention': j.is_abstention,
+            'retrieval_contains_answer': j.retrieval_contains_answer,
+            'retrieval_containment_reasoning': j.retrieval_containment_reasoning,
+            'interpretation': j.interpretation,
         }
 
         if hyp:
@@ -660,11 +663,11 @@ def _generate_markdown(
     w(f'| **Overall** | **{n_scored}** | **{n_correct}** | **{report.overall_accuracy:.3f}** |')
     w()
 
-    # Per-question detail
+    # Per-question detail (now includes retrieval containment)
     w('### Per-question detail')
     w()
-    w('| ID | Category | Score | Reasoning |')
-    w('|---|---|---|---|')
+    w('| ID | Category | Score | Retrieval Contains | Interpretation | Reasoning |')
+    w('|---|---|---|---|---|---|')
 
     for d in sorted(details, key=lambda x: x['id']):
         qid = d['id']
@@ -675,8 +678,11 @@ def _generate_markdown(
         except ValueError:
             cat_name = cat_val
         score_str = f'{d["score"]:.1f}'
+        retr_contains = d.get('retrieval_contains_answer', True)
+        retr_str = 'Yes' if retr_contains else 'No'
+        interp = d.get('interpretation', '')
         reasoning = d.get('reasoning', '')[:120]
-        w(f'| {qid} | {cat_name.lower()} | {score_str} | {reasoning} |')
+        w(f'| {qid} | {cat_name.lower()} | {score_str} | {retr_str} | {interp} | {reasoning} |')
     w()
 
     # Errors
@@ -696,6 +702,46 @@ def _generate_markdown(
             reasoning = d.get('reasoning', '')[:120]
             w(f'| {d["id"]} | {cat_name} | {reasoning} |')
         w()
+
+    # ===================================================================
+    # Error Analysis (retrieval containment x answer correctness)
+    # ===================================================================
+    w('## Error Analysis')
+    w()
+    w(
+        'Combines retrieval containment (does memex return the evidence?) with '
+        'answer correctness to classify each question into one of five outcomes.'
+    )
+    w()
+
+    # Per-question error analysis table
+    w('| Question | Retrieval Contains | Answer Correct | Interpretation |')
+    w('|---|---|---|---|')
+    for d in sorted(details, key=lambda x: x['id']):
+        retr_contains = d.get('retrieval_contains_answer', True)
+        retr_str = 'Yes' if retr_contains else 'No'
+        correct_str = 'Yes' if d['score'] == 1.0 else 'No'
+        interp = d.get('interpretation', '')
+        w(f'| {d["id"]} | {retr_str} | {correct_str} | {interp} |')
+    w()
+
+    # Summary counts
+    interpretation_counts: Counter[str] = Counter()
+    for d in details:
+        interpretation_counts[d.get('interpretation', 'unknown')] += 1
+
+    interp_order = ['correct', 'model_error', 'correct_abstention', 'hallucination', 'lucky_guess']
+    w('### Summary')
+    w()
+    w('| Interpretation | Count | Share |')
+    w('|---|---|---|')
+    for interp_label in interp_order:
+        cnt = interpretation_counts.get(interp_label, 0)
+        if cnt == 0:
+            continue
+        share = round(cnt / n_scored * 100, 1) if n_scored else 0.0
+        w(f'| {interp_label} | {cnt} | {share}% |')
+    w()
 
     # ===================================================================
     # AXIS 3: Token Efficiency

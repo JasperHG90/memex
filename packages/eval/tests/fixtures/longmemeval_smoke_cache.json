@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Cached judge responses for the LongMemEval smoke-tier test. Keys are question_id; values describe the deterministic judge verdict for that hypothesis. ``is_abstention_hypothesis`` reflects what the LM abstention classifier would have returned. Placeholder values — recorded against synthetic fixture questions, not the upstream dataset.",
+    "description": "Cached judge responses for the LongMemEval smoke-tier test. Keys are question_id; values describe the deterministic judge verdict for that hypothesis. ``is_abstention_hypothesis`` reflects what the LM abstention classifier would have returned. ``retrieval_contains_answer`` and ``retrieval_containment_reasoning`` are for retrieval containment judging. Placeholder values — recorded against synthetic fixture questions, not the upstream dataset.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
     "prompt_template_version": "2026-04-15.v1"
   },
@@ -8,30 +8,40 @@
     "correct": true,
     "reasoning": "Hypothesis matches the ground truth.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
-    "is_abstention_hypothesis": false
+    "is_abstention_hypothesis": false,
+    "retrieval_contains_answer": true,
+    "retrieval_containment_reasoning": "Retrieval results contain the greeting."
   },
   "smoke-q-002": {
     "correct": true,
     "reasoning": "Hypothesis matches the ground truth.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
-    "is_abstention_hypothesis": false
+    "is_abstention_hypothesis": false,
+    "retrieval_contains_answer": true,
+    "retrieval_containment_reasoning": "Retrieval results contain meeting schedule."
   },
   "smoke-q-003": {
     "correct": false,
     "reasoning": "Hypothesis missed the date constraint.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
-    "is_abstention_hypothesis": false
+    "is_abstention_hypothesis": false,
+    "retrieval_contains_answer": true,
+    "retrieval_containment_reasoning": "Retrieval results contain time reference."
   },
   "smoke-q-004_abs": {
     "correct": true,
     "reasoning": "Abstention question; hypothesis correctly abstained.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
-    "is_abstention_hypothesis": true
+    "is_abstention_hypothesis": true,
+    "retrieval_contains_answer": false,
+    "retrieval_containment_reasoning": "No information about middle name in retrieval results."
   },
   "smoke-q-005": {
     "correct": true,
     "reasoning": "Hypothesis matches the ground truth.",
     "judge_model_fingerprint": "cached-smoke@2026-04-15.v1",
-    "is_abstention_hypothesis": false
+    "is_abstention_hypothesis": false,
+    "retrieval_contains_answer": true,
+    "retrieval_containment_reasoning": "Retrieval results contain preference information."
   }
 }

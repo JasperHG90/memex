@@ -21,6 +21,23 @@ logger = logging.getLogger('memex_eval.longmemeval_trace_parser')
 
 _MEMEX_TOOL_PREFIX = 'mcp__memex__'
 
+# All memex tools whose results we extract content from for retrieval containment.
+_ALL_MEMEX_TOOLS = {
+    'mcp__memex__memex_memory_search',
+    'mcp__memex__memex_note_search',
+    'mcp__memex__memex_survey',
+    'mcp__memex__memex_get_page_indices',
+    'mcp__memex__memex_get_nodes',
+    'mcp__memex__memex_read_note',
+    'mcp__memex__memex_get_notes_metadata',
+    'mcp__memex__memex_get_memory_units',
+    'mcp__memex__memex_list_entities',
+    'mcp__memex__memex_get_entity_mentions',
+    'mcp__memex__memex_get_entity_cooccurrences',
+    'mcp__memex__memex_find_note',
+    'mcp__memex__memex_get_vault_summary',
+}
+
 # Retrieval tools whose results we parse for recall.
 _RETRIEVAL_TOOLS = {
     'mcp__memex__memex_memory_search',
@@ -348,6 +365,81 @@ def format_question_breakdown(trace: TraceAnalysis, metrics: RecallMetrics | Non
         lines.append('  (no gold session IDs available)')
 
     return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Retrieval content extraction (for containment judging)
+# ---------------------------------------------------------------------------
+
+
+def _extract_text_from_content(content: str | list[Any]) -> str:
+    """Extract plain text from a tool_result content block."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get('type') == 'text':
+                parts.append(part.get('text', ''))
+        return '\n'.join(parts)
+    return ''
+
+
+def extract_retrieval_content(trace_path: Path) -> str:
+    """Extract all memex tool result text from a session trace.
+
+    Parses the JSONL trace, finds all ``tool_result`` blocks whose
+    ``tool_use_id`` maps to a memex tool, extracts the text content,
+    and concatenates. Returns a single string with all retrieval output.
+    """
+    try:
+        lines = trace_path.read_text().strip().splitlines()
+    except Exception:
+        logger.warning('Failed to read trace %s', trace_path)
+        return ''
+
+    # Pass 1: collect all memex tool_use IDs
+    memex_tool_ids: set[str] = set()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get('type') == 'assistant':
+            for block in obj.get('message', {}).get('content', []):
+                if isinstance(block, dict) and block.get('type') == 'tool_use':
+                    name = block.get('name', '')
+                    tid = block.get('id', '')
+                    if tid and name in _ALL_MEMEX_TOOLS:
+                        memex_tool_ids.add(tid)
+
+    # Pass 2: collect tool_result content for those IDs
+    result_parts: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get('type') == 'user':
+            for block in obj.get('message', {}).get('content', []):
+                if isinstance(block, dict) and block.get('type') == 'tool_result':
+                    tid = block.get('tool_use_id', '')
+                    if tid in memex_tool_ids:
+                        text = _extract_text_from_content(block.get('content', ''))
+                        if text.strip():
+                            result_parts.append(text)
+
+    return '\n\n---\n\n'.join(result_parts)
 
 
 # ---------------------------------------------------------------------------

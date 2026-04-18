@@ -4,6 +4,12 @@ Reads hypotheses + questions, runs a binary-correctness judge per row, and
 writes ``LongMemEvalJudgment`` records to a JSONL file. Reuses
 ``memex_eval.judge.Judge`` as the underlying executor.
 
+Additionally performs retrieval containment judging: determines whether
+the memex retrieval output contains sufficient evidence to answer the
+question. Combined with answer correctness, this yields a 2x2 error
+analysis (correct, model_error, correct_abstention, hallucination,
+lucky_guess).
+
 Supports a JSON cache fixture so smoke-tier CI runs do not require live
 judge API calls. The cache shape is ``{question_id: {"correct": bool,
 "reasoning": str, "judge_model_fingerprint": str}}``.
@@ -16,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import dspy
 from rich.console import Console
 
 
@@ -26,6 +33,7 @@ from memex_eval.external.longmemeval_common import (
     append_jsonl,
     read_jsonl,
 )
+from memex_eval.external.longmemeval_trace_parser import extract_retrieval_content
 from memex_eval.judge import Judge
 
 logger = logging.getLogger('memex_eval.longmemeval_judge')
@@ -81,6 +89,77 @@ def _heuristic_abstention_fallback(hypothesis: str) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Retrieval containment judge
+# ---------------------------------------------------------------------------
+
+
+class RetrievalContainment(dspy.Signature):
+    """Judge whether retrieval results contain sufficient evidence to answer a question."""
+
+    question: str = dspy.InputField(desc='The question that was asked.')
+    expected_answer: str = dspy.InputField(desc='The ground truth expected answer.')
+    retrieval_results: str = dspy.InputField(
+        desc='All memex tool result text from the session trace.'
+    )
+    contains_answer: bool = dspy.OutputField(
+        desc='Whether the retrieval output contains the information needed to answer correctly.'
+    )
+    reasoning: str = dspy.OutputField(
+        desc='Brief explanation of what evidence is present or missing.'
+    )
+
+
+async def judge_retrieval_containment(
+    question_text: str,
+    gold_answer: str,
+    retrieval_content: str,
+    judge_model: str | None = None,
+    *,
+    judge_instance: Judge | None = None,
+) -> tuple[bool, str]:
+    """Judge whether retrieval results contain the answer.
+
+    Returns (contains, reasoning).
+    """
+    if not retrieval_content.strip():
+        return False, 'No retrieval content found in trace.'
+
+    if judge_instance is None:
+        judge_instance = Judge(model=judge_model)
+
+    predictor = dspy.ChainOfThought(RetrievalContainment)
+    with dspy.context(lm=judge_instance.lm):
+        result = predictor(
+            question=question_text,
+            expected_answer=gold_answer or 'The question has no known answer (abstention).',
+            retrieval_results=retrieval_content,
+        )
+    return result.contains_answer, result.reasoning
+
+
+def compute_interpretation(
+    retrieval_contains: bool,
+    answer_correct: bool,
+    is_abstention_hypothesis: bool,
+) -> str:
+    """Compute the interpretation label from the 2x2 matrix.
+
+    Returns one of: correct, model_error, correct_abstention,
+    hallucination, lucky_guess.
+    """
+    if retrieval_contains and answer_correct:
+        return 'correct'
+    if retrieval_contains and not answer_correct:
+        return 'model_error'
+    if not retrieval_contains and is_abstention_hypothesis:
+        return 'correct_abstention'
+    if not retrieval_contains and answer_correct:
+        return 'lucky_guess'
+    # not retrieval_contains and not answer_correct and not abstention
+    return 'hallucination'
+
+
 async def judge_hypotheses(
     dataset_path: str,
     variant: str,
@@ -90,11 +169,18 @@ async def judge_hypotheses(
     judge_model: str | None = None,
     cache_path: str | Path | None = None,
     allow_unpinned_checksum: bool = False,
+    traces_dir: str | Path | None = None,
 ) -> int:
     """Judge hypotheses and write ``LongMemEvalJudgment`` JSONL.
 
     Returns the number of judgments written. Skips hypotheses that already
     have a judgment in ``output_path``.
+
+    When ``traces_dir`` is provided, also performs retrieval containment
+    judging: extracts all memex tool results from the session trace and
+    asks an LLM whether they contain the evidence needed to answer.
+    The result populates ``retrieval_contains_answer``,
+    ``retrieval_containment_reasoning``, and ``interpretation`` fields.
     """
     questions: dict[str, LongMemEvalQuestion] = {
         q.question_id: q
@@ -187,6 +273,49 @@ async def judge_hypotheses(
             )
             judge_fingerprint = fingerprint
 
+        # --- Retrieval containment judging ---
+        retrieval_contains = True
+        containment_reasoning = ''
+        if traces_dir is not None:
+            traces_path = Path(traces_dir)
+            trace_file = traces_path / f'{qid}.jsonl'
+            if trace_file.exists():
+                retrieval_content = extract_retrieval_content(trace_file)
+
+                cache_containment = (cache.get(qid) or {}).get('retrieval_contains_answer')
+                if cache_containment is not None:
+                    retrieval_contains = bool(cache_containment)
+                    containment_reasoning = (cache.get(qid) or {}).get(
+                        'retrieval_containment_reasoning', ''
+                    )
+                elif judge is not None:
+                    try:
+                        (
+                            retrieval_contains,
+                            containment_reasoning,
+                        ) = await judge_retrieval_containment(
+                            question_text=question.question_text,
+                            gold_answer=question.answer or '',
+                            retrieval_content=retrieval_content,
+                            judge_instance=judge,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            'Retrieval containment judge failed for %s: %s',
+                            qid,
+                            exc,
+                        )
+                        retrieval_contains = True
+                        containment_reasoning = f'Retrieval containment judge failed: {exc}'
+            else:
+                logger.debug('No trace file for %s; skipping containment judge.', qid)
+
+        interpretation = compute_interpretation(
+            retrieval_contains=retrieval_contains,
+            answer_correct=correct,
+            is_abstention_hypothesis=is_abstention_hypothesis,
+        )
+
         judgment = LongMemEvalJudgment(
             question_id=qid,
             category=question.category,
@@ -197,11 +326,15 @@ async def judge_hypotheses(
             judge_reasoning=reasoning,
             judge_model_fingerprint=fingerprint,
             is_abstention_hypothesis=is_abstention_hypothesis,
+            retrieval_contains_answer=retrieval_contains,
+            retrieval_containment_reasoning=containment_reasoning,
+            interpretation=interpretation,
         )
         append_jsonl(output_path, judgment.model_dump())
         written += 1
         logger.info(
-            '[%d/%d] %s (%s, abstention=%s, hyp_abstained=%s) -> correct=%s',
+            '[%d/%d] %s (%s, abstention=%s, hyp_abstained=%s) -> '
+            'correct=%s retrieval_contains=%s interpretation=%s',
             i + 1,
             len(pending),
             qid,
@@ -209,6 +342,8 @@ async def judge_hypotheses(
             question.is_abstention,
             is_abstention_hypothesis,
             correct,
+            retrieval_contains,
+            interpretation,
         )
 
     console.print(f'\n[bold green]Wrote {written} judgments -> {output_path}[/bold green]')

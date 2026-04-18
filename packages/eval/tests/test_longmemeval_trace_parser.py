@@ -13,6 +13,7 @@ from memex_eval.external.longmemeval_trace_parser import (
     _session_id_from_note_title,
     compute_batch_recall,
     compute_recall,
+    extract_retrieval_content,
     format_question_breakdown,
     parse_trace,
     parse_traces_dir,
@@ -402,3 +403,158 @@ def test_parse_traces_dir(tmp_path: Path) -> None:
     assert len(traces) == 2
     assert traces[0].question_id == 'q1'
     assert traces[1].question_id == 'q2'
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: extract_retrieval_content
+# ---------------------------------------------------------------------------
+
+
+def test_extract_retrieval_content_basic(tmp_path: Path) -> None:
+    """Extracts text from memex tool results in a trace."""
+    content = _make_trace_jsonl(
+        tool_calls=[
+            {
+                'name': 'mcp__memex__memex_memory_search',
+                'id': 'call-1',
+                'input': {'query': 'test'},
+            },
+        ],
+        tool_results={
+            'call-1': _make_memory_search_result(
+                [
+                    ('note-aaa', 'q1 — session_a'),
+                ]
+            ),
+        },
+    )
+    trace_file = tmp_path / 'q1.jsonl'
+    trace_file.write_text(content)
+
+    result = extract_retrieval_content(trace_file)
+    assert 'note-aaa' in result or 'Some fact.' in result
+    assert result.strip() != ''
+
+
+def test_extract_retrieval_content_multiple_tools(tmp_path: Path) -> None:
+    """Extracts content from multiple memex tool results."""
+    lines: list[str] = []
+
+    # First tool call: memory_search
+    lines.append(
+        json.dumps(
+            {
+                'type': 'assistant',
+                'message': {
+                    'content': [
+                        {
+                            'type': 'tool_use',
+                            'name': 'mcp__memex__memex_memory_search',
+                            'id': 'call-1',
+                            'input': {'query': 'test'},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    lines.append(
+        json.dumps(
+            {
+                'type': 'user',
+                'message': {
+                    'content': [
+                        {
+                            'type': 'tool_result',
+                            'tool_use_id': 'call-1',
+                            'content': json.dumps(
+                                {'result': [{'text': 'First fact.', 'note_id': 'n1'}]}
+                            ),
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+    # Second tool call: note_search
+    lines.append(
+        json.dumps(
+            {
+                'type': 'assistant',
+                'message': {
+                    'content': [
+                        {
+                            'type': 'tool_use',
+                            'name': 'mcp__memex__memex_note_search',
+                            'id': 'call-2',
+                            'input': {'query': 'another'},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    lines.append(
+        json.dumps(
+            {
+                'type': 'user',
+                'message': {
+                    'content': [
+                        {
+                            'type': 'tool_result',
+                            'tool_use_id': 'call-2',
+                            'content': json.dumps(
+                                {'result': [{'text': 'Second fact.', 'note_id': 'n2'}]}
+                            ),
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+    trace_file = tmp_path / 'q1.jsonl'
+    trace_file.write_text('\n'.join(lines))
+
+    result = extract_retrieval_content(trace_file)
+    assert 'First fact.' in result
+    assert 'Second fact.' in result
+    # Separator between tool results
+    assert '---' in result
+
+
+def test_extract_retrieval_content_ignores_non_memex(tmp_path: Path) -> None:
+    """Non-memex tool results are not included."""
+    content = _make_trace_jsonl(
+        tool_calls=[
+            {
+                'name': 'some_other_tool',
+                'id': 'call-1',
+                'input': {},
+            },
+        ],
+        tool_results={
+            'call-1': 'Some non-memex result',
+        },
+    )
+    trace_file = tmp_path / 'q1.jsonl'
+    trace_file.write_text(content)
+
+    result = extract_retrieval_content(trace_file)
+    assert result == ''
+
+
+def test_extract_retrieval_content_empty_trace(tmp_path: Path) -> None:
+    """Empty trace file returns empty string."""
+    trace_file = tmp_path / 'empty.jsonl'
+    trace_file.write_text('')
+
+    result = extract_retrieval_content(trace_file)
+    assert result == ''
+
+
+def test_extract_retrieval_content_missing_file(tmp_path: Path) -> None:
+    """Missing trace file returns empty string."""
+    result = extract_retrieval_content(tmp_path / 'missing.jsonl')
+    assert result == ''

@@ -177,6 +177,11 @@ def longmemeval_judge_cmd(
     cache: str | None = typer.Option(
         None, '--cache', help='JSON file with cached judge responses (for offline runs).'
     ),
+    traces_dir: str | None = typer.Option(
+        None,
+        '--traces-dir',
+        help='Directory with per-question trace JSONL files for retrieval containment judging.',
+    ),
     allow_unpinned_checksum: bool = typer.Option(
         False,
         '--allow-unpinned-checksum',
@@ -187,7 +192,11 @@ def longmemeval_judge_cmd(
     """Phase 3: Judge hypotheses against ground-truth answers."""
     _setup_logging(verbose)
 
+    from pathlib import Path
+
     from memex_eval.external.longmemeval_judge import judge_hypotheses
+
+    resolved_traces = traces_dir or str(Path(hypotheses).parent / 'traces')
 
     asyncio.run(
         judge_hypotheses(
@@ -198,6 +207,7 @@ def longmemeval_judge_cmd(
             judge_model=judge_model,
             cache_path=cache,
             allow_unpinned_checksum=allow_unpinned_checksum,
+            traces_dir=resolved_traces,
         )
     )
 
@@ -404,6 +414,7 @@ def longmemeval_run_cmd(
             judge_model=judge_model,
             cache_path=cache,
             allow_unpinned_checksum=allow_unpinned_checksum,
+            traces_dir=str(out / 'traces'),
         )
 
     asyncio.run(_pipeline())

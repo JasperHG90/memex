@@ -137,6 +137,10 @@ class LongMemEvalQuestion(BaseModel):
         default_factory=list,
         description='Session IDs containing the evidence needed to answer this question.',
     )
+    question_date: datetime | None = Field(
+        default=None,
+        description='When the question was asked. Used as reference_date for temporal queries.',
+    )
     sessions: list[LongMemEvalSession] = Field(default_factory=list)
 
 
@@ -182,6 +186,22 @@ class LongMemEvalJudgment(BaseModel):
             'Populated for every question — not just ground-truth abstention ones — '
             'so abstention precision can be computed without re-using the judge '
             'correctness signal as its own denominator.'
+        ),
+    )
+    retrieval_contains_answer: bool = Field(
+        default=True,
+        description='Whether the memex retrieval output contained sufficient evidence to answer.',
+    )
+    retrieval_containment_reasoning: str = Field(
+        default='',
+        description='LLM judge reasoning for retrieval containment.',
+    )
+    interpretation: str = Field(
+        default='correct',
+        description=(
+            'Error analysis label derived from the 2x2 matrix of retrieval containment '
+            'and answer correctness. One of: correct, model_error, correct_abstention, '
+            'hallucination, lucky_guess.'
         ),
     )
 
@@ -410,6 +430,15 @@ def _parse_question(raw: dict[str, Any]) -> LongMemEvalQuestion:
     answer_session_ids = raw.get('answer_session_ids', [])
     if not isinstance(answer_session_ids, list):
         answer_session_ids = []
+    # Parse question_date — upstream format is '2023/05/30 (Tue) 23:40'
+    question_date_raw = raw.get('question_date')
+    question_date = None
+    if question_date_raw:
+        try:
+            question_date = _parse_upstream_date(question_date_raw)
+        except (ValueError, TypeError):
+            pass
+
     return LongMemEvalQuestion(
         question_id=qid,
         category=category,
@@ -417,6 +446,7 @@ def _parse_question(raw: dict[str, Any]) -> LongMemEvalQuestion:
         question_text=raw.get('question') or raw.get('question_text') or '',
         answer=answer,
         answer_session_ids=[str(sid) for sid in answer_session_ids],
+        question_date=question_date,
         sessions=sessions,
     )
 
