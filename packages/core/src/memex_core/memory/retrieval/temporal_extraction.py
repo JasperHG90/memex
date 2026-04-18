@@ -61,6 +61,13 @@ _MONTH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern for bare month references without a year (used to filter dateparser false positives)
+_BARE_MONTH_PATTERN = re.compile(
+    r'^(?:in\s+)?(?:january|february|march|april|may|june|july|august|'
+    r'september|october|november|december)$',
+    re.IGNORECASE,
+)
+
 # Pattern for "last week/month/year"
 _LAST_PERIOD_PATTERN = re.compile(
     r'\blast\s+(week|month|year)\b',
@@ -237,8 +244,10 @@ def _try_regex_patterns(
     if m:
         month_name = m.group(1).lower()
         year_str = m.group(2)
+        if not year_str:
+            return None  # Bare month without year — don't assume; let ranking handle it
         month = _MONTH_NAMES[month_name]
-        year = int(year_str) if year_str else reference_date.year
+        year = int(year_str)
         tz = reference_date.tzinfo
         start = datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
         last_day = _last_day_of_month(year, month)
@@ -283,10 +292,13 @@ def _try_dateparser(
         return None
 
     # Filter out false positives: matched text that is just a common word
+    # or a bare month without a year (e.g. "in March" → ambiguous, skip).
     filtered = []
     for matched_text, parsed_date in results:
         cleaned = matched_text.strip().strip('.,;:!?')
         if _FALSE_POSITIVE_PATTERNS.match(cleaned):
+            continue
+        if _BARE_MONTH_PATTERN.match(cleaned):
             continue
         filtered.append((matched_text, parsed_date))
 

@@ -47,13 +47,9 @@ class TestInMonth:
         assert end.day == 31
 
     def test_month_without_year(self):
-        """'in March' without year should default to reference year."""
+        """'in March' without year should return None (bare month — no assumption)."""
         result = extract_temporal_constraint('what happened in March', reference_date=REF)
-        assert result is not None
-        start, end = result
-        assert start.month == 3
-        assert start.year == REF.year
-        assert end.month == 3
+        assert result is None
 
     def test_february_leap_year(self):
         """February in a leap year should end on the 29th."""
@@ -70,6 +66,28 @@ class TestInMonth:
         assert result is not None
         _start, end = result
         assert end.day == 28
+
+    def test_month_with_explicit_year_still_works(self):
+        """'in March 2024' with explicit year should still return March 2024."""
+        result = extract_temporal_constraint('in March 2024', reference_date=REF)
+        assert result is not None
+        start, end = result
+        assert start.year == 2024
+        assert start.month == 3
+        assert start.day == 1
+        assert end.year == 2024
+        assert end.month == 3
+        assert end.day == 31
+
+    def test_bare_month_returns_none(self):
+        """'in June' without a year should return None."""
+        result = extract_temporal_constraint('in June', reference_date=REF)
+        assert result is None
+
+    def test_bare_month_in_full_question(self):
+        """'What happened in June?' without a year should return None."""
+        result = extract_temporal_constraint('What happened in June?', reference_date=REF)
+        assert result is None
 
 
 class TestYesterday:
@@ -413,3 +431,63 @@ class TestTemporalExtractionDisabled:
         # Original filters should NOT be mutated (no start_date/end_date injected)
         assert 'start_date' not in original_filters
         assert 'end_date' not in original_filters
+
+
+class TestTemporalFallback:
+    """Test that the engine retries without temporal filters on zero results."""
+
+    @pytest.mark.asyncio
+    async def test_zero_results_retries_without_temporal_filter(self):
+        """When NLP temporal filter produces zero results, engine retries without it."""
+        from memex_common.config import RetrievalConfig
+        from memex_core.memory.retrieval.engine import RetrievalEngine
+        from memex_core.memory.retrieval.models import RetrievalRequest
+        from sqlmodel.ext.asyncio.session import AsyncSession
+
+        config = RetrievalConfig(temporal_extraction_enabled=True)
+        mock_embedder = MagicMock()
+        mock_vec = MagicMock()
+        mock_vec.tolist.return_value = [0.1] * 384
+        mock_embedder.encode.return_value = [mock_vec]
+
+        engine = RetrievalEngine(embedder=mock_embedder, retrieval_config=config)
+
+        session = MagicMock(spec=AsyncSession)
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        session.exec.return_value = mock_result
+
+        # Use a query with an explicit temporal expression that passes NLP extraction
+        request = RetrievalRequest(
+            query='what happened in March 2024',
+        )
+
+        with patch(
+            'memex_core.memory.retrieval.engine.extract_temporal_constraint'
+        ) as mock_extract:
+            from datetime import datetime, timezone
+
+            mock_extract.return_value = (
+                datetime(2024, 3, 1, tzinfo=timezone.utc),
+                datetime(2024, 3, 31, 23, 59, 59, tzinfo=timezone.utc),
+            )
+
+            # Spy on _perform_rrf_retrieval to track calls
+            original_rrf = engine._perform_rrf_retrieval
+            rrf_calls: list[dict] = []
+
+            async def spy_rrf(session, query, embedding, limit, filters, **kwargs):
+                rrf_calls.append({'filters': dict(filters)})
+                return await original_rrf(session, query, embedding, limit, filters, **kwargs)
+
+            engine._perform_rrf_retrieval = spy_rrf
+
+            await engine.retrieve(session, request)
+
+            # Should have been called at least twice: first with temporal filters,
+            # then without (fallback)
+            assert len(rrf_calls) >= 2
+            # First call should have start_date
+            assert 'start_date' in rrf_calls[0]['filters']
+            # Last call (fallback) should NOT have start_date
+            assert 'start_date' not in rrf_calls[-1]['filters']
