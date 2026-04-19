@@ -83,6 +83,29 @@ def apply_context_filter(statement: Select, **kwargs: Any) -> Select:
     return statement
 
 
+def _apply_as_of_filter(statement: Select, **kwargs: Any) -> Select:
+    """Filter EntityCooccurrence rows by temporal validity when ``as_of`` is set.
+
+    A cooccurrence is valid at ``as_of`` iff:
+      (valid_from IS NULL OR valid_from <= as_of)
+      AND (valid_to IS NULL OR valid_to > as_of)
+    """
+    as_of = kwargs.get('as_of')
+    if as_of is not None:
+        statement = statement.where(
+            or_(
+                col(EntityCooccurrence.valid_from).is_(None),
+                col(EntityCooccurrence.valid_from) <= as_of,
+            )
+        ).where(
+            or_(
+                col(EntityCooccurrence.valid_to).is_(None),
+                col(EntityCooccurrence.valid_to) > as_of,
+            )
+        )
+    return statement
+
+
 @runtime_checkable
 class RetrievalStrategy(Protocol):
     """Protocol for memory retrieval strategies."""
@@ -518,6 +541,7 @@ class EntityCooccurrenceGraphStrategy:
         )
 
         co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
+        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
         co_occurrences = co_occur_stmt.cte('related_entities')
 
         # 4. 2nd Order Memories (Indirect Link)
@@ -700,6 +724,7 @@ class EntityCooccurrenceNoteGraphStrategy:
             .join(Entity, col(Entity.id) == neighbor_id_expr)
         )
         co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
+        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
         co_occurrences = co_occur_stmt.cte('doc_graph_related_entities')
 
         second_order = (

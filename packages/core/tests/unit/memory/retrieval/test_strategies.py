@@ -6,7 +6,10 @@ from memex_core.memory.retrieval.strategies import (
     TemporalStrategy,
     GraphStrategy,
     MentalModelStrategy,
+    _apply_as_of_filter,
 )
+from memex_core.memory.sql_models import EntityCooccurrence
+from sqlmodel import select
 
 
 def test_semantic_strategy_sql():
@@ -63,3 +66,59 @@ def test_mental_model_strategy_fallback():
     # SQLAlchemy ilike often compiles to LOWER(...) LIKE LOWER(...)
     assert 'mental_models.name' in sql
     assert 'LIKE' in sql
+
+
+class TestAsOfFilter:
+    """Unit tests for the _apply_as_of_filter helper."""
+
+    def test_no_as_of_leaves_statement_unchanged(self):
+        """Without as_of kwarg, the statement is returned unchanged."""
+        base = select(EntityCooccurrence.entity_id_1)
+        result = _apply_as_of_filter(base)
+        # No WHERE clause should be added
+        compiled = str(result.compile())
+        assert 'valid_from' not in compiled
+        assert 'valid_to' not in compiled
+
+    def test_as_of_adds_valid_from_predicate(self):
+        """as_of adds: valid_from IS NULL OR valid_from <= as_of."""
+        base = select(EntityCooccurrence.entity_id_1)
+        as_of = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        result = _apply_as_of_filter(base, as_of=as_of)
+        compiled = str(result.compile())
+        assert 'valid_from' in compiled
+
+    def test_as_of_adds_valid_to_predicate(self):
+        """as_of adds: valid_to IS NULL OR valid_to > as_of."""
+        base = select(EntityCooccurrence.entity_id_1)
+        as_of = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        result = _apply_as_of_filter(base, as_of=as_of)
+        compiled = str(result.compile())
+        assert 'valid_to' in compiled
+
+    def test_as_of_none_no_filter(self):
+        """Explicitly passing as_of=None should not add filters."""
+        base = select(EntityCooccurrence.entity_id_1)
+        result = _apply_as_of_filter(base, as_of=None)
+        compiled = str(result.compile())
+        assert 'valid_from' not in compiled
+        assert 'valid_to' not in compiled
+
+    def test_graph_strategy_passes_as_of_through(self):
+        """GraphStrategy.get_statement passes as_of to co-occurrence query."""
+        strategy = GraphStrategy()
+        as_of = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        stmt = strategy.get_statement('chimera', None, as_of=as_of)
+        compiled = str(stmt.compile())
+        assert 'valid_from' in compiled
+        assert 'valid_to' in compiled
+
+    def test_graph_strategy_no_as_of_no_temporal_filter(self):
+        """GraphStrategy without as_of does not add temporal validity filters."""
+        strategy = GraphStrategy()
+        stmt = strategy.get_statement('chimera', None)
+        compiled = str(stmt.compile())
+        # valid_from/valid_to should not appear as WHERE predicates
+        # (they may appear in column definitions from the model, but not in WHERE)
+        # Check that the temporal validity filter is NOT applied
+        assert 'valid_from' not in compiled or 'IS NULL' not in compiled

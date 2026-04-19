@@ -91,6 +91,13 @@ class RetrievalRequest(SQLModel):
             '(e.g. "last week"). Defaults to now (UTC) when None.'
         ),
     )
+    as_of: datetime | None = Field(
+        default=None,
+        description=(
+            'Point-in-time filter for entity graph relations. '
+            'When set, only cooccurrences valid at this timestamp are included.'
+        ),
+    )
 
     # Source context filtering
     source_context: str | None = Field(
