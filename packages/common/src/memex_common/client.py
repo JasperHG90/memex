@@ -530,7 +530,7 @@ class RemoteMemexAPI:
         entity_type: str | None = None,
     ) -> list[EntityDTO]:
         """Search for entities by name."""
-        params: dict[str, Any] = {'q': query, 'limit': limit}
+        params: dict[str, Any] = {'query': query, 'limit': limit}
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
             params['vault_id'] = [str(v) for v in resolved]
@@ -552,7 +552,7 @@ class RemoteMemexAPI:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
         if q:
-            params['q'] = q
+            params['query'] = q
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
             params['vault_id'] = [str(v) for v in resolved]

@@ -1019,7 +1019,7 @@ List, search, or rank entities. Returns an NDJSON stream.
 curl "http://localhost:8000/api/v1/entities?limit=20"
 
 # Search by name
-curl "http://localhost:8000/api/v1/entities?q=PostgreSQL"
+curl "http://localhost:8000/api/v1/entities?query=PostgreSQL"
 
 # Top entities by mention count
 curl "http://localhost:8000/api/v1/entities?sort=-mentions&limit=10"

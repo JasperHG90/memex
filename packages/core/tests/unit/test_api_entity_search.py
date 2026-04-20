@@ -83,7 +83,7 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
         patch('memex_core.server.run_scheduler_with_leader_election', new_callable=AsyncMock),
     ):
         with TestClient(app) as client:
-            response = client.get('/api/v1/entities?q=match')
+            response = client.get('/api/v1/entities?query=match')
             assert response.status_code == 200
             import json
 
@@ -92,3 +92,162 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
             assert data[0]['name'] == 'Search Match'
 
     app.dependency_overrides.clear()
+
+
+def _make_server_test_client(api, mock_metastore, mock_filestore):
+    """Helper to create a TestClient with all required patches for entity endpoint tests."""
+    from memex_core.server import app
+    from memex_core.server.common import get_api
+    from unittest.mock import patch
+
+    mock_config = MagicMock()
+    mock_config.server.memory.extraction.model.model = 'test-model'
+    mock_config.server.default_active_vault = 'global'
+    mock_config.server.default_reader_vault = 'global'
+    mock_config.server.logging.level = 'WARNING'
+    mock_config.server.logging.json_output = False
+    mock_config.server.host = '127.0.0.1'
+    mock_config.server.cache_dir = '/tmp/memex-test-cache'
+    mock_config.server.tracing.enabled = False
+
+    mock_metastore.connect = AsyncMock()
+    mock_metastore.close = AsyncMock()
+    mock_metastore.session.return_value.__aenter__.return_value.get = AsyncMock(return_value=None)
+    mock_metastore.session.return_value.__aenter__.return_value.commit = AsyncMock()
+
+    api.initialize = AsyncMock()
+    app.dependency_overrides[get_api] = lambda: api
+
+    patches = (
+        patch('memex_core.server.get_metastore', return_value=mock_metastore),
+        patch('memex_core.server.get_filestore', return_value=mock_filestore),
+        patch('memex_core.server.parse_memex_config', return_value=mock_config),
+        patch('memex_core.server.setup_auth'),
+        patch('memex_core.server.setup_rate_limiting'),
+        patch('memex_core.server.configure_logging'),
+        patch('memex_core.server.MemexAPI', return_value=api),
+        patch('memex_core.server.get_embedding_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_reranking_model', new_callable=AsyncMock),
+        patch('memex_core.server.get_ner_model', new_callable=AsyncMock),
+        patch('memex_core.server.run_scheduler_with_leader_election', new_callable=AsyncMock),
+    )
+
+    return app, patches, get_api
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: query parameter filtering on GET /api/v1/entities
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_entity_search_with_query_param(api, mock_metastore, mock_filestore):
+    """GET /api/v1/entities?query=... must filter entities by name (regression)."""
+    from contextlib import ExitStack
+    from fastapi.testclient import TestClient
+    import json
+
+    e1 = Entity(id=uuid4(), canonical_name='Imagine Dragons')
+    wrapped = EntityWithMetadata(entity=e1, metadata={})
+    api.search_entities = AsyncMock(return_value=[wrapped])
+
+    app, patches, get_api = _make_server_test_client(api, mock_metastore, mock_filestore)
+    try:
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with TestClient(app) as client:
+                response = client.get('/api/v1/entities?query=Imagine+Dragons')
+                assert response.status_code == 200
+                data = [json.loads(line) for line in response.text.strip().split('\n') if line]
+                assert len(data) == 1
+                assert data[0]['name'] == 'Imagine Dragons'
+                api.search_entities.assert_called_once()
+                call_kwargs = api.search_entities.call_args
+                assert call_kwargs.kwargs['query'] == 'Imagine Dragons'
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_entity_search_with_legacy_q_param(api, mock_metastore, mock_filestore):
+    """GET /api/v1/entities?q=... must still work (backward compatibility)."""
+    from contextlib import ExitStack
+    from fastapi.testclient import TestClient
+    import json
+
+    e1 = Entity(id=uuid4(), canonical_name='Serenity Yoga')
+    wrapped = EntityWithMetadata(entity=e1, metadata={})
+    api.search_entities = AsyncMock(return_value=[wrapped])
+
+    app, patches, get_api = _make_server_test_client(api, mock_metastore, mock_filestore)
+    try:
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with TestClient(app) as client:
+                response = client.get('/api/v1/entities?q=Serenity')
+                assert response.status_code == 200
+                data = [json.loads(line) for line in response.text.strip().split('\n') if line]
+                assert len(data) == 1
+                assert data[0]['name'] == 'Serenity Yoga'
+                api.search_entities.assert_called_once()
+                call_kwargs = api.search_entities.call_args
+                assert call_kwargs.kwargs['query'] == 'Serenity'
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_entity_search_query_takes_precedence_over_q(api, mock_metastore, mock_filestore):
+    """When both query= and q= are provided, query= takes precedence."""
+    from contextlib import ExitStack
+    from fastapi.testclient import TestClient
+    import json
+
+    e1 = Entity(id=uuid4(), canonical_name='Xfinity Center')
+    wrapped = EntityWithMetadata(entity=e1, metadata={})
+    api.search_entities = AsyncMock(return_value=[wrapped])
+
+    app, patches, get_api = _make_server_test_client(api, mock_metastore, mock_filestore)
+    try:
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with TestClient(app) as client:
+                response = client.get('/api/v1/entities?query=Xfinity&q=ignored')
+                assert response.status_code == 200
+                data = [json.loads(line) for line in response.text.strip().split('\n') if line]
+                assert len(data) == 1
+                api.search_entities.assert_called_once()
+                call_kwargs = api.search_entities.call_args
+                assert call_kwargs.kwargs['query'] == 'Xfinity'
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_entity_listing_without_query_returns_ranked(api, mock_metastore, mock_filestore):
+    """GET /api/v1/entities without query/q must NOT call search_entities."""
+    from contextlib import ExitStack
+    from fastapi.testclient import TestClient
+
+    api.search_entities = AsyncMock()
+
+    async def _ranked(limit=100, vault_ids=None, entity_type=None):
+        e = Entity(id=uuid4(), canonical_name='User', mention_count=2368)
+        yield EntityWithMetadata(entity=e, metadata={})
+
+    api.list_entities_ranked = _ranked
+
+    app, patches, get_api = _make_server_test_client(api, mock_metastore, mock_filestore)
+    try:
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with TestClient(app) as client:
+                response = client.get('/api/v1/entities')
+                assert response.status_code == 200
+                api.search_entities.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
