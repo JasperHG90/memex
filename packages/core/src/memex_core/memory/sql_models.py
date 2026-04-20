@@ -909,6 +909,18 @@ class EntityCooccurrence(SQLModel, table=True):  # type: ignore
         description='Timestamp of the most recent cooccurrence.',
     )
 
+    valid_from: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Start of this relation validity interval. NULL = open-start.',
+    )
+
+    valid_to: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='End of this relation validity interval. NULL = still valid.',
+    )
+
     # Relationships
 
     entity_1: 'Entity' = Relationship(
@@ -929,6 +941,13 @@ class EntityCooccurrence(SQLModel, table=True):  # type: ignore
             'idx_entity_cooccurrences_count',
             'cooccurrence_count',
             postgresql_ops={'cooccurrence_count': 'DESC'},
+        ),
+        Index(
+            'idx_entity_cooccurrences_temporal',
+            'entity_id_1',
+            'entity_id_2',
+            sql_text('valid_to DESC NULLS FIRST'),
+            sql_text('valid_from DESC'),
         ),
     )
 
