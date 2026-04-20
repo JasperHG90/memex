@@ -239,7 +239,9 @@ async def test_rest_search_with_type_filter(api, metastore, init_global_vault):
         await session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
-        response = await ac.get('/api/v1/entities?q=Python&entity_type=Technology&sort=-mentions')
+        response = await ac.get(
+            '/api/v1/entities?query=Python&entity_type=Technology&sort=-mentions'
+        )
         assert response.status_code == 200
         data = [json.loads(line) for line in response.text.splitlines() if line.strip()]
         assert len(data) == 1

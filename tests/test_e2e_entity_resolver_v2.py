@@ -100,7 +100,7 @@ def test_entity_type_partitioning_e2e(client: TestClient):
         assert resp.status_code == 200
 
     # Step 3: Verify distinct entities are merged because EntityResolver is type-agnostic
-    resp = client.get(f'/api/v1/entities?q=Java&vault_id={vault_id}')
+    resp = client.get(f'/api/v1/entities?query=Java&vault_id={vault_id}')
     assert resp.status_code == 200
     entities = parse_ndjson(resp.text)
 

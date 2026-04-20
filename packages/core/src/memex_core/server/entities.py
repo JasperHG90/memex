@@ -47,7 +47,14 @@ router = APIRouter(prefix='/api/v1')
 async def list_entities(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    q: str | None = None,
+    query: Annotated[
+        str | None,
+        Query(description='Search query for name-based filtering.'),
+    ] = None,
+    q: Annotated[
+        str | None,
+        Query(description='Alias for query (deprecated, use query).', include_in_schema=False),
+    ] = None,
     sort: Literal['-mentions'] | None = Query(
         None, description='Sort option: -mentions for top by mention count'
     ),
@@ -63,17 +70,19 @@ async def list_entities(
 
     Query params:
     - limit: Maximum number of entities to return
-    - q: Optional search query for name-based search
+    - query: Optional search query for name-based search
+    - q: Deprecated alias for query (kept for backward compatibility)
     - sort: Optional sort option. Use '-mentions' for top entities by mention count.
     - vault_id: Optional vault ID(s) or name(s) to filter by. Repeat for multiple vaults.
     - entity_type: Optional entity type filter.
     """
     await check_vault_access(auth, vault_id, api)
     vault_ids = await resolve_vault_ids(api, vault_id)
-    if q:
+    search_query = query or q
+    if search_query:
         try:
             entities = await api.search_entities(
-                query=q, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+                query=search_query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
             )
             return ndjson_response([build_entity_dto(e) for e in entities])
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
