@@ -629,6 +629,13 @@ class RetrievalConfig(BaseModel):
         default=True,
         description='Enable NLP-based temporal constraint extraction from queries using dateparser.',
     )
+    temporal_concretization_enabled: bool = Field(
+        default=True,
+        description=(
+            'Enable LLM-assisted fallback for temporal expressions that the regex '
+            'extractor cannot resolve (e.g. "during the onboarding").'
+        ),
+    )
     fact_type_partitioned_rrf: bool = Field(
         default=False,
         description='Run RRF independently per fact type, then interleave results.',
