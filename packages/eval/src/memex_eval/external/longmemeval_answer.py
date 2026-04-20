@@ -118,10 +118,17 @@ mcp__memex__memex_get_page_indices,mcp__memex__memex_get_nodes,\
 mcp__memex__memex_read_note", max_results=9)
 ```
 
-## Retrieval routing
+## Retrieval routing (two-stage with expansion fallback)
 
-- Memory / fact / observation lookup: ``memex_memory_search`` (broad)
-  AND/OR ``memex_note_search`` (targeted). Run in parallel.
+1. **First pass**: run ``memex_memory_search`` AND ``memex_note_search``
+   in parallel (no expansion).
+2. **If results are insufficient** to answer the question: retry BOTH
+   with ``expand_query=true`` for LLM-powered query expansion.
+3. If still no results, try ``memex_list_entities`` for entity-graph
+   exploration.
+4. If nothing found after all strategies, abstain.
+
+Additional routing:
 - Relationships / "how X connects to Y": ``memex_list_entities`` →
   ``memex_get_entity_cooccurrences`` → ``memex_get_entity_mentions``.
 - Temporal-reasoning questions: use ``memex_memory_search`` with
