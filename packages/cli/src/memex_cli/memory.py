@@ -434,6 +434,7 @@ async def search_memory(
             ),
         ),
     ] = None,
+    expand: Annotated[bool, typer.Option('--expand', help='Enable query expansion.')] = False,
 ):
     """
     Search for memories.
@@ -478,6 +479,7 @@ async def search_memory(
                 include_stale=include_stale,
                 source_context=source_context,
                 reference_date=ref_dt,
+                expand_query=expand,
             )
         except Exception as e:
             handle_api_error(e)

@@ -286,6 +286,7 @@ class RemoteMemexAPI:
         tags: list[str] | None = None,
         source_context: str | None = None,
         reference_date: dt.datetime | None = None,
+        expand_query: bool = False,
     ) -> list[MemoryUnitDTO]:
         """Search for memories."""
         request = RetrievalRequest(
@@ -302,6 +303,7 @@ class RemoteMemexAPI:
             tags=tags,
             source_context=source_context,
             reference_date=reference_date,
+            expand_query=expand_query,
         )
         result = await self._post('memories/search', request)
         return [MemoryUnitDTO(**r) for r in result]

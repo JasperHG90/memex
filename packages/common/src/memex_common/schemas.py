@@ -214,6 +214,12 @@ class RetrievalRequest(BaseModel):
         ),
     )
 
+    # Query expansion
+    expand_query: bool = Field(
+        default=False,
+        description='Whether to expand the query using LLM-generated semantic variations.',
+    )
+
     # Advanced options
     rerank: bool = Field(
         default=True, description='Whether to apply neural reranking if available.'
