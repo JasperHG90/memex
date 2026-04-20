@@ -347,10 +347,15 @@ async def check_duplicates_in_window(
     if not texts:
         return []
 
-    # Calculate window
+    # Calculate window — guard against OverflowError on extreme dates
+    # (e.g. LLM produces "0001-01-01" which parses validly but overflows timedelta)
     delta = timedelta(hours=window_hours / 2)
-    start_date = target_date - delta
-    end_date = target_date + delta
+    try:
+        start_date = target_date - delta
+        end_date = target_date + delta
+    except OverflowError:
+        start_date = datetime.min.replace(tzinfo=target_date.tzinfo)
+        end_date = datetime.max.replace(tzinfo=target_date.tzinfo)
 
     count = len(texts)
     is_duplicate = [False] * count

@@ -22,6 +22,7 @@ async def check_duplicates_batch(
     facts: list[ProcessedFact],
     duplicate_checker_fn,
     vault_id: UUID = GLOBAL_VAULT_ID,
+    event_date: datetime | None = None,
 ) -> list[bool]:
     """
     Check which facts are duplicates using batched time-window queries.
@@ -47,10 +48,10 @@ async def check_duplicates_batch(
     # but ExtractionEngine usually processes one vault at a time.
     # To be robust, we group by (bucket_date, fact_vault_id)
     time_vault_buckets = defaultdict(list)
+    _fallback = event_date or datetime.now(timezone.utc)
+
     for idx, fact in enumerate(facts):
-        fact_date = fact.occurred_start if fact.occurred_start is not None else fact.mentioned_at
-        if fact_date is None:
-            fact_date = datetime.now(timezone.utc)
+        fact_date = fact.occurred_start or fact.mentioned_at or _fallback
 
         bucket_date = fact_date.replace(
             hour=(fact_date.hour // 12) * 12, minute=0, second=0, microsecond=0
