@@ -1,3 +1,11 @@
+## Search query formulation
+
+<constraint name="search-queries" priority="high">
+ALWAYS formulate search queries as natural language, NEVER as keyword lists.
+ALWAYS preserve all proper nouns, amounts, dates, and qualifiers from the original question.
+ALWAYS search for the subject/activity, NOT the answer type. The answer (location, price, name) will be IN the results about the subject.
+</constraint>
+
 ## Memex retrieval routing
 
 Route by query type:
@@ -8,7 +16,7 @@ Route by query type:
   1. **First pass**: run `memex_memory_search` AND `memex_note_search` in parallel (no expansion).
   2. **If insufficient**: retry BOTH with `expand_query=true` for LLM-powered query expansion.
   3. **If still nothing**: abstain — do not guess.
-  `memory_search` returns individual facts/observations across notes — use it to find cross-cutting patterns, contradictions, and specific claims buried inside large documents. `note_search` returns whole notes ranked by relevance — use it to find source documents. �� `memex_get_notes_metadata` after memory_search (skip after note_search — metadata inline) → read via `memex_get_page_indices` + `memex_get_nodes` (use `memex_read_note` only when total_tokens < 500)
+  `memory_search` returns individual facts/observations across notes — use it to find cross-cutting patterns, contradictions, and specific claims buried inside large documents. `note_search` returns whole notes ranked by relevance — use it to find source documents. → `memex_get_notes_metadata` after memory_search (skip after note_search — metadata inline) → read via `memex_get_page_indices` + `memex_get_nodes` (use `memex_read_note` only when total_tokens < 500)
 - **Broad / panoramic** ("what do you know about X?", "overview of X") → `memex_survey(query)` for auto-decomposed parallel search; or entity exploration AND search in parallel for manual control
 - **Vault overview** ("what's in this vault?") → `memex_get_vault_summary` + `memex_survey` in parallel
 - **Assets** → when `has_assets: true`: `memex_list_assets` → `memex_get_resources`. Use images as visual input. Reproduce diagrams as Mermaid/ASCII. NEVER skip.
