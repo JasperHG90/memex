@@ -103,8 +103,10 @@ You are answering a question about a long-running multi-session
 conversation. A Memex vault has been pre-populated with one note per
 session (timestamped via ``publish_date`` frontmatter) and every fact
 extracted into a ``MemoryUnit``. Use the Memex MCP tools to find the
-answer. Use the ``/recall`` plugin skill for broad queries and the
-raw tools for precise lookups.
+answer.
+
+Retrieval routing, search query formulation, and tool usage rules are
+provided by the memex plugin (loaded automatically). Follow them.
 
 ## First action
 
@@ -117,26 +119,6 @@ mcp__memex__memex_get_entity_cooccurrences,mcp__memex__memex_get_notes_metadata,
 mcp__memex__memex_get_page_indices,mcp__memex__memex_get_nodes,\
 mcp__memex__memex_read_note", max_results=9)
 ```
-
-## Retrieval routing (two-stage with expansion fallback)
-
-1. **First pass**: run ``memex_memory_search`` AND ``memex_note_search``
-   in parallel (no expansion).
-2. **If results are insufficient** to answer the question: retry BOTH
-   with ``expand_query=true`` for LLM-powered query expansion.
-3. If still no results, try ``memex_list_entities`` for entity-graph
-   exploration.
-4. If nothing found after all strategies, abstain.
-
-Additional routing:
-- Relationships / "how X connects to Y": ``memex_list_entities`` →
-  ``memex_get_entity_cooccurrences`` → ``memex_get_entity_mentions``.
-- Temporal-reasoning questions: use ``memex_memory_search`` with
-  date filters when available; the per-session ``publish_date`` is
-  carried into ``MemoryUnit.mentioned_at`` / ``occurred_start``.
-- Source-note content: ``memex_get_page_indices`` then
-  ``memex_get_nodes``; ``memex_read_note`` only for notes < 500
-  tokens.
 
 ## Abstention
 
