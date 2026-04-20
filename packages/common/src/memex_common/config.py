@@ -255,6 +255,20 @@ class ModelConfig(BaseModel):
     reasoning_effort: ReasoningEffort | None = Field(
         default=None, description='Reasoning effort of the model (if supported)'
     )
+    timeout: int = Field(
+        default=120,
+        ge=10,
+        description=(
+            'Per-request timeout in seconds for LLM calls. Prevents hanging on '
+            'slow providers. Increase for large models on remote endpoints '
+            '(e.g. ollama.com). Default: 120s.'
+        ),
+    )
+    num_retries: int = Field(
+        default=3,
+        ge=1,
+        description='Number of retries for LLM calls on failure (e.g. schema validation errors). Default: 3.',
+    )
 
     @field_serializer('reasoning_effort')
     def serialize_reasoning_effort(self, value: ReasoningEffort | None) -> str | None:

@@ -54,6 +54,7 @@ async def run_dspy_operation(
     input_kwargs: dict[str, Any],
     semaphore: asyncio.Semaphore | None = None,
     operation_name: str = 'dspy',
+    timeout: int = 180,
 ) -> Any:
     """
     Executes a DSPy predictor with circuit breaker and metrics.
@@ -105,9 +106,9 @@ async def run_dspy_operation(
     try:
         if semaphore:
             async with semaphore:
-                result = await _execute()
+                result = await asyncio.wait_for(_execute(), timeout=timeout)
         else:
-            result = await _execute()
+            result = await asyncio.wait_for(_execute(), timeout=timeout)
 
         await _circuit_breaker.record_success()
 
@@ -121,6 +122,17 @@ async def run_dspy_operation(
             lm_.history.clear()
 
         return result
+
+    except TimeoutError:
+        await _circuit_breaker.record_failure()
+
+        elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='timeout').inc()
+        LLM_CALL_DURATION_SECONDS.observe(elapsed)
+        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
+
+        logger.error('DSPy operation timed out after %ds: %s', timeout, operation_name)
+        raise RuntimeError(f'LLM call timed out after {timeout}s ({operation_name})') from None
 
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         await _circuit_breaker.record_failure()

@@ -1408,9 +1408,15 @@ async def index_document(
 
     # Full PageIndex
     indexer = AsyncMarkdownPageIndex(lm=lm)
-    return await indexer.aforward(
-        full_text,
-        max_scan_tokens=max_scan_tokens,
-        max_node_length=max_node_length,
-        block_size=block_token_target,
+    # Wrap in timeout — individual LLM calls have their own timeout via dspy.LM,
+    # but the full page-index pipeline (multiple sequential LLM calls) can hang
+    # if any single call stalls silently.
+    return await asyncio.wait_for(
+        indexer.aforward(
+            full_text,
+            max_scan_tokens=max_scan_tokens,
+            max_node_length=max_node_length,
+            block_size=block_token_target,
+        ),
+        timeout=600,  # 10 min max for full page index pipeline
     )
