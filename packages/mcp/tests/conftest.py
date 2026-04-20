@@ -39,6 +39,7 @@ def mock_api():
     mock.get_note_metadata = AsyncMock()
     mock.get_notes_metadata = AsyncMock()
     mock.get_related_notes = AsyncMock(return_value={})
+    mock.get_memory_links = AsyncMock(return_value={})
     # Vault resolution (required by all vault-scoped tools)
     mock.resolve_vault_identifier = AsyncMock(return_value=TEST_VAULT_UUID)
 

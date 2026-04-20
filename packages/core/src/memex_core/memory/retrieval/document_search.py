@@ -211,7 +211,9 @@ class NoteSearchEngine:
                 top_k=rc.top_k_related,
                 max_shared_entities=rc.max_shared_entities,
             )
-            links_map = await fetch_memory_links_for_notes(session, note_ids, vault_ids=vault_ids)
+            links_map = await fetch_memory_links_for_notes(
+                session, note_ids, vault_ids=vault_ids, link_types=['contradicts', 'weakens']
+            )
             for r in results:
                 r.related_notes = related_map.get(r.note_id, [])
                 r.links = links_map.get(r.note_id, [])

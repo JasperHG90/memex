@@ -251,16 +251,104 @@ async def test_hydrate_results_attaches_links():
 
 
 # ---------------------------------------------------------------------------
+# 9b. fetch_memory_links link_types filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_memory_links_link_types_filter():
+    """Verify link_types param generates the correct SQL filter and returns
+    only matching link types."""
+    from memex_core.memory.retrieval.note_relations import fetch_memory_links
+
+    uid = uuid4()
+    target_uid = uuid4()
+    note_id = uuid4()
+
+    # Create mock rows: one 'contradicts' and one 'temporal'
+    contradicts_row = {
+        'from_unit_id': uid,
+        'to_unit_id': target_uid,
+        'link_type': 'contradicts',
+        'weight': 0.9,
+        'created_at': None,
+        'link_metadata': None,
+        'from_note_id': note_id,
+        'from_note_title': 'Source',
+        'to_note_id': note_id,
+        'to_note_title': 'Target',
+    }
+    temporal_row = {
+        'from_unit_id': uid,
+        'to_unit_id': target_uid,
+        'link_type': 'temporal',
+        'weight': 0.5,
+        'created_at': None,
+        'link_metadata': None,
+        'from_note_id': note_id,
+        'from_note_title': 'Source',
+        'to_note_id': note_id,
+        'to_note_title': 'Target',
+    }
+
+    # Mock session that captures the SQL text to verify filter clause
+    mock_session = AsyncMock()
+    captured_sql = []
+
+    async def mock_execute(query, params=None):
+        captured_sql.append(str(query.text if hasattr(query, 'text') else query))
+        result = MagicMock()
+        # When link_types is set, return only contradicts; otherwise both
+        if params and 'link_types' in params:
+            result.mappings.return_value = [contradicts_row]
+        else:
+            result.mappings.return_value = [contradicts_row, temporal_row]
+        return result
+
+    mock_session.execute = mock_execute
+
+    # Test with link_types=['contradicts'] -- should filter
+    result_filtered = await fetch_memory_links(mock_session, [uid], link_types=['contradicts'])
+    assert len(result_filtered[uid]) == 1
+    assert result_filtered[uid][0].relation == 'contradicts'
+    # Verify SQL contains the type filter
+    assert 'link_types' in captured_sql[-1]
+
+    # Test with link_types=None -- should return all
+    result_all = await fetch_memory_links(mock_session, [uid], link_types=None)
+    assert len(result_all[uid]) == 2
+    relations = {lnk.relation for lnk in result_all[uid]}
+    assert relations == {'contradicts', 'temporal'}
+
+
+@pytest.mark.asyncio
+async def test_fetch_memory_links_empty_link_types():
+    """Empty link_types list should return empty dict immediately."""
+    from memex_core.memory.retrieval.note_relations import fetch_memory_links
+
+    mock_session = AsyncMock()
+    result = await fetch_memory_links(mock_session, [uuid4()], link_types=[])
+    assert result == {}
+    # Session should not be called at all
+    mock_session.execute.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # 10. _build_memory_unit_model link propagation
 # ---------------------------------------------------------------------------
 
 
-def test_build_memory_unit_model_extracts_links():
-    """Verify _build_memory_unit_model extracts links from unit_metadata."""
+def test_build_memory_unit_model_extracts_contradiction_links_only():
+    """Verify _build_memory_unit_model only inlines contradiction/weakens links."""
     from memex_mcp.server import _build_memory_unit_model
 
     uid = uuid4()
-    link_data = {
+    contradiction_link = {
+        'unit_id': str(uuid4()),
+        'relation': 'contradicts',
+        'weight': 0.9,
+    }
+    temporal_link = {
         'unit_id': str(uuid4()),
         'relation': 'temporal',
         'weight': 0.8,
@@ -275,7 +363,7 @@ def test_build_memory_unit_model_extracts_links():
     mock_unit.note_id = None
     mock_unit.node_ids = []
     mock_unit.status = 'active'
-    mock_unit.metadata = {'tags': [], 'links': [link_data]}
+    mock_unit.metadata = {'tags': [], 'links': [contradiction_link, temporal_link]}
     mock_unit.superseded_by = []
     mock_unit.occurred_start = None
     mock_unit.occurred_end = None
@@ -283,9 +371,10 @@ def test_build_memory_unit_model_extracts_links():
 
     result = _build_memory_unit_model(mock_unit)
 
+    # Only contradiction links are inlined; temporal is filtered out
     assert len(result.links) == 1
-    assert result.links[0].relation == 'temporal'
-    assert result.links[0].weight == 0.8
+    assert result.links[0].relation == 'contradicts'
+    assert result.links[0].weight == 0.9
 
 
 def test_build_memory_unit_model_no_links():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -27,6 +28,7 @@ _MAX_ENTITY_IDS = 100
 async def fetch_memory_links(
     session: AsyncSession,
     unit_ids: list[UUID],
+    link_types: list[str] | None = None,
 ) -> dict[UUID, list[MemoryLinkDTO]]:
     """Fetch MemoryLink data for the given unit IDs (both directions).
 
@@ -35,14 +37,27 @@ async def fetch_memory_links(
 
     When both sides of a link are in the input set, both get an entry pointing
     to the other side.
+
+    Args:
+        link_types: Optional filter. When set, only links whose link_type
+            matches one of the given values are returned.
     """
     if not unit_ids:
         return {}
 
+    if link_types is not None and len(link_types) == 0:
+        return {}
+
+    type_filter = ' AND ml.link_type = ANY(:link_types)' if link_types else ''
+
     # Fetch link rows with note metadata for BOTH sides so we can resolve
     # either direction without a lossy CASE expression.
+    params: dict[str, Any] = {'ids': [str(uid) for uid in unit_ids]}
+    if link_types:
+        params['link_types'] = link_types
+
     result = await session.execute(
-        text("""
+        text(f"""
             SELECT
                 ml.from_unit_id,
                 ml.to_unit_id,
@@ -59,9 +74,9 @@ async def fetch_memory_links(
             JOIN memory_units mu_to   ON mu_to.id   = ml.to_unit_id
             LEFT JOIN notes n_from ON n_from.id = mu_from.note_id
             LEFT JOIN notes n_to   ON n_to.id   = mu_to.note_id
-            WHERE ml.from_unit_id = ANY(:ids) OR ml.to_unit_id = ANY(:ids)
+            WHERE (ml.from_unit_id = ANY(:ids) OR ml.to_unit_id = ANY(:ids)){type_filter}
         """),
-        {'ids': [str(uid) for uid in unit_ids]},
+        params,
     )
 
     unit_id_set = {UUID(str(u)) for u in unit_ids}
@@ -113,6 +128,7 @@ async def fetch_memory_links_for_notes(
     note_ids: list[UUID],
     vault_ids: list[UUID] | None = None,
     top_k: int = _TOP_K_LINKS,
+    link_types: list[str] | None = None,
 ) -> dict[UUID, list[MemoryLinkDTO]]:
     """Fetch links for notes by first resolving note_ids to unit_ids, then
     aggregating and deduplicating at note level.
@@ -121,6 +137,7 @@ async def fetch_memory_links_for_notes(
     Self-links (links pointing back to the same note) are excluded.
     Results are truncated to top_k per note, sorted by weight descending.
     If vault_ids is provided, only units in those vaults are considered.
+    If link_types is provided, only links with matching link_type are returned.
     """
     if not note_ids:
         return {}
@@ -154,7 +171,7 @@ async def fetch_memory_links_for_notes(
         return {}
 
     # Step 2: fetch links for all units
-    unit_links = await fetch_memory_links(session, all_unit_ids)
+    unit_links = await fetch_memory_links(session, all_unit_ids, link_types=link_types)
 
     # Step 3: re-group by note_id and deduplicate
     note_links: dict[UUID, dict[tuple[UUID | None, str], MemoryLinkDTO]] = defaultdict(dict)

@@ -1000,7 +1000,9 @@ class RetrievalEngine:
         if all_unit_ids and self.retrieval_config.relations.top_k_related > 0:
             from memex_core.memory.retrieval.note_relations import fetch_memory_links
 
-            links_map = await fetch_memory_links(session, all_unit_ids)
+            links_map = await fetch_memory_links(
+                session, all_unit_ids, link_types=['contradicts', 'weakens']
+            )
             for uid, links_list in links_map.items():
                 if uid in fetched_units:
                     fetched_units[uid].unit_metadata['links'] = [

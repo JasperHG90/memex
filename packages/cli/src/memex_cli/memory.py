@@ -620,6 +620,59 @@ async def reflect(
             handle_api_error(e)
 
 
+@app.command('links')
+@async_command
+async def memory_links(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit.')],
+    link_type: Annotated[
+        str | None,
+        typer.Option('--type', '-t', help='Filter by link type (e.g. contradicts).'),
+    ] = None,
+    limit: Annotated[int, typer.Option('--limit', '-l', help='Max links to return.')] = 20,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """
+    View relationship links for a memory unit.
+    Shows temporal, semantic, causal, contradiction, and other typed links.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+
+    async with get_api_context(config) as api:
+        try:
+            links = await api.get_memory_links(uuid_obj, link_type=link_type, limit=limit)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if not links:
+        console.print('[dim]No links found.[/dim]')
+        return
+
+    if json_output:
+        console.print_json(json.dumps([lnk.model_dump() for lnk in links], default=str))
+        return
+
+    table = Table(title=f'Links for {unit_id[:8]}...')
+    table.add_column('Relation', style='cyan')
+    table.add_column('Target Unit', style='dim')
+    table.add_column('Note Title', style='white')
+    table.add_column('Weight', style='magenta', justify='right')
+    table.add_column('Time', style='dim')
+
+    for lnk in links:
+        table.add_row(
+            lnk.relation,
+            str(lnk.unit_id)[:8] + '...',
+            lnk.note_title or '-',
+            f'{lnk.weight:.2f}',
+            str(lnk.time)[:10] if lnk.time else '-',
+        )
+
+    console.print(table)
+
+
 @app.command('lineage')
 @async_command
 async def get_lineage(
