@@ -22,12 +22,14 @@ dependencies = [
 [project.optional-dependencies]
 server = ["memex-core"]
 mcp = ["memex-mcp"]
+hermes = ["memex-hermes-plugin"]
 sync = ["watchdog>=4.0.0", "sqlmodel>=0.0.22", "structlog>=25.0.0"]
 
 [tool.uv.sources]
 memex-common = { workspace = true }
 memex-core = { workspace = true }
 memex-mcp = { workspace = true }
+memex-hermes-plugin = { workspace = true }
 
 [project.scripts]
 memex = "memex_cli:app"
