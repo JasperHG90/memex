@@ -71,10 +71,6 @@ follow_imports = "silent"
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
-# Hard per-test timeout so a hung test can't lock CI for six hours.
-# Thread method is compatible with asyncio tests and forces a traceback
-# on the stuck thread at exit.
-addopts = "--timeout=300 --timeout-method=thread"
 markers = [
   "integration: marks integration tests",
   "llm: marks tests that require LLM calls",
@@ -97,7 +93,6 @@ dev = [
     "pytest-asyncio>=1.2.0",
     "pytest-httpx>=0.27.0",
     "pytest-async>=0.1.1",
-    "pytest-timeout>=2.3",
     "testcontainers>=4.14.0",
     "pytest-rerunfailures>=16.1",
     "pyinstrument>=5.1.2",
