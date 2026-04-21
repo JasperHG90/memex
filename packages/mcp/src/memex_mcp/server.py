@@ -1286,6 +1286,16 @@ async def memex_memory_search(
             ),
         ),
     ] = None,
+    expand_query: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                'Expand query using LLM-generated semantic variations for broader recall. '
+                'Use when initial search returns insufficient results.'
+            ),
+        ),
+    ] = False,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1314,6 +1324,7 @@ async def memex_memory_search(
             tags=tags,
             source_context=source_context,
             reference_date=ref_dt,
+            expand_query=expand_query,
         )
 
         if not results:
