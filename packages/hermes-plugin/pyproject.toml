@@ -1,0 +1,56 @@
+[project]
+name = "memex-hermes-plugin"
+dynamic = ["version"]
+description = "Memex memory provider plugin for Hermes Agent."
+authors = [
+  {name="Jasper Ginn", email="jasperginn@gmail.com"}
+]
+requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+dependencies = [
+    "memex-common",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.0",
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+memex-hermes = "memex_hermes_plugin.install:app"
+
+[tool.uv.sources]
+memex-common = { workspace = true }
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memex_hermes_plugin"]
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/memex_hermes_plugin/__about__.py"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = "../.."
+raw-options.git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-httpx>=0.27.0",
+    "respx>=0.22.0",
+]
+
+[tool.pytest.ini_options]
+# Fast unit suite by default; integration suite is opt-in.
+addopts = "-m 'not hermes_integration'"
+markers = [
+  "hermes_integration: tests that clone + install hermes-agent and exercise the real plugin loader (slow; opt-in)",
+]

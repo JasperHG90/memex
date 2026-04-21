@@ -1,0 +1,40 @@
+default:
+    @just --list
+
+# Install plugin into $HERMES_HOME/plugins/memex via symlink (dev default)
+install mode="symlink":
+    uv run --no-sync memex-hermes install --mode {{mode}}
+
+# Remove plugin from $HERMES_HOME/plugins/memex
+uninstall:
+    uv run --no-sync memex-hermes uninstall
+
+# Run unit tests (fast; excludes hermes_integration)
+test:
+    uv run --no-sync pytest -v
+
+# Install hermes-agent + dev deps for the integration suite
+integration-setup:
+    cd ../.. && uv sync --all-packages --dev --group hermes-integration
+
+# Run the hermes_integration suite (testcontainers Postgres + real Hermes loader + uvicorn)
+test-integration: integration-setup
+    uv run --no-sync pytest -v -m hermes_integration
+
+# Run EVERYTHING — unit + integration
+test-all: integration-setup
+    uv run --no-sync pytest -v -m "hermes_integration or not hermes_integration"
+
+# Run a specific test file or pattern
+test-one pattern:
+    uv run pytest -v -k "{{pattern}}"
+
+# Lint + format + type-check
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+    uv run mypy src
+
+# Format in place
+fmt:
+    uv run ruff format .

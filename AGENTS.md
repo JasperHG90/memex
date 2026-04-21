@@ -47,19 +47,20 @@ Always use `uv`, never `pip`.
 
 ## Architecture
 
-Python monorepo managed by `uv` with 7 packages.
+Python monorepo managed by `uv` with 8 packages.
 
 ### Packages
 
 | Package | Import | Purpose |
 |---------|--------|---------|
 | `packages/core` | `memex_core` | Core library: storage, memory engine (extraction/retrieval/reflection), services layer, MemexAPI facade, FastAPI server |
-| `packages/cli` | `memex_cli` | Typer CLI (`memex` command) — 12 command groups: note, vault, memory, entity, kv, server, mcp, config, system, database, setup, report-bug |
+| `packages/cli` | `memex_cli` | Typer CLI (`memex` command) — 13 command groups: note, vault, memory, entity, kv, server, mcp, config, system, database, setup, hermes, report-bug |
 | `packages/mcp` | `memex_mcp` | FastMCP server — 35 tools for LLM integration (progressive disclosure by default) |
 | `packages/common` | `memex_common` | Shared Pydantic models, config (hierarchical YAML), HTTP client, exceptions |
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
 | `packages/firefox-extension` | — | TypeScript/WebExtension for saving pages to Memex |
 | `packages/claude-code-plugin` | — | Claude Code plugin: `/remember` and `/recall` skills, session hooks, MCP server config |
+| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — 7 tools (recall, retrieve_notes, survey, retain, list_entities, get_entity_mentions, get_entity_cooccurrences), session briefings, per-project vault binding |
 
 ### Dependency graph
 

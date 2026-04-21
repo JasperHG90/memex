@@ -1,0 +1,17 @@
+name: memex
+version: 1.0.0
+description: "Memex — long-term memory with knowledge graph, multi-strategy TEMPR retrieval, session briefings, surveys, and multi-vault scoping."
+pip_dependencies:
+  - "memex-common>=0.1.11"
+requires_env:
+  - name: MEMEX_API_KEY
+    description: "Memex server API key (optional for local/unsecured deployments)."
+    secret: true
+  - name: MEMEX_SERVER_URL
+    description: "Memex server base URL. Defaults to http://127.0.0.1:8000."
+    secret: false
+hooks:
+  - on_session_end
+  - on_pre_compress
+  - on_memory_write
+  - on_turn_start

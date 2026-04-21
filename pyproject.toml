@@ -21,6 +21,7 @@ memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
 memex_eval = { workspace = true }
+hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git", branch = "main" }
 
 [tool.uv.workspace]
 members = [
@@ -28,6 +29,7 @@ members = [
     "packages/common",
     "packages/core",
     "packages/eval",
+    "packages/hermes-plugin",
     "packages/mcp",
 ]
 
@@ -80,6 +82,9 @@ cache_dir = "/home/vscode/.cache/pytest"
 asyncio_mode = "auto"
 
 [dependency-groups]
+hermes-integration = [
+    "hermes-agent",
+]
 dev = [
     "nest-asyncio>=1.6.0",
     "prek>=0.2.25",
