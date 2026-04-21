@@ -35,25 +35,31 @@ Inside Hermes, Memex exposes more than just search: five tools cover memory-unit
 
 ## Installation
 
-From this repo:
+The plugin is a standalone package — no Memex CLI required.
 
 ```bash
-memex hermes install
-```
-
-Or manually copy the plugin directory:
-
-```bash
-cp -r packages/hermes-plugin/src/memex_hermes_plugin/memex "$HERMES_HOME/plugins/memex"
-```
-
-Then activate in Hermes:
-
-```bash
+uv tool install 'memex-hermes-plugin @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/hermes-plugin'
+memex-hermes install
 hermes memory setup    # select "memex"
 ```
 
-This writes `memory.provider: memex` to `$HERMES_HOME/config.yaml` and walks you through the config keys.
+Or install from a GitHub release wheel (attached to every Memex `v*` release):
+
+```bash
+uv tool install https://github.com/JasperHG90/memex/releases/download/<tag>/memex_hermes_plugin-<version>-py3-none-any.whl
+memex-hermes install
+```
+
+Manual install (no Python tooling):
+
+```bash
+git clone https://github.com/JasperHG90/memex.git
+cp -r memex/packages/hermes-plugin/src/memex_hermes_plugin/memex "$HERMES_HOME/plugins/memex"
+```
+
+`memex-hermes install` writes `memory.provider: memex` to `$HERMES_HOME/config.yaml` and symlinks the plugin directory into `$HERMES_HOME/plugins/memex/`. Use `--mode copy` for a real copy instead of a symlink, and `--force` to replace an existing install.
+
+Commands: `memex-hermes install`, `memex-hermes status`, `memex-hermes uninstall`.
 
 ## Per-project vault binding
 
@@ -161,15 +167,15 @@ Set via `memory_mode` in the config file or `MEMEX_HERMES_MODE=tools`.
 ## Updating
 
 ```bash
-memex hermes install --mode copy --force    # refresh copied plugin
-# or for a symlinked install:
-cd /path/to/memex-repo && git pull
+uv tool upgrade memex-hermes-plugin
+memex-hermes install --mode copy --force    # refresh the copy in $HERMES_HOME
 ```
 
 ## Uninstall
 
 ```bash
-memex hermes uninstall
+memex-hermes uninstall
+uv tool uninstall memex-hermes-plugin
 ```
 
 Removes `$HERMES_HOME/plugins/memex/` and (with `--purge-config`) `$HERMES_HOME/memex/config.json`.

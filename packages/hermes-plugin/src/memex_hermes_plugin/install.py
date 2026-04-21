@@ -1,13 +1,21 @@
-"""Hermes Agent integration commands.
+"""Standalone installer for the Memex Hermes plugin.
 
-Installs and manages the Memex memory-provider plugin for
-https://hermes-agent.nousresearch.com under ``$HERMES_HOME/plugins/memex/``.
+Exposed as the ``memex-hermes`` console script (see ``[project.scripts]`` in
+``pyproject.toml``). Intended to be used WITHOUT the Memex CLI:
 
-Requires the ``hermes`` optional extra: ``uv tool install 'memex-cli[hermes]'``.
+    uv tool install 'memex-hermes-plugin @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/hermes-plugin'
+    memex-hermes install
+    memex-hermes status
+    memex-hermes uninstall
+
+The command walks the bundled ``memex_hermes_plugin.memex`` package to find
+the plugin directory, then symlinks (dev) or copies (distribution) it into
+``$HERMES_HOME/plugins/memex/`` so Hermes' real loader can discover it.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -23,11 +31,11 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 
-logger = logging.getLogger('memex_cli.hermes')
+logger = logging.getLogger('memex_hermes_plugin.install')
 console = Console()
 
 app = typer.Typer(
-    name='hermes',
+    name='memex-hermes',
     help='Manage the Memex plugin for Hermes Agent.',
     no_args_is_help=True,
 )
@@ -41,13 +49,8 @@ def _default_hermes_home() -> Path:
 
 
 def _plugin_source() -> Path:
-    try:
-        from memex_hermes_plugin import PLUGIN_DIR
-    except ImportError as exc:
-        raise typer.BadParameter(
-            'memex-hermes-plugin is not installed. Install with: '
-            "uv tool install 'memex-cli[hermes] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli'"
-        ) from exc
+    from memex_hermes_plugin import PLUGIN_DIR
+
     return PLUGIN_DIR
 
 
@@ -63,10 +66,7 @@ def _remove_path(path: Path) -> None:
 
 
 def _set_provider_in_hermes_config(hermes_home: Path) -> bool:
-    """Set ``memory.provider: memex`` in ``$HERMES_HOME/config.yaml``.
-
-    Returns True if the file was modified. Creates the file if missing.
-    """
+    """Set ``memory.provider: memex`` in ``$HERMES_HOME/config.yaml``."""
     cfg_path = hermes_home / 'config.yaml'
     if cfg_path.exists():
         try:
@@ -272,8 +272,6 @@ def _resolve_server_url(cfg_path: Path) -> str:
     if 'MEMEX_SERVER_URL' in os.environ:
         return os.environ['MEMEX_SERVER_URL']
     if cfg_path.exists():
-        import json
-
         try:
             data = json.loads(cfg_path.read_text(encoding='utf-8'))
             if isinstance(data, dict) and isinstance(data.get('server_url'), str):
@@ -295,3 +293,7 @@ def _check_server(url: str) -> tuple[bool, str]:
         return False, f'HTTP {response.status_code}'
     except httpx.HTTPError as e:
         return False, str(e)
+
+
+if __name__ == '__main__':
+    app()

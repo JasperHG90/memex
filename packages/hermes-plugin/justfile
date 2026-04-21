@@ -3,11 +3,11 @@ default:
 
 # Install plugin into $HERMES_HOME/plugins/memex via symlink (dev default)
 install mode="symlink":
-    uv run memex hermes install --mode {{mode}}
+    uv run --no-sync memex-hermes install --mode {{mode}}
 
 # Remove plugin from $HERMES_HOME/plugins/memex
 uninstall:
-    uv run memex hermes uninstall
+    uv run --no-sync memex-hermes uninstall
 
 # Run unit tests (fast; excludes hermes_integration)
 test:

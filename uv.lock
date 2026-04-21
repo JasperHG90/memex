@@ -3020,9 +3020,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-hermes = [
-    { name = "memex-hermes-plugin" },
-]
 mcp = [
     { name = "memex-mcp" },
 ]
@@ -3041,7 +3038,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "memex-common", editable = "packages/common" },
     { name = "memex-core", marker = "extra == 'server'", editable = "packages/core" },
-    { name = "memex-hermes-plugin", marker = "extra == 'hermes'", editable = "packages/hermes-plugin" },
     { name = "memex-mcp", marker = "extra == 'mcp'", editable = "packages/mcp" },
     { name = "platformdirs", specifier = ">=4.5.1" },
     { name = "python-box", specifier = ">=7.3.2" },
@@ -3052,7 +3048,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12.0" },
     { name = "watchdog", marker = "extra == 'sync'", specifier = ">=4.0.0" },
 ]
-provides-extras = ["hermes", "mcp", "server", "sync"]
+provides-extras = ["mcp", "server", "sync"]
 
 [[package]]
 name = "memex-common"
@@ -3243,6 +3239,8 @@ dependencies = [
     { name = "httpx" },
     { name = "memex-common" },
     { name = "pyyaml" },
+    { name = "rich" },
+    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -3258,6 +3256,8 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "memex-common", editable = "packages/common" },
     { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "typer", specifier = ">=0.12.0" },
 ]
 
 [package.metadata.requires-dev]
