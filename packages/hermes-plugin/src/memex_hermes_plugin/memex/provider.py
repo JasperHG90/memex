@@ -225,7 +225,21 @@ class MemexMemoryProvider(MemoryProvider):
     # -- Tools ---------------------------------------------------------------
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:  # type: ignore[override]
-        if self._config is None or self._config.memory_mode == 'context':
+        """Return the static tool schemas.
+
+        IMPORTANT: Hermes calls ``get_tool_schemas()`` at provider *registration
+        time* — before ``initialize()`` runs — to build its
+        ``_tool_to_provider`` dispatch map. If we returned ``[]`` here because
+        ``self._config is None``, Hermes would register zero memex tools and
+        every subsequent call from the model would fall through to the
+        "Unknown tool" error path.
+
+        The schemas are static module-level constants; there's no reason to
+        gate them on runtime state. Only hide them when the user has
+        explicitly configured ``memory_mode='context'`` — in which case the
+        plugin is intentionally context-only, no tools exposed.
+        """
+        if self._config is not None and self._config.memory_mode == 'context':
             return []
         return list(ALL_SCHEMAS)
 

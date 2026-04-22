@@ -89,6 +89,62 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
     }
 
 
+# Regression for v0.1.13 bug:
+# Hermes calls ``get_tool_schemas()`` at provider *registration* time, before
+# ``initialize()`` has run. v0.1.13 gated the schemas on ``self._config is
+# None`` and returned ``[]`` there — resulting in Hermes registering 0 memex
+# tools, and every subsequent model call failing with "Unknown tool".
+#
+# These tests cover the pre-init path explicitly.
+class TestGetToolSchemasBeforeInitialize:
+    def test_returns_all_seven_schemas_pre_init(self):
+        p = MemexMemoryProvider()
+        # NOTE: no initialize() call.
+        schemas = p.get_tool_schemas()
+        names = {s['name'] for s in schemas}
+        assert names == {
+            'memex_recall',
+            'memex_retrieve_notes',
+            'memex_survey',
+            'memex_retain',
+            'memex_list_entities',
+            'memex_get_entity_mentions',
+            'memex_get_entity_cooccurrences',
+        }
+
+    def test_each_schema_is_well_formed(self):
+        p = MemexMemoryProvider()
+        for schema in p.get_tool_schemas():
+            assert 'name' in schema
+            assert 'description' in schema
+            assert schema['parameters']['type'] == 'object'
+
+    def test_ever_only_empty_when_explicit_context_mode(self, tmp_path: Path, monkeypatch):
+        """A fresh provider with no config always exposes tools. Only an
+        initialized provider whose config explicitly says ``context`` hides them."""
+        # Pre-init: full set.
+        p = MemexMemoryProvider()
+        assert len(p.get_tool_schemas()) == 7
+
+        # After init in context mode: empty.
+        monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+        monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+        monkeypatch.setenv('MEMEX_HERMES_MODE', 'context')
+
+        fake_api = Mock()
+        fake_api.kv_get = AsyncMock(return_value=None)
+        fake_api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+        fake_api.get_session_briefing = AsyncMock(return_value='')
+
+        with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+            p2 = MemexMemoryProvider()
+            p2.initialize('s', hermes_home=str(tmp_path), platform='cli')
+            try:
+                assert p2.get_tool_schemas() == []
+            finally:
+                p2.shutdown()
+
+
 def test_sync_turn_buffers(provider_with_stubbed_api):
     provider, *_ = provider_with_stubbed_api
     provider.sync_turn('hi', 'hello', session_id='s')

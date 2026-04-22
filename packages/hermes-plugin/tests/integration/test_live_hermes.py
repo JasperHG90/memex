@@ -59,6 +59,38 @@ def test_get_tool_schemas_exposes_7_tools(initialized_provider):
     }
 
 
+def test_get_tool_schemas_at_registration_time(loaded_provider):
+    """Regression for v0.1.13 production bug.
+
+    Hermes calls ``get_tool_schemas()`` at provider *registration* time
+    (before ``initialize()`` runs) to build its internal
+    ``_tool_to_provider`` dispatch map. v0.1.13 returned ``[]`` there
+    because ``self._config`` was None — Hermes then registered 0 memex
+    tools and every model call routed to "Unknown tool".
+
+    This test exercises exactly that code path: the plugin is loaded via
+    Hermes' real loader, and we call ``get_tool_schemas()`` on it WITHOUT
+    calling ``initialize()`` first.
+    """
+    # ``loaded_provider`` fixture returns the provider fresh from
+    # ``plugins.memory.load_memory_provider('memex')`` — no ``initialize()``
+    # has been called on it yet.
+    assert loaded_provider._config is None, (
+        'fixture contract: provider should be pre-init for this test'
+    )
+    schemas = loaded_provider.get_tool_schemas()
+    names = {s['name'] for s in schemas}
+    assert names == {
+        'memex_recall',
+        'memex_retrieve_notes',
+        'memex_survey',
+        'memex_retain',
+        'memex_list_entities',
+        'memex_get_entity_mentions',
+        'memex_get_entity_cooccurrences',
+    }, f'Pre-init schemas must cover the full tool set — got {names!r}'
+
+
 @pytest.mark.asyncio
 async def test_retain_roundtrip_via_real_server(initialized_provider, live_api, live_vault: UUID):
     """memex_retain → note lands in Postgres; verified by listing server-side."""
