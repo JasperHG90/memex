@@ -58,6 +58,7 @@ class MemexMemoryProvider(MemoryProvider):
         self._session_id: str = ''
         self._agent_identity: str = ''
         self._user_id: str | None = None
+        self._platform: str = ''
         self._briefing = BriefingCache()
         self._prefetch = PrefetchCache()
         self._turn_buffer: list[dict[str, str]] = []
@@ -132,6 +133,7 @@ class MemexMemoryProvider(MemoryProvider):
         self._hermes_home = _resolve_hermes_home(kwargs)
         self._agent_identity = kwargs.get('agent_identity') or ''
         self._user_id = kwargs.get('user_id')
+        self._platform = kwargs.get('platform') or ''
 
         self._config = load_config(self._hermes_home)
         self._session_note_key = make_session_note_key()
@@ -290,7 +292,7 @@ class MemexMemoryProvider(MemoryProvider):
         transcript = _format_transcript(messages or self._turn_buffer)
         if not transcript.strip():
             return
-        self._ingest_session_note(transcript, title='Hermes session')
+        self._ingest_session_note(transcript, title=self._format_session_title())
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
         """Append soon-to-be-compressed messages to the session note so nothing is lost.
@@ -301,7 +303,8 @@ class MemexMemoryProvider(MemoryProvider):
             return ''
         chunk = _format_transcript(messages)
         if chunk.strip():
-            self._ingest_session_note(chunk, title='Hermes session (pre-compress fragment)')
+            title = f'{self._format_session_title()} (pre-compress fragment)'
+            self._ingest_session_note(chunk, title=title)
         return (
             f'Memex captured {len(messages)} pre-compression messages into '
             f'session note `{self._session_note_key}`.'
@@ -334,7 +337,7 @@ class MemexMemoryProvider(MemoryProvider):
             transcript = _format_transcript(self._turn_buffer)
             if transcript.strip():
                 try:
-                    self._ingest_session_note(transcript, title='Hermes session')
+                    self._ingest_session_note(transcript, title=self._format_session_title())
                 except Exception as e:
                     logger.debug('Shutdown ingest failed: %s', e)
         client = self._client
@@ -355,6 +358,39 @@ class MemexMemoryProvider(MemoryProvider):
             pass
 
     # -- Helpers -------------------------------------------------------------
+
+    def _format_session_title(self) -> str:
+        """Render the session-note title from the configured template.
+
+        Substitutes ``{agent_identity}``, ``{platform}``, ``{date}``,
+        ``{session_id}``, ``{session_id_short}``. Missing/empty fields
+        render as ``'agent'`` / ``'?'`` so the title stays readable.
+        Falls back to a hardcoded default if the template references an
+        unsupported key.
+        """
+        from datetime import datetime, timezone
+
+        if self._config is None:
+            return 'Hermes session'
+        template = self._config.retain.session_title_template
+
+        session_short = (self._session_id or '')[:8] or '?'
+        substitutions = {
+            'agent_identity': self._agent_identity or 'agent',
+            'platform': self._platform or 'unknown',
+            'date': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
+            'session_id': self._session_id or '?',
+            'session_id_short': session_short,
+        }
+        try:
+            return template.format(**substitutions)
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning(
+                'Session title template %r failed to render: %s — falling back to default.',
+                template,
+                e,
+            )
+            return f'Hermes session — {substitutions["date"]}'
 
     def _ingest_session_note(self, content: str, *, title: str) -> None:
         assert self._api is not None and self._config is not None

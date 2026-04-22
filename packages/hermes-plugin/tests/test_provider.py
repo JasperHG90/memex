@@ -139,3 +139,121 @@ def test_shutdown_is_safe_to_call_twice(provider_with_stubbed_api):
     provider.shutdown()
     # Second call is a no-op.
     provider.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Session-note title formatting
+# ---------------------------------------------------------------------------
+
+
+class TestSessionTitle:
+    """The title was hardcoded 'Hermes session' in v0.1.12 — every note
+    looked the same. Now it's templated and includes per-session context."""
+
+    def _provider(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        agent_identity: str = 'coder',
+        platform: str = 'cli',
+        template: str | None = None,
+    ):
+        monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+        monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+        monkeypatch.setenv('MEMEX_VAULT', 'v')
+
+        if template is not None:
+            import json
+
+            cfg_dir = tmp_path / 'memex'
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            (cfg_dir / 'config.json').write_text(
+                json.dumps({'retain': {'session_title_template': template}})
+            )
+
+        fake_api = Mock()
+        fake_api.kv_get = AsyncMock(return_value=None)
+        fake_api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+        fake_api.get_session_briefing = AsyncMock(return_value='')
+        fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+        fake_api.kv_put = AsyncMock()
+
+        with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+            p = MemexMemoryProvider()
+            p.initialize(
+                'session-12345678',
+                hermes_home=str(tmp_path),
+                platform=platform,
+                agent_identity=agent_identity,
+            )
+        return p, fake_api
+
+    def test_default_template_includes_agent_platform_date(self, tmp_path, monkeypatch):
+        p, _ = self._provider(tmp_path, monkeypatch)
+        title = p._format_session_title()
+        try:
+            assert 'coder' in title
+            assert 'cli' in title
+            assert 'Hermes session' in title
+            # ISO-ish date prefix.
+            import re
+
+            assert re.search(r'\d{4}-\d{2}-\d{2}', title)
+        finally:
+            p.shutdown()
+
+    def test_user_template_with_session_id_short(self, tmp_path, monkeypatch):
+        p, _ = self._provider(
+            tmp_path,
+            monkeypatch,
+            template='S [{agent_identity}] {session_id_short}',
+        )
+        title = p._format_session_title()
+        try:
+            # session_id_short = first 8 chars of 'session-12345678' = 'session-'
+            assert title == 'S [coder] session-'
+        finally:
+            p.shutdown()
+
+    def test_template_unknown_key_falls_back_gracefully(self, tmp_path, monkeypatch):
+        p, _ = self._provider(tmp_path, monkeypatch, template='Bad {nonexistent}')
+        title = p._format_session_title()
+        try:
+            # Falls back to a default (still useful, won't crash).
+            assert 'Hermes session' in title
+        finally:
+            p.shutdown()
+
+    def test_missing_agent_identity_renders_as_agent(self, tmp_path, monkeypatch):
+        p, _ = self._provider(
+            tmp_path, monkeypatch, agent_identity='', template='[{agent_identity}]'
+        )
+        title = p._format_session_title()
+        try:
+            assert title == '[agent]'
+        finally:
+            p.shutdown()
+
+    def test_on_session_end_uses_formatted_title(self, tmp_path, monkeypatch):
+        p, api = self._provider(tmp_path, monkeypatch)
+        p.sync_turn('hi', 'hello')
+        p.on_session_end([])
+        try:
+            api.ingest.assert_awaited()
+            dto = api.ingest.call_args.args[0]
+            # Title is no longer the hardcoded 'Hermes session'.
+            assert dto.name != 'Hermes session'
+            assert 'coder' in dto.name and 'cli' in dto.name
+        finally:
+            p.shutdown()
+
+    def test_pre_compress_marks_fragment_in_title(self, tmp_path, monkeypatch):
+        p, api = self._provider(tmp_path, monkeypatch)
+        p.on_pre_compress([{'role': 'user', 'content': 'bye'}])
+        try:
+            api.ingest.assert_awaited()
+            dto = api.ingest.call_args.args[0]
+            assert 'pre-compress fragment' in dto.name
+        finally:
+            p.shutdown()

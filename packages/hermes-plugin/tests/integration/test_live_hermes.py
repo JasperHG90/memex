@@ -170,3 +170,294 @@ def test_memory_mode_tools_hides_briefing_and_prefetch(
         assert len(provider.get_tool_schemas()) == 7
     finally:
         provider.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# v0.1.13: KV-driven vault binding + configurable session title
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kv_binding_resolves_vault_via_app_hermes_namespace(
+    installed_plugin,  # noqa: ARG001
+    server_url_env: str,  # noqa: ARG001 — MEMEX_SERVER_URL set
+    live_api,
+    live_vault: UUID,
+    vault_name: str,
+    hermes_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A KV entry under app:hermes:project:<id>:vault should win over MEMEX_VAULT.
+
+    We point CWD at a non-git tmp dir so ``derive_project_id`` produces a
+    deterministic, predictable id we can pre-bind via KV.
+    """
+    from memex_hermes_plugin.memex.cache import clear_vault_cache
+
+    clear_vault_cache()
+
+    # Force CWD to a non-git tmp dir so derive_project_id falls back to the
+    # $HOME-relative or absolute path. We use HOME=tmp_path/home and
+    # CWD=tmp_path/home/proj so the derived id is the predictable string 'proj'.
+    home_root = tmp_path / 'home'
+    proj_dir = home_root / 'proj'
+    proj_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(home_root))
+    monkeypatch.chdir(proj_dir)
+    project_id = 'proj'
+
+    # Bind that project_id to the live test vault via KV.
+    kv_key = f'app:hermes:project:{project_id}:vault'
+    await live_api.kv_put(value=vault_name, key=kv_key)
+
+    # Sanity: the KV entry persists.
+    entry = await live_api.kv_get(kv_key)
+    assert entry is not None and entry.value == vault_name
+
+    # Set MEMEX_VAULT to a different value so we know KV wins, not the env fallback.
+    monkeypatch.setenv('MEMEX_VAULT', 'nonexistent-fallback-vault')
+
+    from plugins.memory import load_memory_provider  # type: ignore[import-not-found]
+
+    provider = load_memory_provider('memex')
+    try:
+        provider.initialize(
+            'kv-binding-session',
+            hermes_home=str(hermes_home),
+            platform='cli',
+            agent_identity='integration',
+            user_id='tester',
+        )
+        # CWD-derived project_id should be 'proj'.
+        assert provider._project_id == project_id, (
+            f'expected derived project_id={project_id!r}, got {provider._project_id!r}'
+        )
+        # KV binding takes precedence over MEMEX_VAULT.
+        assert provider._vault_name == vault_name, (
+            f'expected vault {vault_name!r} from KV binding, got {provider._vault_name!r}'
+        )
+        assert provider._vault_id == live_vault
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_no_synthetic_vault_lookups_against_server(
+    installed_plugin,  # noqa: ARG001
+    server_url_env: str,  # noqa: ARG001 — MEMEX_SERVER_URL set
+    live_api,  # noqa: ARG001
+    live_vault: UUID,  # noqa: ARG001 — vault exists
+    vault_name: str,
+    hermes_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression: v0.1.12 hit the server with synthetic vault-name lookups
+    like ``hermes:user:<id>``. The new design only does ``kv_get``s.
+
+    We assert that no vault named ``hermes:user:tester`` or
+    ``hermes:agent:integration`` was created (since the plugin should never
+    have asked for them in the first place).
+    """
+    from memex_hermes_plugin.memex.cache import clear_vault_cache
+
+    clear_vault_cache()
+
+    monkeypatch.setenv('MEMEX_VAULT', vault_name)
+
+    from plugins.memory import load_memory_provider  # type: ignore[import-not-found]
+
+    provider = load_memory_provider('memex')
+    try:
+        provider.initialize(
+            'no-synthetic-session',
+            hermes_home=str(hermes_home),
+            platform='cli',
+            agent_identity='integration',
+            user_id='tester',
+        )
+    finally:
+        provider.shutdown()
+
+    # The synthetic vault names (the v0.1.12 anti-pattern) must not exist.
+    vaults = await live_api.list_vaults()
+    names = {v.name for v in vaults}
+    assert 'hermes:user:tester' not in names
+    assert 'hermes:agent:integration' not in names
+
+
+@pytest.mark.asyncio
+async def test_vault_cache_avoids_repeat_kv_calls(
+    installed_plugin,  # noqa: ARG001
+    server_url_env: str,  # noqa: ARG001 — MEMEX_SERVER_URL set
+    live_api,
+    live_vault: UUID,  # noqa: ARG001
+    vault_name: str,
+    hermes_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Two sessions in a row should only hit Memex KV once (cached).
+
+    The cache singleton lives in the plugin's loaded module namespace
+    (``_hermes_user_memory.memex.cache``), which is a different module
+    object from the test-side ``memex_hermes_plugin.memex.cache``. We
+    inspect the loaded-side singleton directly via ``sys.modules``.
+    """
+    import sys
+
+    # Same trick as test_kv_binding_resolves: deterministic project_id via CWD.
+    home_root = tmp_path / 'home'
+    proj_dir = home_root / 'cacheproj'
+    proj_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(home_root))
+    monkeypatch.chdir(proj_dir)
+    project_id = 'cacheproj'
+
+    kv_key = f'app:hermes:project:{project_id}:vault'
+    await live_api.kv_put(value=vault_name, key=kv_key)
+
+    monkeypatch.setenv('MEMEX_VAULT', vault_name)
+
+    from plugins.memory import load_memory_provider  # type: ignore[import-not-found]
+
+    # Load once so the loader-side cache module is in sys.modules.
+    provider1 = load_memory_provider('memex')
+    loaded_cache_mod = sys.modules['_hermes_user_memory.memex.cache']
+    # Reset any leftover state from prior tests on the loader-side singleton.
+    loaded_cache_mod.configure_vault_cache(300.0)
+    cache = loaded_cache_mod.vault_cache()
+    assert len(cache) == 0, 'cache should be empty before any plugin init'
+
+    try:
+        provider1.initialize(
+            's1',
+            hermes_home=str(hermes_home),
+            platform='cli',
+            agent_identity='integration',
+            user_id='tester',
+        )
+    finally:
+        provider1.shutdown()
+
+    cache_size_after_first = len(cache)
+    assert cache_size_after_first >= 1, 'first init should populate the cache'
+
+    provider2 = load_memory_provider('memex')
+    try:
+        provider2.initialize(
+            's2',
+            hermes_home=str(hermes_home),
+            platform='cli',
+            agent_identity='integration',
+            user_id='tester',
+        )
+    finally:
+        provider2.shutdown()
+
+    # Cache size shouldn't grow if the second resolve hit the cache.
+    assert len(cache) == cache_size_after_first
+
+
+def test_session_title_uses_template_against_real_server(
+    installed_plugin,  # noqa: ARG001
+    memex_server_url: str,
+    server_url_env: str,  # noqa: ARG001 — MEMEX_SERVER_URL set
+    live_vault: UUID,
+    vault_name: str,
+    hermes_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Session note title is no longer hardcoded — it follows the template.
+
+    Uses sync ``httpx.Client`` for verification (the plugin already runs on
+    its own asyncio loop; pytest-asyncio + plugin loop = bound-to-different-
+    loop errors).
+    """
+    import json
+    import sys
+    import time
+
+    import httpx
+
+    cfg_dir = hermes_home / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'memex' / 'config.json' if False else cfg_dir / 'config.json').write_text(
+        json.dumps(
+            {
+                'server_url': memex_server_url,
+                'vault_id': vault_name,
+                'retain': {
+                    'session_title_template': ('IntegrationTitle [{agent_identity}@{platform}]'),
+                },
+            }
+        )
+    )
+    monkeypatch.setenv('MEMEX_VAULT', vault_name)
+
+    # Reset the loaded-side cache so resolve_vault hits Memex fresh.
+    if '_hermes_user_memory.memex.cache' in sys.modules:
+        sys.modules['_hermes_user_memory.memex.cache'].clear_vault_cache()
+
+    from plugins.memory import load_memory_provider  # type: ignore[import-not-found]
+
+    provider = load_memory_provider('memex')
+    try:
+        provider.initialize(
+            'title-test',
+            hermes_home=str(hermes_home),
+            platform='cli',
+            agent_identity='coder',
+            user_id='tester',
+        )
+        provider.sync_turn('hi', 'hello')
+        provider.on_session_end([])
+    finally:
+        provider.shutdown()
+
+    # Poll the server (sync httpx) for the new note to appear with our title.
+    deadline = time.monotonic() + 30.0
+    found_titles: list[str] = []
+    with httpx.Client(base_url=f'{memex_server_url}/api/v1/', timeout=10.0) as client:
+        while time.monotonic() < deadline:
+            response = client.post(
+                'notes/search',
+                json={
+                    'query': 'IntegrationTitle',
+                    'limit': 10,
+                    'vault_ids': [str(live_vault)],
+                },
+            )
+            if response.status_code == 200:
+                # NDJSON stream — one note per line.
+                titles = []
+                for line in response.text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    metadata = obj.get('metadata') or {}
+                    title = metadata.get('name') or metadata.get('title')
+                    if title:
+                        titles.append(title)
+                if any('IntegrationTitle' in t for t in titles):
+                    found_titles = titles
+                    break
+            time.sleep(0.5)
+
+    assert any('IntegrationTitle [coder@cli]' in t for t in found_titles), (
+        f'Expected templated title in {found_titles!r}'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+# (No module-level patches needed — tests force a deterministic project_id by
+# setting HOME + chdir to a non-git tmp dir; ``derive_project_id`` then falls
+# back to the $HOME-relative path.)

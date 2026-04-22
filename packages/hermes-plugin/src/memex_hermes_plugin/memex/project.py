@@ -1,13 +1,26 @@
-"""Per-project vault resolution.
+"""Per-project vault resolution via KV.
 
-Ports the pattern from Memex's Claude Code plugin (``scripts/on_session_start.sh``):
-1. Derive a portable ``project_id`` from git remote origin or the CWD.
-2. Look up ``project:<project_id>:vault`` in the Memex KV store.
-3. Fall back in order: gateway ``user_id`` / ``agent_identity`` vault → config
-   ``vault_id`` → Memex default.
+Vault binding lives in the Memex KV store under the ``app:hermes:*``
+namespace — same convention as any other app on top of Memex (e.g. a
+trading bot would use ``app:trading:*``). Aligns with
+``VALID_NAMESPACES = ('global', 'user', 'project', 'app')`` server-side.
 
-Keeping the same KV namespace as the Claude Code plugin means users bind a
-project once and both plugins resolve the same vault.
+Lookup chain at session start (each is a single ``KV GET``):
+
+1. ``app:hermes:project:<project_id>:vault`` — if a project_id is derivable
+2. ``app:hermes:user:<user_id>:vault`` — if Hermes passed a user_id
+3. ``app:hermes:agent:<agent_identity>:vault`` — if Hermes passed an agent identity
+4. Plugin config ``vault_id`` (``MEMEX_VAULT``)
+5. None — the caller falls back to Memex's server-side default
+
+Bind a vault the obvious way:
+
+    memex kv put "app:hermes:user:10650075:vault" my-personal-vault
+    memex kv put "app:hermes:project:github.com/acme/foo:vault" foo-vault
+
+Lookups are cached in-process via :mod:`.cache` (5-minute TTL by default)
+so repeated session starts within the same long-running plugin process
+don't re-query Memex.
 """
 
 from __future__ import annotations
@@ -19,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .async_bridge import run_sync
+from .cache import vault_cache
 
 
 def derive_project_id(cwd: Path | None = None, home: Path | None = None) -> str:
@@ -61,16 +75,16 @@ def _git_remote_origin(cwd: Path) -> str | None:
 
 
 def _normalize_remote(url: str) -> str:
-    """Normalize a git remote URL to match the claude-code-plugin shell script.
+    """Normalize a git remote URL to a stable identifier.
 
     Steps (in order):
     - Strip trailing ``.git``
     - Strip basic-auth prefix from ``https://user:pass@host/path``
     - Strip the URL scheme (``https://`` etc.)
 
-    Note: SSH URLs (``git@host:path``) are returned as-is minus the ``.git``
-    suffix — matching the shell script's behavior so KV keys are interchangeable
-    between the Claude Code and Hermes plugins.
+    SSH URLs (``git@host:path``) are returned as-is minus the ``.git``
+    suffix so the same project resolves to a stable id regardless of
+    transport.
     """
     url = re.sub(r'\.git$', '', url)
     url = re.sub(r'^https://[^@]*@', 'https://', url)
@@ -78,17 +92,38 @@ def _normalize_remote(url: str) -> str:
     return url
 
 
+# ---------------------------------------------------------------------------
+# KV key helpers
+# ---------------------------------------------------------------------------
+
+# All Hermes-plugin state lives under app:hermes:* so it can coexist cleanly
+# with any other app's KV usage (e.g. app:trading:*).
+KV_NAMESPACE = 'app:hermes'
+
+
 def project_vault_kv_key(project_id: str) -> str:
-    """Return the KV key under which the per-project vault is stored."""
-    return f'project:{project_id}:vault'
+    return f'{KV_NAMESPACE}:project:{project_id}:vault'
+
+
+def user_vault_kv_key(user_id: str) -> str:
+    return f'{KV_NAMESPACE}:user:{user_id}:vault'
+
+
+def agent_vault_kv_key(agent_identity: str) -> str:
+    return f'{KV_NAMESPACE}:agent:{agent_identity}:vault'
+
+
+# ---------------------------------------------------------------------------
+# Vault resolution
+# ---------------------------------------------------------------------------
 
 
 async def _kv_lookup(api: Any, key: str) -> str | None:
-    """Look up a KV value. Returns None on miss or error.
+    """Look up a KV value. Returns the string value or None on miss/error.
 
     ``RemoteMemexAPI.kv_get`` returns a ``KVEntryDTO`` (pydantic model with a
-    ``value: str`` attribute) or None. Handles dict/str returns too for
-    robustness against client-shape changes.
+    ``.value: str``) or None. Handles dict/str returns too for robustness
+    against client-shape changes.
     """
     try:
         result = await api.kv_get(key)
@@ -96,11 +131,9 @@ async def _kv_lookup(api: Any, key: str) -> str | None:
         return None
     if result is None:
         return None
-    # KVEntryDTO / similar pydantic model.
     value = getattr(result, 'value', None)
     if isinstance(value, str):
         return value
-    # Defensive fallbacks in case the client evolves.
     if isinstance(result, dict):
         dict_value = result.get('value')
         return dict_value if isinstance(dict_value, str) else None
@@ -109,48 +142,41 @@ async def _kv_lookup(api: Any, key: str) -> str | None:
     return None
 
 
-async def _vault_exists(api: Any, identifier: str) -> bool:
-    """Return True if a vault with ``identifier`` (name or UUID) exists."""
-    try:
-        await api.resolve_vault_identifier(identifier)
-        return True
-    except Exception:
-        return False
+def _resolve_kv_key(api: Any, kv_key: str) -> str | None:
+    """Look up ``kv_key`` against Memex KV with TTL caching."""
+    cache = vault_cache()
+    hit, cached = cache.get(kv_key)
+    if hit:
+        return cached
+    value = run_sync(_kv_lookup(api, kv_key), timeout=5.0)
+    cache.set(kv_key, value)
+    return value
 
 
 def resolve_vault(
     api: Any,
     *,
-    project_id: str,
+    project_id: str | None,
     agent_identity: str | None,
     user_id: str | None,
     config_vault: str | None,
 ) -> str | None:
-    """Resolve the active vault, returning its name or None if nothing found.
+    """Resolve the active vault by walking the KV chain, then config.
 
-    Synchronous wrapper over async KV + vault checks; runs on the shared loop.
-    Priority order:
-    1. ``project:<project_id>:vault`` in KV
-    2. ``hermes:user:<user_id>`` if a vault with that name exists
-    3. ``hermes:agent:<agent_identity>`` if a vault with that name exists
-    4. Plugin config ``vault_id``
-    5. None (caller uses Memex default)
+    See module docstring for the lookup chain and KV key conventions.
     """
     candidates: list[str] = []
-
-    kv_key = project_vault_kv_key(project_id)
-    kv_vault = run_sync(_kv_lookup(api, kv_key), timeout=5.0)
-    if kv_vault:
-        return kv_vault
-
+    if project_id:
+        candidates.append(project_vault_kv_key(project_id))
     if user_id:
-        candidates.append(f'hermes:user:{user_id}')
+        candidates.append(user_vault_kv_key(user_id))
     if agent_identity:
-        candidates.append(f'hermes:agent:{agent_identity}')
+        candidates.append(agent_vault_kv_key(agent_identity))
 
-    for candidate in candidates:
-        if run_sync(_vault_exists(api, candidate), timeout=3.0):
-            return candidate
+    for kv_key in candidates:
+        value = _resolve_kv_key(api, kv_key)
+        if value:
+            return value
 
     if config_vault:
         return config_vault
@@ -159,7 +185,10 @@ def resolve_vault(
 
 
 __all__ = [
+    'KV_NAMESPACE',
+    'agent_vault_kv_key',
     'derive_project_id',
     'project_vault_kv_key',
     'resolve_vault',
+    'user_vault_kv_key',
 ]

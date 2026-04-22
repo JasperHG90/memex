@@ -73,6 +73,22 @@ def test_invalid_briefing_budget_rejected():
         HermesMemexConfig(briefing_budget=1500)
 
 
+def test_session_title_template_defaults_to_useful_format():
+    cfg = HermesMemexConfig()
+    template = cfg.retain.session_title_template
+    # Must include at least the date placeholder so notes aren't all
+    # identical the way v0.1.12 was.
+    assert '{date}' in template
+    assert template != 'Hermes session'
+
+
+def test_session_title_template_user_override_persists():
+    cfg = HermesMemexConfig.model_validate(
+        {'retain': {'session_title_template': 'My session — {agent_identity}'}}
+    )
+    assert cfg.retain.session_title_template == 'My session — {agent_identity}'
+
+
 def test_server_url_trailing_slash_stripped():
     cfg = HermesMemexConfig(server_url='http://x:8000/')
     assert cfg.server_url == 'http://x:8000'
