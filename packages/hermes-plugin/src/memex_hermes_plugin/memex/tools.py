@@ -24,8 +24,11 @@ via ``async_bridge.run_sync``. All return JSON strings.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
+import mimetypes
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -348,10 +351,173 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
 # <streams append here>
 
 # --- Assets (Stream 5) ---
-# <streams append here>
+
+LIST_ASSETS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_list_assets',
+    'description': (
+        'List file attachments (assets) for a note — images, audio, PDFs, '
+        'documents. REQUIRED when has_assets is true in a search result. '
+        'Feed the returned paths to memex_get_resources to retrieve bytes.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'note_id': {
+                'type': 'string',
+                'description': 'Note UUID.',
+            },
+        },
+        'required': ['note_id'],
+    },
+}
+
+GET_RESOURCES_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_resources',
+    'description': (
+        'Retrieve one or more file attachments by path. Returns base64-encoded '
+        'bytes (diverges from MCP which returns native Image/Audio/File). '
+        'Per-path failure isolation: failures produce {path, error} entries '
+        'interleaved with successful {path, filename, mime_type, content_b64, '
+        'size_bytes} entries. Get paths from memex_list_assets.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'paths': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Resource paths to fetch.',
+            },
+        },
+        'required': ['paths'],
+    },
+}
+
+ADD_ASSETS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_add_assets',
+    'description': (
+        'Attach one or more files to an existing note. Hermes accepts '
+        'base64-encoded content inline (diverges from MCP which takes local '
+        'file_paths) — this is required because the Hermes server may not '
+        'share a filesystem with the caller.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'note_id': {
+                'type': 'string',
+                'description': 'Note UUID.',
+            },
+            'assets': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'filename': {'type': 'string'},
+                        'content_b64': {
+                            'type': 'string',
+                            'description': 'Base64-encoded file bytes.',
+                        },
+                    },
+                    'required': ['filename', 'content_b64'],
+                },
+                'description': 'List of {filename, content_b64} objects.',
+            },
+        },
+        'required': ['note_id', 'assets'],
+    },
+}
 
 # --- KV store (Stream 5) ---
-# <streams append here>
+
+KV_WRITE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_write',
+    'description': (
+        'Write a fact or preference to the KV store with semantic embedding '
+        'for later fuzzy search. Key must start with global:, user:, '
+        'project:, or app:. Examples: "global:lang:python:version", '
+        '"user:work:employer", "project:github.com/user/repo:vault", '
+        '"app:claude-code:theme".'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'value': {
+                'type': 'string',
+                'description': 'The fact or preference text to store.',
+            },
+            'key': {
+                'type': 'string',
+                'description': (
+                    'Namespaced key. Must start with global:, user:, project:, or app:.'
+                ),
+            },
+            'ttl_seconds': {
+                'type': 'integer',
+                'description': ('Optional time-to-live in seconds. Omit for no expiration.'),
+            },
+        },
+        'required': ['value', 'key'],
+    },
+}
+
+KV_GET_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_get',
+    'description': 'Get a KV entry by exact key. Returns null if not found.',
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'key': {
+                'type': 'string',
+                'description': 'Exact key to look up.',
+            },
+        },
+        'required': ['key'],
+    },
+}
+
+KV_SEARCH_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_search',
+    'description': (
+        'Semantic search over KV entries. Returns the closest matching '
+        'entries. Optionally filter by namespace prefixes.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'query': {
+                'type': 'string',
+                'description': 'Search query text.',
+            },
+            'namespaces': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Namespace prefixes to filter (e.g. ["global", "user"]).',
+            },
+            'limit': {
+                'type': 'integer',
+                'description': 'Max results (default: 5).',
+            },
+        },
+        'required': ['query'],
+    },
+}
+
+KV_LIST_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_list',
+    'description': ('List KV entries, optionally filtered by namespace prefixes.'),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'namespaces': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Namespace prefixes to filter (e.g. ["global", "user"]).',
+            },
+        },
+        'required': [],
+    },
+}
 
 
 ALL_SCHEMAS: list[dict[str, Any]] = [
@@ -370,9 +536,14 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---
-    # <Stream 5 appends>
+    LIST_ASSETS_SCHEMA,
+    GET_RESOURCES_SCHEMA,
+    ADD_ASSETS_SCHEMA,
     # --- KV store (Stream 5) ---
-    # <Stream 5 appends>
+    KV_WRITE_SCHEMA,
+    KV_GET_SCHEMA,
+    KV_SEARCH_SCHEMA,
+    KV_LIST_SCHEMA,
 ]
 
 
@@ -446,6 +617,44 @@ def _serialize_entity(entity: Any) -> dict[str, Any]:
         'id': str(getattr(entity, 'id', '')),
         'name': getattr(entity, 'name', ''),
         'mention_count': getattr(entity, 'mention_count', 0),
+    }
+
+
+# NOTE: _scope_from_key MUST stay byte-for-byte in sync with `_scope_from_key`
+# at `packages/mcp/src/memex_mcp/models.py:356`. If you change one, change the
+# other. Both derive the KV namespace scope from a key's prefix. Copied here
+# (rather than imported) to avoid cross-package runtime coupling between the
+# Hermes plugin and the MCP server package. A drift-detector test
+# (test_scope_from_key_matches_mcp_source_of_truth) imports both functions and
+# asserts byte-equal output across the canonical namespace shapes. Shared
+# source would live in memex_common if this becomes a maintenance burden.
+def _scope_from_key(key: str) -> str:
+    """Derive scope from the namespace prefix of a key.
+
+    Examples:
+        'global:foo' -> 'global'
+        'user:work:employer' -> 'user'
+        'project:github.com/user/repo:vault' -> 'project:github.com/user/repo'
+    """
+    if key.startswith('project:'):
+        # project:<project-id>:<setting> -> scope is project:<project-id>
+        rest = key[len('project:') :]
+        colon_idx = rest.rfind(':')
+        if colon_idx > 0:
+            return f'project:{rest[:colon_idx]}'
+        return 'project'
+    return key.split(':', 1)[0] if ':' in key else 'unknown'
+
+
+def _serialize_kv_entry(entry: Any) -> dict[str, Any]:
+    """Serialize a KVEntryDTO to the MCP-compatible shape with derived scope."""
+    key = getattr(entry, 'key', '')
+    return {
+        'key': key,
+        'value': getattr(entry, 'value', ''),
+        'scope': _scope_from_key(key),
+        'updated_at': (u.isoformat() if (u := getattr(entry, 'updated_at', None)) else None),
+        'expires_at': (e.isoformat() if (e := getattr(entry, 'expires_at', None)) else None),
     }
 
 
@@ -747,6 +956,206 @@ def handle_get_entity_cooccurrences(
     return json.dumps({'results': pairs})
 
 
+# --- Assets (Stream 5) ---
+
+
+def handle_list_assets(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """List asset filenames/paths/mime types for a note."""
+    try:
+        note_id_str = _require(args, 'note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        note_uuid = UUID(str(note_id_str))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid note_id: {note_id_str!r}')
+
+    try:
+        note = run_sync(api.get_note(note_uuid), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_list_assets failed: %s', e)
+        return tool_error(f'List assets failed: {e}')
+
+    assets = list(getattr(note, 'assets', None) or [])
+    results: list[dict[str, Any]] = []
+    for asset_path in assets:
+        filename = Path(asset_path).name
+        mime_type, _ = mimetypes.guess_type(filename)
+        results.append({'filename': filename, 'path': asset_path, 'mime_type': mime_type})
+    return json.dumps({'results': results})
+
+
+def handle_get_resources(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """Fetch assets by path; return base64-encoded bytes with per-path failure isolation."""
+    try:
+        paths = _require(args, 'paths')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    if not isinstance(paths, list):
+        return tool_error("'paths' must be an array of strings")
+
+    results: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            content_bytes = run_sync(api.get_resource(path), timeout=30.0)
+            mime_type, _ = mimetypes.guess_type(path)
+            results.append(
+                {
+                    'path': path,
+                    'filename': Path(path).name,
+                    'mime_type': mime_type,
+                    'content_b64': base64.b64encode(content_bytes).decode('ascii'),
+                    'size_bytes': len(content_bytes),
+                }
+            )
+        except Exception as exc:
+            results.append({'path': path, 'error': str(exc)})
+    return json.dumps({'results': results})
+
+
+def handle_add_assets(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """Attach base64-encoded files to a note (diverges from MCP file_paths input)."""
+    try:
+        note_id_str = _require(args, 'note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        note_uuid = UUID(str(note_id_str))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid note_id: {note_id_str!r}')
+
+    assets = args.get('assets') or []
+    try:
+        files: dict[str, bytes] = {
+            a['filename']: base64.b64decode(a['content_b64'], validate=True) for a in assets
+        }
+    except (binascii.Error, ValueError, TypeError, KeyError) as e:
+        return tool_error(f'Invalid asset payload: {e}')
+
+    try:
+        result = run_sync(api.add_note_assets(note_uuid, files), timeout=60.0)
+    except Exception as e:
+        logger.warning('memex_add_assets failed: %s', e)
+        return tool_error(f'Add assets failed: {e}')
+
+    added: list[dict[str, Any]] = []
+    for asset_path in result.get('added_assets', []) or []:
+        filename = Path(asset_path).name
+        mime_type, _ = mimetypes.guess_type(filename)
+        added.append({'filename': filename, 'path': asset_path, 'mime_type': mime_type})
+    return json.dumps(
+        {
+            'status': 'ok',
+            'note_id': str(note_uuid),
+            'added_assets': added,
+            'skipped': result.get('skipped', []),
+            'asset_count': result.get('asset_count', 0),
+        }
+    )
+
+
+# --- KV store (Stream 5) ---
+
+
+def handle_kv_write(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """Write a fact or preference to the KV store with semantic embedding."""
+    try:
+        value = _require(args, 'value')
+        key = _require(args, 'key')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    ttl_seconds = args.get('ttl_seconds')
+
+    try:
+        embedding = run_sync(api.embed_text(value), timeout=15.0)
+        entry = run_sync(
+            api.kv_put(value=value, key=key, embedding=embedding, ttl_seconds=ttl_seconds),
+            timeout=15.0,
+        )
+    except Exception as e:
+        logger.warning('memex_kv_write failed: %s', e)
+        return tool_error(f'KV write failed: {e}')
+
+    return json.dumps(
+        {
+            'key': entry.key,
+            'value': entry.value,
+            'scope': _scope_from_key(entry.key),
+            'expires_at': (e2.isoformat() if (e2 := getattr(entry, 'expires_at', None)) else None),
+        }
+    )
+
+
+def handle_kv_get(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """Exact key lookup in the KV store. Returns JSON null on miss."""
+    try:
+        key = _require(args, 'key')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        entry = run_sync(api.kv_get(key), timeout=15.0)
+    except Exception as e:
+        logger.warning('memex_kv_get failed: %s', e)
+        return tool_error(f'KV get failed: {e}')
+
+    if entry is None:
+        return json.dumps(None)
+    return json.dumps(_serialize_kv_entry(entry))
+
+
+def handle_kv_search(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """Semantic search over KV store entries."""
+    try:
+        query = _require(args, 'query')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    namespaces = args.get('namespaces') or None
+    limit = int(args.get('limit') or 5)
+
+    try:
+        entries = run_sync(
+            api.kv_search(query=query, namespaces=namespaces, limit=limit),
+            timeout=15.0,
+        )
+    except Exception as e:
+        logger.warning('memex_kv_search failed: %s', e)
+        return tool_error(f'KV search failed: {e}')
+
+    return json.dumps({'results': [_serialize_kv_entry(e) for e in entries or []]})
+
+
+def handle_kv_list(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    """List KV entries, optionally filtered by namespace prefixes."""
+    namespaces = args.get('namespaces') or None
+    try:
+        entries = run_sync(api.kv_list(namespaces=namespaces), timeout=15.0)
+    except Exception as e:
+        logger.warning('memex_kv_list failed: %s', e)
+        return tool_error(f'KV list failed: {e}')
+
+    return json.dumps({'results': [_serialize_kv_entry(e) for e in entries or []]})
+
+
 HANDLERS = {
     # --- Vault-scoped (Stream 1) ---
     'memex_recall': handle_recall,
@@ -763,9 +1172,14 @@ HANDLERS = {
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---
-    # <Stream 5 appends>
+    'memex_list_assets': handle_list_assets,
+    'memex_get_resources': handle_get_resources,
+    'memex_add_assets': handle_add_assets,
     # --- KV store (Stream 5) ---
-    # <Stream 5 appends>
+    'memex_kv_write': handle_kv_write,
+    'memex_kv_get': handle_kv_get,
+    'memex_kv_search': handle_kv_search,
+    'memex_kv_list': handle_kv_list,
 }
 
 
@@ -807,7 +1221,12 @@ __all__ = [
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---
-    # <Stream 5 appends>
+    'ADD_ASSETS_SCHEMA',
+    'GET_RESOURCES_SCHEMA',
+    'LIST_ASSETS_SCHEMA',
     # --- KV store (Stream 5) ---
-    # <Stream 5 appends>
+    'KV_GET_SCHEMA',
+    'KV_LIST_SCHEMA',
+    'KV_SEARCH_SCHEMA',
+    'KV_WRITE_SCHEMA',
 ]

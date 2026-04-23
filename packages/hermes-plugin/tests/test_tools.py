@@ -66,7 +66,7 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 def test_all_schemas_have_required_fields():
     names = {s['name'] for s in ALL_SCHEMAS}
-    assert names == {
+    expected = {
         'memex_recall',
         'memex_retrieve_notes',
         'memex_survey',
@@ -74,7 +74,16 @@ def test_all_schemas_have_required_fields():
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
+        # --- Stream 5: assets + KV store ---
+        'memex_list_assets',
+        'memex_get_resources',
+        'memex_add_assets',
+        'memex_kv_write',
+        'memex_kv_get',
+        'memex_kv_search',
+        'memex_kv_list',
     }
+    assert expected.issubset(names)
     for s in ALL_SCHEMAS:
         assert 'description' in s
         assert s['parameters']['type'] == 'object'
@@ -719,3 +728,459 @@ def test_vault_resolution_error_carries_failing_name():
     err = VaultResolutionError('missing-vault')
     assert err.name == 'missing-vault'
     assert str(err) == 'missing-vault'
+
+
+# ---------------------------------------------------------------------------
+# Stream 5: assets + KV store
+# ---------------------------------------------------------------------------
+
+import base64 as _b64  # noqa: E402
+
+from memex_common.schemas import KVEntryDTO, NoteDTO  # noqa: E402
+
+from memex_hermes_plugin.memex.tools import (  # noqa: E402
+    ADD_ASSETS_SCHEMA,
+    GET_RESOURCES_SCHEMA,
+    KV_GET_SCHEMA,
+    KV_LIST_SCHEMA,
+    KV_SEARCH_SCHEMA,
+    KV_WRITE_SCHEMA,
+    LIST_ASSETS_SCHEMA,
+    _scope_from_key,
+)
+
+
+def _fake_kv_entry(key: str = 'user:work:employer', value: str = 'ACME') -> KVEntryDTO:
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    return KVEntryDTO(
+        id=uuid4(),
+        key=key,
+        value=value,
+        created_at=now,
+        updated_at=now,
+        expires_at=None,
+    )
+
+
+def _note_with_assets(assets: list[str]):
+    from datetime import datetime, timezone
+
+    return NoteDTO(
+        id=uuid4(),
+        title='a note',
+        vault_id=uuid4(),
+        created_at=datetime.now(timezone.utc),
+        assets=assets,
+    )
+
+
+# -- Schema-level tests --
+
+
+def test_list_assets_schema_shape():
+    """AC-041: required note_id; no other required params; no vault_ids."""
+    params = LIST_ASSETS_SCHEMA['parameters']
+    assert params['required'] == ['note_id']
+    assert 'vault_ids' not in params['properties']
+    assert params['properties']['note_id']['type'] == 'string'
+
+
+def test_get_resources_schema_shape():
+    """AC-045: required paths array of string."""
+    params = GET_RESOURCES_SCHEMA['parameters']
+    assert params['required'] == ['paths']
+    assert params['properties']['paths']['type'] == 'array'
+    assert params['properties']['paths']['items']['type'] == 'string'
+
+
+def test_add_assets_schema_shape():
+    """AC-048: required note_id + assets[{filename, content_b64}]; divergence note in description."""
+    assert 'diverges from MCP' in ADD_ASSETS_SCHEMA['description']
+    params = ADD_ASSETS_SCHEMA['parameters']
+    assert set(params['required']) == {'note_id', 'assets'}
+    item = params['properties']['assets']['items']
+    assert set(item['required']) == {'filename', 'content_b64'}
+    # Divergence invariant: no file_paths property (Hermes receives bytes, not paths).
+    assert 'file_paths' not in params['properties']
+
+
+def test_kv_write_schema_shape():
+    """AC-078: required value/key; optional ttl_seconds; namespace guidance in description."""
+    desc = KV_WRITE_SCHEMA['description']
+    assert 'global:' in desc and 'user:' in desc and 'project:' in desc and 'app:' in desc
+    params = KV_WRITE_SCHEMA['parameters']
+    assert set(params['required']) == {'value', 'key'}
+    assert 'ttl_seconds' in params['properties']
+    assert 'ttl_seconds' not in params['required']
+
+
+def test_kv_get_schema_shape():
+    """AC-080: required key."""
+    params = KV_GET_SCHEMA['parameters']
+    assert params['required'] == ['key']
+
+
+def test_kv_search_schema_shape():
+    """AC-082: required query; optional namespaces, limit."""
+    params = KV_SEARCH_SCHEMA['parameters']
+    assert params['required'] == ['query']
+    assert 'namespaces' in params['properties']
+    assert 'limit' in params['properties']
+
+
+def test_kv_list_schema_shape():
+    """AC-084: no required params; optional namespaces."""
+    params = KV_LIST_SCHEMA['parameters']
+    assert params['required'] == []
+    assert 'namespaces' in params['properties']
+
+
+# -- Handler tests: list_assets (#22) --
+
+
+def test_list_assets_returns_mcp_asset_shape(config, vault_id):
+    """AC-042: returns {"results": [{filename, path, mime_type}]} from note.assets."""
+    api = Mock()
+    api.get_note = AsyncMock(
+        return_value=_note_with_assets(['note123/diagram.png', 'note123/audio.mp3'])
+    )
+    note_id = uuid4()
+    out = dispatch(
+        'memex_list_assets',
+        {'note_id': str(note_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    assert data['results'][0] == {
+        'filename': 'diagram.png',
+        'path': 'note123/diagram.png',
+        'mime_type': 'image/png',
+    }
+    assert data['results'][1] == {
+        'filename': 'audio.mp3',
+        'path': 'note123/audio.mp3',
+        'mime_type': 'audio/mpeg',
+    }
+
+
+def test_list_assets_empty_returns_empty_results(config, vault_id):
+    """AC-043: empty assets list returns {"results": []}, NOT tool_error."""
+    api = Mock()
+    api.get_note = AsyncMock(return_value=_note_with_assets([]))
+    out = dispatch(
+        'memex_list_assets',
+        {'note_id': str(uuid4())},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data == {'results': []}
+    assert 'error' not in data
+
+
+def test_list_assets_rejects_invalid_uuid(config, vault_id):
+    """AC-044: invalid UUID → tool_error; api.get_note NOT awaited."""
+    api = Mock()
+    api.get_note = AsyncMock()
+    out = dispatch(
+        'memex_list_assets',
+        {'note_id': 'not-a-uuid'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    api.get_note.assert_not_awaited()
+
+
+# -- Handler tests: get_resources (#23) --
+
+
+def test_get_resources_base64_round_trip(config, vault_id):
+    """AC-046: bytes round-trip base64; size_bytes is pre-encode length; mime from path."""
+    api = Mock()
+    raw = b'PNG_FAKE'
+    api.get_resource = AsyncMock(return_value=raw)
+    out = dispatch(
+        'memex_get_resources',
+        {'paths': ['abc/diagram.png']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    result = data['results'][0]
+    assert _b64.b64decode(result['content_b64']) == raw
+    assert result['size_bytes'] == len(raw)
+    assert result['mime_type'] == 'image/png'
+    assert result['filename'] == 'diagram.png'
+    assert result['path'] == 'abc/diagram.png'
+    assert 'error' not in result
+
+
+def test_get_resources_partial_failure_reports_per_path(config, vault_id):
+    """AC-047: per-path partial failure isolation; error entries have no content_b64."""
+    api = Mock()
+    api.get_resource = AsyncMock(
+        side_effect=[b'ok1', FileNotFoundError('missing'), b'ok3'],
+    )
+    out = dispatch(
+        'memex_get_resources',
+        {'paths': ['p1', 'p2', 'p3']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    results = json.loads(out)['results']
+    assert len(results) == 3
+    assert _b64.b64decode(results[0]['content_b64']) == b'ok1'
+    assert results[1]['path'] == 'p2'
+    assert 'error' in results[1]
+    assert 'content_b64' not in results[1]
+    assert _b64.b64decode(results[2]['content_b64']) == b'ok3'
+
+
+# -- Handler tests: add_assets (#24) --
+
+
+def test_add_assets_base64_decode_round_trip(config, vault_id):
+    """AC-049: handler decodes each content_b64 and passes {filename: bytes} to API."""
+    api = Mock()
+    note_id = uuid4()
+    api.add_note_assets = AsyncMock(
+        return_value={
+            'added_assets': [f'{note_id}/x.png'],
+            'skipped': [],
+            'asset_count': 1,
+        }
+    )
+    raw = b'PNG_FAKE'
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(note_id),
+            'assets': [{'filename': 'x.png', 'content_b64': _b64.b64encode(raw).decode('ascii')}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['status'] == 'ok'
+    assert data['note_id'] == str(note_id)
+    assert data['added_assets'][0]['filename'] == 'x.png'
+    assert data['added_assets'][0]['mime_type'] == 'image/png'
+    assert data['asset_count'] == 1
+    api.add_note_assets.assert_awaited_once()
+    uuid_arg, files_arg = api.add_note_assets.call_args.args
+    assert uuid_arg == note_id
+    assert files_arg == {'x.png': raw}
+
+
+def test_add_assets_rejects_invalid_uuid(config, vault_id):
+    """AC-050: invalid note_id UUID → tool_error; api.add_note_assets NOT awaited."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': 'not-a-uuid',
+            'assets': [{'filename': 'x.png', 'content_b64': _b64.b64encode(b'x').decode()}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_add_assets_rejects_invalid_base64(config, vault_id):
+    """Malformed base64 is caught (binascii.Error) and surfaced as tool_error — no handler crash."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [{'filename': 'x.png', 'content_b64': '!!! not base64 !!!'}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    api.add_note_assets.assert_not_awaited()
+
+
+# -- Handler tests: kv_write (#25) --
+
+
+@pytest.mark.parametrize(
+    'key, expected_scope',
+    [
+        ('global:foo', 'global'),
+        ('user:work:employer', 'user'),
+        ('project:github.com/user/repo:vault', 'project:github.com/user/repo'),
+        ('app:claude-code:theme', 'app'),
+        ('project:justid', 'project'),
+        ('nocolon', 'unknown'),
+    ],
+)
+def test_scope_from_key_parametrized(key, expected_scope):
+    """AC-079 scope derivation across all 4 namespace shapes + edges (RFC-012)."""
+    assert _scope_from_key(key) == expected_scope
+
+
+def test_scope_from_key_matches_mcp_source_of_truth():
+    """Drift canary per RFC-012: Hermes copy MUST produce byte-equal output to MCP source.
+
+    Fails loudly if _scope_from_key drifts from packages/mcp/src/memex_mcp/models.py:356.
+    """
+    pytest.importorskip('memex_mcp.models')
+    from memex_mcp.models import _scope_from_key as mcp_fn
+
+    from memex_hermes_plugin.memex.tools import _scope_from_key as hermes_fn
+
+    for key in [
+        'global:foo',
+        'user:work:employer',
+        'project:github.com/user/repo:vault',
+        'app:claude-code:theme',
+        'project:justid',
+        'nocolon',
+        '',
+        ':leading',
+        'trailing:',
+    ]:
+        assert hermes_fn(key) == mcp_fn(key), f'scope drift on key {key!r}'
+
+
+def test_kv_write_generates_embedding_then_puts(config, vault_id):
+    """AC-079: handler calls embed_text FIRST, then kv_put with that embedding."""
+    api = Mock()
+    api.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    entry = _fake_kv_entry(key='user:work:employer', value='ACME')
+    api.kv_put = AsyncMock(return_value=entry)
+    out = dispatch(
+        'memex_kv_write',
+        {'value': 'ACME', 'key': 'user:work:employer', 'ttl_seconds': 3600},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['key'] == 'user:work:employer'
+    assert data['value'] == 'ACME'
+    assert data['scope'] == 'user'
+    api.embed_text.assert_awaited_once_with('ACME')
+    api.kv_put.assert_awaited_once()
+    put_kwargs = api.kv_put.call_args.kwargs
+    assert put_kwargs['value'] == 'ACME'
+    assert put_kwargs['key'] == 'user:work:employer'
+    assert put_kwargs['embedding'] == [0.1, 0.2, 0.3]
+    assert put_kwargs['ttl_seconds'] == 3600
+
+
+def test_kv_write_missing_required_params(config, vault_id):
+    """Missing value/key → tool_error, no API calls."""
+    api = Mock()
+    api.embed_text = AsyncMock()
+    api.kv_put = AsyncMock()
+    out = dispatch('memex_kv_write', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
+    assert 'error' in json.loads(out)
+    api.embed_text.assert_not_awaited()
+    api.kv_put.assert_not_awaited()
+
+
+# -- Handler tests: kv_get (#26) --
+
+
+def test_kv_get_returns_entry(config, vault_id):
+    """AC-081: present entry returns dict with derived scope."""
+    api = Mock()
+    entry = _fake_kv_entry(key='project:gh.com/r:v', value='prod')
+    api.kv_get = AsyncMock(return_value=entry)
+    out = dispatch(
+        'memex_kv_get',
+        {'key': 'project:gh.com/r:v'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['key'] == 'project:gh.com/r:v'
+    assert data['value'] == 'prod'
+    assert data['scope'] == 'project:gh.com/r'
+
+
+def test_kv_get_returns_null_on_miss(config, vault_id):
+    """AC-081: missing key returns JSON null (not tool_error)."""
+    api = Mock()
+    api.kv_get = AsyncMock(return_value=None)
+    out = dispatch('memex_kv_get', {'key': 'x'}, api=api, config=config, vault_id=vault_id)
+    assert json.loads(out) is None
+
+
+# -- Handler tests: kv_search (#27) --
+
+
+def test_kv_search_returns_semantic_results(config, vault_id):
+    """AC-083: handler passes query/namespaces/limit to api.kv_search; wraps into {results: [...]}."""
+    api = Mock()
+    api.kv_search = AsyncMock(
+        return_value=[
+            _fake_kv_entry(key='user:a', value='v1'),
+            _fake_kv_entry(key='user:b', value='v2'),
+        ]
+    )
+    out = dispatch(
+        'memex_kv_search',
+        {'query': 'employer', 'namespaces': ['user'], 'limit': 3},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    assert data['results'][0]['scope'] == 'user'
+    api.kv_search.assert_awaited_once()
+    kwargs = api.kv_search.call_args.kwargs
+    assert kwargs['query'] == 'employer'
+    assert kwargs['namespaces'] == ['user']
+    assert kwargs['limit'] == 3
+
+
+# -- Handler tests: kv_list (#28) --
+
+
+def test_kv_list_returns_entries(config, vault_id):
+    """AC-085: handler passes namespaces to api.kv_list and wraps into {results: [...]}."""
+    api = Mock()
+    api.kv_list = AsyncMock(return_value=[_fake_kv_entry(key='user:pref', value='dark')])
+    out = dispatch(
+        'memex_kv_list',
+        {'namespaces': ['user']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 1
+    assert data['results'][0]['scope'] == 'user'
+    api.kv_list.assert_awaited_once()
+    assert api.kv_list.call_args.kwargs['namespaces'] == ['user']
+
+
+def test_kv_list_no_namespaces_passes_none(config, vault_id):
+    """Optional namespaces: when omitted, handler passes None to api.kv_list."""
+    api = Mock()
+    api.kv_list = AsyncMock(return_value=[])
+    dispatch('memex_kv_list', {}, api=api, config=config, vault_id=vault_id)
+    assert api.kv_list.call_args.kwargs['namespaces'] is None
