@@ -1,6 +1,5 @@
 import os
 import pytest
-import nest_asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from typer.testing import CliRunner
 from httpx import AsyncClient, ASGITransport
@@ -17,7 +16,8 @@ from memex_core.memory.extraction.models import (
 from memex_core.api import MemexAPI
 from memex_core.services.ingestion import IngestionService
 
-nest_asyncio.apply()
+# nest_asyncio is applied conditionally via tests/conftest.py
+# `pytest_collection_modifyitems` hook when this file's tests are selected.
 runner = CliRunner()
 
 

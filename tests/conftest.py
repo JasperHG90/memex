@@ -20,6 +20,56 @@ import logging
 postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
+# Markers present on the four legacy CLI test files that need nest_asyncio
+# (test_cli_memory_vault, test_e2e_cli_memory, test_e2e_reflect,
+# test_e2e_entity_resolver_v2_retrieval). They carry @pytest.mark.asyncio and
+# no integration/llm markers. We evaluate the active -m expression against
+# this marker set to decide whether nest_asyncio should be applied for the
+# current invocation.
+_LEGACY_NEST_ASYNCIO_MARKERS = frozenset({'asyncio'})
+
+
+def pytest_configure(config):
+    """Apply nest_asyncio only when the active -m filter selects at least
+    one of the four legacy files that require it.
+
+    These files used to call ``nest_asyncio.apply()`` at module top level,
+    which fires at pytest collection time and globally patches asyncio for
+    the whole session — breaking pytest-asyncio's fixture setup for
+    integration tests (observed CI symptom on GHA:
+    ``test_e2e_page_index_strategy`` deadlock, traceback landing in
+    nest_asyncio's patched ``run_until_complete``).
+
+    Centralising the apply here lets us skip it when no test that needs it
+    will run. We use pytest's own mark-expression evaluator rather than
+    substring matching on the raw ``-m`` string, so expressions like
+    ``"llm or integration"`` or ``"asyncio and not llm"`` route correctly.
+    """
+    marker_expr = (config.getoption('-m', default='') or '').strip()
+
+    if marker_expr:
+        try:
+            from _pytest.mark.expression import Expression
+
+            def _matcher(name: str, **_kwargs: object) -> bool:
+                return name in _LEGACY_NEST_ASYNCIO_MARKERS
+
+            expr = Expression.compile(marker_expr)
+            should_apply = expr.evaluate(_matcher)  # type: ignore[arg-type]
+        except Exception:
+            # Conservative fallback if the pytest-internal API shifts: apply
+            # unless the filter clearly targets integration-marked tests.
+            should_apply = 'not integration' in marker_expr or 'integration' not in marker_expr
+    else:
+        # No -m filter: all tests selected, legacy files will run → apply.
+        should_apply = True
+
+    if should_apply:
+        import nest_asyncio
+
+        nest_asyncio.apply()
+
+
 @pytest.fixture(autouse=True)
 def _disable_background_scheduler():
     """Prevent the reflection scheduler from running during E2E tests.

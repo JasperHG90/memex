@@ -1,5 +1,4 @@
 import pytest
-import nest_asyncio
 from unittest.mock import MagicMock
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +8,7 @@ from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.utils import get_phonetic_code
 import numpy as np
 
-nest_asyncio.apply()
+# nest_asyncio is applied conditionally via tests/conftest.py pytest_configure.
 
 
 @pytest.fixture
