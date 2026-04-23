@@ -1,0 +1,160 @@
+name: Hermes Agent
+description: Run Hermes Agent with a custom system prompt, skills directory, and provider. Defaults to ollama-cloud/glm-5.1.
+
+inputs:
+  system-prompt-file:
+    description: Path (relative to $GITHUB_WORKSPACE) to a Markdown file holding the agent's ephemeral system prompt.
+    required: true
+  user-message:
+    description: Message passed to the agent. Prefix with @ to load from a file (e.g. "@$RUNNER_TEMP/diff.patch").
+    required: true
+  api-key:
+    description: Provider API key. Wired into OPENAI_API_KEY and HERMES_RUNNER_API_KEY.
+    required: true
+  skills-dir:
+    description: Directory of skills (<name>/SKILL.md subdirs). Copied into $HERMES_HOME/skills/ before the run.
+    required: false
+    default: ''
+  model:
+    description: Model in Hermes provider/model format.
+    required: false
+    default: ollama-cloud/glm-5.1
+  provider:
+    description: Hermes inference provider identifier.
+    required: false
+    default: ollama-cloud
+  base-url:
+    description: OpenAI-compatible base URL for the provider.
+    required: false
+    default: https://ollama.com/v1
+  extra-env:
+    description: Multi-line KEY=VALUE pairs exported before the run. Escape hatch for provider-specific env vars.
+    required: false
+    default: ''
+  max-iterations:
+    description: Cap on Hermes tool-call iterations per conversation.
+    required: false
+    default: '40'
+  enabled-toolsets:
+    description: Comma-separated toolsets to whitelist (empty = Hermes default).
+    required: false
+    default: ''
+  disabled-toolsets:
+    description: Comma-separated toolsets to blacklist.
+    required: false
+    default: ''
+  output-file:
+    description: If set, the agent's final response is also written to this workspace-relative path.
+    required: false
+    default: ''
+  python-version:
+    description: Python version for setup-python.
+    required: false
+    default: '3.12'
+  uv-version:
+    description: Version spec for setup-uv.
+    required: false
+    default: 0.10.x
+
+outputs:
+  response:
+    description: Final agent response (truncated to ~900KB to stay under GitHub output limits).
+    value: ${{ steps.run.outputs.response }}
+  response-file:
+    description: Absolute path to the full response on disk.
+    value: ${{ steps.run.outputs.response-file }}
+  trajectory-file:
+    description: Absolute path to the JSON message trajectory on disk.
+    value: ${{ steps.run.outputs.trajectory-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: ${{ inputs.uv-version }}
+        enable-cache: true
+
+    - name: Prepare HERMES_HOME and copy skills
+      shell: bash
+      env:
+        INPUT_SKILLS_DIR: ${{ inputs.skills-dir }}
+      run: |
+        set -euo pipefail
+        hermes_home="$RUNNER_TEMP/hermes-home"
+        mkdir -p "$hermes_home/skills"
+        echo "HERMES_HOME=$hermes_home" >> "$GITHUB_ENV"
+        if [[ -n "$INPUT_SKILLS_DIR" ]]; then
+          src="$GITHUB_WORKSPACE/$INPUT_SKILLS_DIR"
+          if [[ ! -d "$src" ]]; then
+            echo "::error::skills-dir '$INPUT_SKILLS_DIR' does not exist under \$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          shopt -s nullglob
+          for entry in "$src"/*/; do
+            cp -R "$entry" "$hermes_home/skills/"
+          done
+          echo "Copied $(find "$hermes_home/skills" -mindepth 1 -maxdepth 1 -type d | wc -l) skill(s) into \$HERMES_HOME/skills/"
+        fi
+
+    - name: Export extra-env
+      shell: bash
+      env:
+        EXTRA_ENV: ${{ inputs.extra-env }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$EXTRA_ENV" ]]; then
+          exit 0
+        fi
+        while IFS= read -r line; do
+          [[ -z "$line" || "$line" == \#* ]] && continue
+          if [[ "$line" != *=* ]]; then
+            echo "::warning::extra-env line skipped (no '='): $line"
+            continue
+          fi
+          echo "$line" >> "$GITHUB_ENV"
+        done <<< "$EXTRA_ENV"
+
+    - name: Install runner
+      shell: bash
+      run: |
+        set -euo pipefail
+        uv sync --project "${{ github.action_path }}/runner"
+
+    - name: Run Hermes
+      id: run
+      shell: bash
+      env:
+        HERMES_RUNNER_MODEL: ${{ inputs.model }}
+        HERMES_RUNNER_PROVIDER: ${{ inputs.provider }}
+        HERMES_RUNNER_BASE_URL: ${{ inputs.base-url }}
+        HERMES_RUNNER_API_KEY: ${{ inputs.api-key }}
+        HERMES_RUNNER_SYSTEM_PROMPT_FILE: ${{ inputs.system-prompt-file }}
+        HERMES_RUNNER_USER_MESSAGE: ${{ inputs.user-message }}
+        HERMES_RUNNER_MAX_ITERATIONS: ${{ inputs.max-iterations }}
+        HERMES_RUNNER_ENABLED_TOOLSETS: ${{ inputs.enabled-toolsets }}
+        HERMES_RUNNER_DISABLED_TOOLSETS: ${{ inputs.disabled-toolsets }}
+        HERMES_RUNNER_OUTPUT_FILE: ${{ inputs.output-file }}
+        HERMES_INFERENCE_PROVIDER: ${{ inputs.provider }}
+        HERMES_MODEL: ${{ inputs.model }}
+        OPENAI_BASE_URL: ${{ inputs.base-url }}
+        OPENAI_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -euo pipefail
+        uv run --project "${{ github.action_path }}/runner" python -m hermes_runner
+        response_file="$RUNNER_TEMP/hermes-response.txt"
+        trajectory_file="$RUNNER_TEMP/hermes-trajectory.json"
+        {
+          echo "response<<__HERMES_EOF__"
+          head -c 900000 "$response_file"
+          echo
+          echo "__HERMES_EOF__"
+        } >> "$GITHUB_OUTPUT"
+        echo "response-file=$response_file" >> "$GITHUB_OUTPUT"
+        echo "trajectory-file=$trajectory_file" >> "$GITHUB_OUTPUT"
