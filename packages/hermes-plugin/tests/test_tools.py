@@ -65,8 +65,10 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
-    """Every stream's tools must be registered. Use superset assertion so
-    streams don't fight over the exact set; AC-086 pins the final 27-tool set.
+    """Every landed stream's tools must be registered. Uses a superset
+    (``expected <= names``) assertion so each stream can append without fighting
+    over the exact set; Stream 6 will tighten this back to strict equality once
+    all 27 tools are registered (AC-086).
     """
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
@@ -78,7 +80,20 @@ def test_all_schemas_have_required_fields():
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
     }
-    assert stream_1_baseline <= names
+    stream_2_read_discovery = {
+        'memex_list_vaults',
+        'memex_get_vault_summary',
+        'memex_find_note',
+        'memex_read_note',
+        'memex_get_page_indices',
+        'memex_get_nodes',
+        'memex_get_notes_metadata',
+        'memex_list_notes',
+        'memex_recent_notes',
+        'memex_search_user_notes',
+    }
+    expected = stream_1_baseline | stream_2_read_discovery
+    assert expected <= names
     for s in ALL_SCHEMAS:
         assert 'description' in s
         assert s['parameters']['type'] == 'object'
