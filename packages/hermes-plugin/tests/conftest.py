@@ -53,3 +53,32 @@ def _reset_async_bridge():
         async_bridge._reset_for_tests()
     except Exception:
         pass
+
+
+# --- Shared fixtures for new-tool tests (pre-installed by Stream 1) ---
+# Each stream fills in the fixtures relevant to its tools; fixtures that
+# multiple streams use go here (not in stream-specific test sections).
+
+
+@pytest.fixture
+def _fake_vault_dto():
+    """Stream 2+ supplies the body when it lands ``memex_list_vaults`` / ``memex_get_vault_summary``."""
+    return None
+
+
+@pytest.fixture
+def _fake_find_note_result():
+    """Stream 2 supplies the body when it lands ``memex_find_note``."""
+    return None
+
+
+@pytest.fixture
+def _fake_note_dto():
+    """Stream 2 supplies the body when it lands ``memex_read_note`` / ``memex_get_notes_metadata``."""
+    return None
+
+
+@pytest.fixture
+def _fake_node_dto():
+    """Stream 2 supplies the body when it lands ``memex_get_nodes``."""
+    return None

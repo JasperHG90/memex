@@ -39,8 +39,89 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Vault resolution helpers (Stream 1)
+# ---------------------------------------------------------------------------
+
+
+class VaultResolutionError(Exception):
+    """Raised when a named vault cannot be resolved.
+
+    Carries the failing name so the dispatcher can surface it in ``tool_error``.
+    Only raised by ``_resolve_vault_ids``; never by handlers directly.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
+_VAULT_IDS_DESCRIPTION = (
+    'Vault names or UUIDs to search. Omit to use the session-bound vault '
+    '(see "Active vault" in the Memex Memory system block). '
+    'Use ["*"] for all vaults.'
+)
+
+
+def _vault_ids_schema() -> dict[str, Any]:
+    """Return the canonical ``vault_ids`` property for schema merging."""
+    return {
+        'type': 'array',
+        'items': {'type': 'string'},
+        'description': _VAULT_IDS_DESCRIPTION,
+    }
+
+
+def _resolve_vault_ids(
+    api: Any, args: dict[str, Any], bound_vault_id: UUID | None
+) -> list[UUID] | None:
+    """Resolve user-supplied ``vault_ids`` to a concrete list of UUIDs.
+
+    Rules (in order):
+    1. If ``args`` has no ``vault_ids`` key OR the value is falsy (empty list/None):
+       return ``[bound_vault_id]`` if bound_vault_id else ``None``.
+    2. If ``args['vault_ids']`` contains ``"*"``: return every vault from
+       ``api.list_vaults()`` (executed via ``run_sync``).
+    3. Otherwise each element is parsed as UUID locally; on parse failure,
+       fall back to ``api.resolve_vault_identifier(name)`` (via ``run_sync``).
+
+    Raises ``VaultResolutionError`` (module-local sentinel) when
+    ``api.resolve_vault_identifier`` fails. The dispatcher catches it and
+    returns a ``tool_error`` JSON string referencing the failing name.
+    """
+    import httpx
+
+    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+
+    supplied = args.get('vault_ids')
+    if not supplied:
+        return [bound_vault_id] if bound_vault_id else None
+
+    if ALL_VAULTS_WILDCARD in supplied:
+        vaults = run_sync(api.list_vaults(), timeout=30.0)
+        return [v.id for v in vaults or []]
+
+    resolved: list[UUID] = []
+    for raw in supplied:
+        try:
+            resolved.append(UUID(str(raw)))
+            continue
+        except (ValueError, TypeError):
+            pass
+        try:
+            r = run_sync(api.resolve_vault_identifier(str(raw)), timeout=30.0)
+        except httpx.HTTPStatusError as exc:
+            raise VaultResolutionError(str(raw)) from exc
+        except Exception as exc:
+            raise VaultResolutionError(str(raw)) from exc
+        resolved.append(r if isinstance(r, UUID) else UUID(str(r)))
+    return resolved
+
+
+# ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
+
+# --- Vault-scoped (Stream 1) ---
 
 RECALL_SCHEMA: dict[str, Any] = {
     'name': 'memex_recall',
@@ -61,10 +142,14 @@ RECALL_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max results (default: 10, max: 50).',
             },
+            'vault_ids': _vault_ids_schema(),
             'tags': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': 'Filter by note tags (optional).',
+                'description': (
+                    'Filter by note metadata tags (e.g. "meeting", "bug"). '
+                    'NOT for vault selection — use vault_ids for that.'
+                ),
             },
             'after': {
                 'type': 'string',
@@ -101,6 +186,7 @@ RETRIEVE_NOTES_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max results (default: 10).',
             },
+            'vault_ids': _vault_ids_schema(),
             'expand_query': {
                 'type': 'boolean',
                 'description': 'Use LLM to generate query variations. Higher recall, higher cost (default: false).',
@@ -129,6 +215,7 @@ SURVEY_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max results per decomposed sub-question (default: 10).',
             },
+            'vault_ids': _vault_ids_schema(),
         },
         'required': ['query'],
     },
@@ -197,6 +284,7 @@ LIST_ENTITIES_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max results (default: 20).',
             },
+            'vault_ids': _vault_ids_schema(),
         },
         'required': ['query'],
     },
@@ -220,6 +308,7 @@ GET_ENTITY_MENTIONS_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max mentions to return (default: 20).',
             },
+            'vault_ids': _vault_ids_schema(),
         },
         'required': ['entity_id'],
     },
@@ -243,12 +332,30 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max co-occurring entities (default: 20).',
             },
+            'vault_ids': _vault_ids_schema(),
         },
         'required': ['entity_id'],
     },
 }
 
+# --- Read/discovery (Stream 2) ---
+# <streams append here>
+
+# --- Entities/memory/lineage (Stream 3) ---
+# <streams append here>
+
+# --- Lifecycle/templates (Stream 4) ---
+# <streams append here>
+
+# --- Assets (Stream 5) ---
+# <streams append here>
+
+# --- KV store (Stream 5) ---
+# <streams append here>
+
+
 ALL_SCHEMAS: list[dict[str, Any]] = [
+    # --- Vault-scoped (Stream 1) ---
     RECALL_SCHEMA,
     RETRIEVE_NOTES_SCHEMA,
     SURVEY_SCHEMA,
@@ -256,6 +363,16 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     LIST_ENTITIES_SCHEMA,
     GET_ENTITY_MENTIONS_SCHEMA,
     GET_ENTITY_COOCCURRENCES_SCHEMA,
+    # --- Read/discovery (Stream 2) ---
+    # <Stream 2 appends>
+    # --- Entities/memory/lineage (Stream 3) ---
+    # <Stream 3 appends>
+    # --- Lifecycle/templates (Stream 4) ---
+    # <Stream 4 appends>
+    # --- Assets (Stream 5) ---
+    # <Stream 5 appends>
+    # --- KV store (Stream 5) ---
+    # <Stream 5 appends>
 ]
 
 
@@ -336,6 +453,8 @@ def _serialize_entity(entity: Any) -> dict[str, Any]:
 # Handlers
 # ---------------------------------------------------------------------------
 
+# --- Vault-scoped (Stream 1) ---
+
 
 def handle_recall(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
@@ -347,7 +466,7 @@ def handle_recall(
 
     limit = min(int(args.get('limit') or 10), 50)
     tags = args.get('tags') or None
-    vault_ids: list[Any] | None = [vault_id] if vault_id else None
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         results = run_sync(
@@ -383,7 +502,7 @@ def handle_retrieve_notes(
 
     limit = min(int(args.get('limit') or 10), 50)
     expand_query = bool(args.get('expand_query', config.recall.expand_query))
-    vault_ids: list[Any] | None = [vault_id] if vault_id else None
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         results = run_sync(
@@ -413,7 +532,7 @@ def handle_survey(
         return tool_error(str(e))
 
     limit_per_query = min(int(args.get('limit_per_query') or 10), 25)
-    vault_ids: list[Any] | None = [vault_id] if vault_id else None
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         response = run_sync(
@@ -512,13 +631,14 @@ def handle_list_entities(
         return tool_error(str(e))
 
     limit = min(int(args.get('limit') or 20), 100)
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         entities = run_sync(
             api.search_entities(
                 query=query,
                 limit=limit,
-                vault_id=vault_id,
+                vault_ids=vault_ids,
                 entity_type=args.get('entity_type') or None,
             ),
             timeout=30.0,
@@ -539,13 +659,14 @@ def handle_get_entity_mentions(
         return tool_error(str(e))
 
     limit = min(int(args.get('limit') or 20), 100)
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         mentions = run_sync(
             api.get_entity_mentions(
                 entity_id=entity_id,
                 limit=limit,
-                vault_id=vault_id,
+                vault_ids=vault_ids,
             ),
             timeout=30.0,
         )
@@ -578,13 +699,14 @@ def handle_get_entity_cooccurrences(
         return tool_error(str(e))
 
     limit = min(int(args.get('limit') or 20), 100)
+    vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     try:
         cooccurrences = run_sync(
             api.get_entity_cooccurrences(
                 entity_id=entity_id,
                 limit=limit,
-                vault_id=vault_id,
+                vault_ids=vault_ids,
             ),
             timeout=30.0,
         )
@@ -626,6 +748,7 @@ def handle_get_entity_cooccurrences(
 
 
 HANDLERS = {
+    # --- Vault-scoped (Stream 1) ---
     'memex_recall': handle_recall,
     'memex_retrieve_notes': handle_retrieve_notes,
     'memex_survey': handle_survey,
@@ -633,6 +756,16 @@ HANDLERS = {
     'memex_list_entities': handle_list_entities,
     'memex_get_entity_mentions': handle_get_entity_mentions,
     'memex_get_entity_cooccurrences': handle_get_entity_cooccurrences,
+    # --- Read/discovery (Stream 2) ---
+    # <Stream 2 appends>
+    # --- Entities/memory/lineage (Stream 3) ---
+    # <Stream 3 appends>
+    # --- Lifecycle/templates (Stream 4) ---
+    # <Stream 4 appends>
+    # --- Assets (Stream 5) ---
+    # <Stream 5 appends>
+    # --- KV store (Stream 5) ---
+    # <Stream 5 appends>
 }
 
 
@@ -647,10 +780,14 @@ def dispatch(
     handler = HANDLERS.get(tool_name)
     if handler is None:
         return tool_error(f'Unknown tool: {tool_name}')
-    return handler(api, config, vault_id, args)
+    try:
+        return handler(api, config, vault_id, args)
+    except VaultResolutionError as exc:
+        return tool_error(f'Unknown vault: {exc.name!r}')
 
 
 __all__ = [
+    # --- Vault-scoped (Stream 1) ---
     'ALL_SCHEMAS',
     'GET_ENTITY_COOCCURRENCES_SCHEMA',
     'GET_ENTITY_MENTIONS_SCHEMA',
@@ -660,5 +797,17 @@ __all__ = [
     'RETAIN_SCHEMA',
     'RETRIEVE_NOTES_SCHEMA',
     'SURVEY_SCHEMA',
+    'VaultResolutionError',
+    '_resolve_vault_ids',
     'dispatch',
+    # --- Read/discovery (Stream 2) ---
+    # <Stream 2 appends>
+    # --- Entities/memory/lineage (Stream 3) ---
+    # <Stream 3 appends>
+    # --- Lifecycle/templates (Stream 4) ---
+    # <Stream 4 appends>
+    # --- Assets (Stream 5) ---
+    # <Stream 5 appends>
+    # --- KV store (Stream 5) ---
+    # <Stream 5 appends>
 ]
