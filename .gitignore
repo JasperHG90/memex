@@ -168,10 +168,9 @@ logs
 !src/persona/data
 !src/memex/mcp/prompts
 !packages/common/src/memex_common/prompts
+!.github/prompts/
 
 # LLM
-.gemini
-!.gemini/prompts/
 .persona
 .serena
 .claude

@@ -1,0 +1,48 @@
+name: Hermes Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+concurrency:
+  group: hermes-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && startsWith(github.event.comment.body, '/review'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pr
+        run: echo "number=${{ github.event.pull_request.number || github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr diff "${{ steps.pr.outputs.number }}" > "${{ runner.temp }}/pr.patch"
+
+      - id: hermes
+        uses: ./.github/actions/hermes
+        with:
+          system-prompt-file: .github/prompts/review-system.md
+          skills-dir: packages/claude-code-plugin/skills
+          user-message: '@${{ runner.temp }}/pr.patch'
+          api-key: ${{ secrets.OLLAMA_API_KEY }}
+
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr review "${{ steps.pr.outputs.number }}" --comment -F "${{ steps.hermes.outputs.response-file }}"

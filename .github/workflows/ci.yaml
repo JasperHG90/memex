@@ -25,6 +25,7 @@ jobs:
       firefox-extension: ${{ steps.filter.outputs.firefox-extension }}
       docker: ${{ steps.filter.outputs.docker }}
       ci-config: ${{ steps.filter.outputs.ci-config }}
+      hermes-runner: ${{ steps.filter.outputs.hermes-runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -48,6 +49,8 @@ jobs:
               - '.dockerignore'
             ci-config:
               - '.github/workflows/ci.yaml'
+            hermes-runner:
+              - '.github/actions/hermes/**'
 
   pre-commit:
     needs: changes
@@ -133,6 +136,24 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ env.PYTHON_VERSION }}
           markers: "llm"
+
+  hermes-runner-tests:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.hermes-runner == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install runner (with dev extras)
+        run: uv sync --project .github/actions/hermes/runner --extra dev
+      - name: Run runner tests
+        run: uv run --project .github/actions/hermes/runner pytest
 
   build-python:
     needs: [changes, pre-commit, python-tests]
