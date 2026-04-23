@@ -19,7 +19,7 @@ def build_agent(settings: HermesRunnerSettings) -> _AgentLike:
         'ephemeral_system_prompt': settings.system_prompt,
         'api_key': settings.api_key.get_secret_value(),
         'max_iterations': settings.max_iterations,
-        'quiet_mode': True,
+        'quiet_mode': settings.quiet_mode,
         'skip_context_files': True,
         'skip_memory': True,
     }

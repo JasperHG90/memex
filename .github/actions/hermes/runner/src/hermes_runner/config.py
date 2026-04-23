@@ -34,6 +34,7 @@ class HermesRunnerSettings(BaseSettings):
     enabled_toolsets: Annotated[list[str], NoDecode] = Field(default_factory=list)
     disabled_toolsets: Annotated[list[str], NoDecode] = Field(default_factory=list)
     output_file: Path | None = None
+    quiet_mode: bool = True
 
     @field_validator('enabled_toolsets', 'disabled_toolsets', mode='before')
     @classmethod

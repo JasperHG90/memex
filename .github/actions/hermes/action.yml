@@ -47,6 +47,10 @@ inputs:
     description: If set, the agent's final response is also written to this workspace-relative path.
     required: false
     default: ''
+  quiet-mode:
+    description: Pass quiet_mode=True to AIAgent. Set to 'false' to see iteration-by-iteration agent output in the step log.
+    required: false
+    default: 'true'
   python-version:
     description: Python version for setup-python.
     required: false
@@ -141,6 +145,7 @@ runs:
         HERMES_RUNNER_ENABLED_TOOLSETS: ${{ inputs.enabled-toolsets }}
         HERMES_RUNNER_DISABLED_TOOLSETS: ${{ inputs.disabled-toolsets }}
         HERMES_RUNNER_OUTPUT_FILE: ${{ inputs.output-file }}
+        HERMES_RUNNER_QUIET_MODE: ${{ inputs.quiet-mode }}
         HERMES_INFERENCE_PROVIDER: ${{ inputs.provider }}
         HERMES_MODEL: ${{ inputs.model }}
         OPENAI_BASE_URL: ${{ inputs.base-url }}
