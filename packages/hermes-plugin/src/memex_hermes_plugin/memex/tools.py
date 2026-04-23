@@ -1014,7 +1014,7 @@ def handle_rename_note(
         logger.warning('memex_rename_note failed: %s', e)
         return tool_error(f'Rename note failed: {e}')
 
-    return json.dumps({'note_id': str(note_uuid), 'new_title': new_title})
+    return json.dumps({'status': 'ok', 'note_id': str(note_uuid), 'new_title': new_title})
 
 
 def handle_get_template(

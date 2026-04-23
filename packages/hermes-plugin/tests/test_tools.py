@@ -983,6 +983,7 @@ def test_rename_note_forwards_to_update_note_title(config, vault_id):
         vault_id=vault_id,
     )
     data = json.loads(out)
+    assert data['status'] == 'ok'
     assert data['note_id'] == str(note_uuid)
     assert data['new_title'] == 'A New Name'
     api.update_note_title.assert_awaited_once_with(note_uuid, 'A New Name')
