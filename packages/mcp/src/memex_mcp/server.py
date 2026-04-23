@@ -2061,6 +2061,18 @@ async def memex_list_notes(
             description='Filter by note lifecycle status (e.g. "active", "archived").',
         ),
     ] = None,
+    date_by: Annotated[
+        str,
+        Field(
+            default='created_at',
+            description=(
+                "Which date column --after/--before filter on: 'created_at' "
+                "(ingest time, default), 'publish_date' (authored date), or "
+                "'coalesce' (publish_date if set, else created_at). "
+                'Default is created_at to avoid misextracted publish dates.'
+            ),
+        ),
+    ] = 'created_at',
 ) -> list[McpNote]:
     """List notes with optional date, tag, and status filters."""
     from datetime import datetime as _dt
@@ -2092,6 +2104,7 @@ async def memex_list_notes(
             template=template,
             tags=tags,
             status=status,
+            date_field=date_by,
         )
 
         return [
@@ -2155,6 +2168,17 @@ async def memex_recent_notes(
         str | None,
         Field(default=None, description='Filter by template slug (e.g. "general_note").'),
     ] = None,
+    date_by: Annotated[
+        str,
+        Field(
+            default='created_at',
+            description=(
+                "Which date column --after/--before filter on: 'created_at' "
+                "(ingest time, default), 'publish_date' (authored date), or "
+                "'coalesce' (publish_date if set, else created_at)."
+            ),
+        ),
+    ] = 'created_at',
 ) -> list[McpNote]:
     """List recent notes."""
     from datetime import datetime as _dt
@@ -2185,6 +2209,7 @@ async def memex_recent_notes(
             after=parsed_after,
             before=parsed_before,
             template=template,
+            date_field=date_by,
         )
 
         return [

@@ -20,32 +20,54 @@ import logging
 postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
+# Markers present on the four legacy CLI test files that need nest_asyncio
+# (test_cli_memory_vault, test_e2e_cli_memory, test_e2e_reflect,
+# test_e2e_entity_resolver_v2_retrieval). They carry @pytest.mark.asyncio and
+# no integration/llm markers. We evaluate the active -m expression against
+# this marker set to decide whether nest_asyncio should be applied for the
+# current invocation.
+_LEGACY_NEST_ASYNCIO_MARKERS = frozenset({'asyncio'})
+
+
 def pytest_configure(config):
-    """Apply nest_asyncio only in the unit-test pass, not integration.
+    """Apply nest_asyncio only when the active -m filter selects at least
+    one of the four legacy files that require it.
 
-    Four legacy CLI test files (test_cli_memory_vault, test_e2e_cli_memory,
-    test_e2e_reflect, test_e2e_entity_resolver_v2_retrieval) depend on
-    nest_asyncio to mix Typer's sync ``CliRunner`` with async test bodies.
-    They used to call ``nest_asyncio.apply()`` at module top level, which
-    fires at pytest collection time and globally patches asyncio for the
-    entire session — breaking pytest-asyncio's fixture setup for later
-    integration tests (observed CI symptom: ``test_e2e_page_index_strategy``
-    deadlock on GHA, traceback landing in nest_asyncio's patched
-    ``run_until_complete``).
+    These files used to call ``nest_asyncio.apply()`` at module top level,
+    which fires at pytest collection time and globally patches asyncio for
+    the whole session — breaking pytest-asyncio's fixture setup for
+    integration tests (observed CI symptom on GHA:
+    ``test_e2e_page_index_strategy`` deadlock, traceback landing in
+    nest_asyncio's patched ``run_until_complete``).
 
-    CI runs pytest twice: ``-m "not integration"`` for unit tests (which
-    includes the 4 legacy files) and ``-m "integration and not llm"`` for
-    integration tests (which does NOT include them). We apply nest_asyncio
-    only when the invocation is NOT integration-only, keyed off the ``-m``
-    expression.
+    Centralising the apply here lets us skip it when no test that needs it
+    will run. We use pytest's own mark-expression evaluator rather than
+    substring matching on the raw ``-m`` string, so expressions like
+    ``"llm or integration"`` or ``"asyncio and not llm"`` route correctly.
     """
-    marker_expr = config.getoption('-m', default='') or ''
-    runs_integration_only = 'integration' in marker_expr and 'not integration' not in marker_expr
-    if runs_integration_only:
-        return
-    import nest_asyncio
+    marker_expr = (config.getoption('-m', default='') or '').strip()
 
-    nest_asyncio.apply()
+    if marker_expr:
+        try:
+            from _pytest.mark.expression import Expression
+
+            def _matcher(name: str, **_kwargs: object) -> bool:
+                return name in _LEGACY_NEST_ASYNCIO_MARKERS
+
+            expr = Expression.compile(marker_expr)
+            should_apply = expr.evaluate(_matcher)  # type: ignore[arg-type]
+        except Exception:
+            # Conservative fallback if the pytest-internal API shifts: apply
+            # unless the filter clearly targets integration-marked tests.
+            should_apply = 'not integration' in marker_expr or 'integration' not in marker_expr
+    else:
+        # No -m filter: all tests selected, legacy files will run → apply.
+        should_apply = True
+
+    if should_apply:
+        import nest_asyncio
+
+        nest_asyncio.apply()
 
 
 @pytest.fixture(autouse=True)
