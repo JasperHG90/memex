@@ -20,6 +20,34 @@ import logging
 postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
+def pytest_configure(config):
+    """Apply nest_asyncio only in the unit-test pass, not integration.
+
+    Four legacy CLI test files (test_cli_memory_vault, test_e2e_cli_memory,
+    test_e2e_reflect, test_e2e_entity_resolver_v2_retrieval) depend on
+    nest_asyncio to mix Typer's sync ``CliRunner`` with async test bodies.
+    They used to call ``nest_asyncio.apply()`` at module top level, which
+    fires at pytest collection time and globally patches asyncio for the
+    entire session — breaking pytest-asyncio's fixture setup for later
+    integration tests (observed CI symptom: ``test_e2e_page_index_strategy``
+    deadlock on GHA, traceback landing in nest_asyncio's patched
+    ``run_until_complete``).
+
+    CI runs pytest twice: ``-m "not integration"`` for unit tests (which
+    includes the 4 legacy files) and ``-m "integration and not llm"`` for
+    integration tests (which does NOT include them). We apply nest_asyncio
+    only when the invocation is NOT integration-only, keyed off the ``-m``
+    expression.
+    """
+    marker_expr = config.getoption('-m', default='') or ''
+    runs_integration_only = 'integration' in marker_expr and 'not integration' not in marker_expr
+    if runs_integration_only:
+        return
+    import nest_asyncio
+
+    nest_asyncio.apply()
+
+
 @pytest.fixture(autouse=True)
 def _disable_background_scheduler():
     """Prevent the reflection scheduler from running during E2E tests.

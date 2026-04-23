@@ -1,6 +1,5 @@
 import os
 import pytest
-import nest_asyncio
 import numpy as np
 from unittest.mock import patch, MagicMock, AsyncMock
 from typer.testing import CliRunner
@@ -15,7 +14,7 @@ from memex_cli import app
 from memex_core.server import app as server_app
 from memex_core.config import GLOBAL_VAULT_ID
 
-nest_asyncio.apply()
+# nest_asyncio is applied conditionally via tests/conftest.py pytest_configure.
 runner = CliRunner()
 
 
