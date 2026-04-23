@@ -23,7 +23,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch, prompt_file: Path) -> None:
 def test_defaults_apply(monkeypatch: pytest.MonkeyPatch, prompt_file: Path) -> None:
     _base_env(monkeypatch, prompt_file)
     settings = HermesRunnerSettings()  # type: ignore[call-arg]
-    assert settings.model == 'ollama-cloud/glm-5.1:cloud'
+    assert settings.model == 'glm-5.1:cloud'
     assert settings.provider == 'ollama-cloud'
     assert settings.base_url == 'https://ollama.com/v1'
     assert settings.max_iterations == 40

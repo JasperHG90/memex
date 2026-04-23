@@ -65,7 +65,7 @@ def test_build_agent_passes_settings(
     built = agent_module.build_agent(settings)
     assert isinstance(built, _FakeAgent)
     kw = built.kwargs
-    assert kw['model'] == 'ollama-cloud/glm-5.1:cloud'
+    assert kw['model'] == 'glm-5.1:cloud'
     assert kw['ephemeral_system_prompt'] == 'SYS'
     assert kw['api_key'] == 'k'
     assert kw['max_iterations'] == 3

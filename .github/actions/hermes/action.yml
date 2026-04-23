@@ -16,9 +16,9 @@ inputs:
     required: false
     default: ''
   model:
-    description: Model in Hermes provider/model format.
+    description: Model identifier. When base-url is set, Hermes passes this verbatim to the endpoint's /chat/completions (so do NOT include a provider prefix for Ollama Cloud — just the tag, e.g. "glm-5.1:cloud").
     required: false
-    default: ollama-cloud/glm-5.1:cloud
+    default: glm-5.1:cloud
   provider:
     description: Hermes inference provider identifier.
     required: false
