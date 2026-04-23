@@ -65,8 +65,11 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
+    """Every stream's tools must be registered. Use superset assertion so
+    streams don't fight over the exact set; AC-086 pins the final 27-tool set.
+    """
     names = {s['name'] for s in ALL_SCHEMAS}
-    assert names == {
+    stream_1_baseline = {
         'memex_recall',
         'memex_retrieve_notes',
         'memex_survey',
@@ -75,6 +78,7 @@ def test_all_schemas_have_required_fields():
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
     }
+    assert stream_1_baseline <= names
     for s in ALL_SCHEMAS:
         assert 'description' in s
         assert s['parameters']['type'] == 'object'
@@ -719,3 +723,457 @@ def test_vault_resolution_error_carries_failing_name():
     err = VaultResolutionError('missing-vault')
     assert err.name == 'missing-vault'
     assert str(err) == 'missing-vault'
+
+
+# ---------------------------------------------------------------------------
+# Stream 2: read/discovery tools
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+from memex_common.schemas import VaultSummaryDTO  # noqa: E402
+
+from memex_hermes_plugin.memex.tools import (  # noqa: E402
+    FIND_NOTE_SCHEMA,
+    GET_NODES_SCHEMA,
+    GET_NOTES_METADATA_SCHEMA,
+    GET_PAGE_INDICES_SCHEMA,
+    GET_VAULT_SUMMARY_SCHEMA,
+    LIST_NOTES_SCHEMA,
+    LIST_VAULTS_SCHEMA,
+    READ_NOTE_SCHEMA,
+    RECENT_NOTES_SCHEMA,
+    SEARCH_USER_NOTES_SCHEMA,
+)
+
+
+# -- memex_list_vaults (AC-018, AC-019) --
+
+
+def test_list_vaults_schema_is_registered():
+    """AC-018: schema registered with no required params."""
+    assert LIST_VAULTS_SCHEMA['name'] == 'memex_list_vaults'
+    assert LIST_VAULTS_SCHEMA in ALL_SCHEMAS
+    params = LIST_VAULTS_SCHEMA['parameters']
+    assert params['type'] == 'object'
+    assert params.get('required', []) == []
+
+
+def test_list_vaults_returns_vault_metadata(config, vault_id, _fake_vault_dto):
+    """AC-019: returns results with id/name/description/is_active/note_count."""
+    api = Mock()
+    v1 = _fake_vault_dto(name='primary', is_active=True, note_count=42)
+    v2 = _fake_vault_dto(name='rituals', note_count=7)
+    api.list_vaults = AsyncMock(return_value=[v1, v2])
+    out = dispatch('memex_list_vaults', {}, api=api, config=config, vault_id=vault_id)
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    first = data['results'][0]
+    assert first['name'] == 'primary'
+    assert first['is_active'] is True
+    assert first['note_count'] == 42
+    assert {'id', 'name', 'description', 'is_active', 'note_count'} <= set(first)
+
+
+# -- memex_get_vault_summary (AC-020..AC-023) --
+
+
+def test_get_vault_summary_schema_declares_optional_vault_id():
+    """AC-020: vault_id is optional."""
+    props = GET_VAULT_SUMMARY_SCHEMA['parameters']['properties']
+    assert 'vault_id' in props
+    assert props['vault_id']['type'] == 'string'
+    assert 'vault_id' not in GET_VAULT_SUMMARY_SCHEMA['parameters'].get('required', [])
+
+
+def _fake_vault_summary(vid=None) -> VaultSummaryDTO:
+    return VaultSummaryDTO(
+        id=uuid4(),
+        vault_id=vid or uuid4(),
+        narrative='A vault about X.',
+        themes=[{'name': 'theme1', 'note_count': 3}],
+        inventory={'total_notes': 3},
+        key_entities=[{'name': 'Alice', 'mention_count': 10}],
+        version=1,
+        notes_incorporated=3,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def test_get_vault_summary_returns_summary_dict(config, vault_id):
+    """AC-021: vault name resolves; summary includes required keys."""
+    api = Mock()
+    resolved = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=resolved)
+    api.get_vault_summary = AsyncMock(return_value=_fake_vault_summary(resolved))
+    out = dispatch(
+        'memex_get_vault_summary',
+        {'vault_id': 'rituals'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert {
+        'narrative',
+        'themes',
+        'inventory',
+        'key_entities',
+        'notes_incorporated',
+        'updated_at',
+    } <= set(data)
+    api.resolve_vault_identifier.assert_awaited_once_with('rituals')
+    api.get_vault_summary.assert_awaited_once_with(resolved)
+
+
+def test_get_vault_summary_falls_back_to_bound_vault(config, vault_id):
+    """AC-022: omitted vault_id → falls back to bound_vault_id."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock()
+    api.get_vault_summary = AsyncMock(return_value=_fake_vault_summary(vault_id))
+    dispatch('memex_get_vault_summary', {}, api=api, config=config, vault_id=vault_id)
+    api.get_vault_summary.assert_awaited_once_with(vault_id)
+    api.resolve_vault_identifier.assert_not_awaited()
+
+
+def test_get_vault_summary_none_returns_informative_error(config, vault_id):
+    """AC-023: None summary → tool_error with "next background reflection cycle"."""
+    api = Mock()
+    api.get_vault_summary = AsyncMock(return_value=None)
+    out = dispatch('memex_get_vault_summary', {}, api=api, config=config, vault_id=vault_id)
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'next background reflection cycle' in data['error']
+
+
+# -- memex_find_note (AC-024..AC-026) --
+
+
+def test_find_note_schema_shape():
+    """AC-024: required query string, optional vault_ids array, optional limit int."""
+    params = FIND_NOTE_SCHEMA['parameters']
+    props = params['properties']
+    assert 'query' in props and props['query']['type'] == 'string'
+    assert 'vault_ids' in props and props['vault_ids']['type'] == 'array'
+    assert 'limit' in props and props['limit']['type'] == 'integer'
+    assert params['required'] == ['query']
+
+
+def test_find_note_returns_title_matches(config, vault_id, _fake_find_note_result):
+    """AC-025: calls find_notes_by_title with bound vault and limit."""
+    api = Mock()
+    match = _fake_find_note_result(title='Compatibility Processor', score=0.95)
+    api.find_notes_by_title = AsyncMock(return_value=[match])
+    out = dispatch(
+        'memex_find_note',
+        {'query': 'compatibility', 'limit': 5},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    first = data['results'][0]
+    assert first['title'] == 'Compatibility Processor'
+    assert first['score'] == 0.95
+    assert first['status'] == 'active'
+    kwargs = api.find_notes_by_title.call_args.kwargs
+    assert kwargs['query'] == 'compatibility'
+    assert kwargs['vault_ids'] == [vault_id]
+    assert kwargs['limit'] == 5
+
+
+def test_find_note_resolves_vault_names_via_helper(config, vault_id):
+    """AC-026: vault_ids routes through _resolve_vault_ids (name → UUID)."""
+    api = Mock()
+    resolved = uuid4()
+    api.resolve_vault_identifier = AsyncMock(return_value=resolved)
+    api.find_notes_by_title = AsyncMock(return_value=[])
+    dispatch(
+        'memex_find_note',
+        {'query': 'x', 'vault_ids': ['rituals']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.find_notes_by_title.call_args.kwargs
+    assert kwargs['vault_ids'] == [resolved]
+
+
+# -- memex_read_note (AC-036, AC-037) --
+
+
+def test_read_note_schema_shape():
+    """AC-036: required note_id string."""
+    params = READ_NOTE_SCHEMA['parameters']
+    assert params['properties']['note_id']['type'] == 'string'
+    assert params['required'] == ['note_id']
+
+
+def test_read_note_returns_note_dto(config, vault_id, _fake_note_dto):
+    """AC-037: calls api.get_note(UUID) and returns serialized NoteDTO."""
+    api = Mock()
+    note = _fake_note_dto(title='The Note')
+    api.get_note = AsyncMock(return_value=note)
+    note_id = uuid4()
+    out = dispatch(
+        'memex_read_note',
+        {'note_id': str(note_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['title'] == 'The Note'
+    assert data['original_text'] == 'Hello, world.'
+    api.get_note.assert_awaited_once_with(note_id)
+
+
+def test_read_note_rejects_invalid_uuid(config, vault_id):
+    """Invalid UUID → tool_error without hitting the API."""
+    api = Mock()
+    api.get_note = AsyncMock()
+    out = dispatch(
+        'memex_read_note',
+        {'note_id': 'not-a-uuid'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    api.get_note.assert_not_awaited()
+
+
+# -- memex_get_page_indices (AC-038) --
+
+
+def test_get_page_indices_returns_index_dict(config, vault_id):
+    """AC-038: required note_id; handler calls api.get_note_page_index(UUID)."""
+    params = GET_PAGE_INDICES_SCHEMA['parameters']
+    assert params['properties']['note_id']['type'] == 'string'
+    assert params['required'] == ['note_id']
+
+    api = Mock()
+    page_index = {'root': {'children': []}, 'total_tokens': 42}
+    api.get_note_page_index = AsyncMock(return_value=page_index)
+    note_id = uuid4()
+    out = dispatch(
+        'memex_get_page_indices',
+        {'note_id': str(note_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['note_id'] == str(note_id)
+    assert data['page_index'] == page_index
+    api.get_note_page_index.assert_awaited_once_with(note_id)
+
+
+def test_get_page_indices_rejects_invalid_uuid(config, vault_id):
+    api = Mock()
+    api.get_note_page_index = AsyncMock()
+    out = dispatch(
+        'memex_get_page_indices',
+        {'note_id': 'bad'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    api.get_note_page_index.assert_not_awaited()
+
+
+# -- memex_get_nodes (AC-039) --
+
+
+def test_get_nodes_batch_returns_list(config, vault_id, _fake_node_dto):
+    """AC-039: required node_ids array; handler calls api.get_nodes([UUID,...])."""
+    params = GET_NODES_SCHEMA['parameters']
+    assert params['properties']['node_ids']['type'] == 'array'
+    assert params['required'] == ['node_ids']
+
+    api = Mock()
+    n1 = _fake_node_dto(title='S1', text='content-1')
+    n2 = _fake_node_dto(title='S2', text='content-2')
+    api.get_nodes = AsyncMock(return_value=[n1, n2])
+    id_1 = uuid4()
+    id_2 = uuid4()
+    out = dispatch(
+        'memex_get_nodes',
+        {'node_ids': [str(id_1), str(id_2)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    titles = {r['title'] for r in data['results']}
+    assert titles == {'S1', 'S2'}
+    call_args = api.get_nodes.call_args.args[0]
+    assert call_args == [id_1, id_2]
+
+
+def test_get_nodes_missing_node_ids_returns_error(config, vault_id):
+    api = Mock()
+    api.get_nodes = AsyncMock()
+    out = dispatch('memex_get_nodes', {}, api=api, config=config, vault_id=vault_id)
+    assert 'error' in json.loads(out)
+    api.get_nodes.assert_not_awaited()
+
+
+# -- memex_get_notes_metadata (AC-040) --
+
+
+def test_get_notes_metadata_batch(config, vault_id):
+    """AC-040: required note_ids array; handler calls api.get_notes_metadata."""
+    params = GET_NOTES_METADATA_SCHEMA['parameters']
+    assert params['properties']['note_ids']['type'] == 'array'
+    assert params['required'] == ['note_ids']
+
+    api = Mock()
+    metadata_list = [
+        {'note_id': str(uuid4()), 'title': 't1', 'total_tokens': 200, 'has_assets': False},
+        {'note_id': str(uuid4()), 'title': 't2', 'total_tokens': 450, 'has_assets': True},
+    ]
+    api.get_notes_metadata = AsyncMock(return_value=metadata_list)
+    id_1 = uuid4()
+    id_2 = uuid4()
+    out = dispatch(
+        'memex_get_notes_metadata',
+        {'note_ids': [str(id_1), str(id_2)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['results'] == metadata_list
+    api.get_notes_metadata.assert_awaited_once_with([id_1, id_2])
+
+
+# -- memex_list_notes (AC-054..AC-056) --
+
+
+def _fake_note_list_item(title='Listed', vid=None):
+    from memex_common.schemas import NoteListItemDTO
+
+    return NoteListItemDTO(
+        id=uuid4(),
+        title=title,
+        vault_id=vid or uuid4(),
+        created_at=datetime.now(timezone.utc),
+        template='general_note',
+    )
+
+
+def test_list_notes_schema_shape():
+    """AC-054: optional vault_ids, after, before, limit, template, tags, status, date_by."""
+    props = LIST_NOTES_SCHEMA['parameters']['properties']
+    for expected in (
+        'vault_ids',
+        'after',
+        'before',
+        'limit',
+        'template',
+        'tags',
+        'status',
+        'date_by',
+    ):
+        assert expected in props
+    assert LIST_NOTES_SCHEMA['parameters'].get('required', []) == []
+
+
+def test_list_notes_returns_note_list(config, vault_id):
+    """AC-055: forwards vault_ids plural, parses dates, returns serialized notes."""
+    api = Mock()
+    n1 = _fake_note_list_item('n1')
+    api.list_notes = AsyncMock(return_value=[n1])
+    dispatch(
+        'memex_list_notes',
+        {'after': '2025-01-01', 'before': '2025-12-31', 'limit': 50},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.list_notes.call_args.kwargs
+    # AC-055: plural vault_ids, not scalar vault_id
+    assert kwargs['vault_ids'] == [vault_id]
+    assert 'vault_id' not in kwargs
+    assert isinstance(kwargs['after'], datetime)
+    assert isinstance(kwargs['before'], datetime)
+    assert kwargs['limit'] == 50
+    assert kwargs['offset'] == 0
+    assert kwargs['date_field'] == 'created_at'
+
+
+def test_list_notes_rejects_invalid_date(config, vault_id):
+    """AC-056: invalid date → tool_error, no API call."""
+    api = Mock()
+    api.list_notes = AsyncMock()
+    out = dispatch(
+        'memex_list_notes',
+        {'after': 'not-a-date'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert 'error' in json.loads(out)
+    assert 'not-a-date' in json.loads(out)['error']
+    api.list_notes.assert_not_awaited()
+
+
+# -- memex_recent_notes (AC-057, AC-058) --
+
+
+def test_recent_notes_schema_shape():
+    """AC-057: optional limit, vault_ids, after, before, template, date_by."""
+    props = RECENT_NOTES_SCHEMA['parameters']['properties']
+    for expected in ('limit', 'vault_ids', 'after', 'before', 'template', 'date_by'):
+        assert expected in props
+
+
+def test_recent_notes_returns_note_list(config, vault_id):
+    """AC-058: calls api.get_recent_notes with vault_ids routed through _resolve_vault_ids."""
+    api = Mock()
+    api.get_recent_notes = AsyncMock(return_value=[_fake_note_list_item('r1')])
+    dispatch(
+        'memex_recent_notes',
+        {'limit': 5, 'template': 'general_note'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.get_recent_notes.call_args.kwargs
+    assert kwargs['limit'] == 5
+    assert kwargs['vault_ids'] == [vault_id]
+    assert kwargs['template'] == 'general_note'
+    assert kwargs['date_field'] == 'created_at'
+
+
+# -- memex_search_user_notes (AC-059, AC-060) --
+
+
+def test_search_user_notes_schema_shape():
+    """AC-059: required query, optional vault_ids, optional limit."""
+    params = SEARCH_USER_NOTES_SCHEMA['parameters']
+    props = params['properties']
+    assert props['query']['type'] == 'string'
+    assert props['vault_ids']['type'] == 'array'
+    assert props['limit']['type'] == 'integer'
+    assert params['required'] == ['query']
+
+
+def test_search_user_notes_forwards_source_context(config, vault_id):
+    """AC-060: hard-codes source_context='user_notes'."""
+    api = Mock()
+    api.search = AsyncMock(return_value=[])
+    dispatch(
+        'memex_search_user_notes',
+        {'query': 'my annotations'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.search.call_args.kwargs
+    assert kwargs['source_context'] == 'user_notes'
+    assert kwargs['query'] == 'my annotations'
+    assert kwargs['vault_ids'] == [vault_id]

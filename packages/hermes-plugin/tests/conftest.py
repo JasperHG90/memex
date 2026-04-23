@@ -62,23 +62,77 @@ def _reset_async_bridge():
 
 @pytest.fixture
 def _fake_vault_dto():
-    """Stream 2+ supplies the body when it lands ``memex_list_vaults`` / ``memex_get_vault_summary``."""
-    return None
+    """Factory for VaultDTOs — used by ``memex_list_vaults`` + ``memex_get_vault_summary`` tests."""
+    from uuid import uuid4
+
+    from memex_common.schemas import VaultDTO
+
+    def _build(name: str = 'v', is_active: bool = False, note_count: int = 0) -> VaultDTO:
+        return VaultDTO(id=uuid4(), name=name, is_active=is_active, note_count=note_count)
+
+    return _build
 
 
 @pytest.fixture
 def _fake_find_note_result():
-    """Stream 2 supplies the body when it lands ``memex_find_note``."""
-    return None
+    """Factory for FindNoteResult DTOs — used by ``memex_find_note`` tests."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from memex_common.schemas import FindNoteResult
+
+    def _build(title: str = 'Matched note', score: float = 0.9) -> FindNoteResult:
+        return FindNoteResult(
+            note_id=uuid4(),
+            title=title,
+            score=score,
+            vault_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+            status='active',
+        )
+
+    return _build
 
 
 @pytest.fixture
 def _fake_note_dto():
-    """Stream 2 supplies the body when it lands ``memex_read_note`` / ``memex_get_notes_metadata``."""
-    return None
+    """Factory for NoteDTOs — used by ``memex_read_note`` / ``memex_get_notes_metadata`` tests."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from memex_common.schemas import NoteDTO
+
+    def _build(title: str = 'A note', vault_id=None) -> NoteDTO:
+        return NoteDTO(
+            id=uuid4(),
+            title=title,
+            vault_id=vault_id or uuid4(),
+            created_at=datetime.now(timezone.utc),
+            original_text='Hello, world.',
+        )
+
+    return _build
 
 
 @pytest.fixture
 def _fake_node_dto():
-    """Stream 2 supplies the body when it lands ``memex_get_nodes``."""
-    return None
+    """Factory for NodeDTOs — used by ``memex_get_nodes`` tests."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from memex_common.schemas import NodeDTO
+
+    def _build(title: str = 'Section', text: str = 'body') -> NodeDTO:
+        return NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            title=title,
+            text=text,
+            level=1,
+            seq=0,
+            status='active',
+            created_at=datetime.now(timezone.utc),
+        )
+
+    return _build
