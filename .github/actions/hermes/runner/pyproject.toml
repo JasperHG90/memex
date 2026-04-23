@@ -1,0 +1,36 @@
+[project]
+name = 'hermes-runner'
+version = '0.1.0'
+description = 'Composite-action runner that invokes Hermes Agent with a configurable system prompt, skills directory, and provider.'
+requires-python = '>=3.12'
+dependencies = [
+    'hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git',
+    'pydantic>=2.7',
+    'pydantic-settings>=2.4',
+]
+
+[project.optional-dependencies]
+dev = [
+    'pytest>=8',
+    'pytest-mock>=3.12',
+]
+
+[project.scripts]
+hermes-runner = 'hermes_runner.__main__:main'
+
+[build-system]
+requires = ['hatchling']
+build-backend = 'hatchling.build'
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ['src/hermes_runner']
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+addopts = '-ra'
