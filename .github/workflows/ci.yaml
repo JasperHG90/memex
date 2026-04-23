@@ -151,9 +151,11 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: Install runner (with dev extras)
-        run: uv sync --project .github/actions/hermes/runner --extra dev
+        run: uv sync --extra dev
+        working-directory: .github/actions/hermes/runner
       - name: Run runner tests
-        run: uv run --project .github/actions/hermes/runner pytest
+        run: uv run pytest
+        working-directory: .github/actions/hermes/runner
 
   build-python:
     needs: [changes, pre-commit, python-tests]

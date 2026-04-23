@@ -37,7 +37,7 @@ repos:
       - id: mypy
         additional_dependencies: [pydantic, pytest-mypy, types-PyYAML, types-aiofiles, types-cachetools, types-python-dateutil, types-Markdown]
         args: [--ignore-missing-imports, --check-untyped-defs]
-        exclude: ^tests/integration/test_app\.py$
+        exclude: ^(tests/integration/test_app\.py|\.github/actions/hermes/runner/)
 
   - repo: local
     hooks:
