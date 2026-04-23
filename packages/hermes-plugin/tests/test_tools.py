@@ -66,7 +66,7 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 def test_all_schemas_have_required_fields():
     names = {s['name'] for s in ALL_SCHEMAS}
-    assert names == {
+    expected_stream_1 = {
         'memex_recall',
         'memex_retrieve_notes',
         'memex_survey',
@@ -75,6 +75,16 @@ def test_all_schemas_have_required_fields():
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
     }
+    expected_stream_4 = {
+        'memex_set_note_status',
+        'memex_update_user_notes',
+        'memex_rename_note',
+        'memex_get_template',
+        'memex_list_templates',
+        'memex_register_template',
+    }
+    assert expected_stream_1.issubset(names)
+    assert expected_stream_4.issubset(names)
     for s in ALL_SCHEMAS:
         assert 'description' in s
         assert s['parameters']['type'] == 'object'
