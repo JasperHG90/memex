@@ -325,8 +325,14 @@ class RemoteMemexAPI:
         template: str | None = None,
         tags: list[str] | None = None,
         status: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[NoteListItemDTO]:
-        """List all notes."""
+        """List all notes.
+
+        ``date_field`` controls which column ``after`` / ``before`` filter on:
+        ``'coalesce'`` (default; preserves legacy server behaviour),
+        ``'created_at'`` (ingest time), or ``'publish_date'`` (authored date).
+        """
         params: dict[str, Any] = {'limit': limit, 'offset': offset}
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
@@ -341,6 +347,7 @@ class RemoteMemexAPI:
             params['tags'] = tags
         if status is not None:
             params['status'] = status
+        params['date_field'] = date_field
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
@@ -514,8 +521,9 @@ class RemoteMemexAPI:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         template: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[NoteListItemDTO]:
-        """Get the most recent notes."""
+        """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
@@ -526,6 +534,7 @@ class RemoteMemexAPI:
             params['before'] = before.isoformat()
         if template is not None:
             params['template'] = template
+        params['date_field'] = date_field
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 

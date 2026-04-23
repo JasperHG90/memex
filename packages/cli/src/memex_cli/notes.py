@@ -324,6 +324,17 @@ async def list_notes(
         str | None,
         typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
     ] = None,
+    date_by: Annotated[
+        str,
+        typer.Option(
+            '--date-by',
+            help=(
+                "Which date column --after/--before filter on: 'created_at' "
+                "(ingest time, default), 'publish_date' (authored date), or "
+                "'coalesce' (publish_date if set, else created_at)."
+            ),
+        ),
+    ] = 'created_at',
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -344,6 +355,13 @@ async def list_notes(
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
     config: MemexConfig = ctx.obj
+
+    if date_by not in ('coalesce', 'created_at', 'publish_date'):
+        console.print(
+            f'[red]Invalid --date-by {date_by!r}. Expected one of: '
+            "'coalesce', 'created_at', 'publish_date'[/red]"
+        )
+        raise typer.Exit(code=1)
 
     parsed_after = None
     parsed_before = None
@@ -374,6 +392,7 @@ async def list_notes(
                 after=parsed_after,
                 before=parsed_before,
                 template=template,
+                date_field=date_by,
             )
         except Exception as e:
             handle_api_error(e)
@@ -426,6 +445,17 @@ async def list_recent(
         str | None,
         typer.Option('--before', help='Only notes on/before this date (ISO 8601).'),
     ] = None,
+    date_by: Annotated[
+        str,
+        typer.Option(
+            '--date-by',
+            help=(
+                "Which date column --after/--before filter on: 'created_at' "
+                "(ingest time, default), 'publish_date' (authored date), or "
+                "'coalesce' (publish_date if set, else created_at)."
+            ),
+        ),
+    ] = 'created_at',
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     minimal: Annotated[
         bool, typer.Option('--minimal', help='Output one note ID per line.')
@@ -442,6 +472,13 @@ async def list_recent(
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
     config: MemexConfig = ctx.obj
+
+    if date_by not in ('coalesce', 'created_at', 'publish_date'):
+        console.print(
+            f'[red]Invalid --date-by {date_by!r}. Expected one of: '
+            "'coalesce', 'created_at', 'publish_date'[/red]"
+        )
+        raise typer.Exit(code=1)
 
     parsed_after = None
     parsed_before = None
@@ -470,6 +507,7 @@ async def list_recent(
                 vault_ids=vault_ids,
                 after=parsed_after,
                 before=parsed_before,
+                date_field=date_by,
             )
         except Exception as e:
             handle_api_error(e)

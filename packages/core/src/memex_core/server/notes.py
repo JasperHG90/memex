@@ -74,6 +74,14 @@ async def list_notes(
         None,
         description='Filter by note lifecycle status (e.g. "active", "archived").',
     ),
+    date_field: Literal['coalesce', 'created_at', 'publish_date'] = Query(
+        'coalesce',
+        description=(
+            'Which date column to apply --after / --before against. '
+            "'coalesce' = COALESCE(publish_date, created_at) (default; legacy). "
+            "'created_at' = ingest time. 'publish_date' = authored date."
+        ),
+    ),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -114,6 +122,7 @@ async def list_notes(
                 after=parsed_after,
                 before=parsed_before,
                 template=template,
+                date_field=date_field,
             )
         else:
             docs = await api.list_notes(
@@ -125,6 +134,7 @@ async def list_notes(
                 template=template,
                 tags=tags,
                 status=status,
+                date_field=date_field,
             )
         return ndjson_response([build_note_list_item_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

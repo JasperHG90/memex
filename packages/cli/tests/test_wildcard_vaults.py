@@ -21,6 +21,7 @@ def test_note_list_wildcard_vault(runner, mock_api, mock_config, monkeypatch):
         after=None,
         before=None,
         template=None,
+        date_field='created_at',
     )
 
 
@@ -36,6 +37,7 @@ def test_note_recent_wildcard_vault(runner, mock_api, mock_config, monkeypatch):
         vault_ids=None,
         after=None,
         before=None,
+        date_field='created_at',
     )
 
 
@@ -87,6 +89,7 @@ def test_note_list_specific_vault_still_works(runner, mock_api, mock_config, mon
         after=None,
         before=None,
         template=None,
+        date_field='created_at',
     )
 
 
@@ -104,4 +107,5 @@ def test_note_list_no_vault_uses_config_default(runner, mock_api, mock_config, m
         after=None,
         before=None,
         template=None,
+        date_field='created_at',
     )

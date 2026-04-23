@@ -23,6 +23,7 @@ def test_note_list(runner, mock_api, mock_config, monkeypatch):
         after=None,
         before=None,
         template=None,
+        date_field='created_at',
     )
 
 
@@ -41,7 +42,30 @@ def test_note_list_with_vault(runner, mock_api, mock_config, monkeypatch):
         after=None,
         before=None,
         template=None,
+        date_field='created_at',
     )
+
+
+def test_note_list_date_by_publish_date(runner, mock_api, mock_config, monkeypatch):
+    """--date-by publish_date forwards to the API as date_field."""
+    mock_api.list_notes.return_value = []
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        ['list', '--after', '2026-04-23', '--date-by', 'publish_date'],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0
+    call_kwargs = mock_api.list_notes.call_args.kwargs
+    assert call_kwargs['date_field'] == 'publish_date'
+
+
+def test_note_list_invalid_date_by_rejected(runner, mock_api, mock_config, monkeypatch):
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+    result = runner.invoke(note_app, ['list', '--date-by', 'banana'], obj=mock_config)
+    assert result.exit_code != 0
+    assert 'Invalid --date-by' in result.stdout
 
 
 def test_note_view(runner, mock_api, monkeypatch):

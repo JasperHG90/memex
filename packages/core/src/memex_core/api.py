@@ -791,6 +791,7 @@ class MemexAPI:
         template: str | None = None,
         tags: list[str] | None = None,
         status: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
@@ -803,6 +804,7 @@ class MemexAPI:
             template=template,
             tags=tags,
             status=status,
+            date_field=date_field,
         )
 
     async def get_stats_counts(
@@ -821,6 +823,7 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         template: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
@@ -830,6 +833,7 @@ class MemexAPI:
             after=after,
             before=before,
             template=template,
+            date_field=date_field,
         )
 
     async def list_entities_ranked(

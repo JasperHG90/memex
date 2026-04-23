@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from sqlmodel import col
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
@@ -23,6 +23,31 @@ from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
+
+
+_VALID_DATE_FIELDS = {'coalesce', 'created_at', 'publish_date'}
+
+
+def _resolve_date_column(date_field: str) -> Any:
+    """Map a string token to the SQLAlchemy column expression to filter on.
+
+    'coalesce' is the legacy default — falls back to created_at when
+    publish_date is NULL. Useful for "give me everything authored after X"
+    style queries. 'created_at' / 'publish_date' are explicit.
+    """
+    from memex_core.memory.sql_models import Note
+
+    if date_field not in _VALID_DATE_FIELDS:
+        raise ValueError(
+            f'Invalid date_field {date_field!r}. Expected one of: {sorted(_VALID_DATE_FIELDS)}'
+        )
+    if date_field == 'created_at':
+        return Note.created_at
+    if date_field == 'publish_date':
+        return Note.publish_date
+    return func.coalesce(Note.publish_date, Note.created_at)
+
+
 from memex_core.storage.transaction import AsyncTransaction
 
 logger = logging.getLogger('memex.core.services.notes')
@@ -590,17 +615,21 @@ class NoteService:
         template: str | None = None,
         tags: list[str] | None = None,
         status: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[Any]:
         """
         List ingested documents.
         Filters by the given vault_id(s), or returns all vaults if not provided.
-        Optional after/before filters use COALESCE(publish_date, created_at).
+        Optional after/before filters compare against ``date_field``:
+          - ``'created_at'``  — when Memex ingested the note
+          - ``'publish_date'`` — note's authored/publication date
+          - ``'coalesce'``    — COALESCE(publish_date, created_at) (default,
+            matches legacy behaviour for HTTP/SDK callers)
         Optional tags filter uses JSONB containment (AND semantics).
         Optional status filter matches exact note lifecycle status.
         """
         import json
 
-        from sqlalchemy import func
         from sqlalchemy.dialects.postgresql import JSONB
         from sqlmodel import select
 
@@ -610,15 +639,15 @@ class NoteService:
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
 
+        date_col = _resolve_date_column(date_field)
+
         async with self.metastore.session() as session:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
-                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col >= after)
             if before is not None:
-                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
             if template is not None:
                 stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
@@ -646,9 +675,9 @@ class NoteService:
         after: datetime | None = None,
         before: datetime | None = None,
         template: str | None = None,
+        date_field: str = 'coalesce',
     ) -> list[Any]:
-        """Get the most recent notes."""
-        from sqlalchemy import func
+        """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         from sqlmodel import select
 
         from memex_core.memory.sql_models import Note
@@ -657,15 +686,15 @@ class NoteService:
         if vault_id and vault_id not in ids:
             ids.append(vault_id)
 
+        date_col = _resolve_date_column(date_field)
+
         async with self.metastore.session() as session:
             stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             if after is not None:
-                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col >= after)
             if before is not None:
-                date_col = func.coalesce(Note.publish_date, Note.created_at)
                 stmt = stmt.where(date_col <= before)
             if template is not None:
                 stmt = stmt.where(col(Note.doc_metadata)['template'].astext == template)
