@@ -24,7 +24,7 @@ class HermesRunnerSettings(BaseSettings):
         extra='ignore',
     )
 
-    model: str = 'ollama-cloud/glm-5.1'
+    model: str = 'ollama-cloud/glm-5.1:cloud'
     provider: str = 'ollama-cloud'
     base_url: str | None = 'https://ollama.com/v1'
     api_key: SecretStr

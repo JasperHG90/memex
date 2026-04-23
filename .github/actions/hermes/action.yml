@@ -18,7 +18,7 @@ inputs:
   model:
     description: Model in Hermes provider/model format.
     required: false
-    default: ollama-cloud/glm-5.1
+    default: ollama-cloud/glm-5.1:cloud
   provider:
     description: Hermes inference provider identifier.
     required: false
