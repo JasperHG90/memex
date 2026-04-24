@@ -1959,7 +1959,12 @@ def _serialize_memory_unit_full(unit: Any) -> dict[str, Any]:
 
     metadata = getattr(unit, 'metadata', None) or {}
     links_raw = metadata.get('links', []) if isinstance(metadata, dict) else []
-    contradictions = [lnk for lnk in links_raw if isinstance(lnk, dict)]
+    # Only surface contradiction links; the field name is load-bearing for
+    # downstream consumers. Other link types (semantic, temporal, causal) are
+    # available via handle_get_memory_links with an explicit link_type filter.
+    contradictions = [
+        lnk for lnk in links_raw if isinstance(lnk, dict) and lnk.get('relation') == 'contradiction'
+    ]
 
     return {
         'id': str(getattr(unit, 'id', '')),

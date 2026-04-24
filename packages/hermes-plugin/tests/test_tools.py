@@ -1490,6 +1490,35 @@ def test_get_memory_units_skips_when_api_returns_none(config, vault_id):
     assert len(data['results']) == 1
 
 
+def test_get_memory_units_contradictions_field_filters_by_relation(config, vault_id):
+    """The ``contradictions`` field only includes links with relation == 'contradiction'.
+
+    Regression: earlier it returned any dict in metadata.links (semantic, temporal,
+    causal — anything), which mislabeled the field.
+    """
+    unit = _fake_memory_unit('claim')
+    unit.metadata = {
+        'links': [
+            {'relation': 'contradiction', 'unit_id': str(uuid4()), 'weight': 0.9},
+            {'relation': 'semantic', 'unit_id': str(uuid4()), 'weight': 0.7},
+            {'relation': 'temporal', 'unit_id': str(uuid4()), 'weight': 0.5},
+            'not-a-dict',
+        ],
+    }
+    api = Mock()
+    api.get_memory_unit = AsyncMock(return_value=unit)
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': [str(uuid4())]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    row = json.loads(out)['results'][0]
+    assert len(row['contradictions']) == 1
+    assert row['contradictions'][0]['relation'] == 'contradiction'
+
+
 # -- AC-067: get_memory_links schema --
 
 
