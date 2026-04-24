@@ -74,7 +74,7 @@ jobs:
           done
 
       - id: hermes
-        uses: JasperHG90/toiminnot/actions/hermes@main
+        uses: JasperHG90/toiminnot/actions/hermes@0c29e3265ba4c99a88c03d9926c6771c9759adab  # main as of 2026-04-24
         with:
           system_prompt_file: .github/prompts/issue-triage-system.md
           skills_dir: packages/claude-code-plugin/skills
