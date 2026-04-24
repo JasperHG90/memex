@@ -63,7 +63,8 @@ class TestGetSummary:
         summary = VaultSummary(vault_id=vault_id, narrative='Test summary')
         ctx, session = _mock_session(summary)
         svc.metastore.session = lambda: ctx
-        result = await svc.get_summary(vault_id)
+        with patch.object(svc, '_apply_freshness_overlay', AsyncMock(side_effect=lambda s: s)):
+            result = await svc.get_summary(vault_id)
         assert result == summary
 
     @pytest.mark.asyncio
@@ -74,6 +75,231 @@ class TestGetSummary:
         svc.metastore.session = lambda: ctx
         result = await svc.get_summary(vault_id)
         assert result is None
+
+
+class TestFreshnessOverlay:
+    """Overlay recomputes time-sensitive fields on read and demotes stale trends."""
+
+    @staticmethod
+    def _fresh(**overrides):
+        base = {
+            'recent_activity': {'7d': 0, '30d': 0},
+            'last_activity_at': None,
+            'days_since_last_note': None,
+            'date_range': {},
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.asyncio
+    async def test_overlays_fresh_recent_activity(self):
+        svc = _make_service()
+        vault_id = uuid4()
+        summary = VaultSummary(
+            vault_id=vault_id,
+            narrative='Test',
+            inventory={
+                'total_notes': 100,
+                'recent_activity': {'7d': 277, '30d': 405},
+                'last_activity_at': '2026-03-01T00:00:00+00:00',
+                'days_since_last_note': 0,
+                'date_range': {'earliest': '2025-01-01', 'latest': '2026-03-01'},
+            },
+            themes=[],
+        )
+        fresh = self._fresh(
+            recent_activity={'7d': 0, '30d': 0},
+            last_activity_at='2026-03-01T00:00:00+00:00',
+            days_since_last_note=54,
+            date_range={'latest': '2026-03-01'},
+        )
+        ctx, _ = _mock_session(summary)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock(return_value=fresh)):
+            result = await svc.get_summary(vault_id)
+        assert result is not None
+        assert result.inventory['recent_activity'] == {'7d': 0, '30d': 0}
+        assert result.inventory['last_activity_at'] == '2026-03-01T00:00:00+00:00'
+        assert result.inventory['days_since_last_note'] == 54
+        # Non-time-sensitive fields preserved from the persisted row
+        assert result.inventory['total_notes'] == 100
+
+    @pytest.mark.asyncio
+    async def test_demotes_theme_trends_when_vault_cold(self):
+        svc = _make_service(VaultSummaryConfig(dormant_threshold_days=30))
+        vault_id = uuid4()
+        persisted_themes = [
+            {'name': 'A', 'note_count': 5, 'description': 'x', 'trend': 'growing'},
+            {'name': 'B', 'note_count': 3, 'description': 'y', 'trend': 'stable'},
+            {'name': 'C', 'note_count': 1, 'description': 'z', 'trend': 'dormant'},
+        ]
+        summary = VaultSummary(
+            vault_id=vault_id, narrative='Test', inventory={}, themes=persisted_themes
+        )
+        fresh = self._fresh(last_activity_at='2026-03-01T00:00:00+00:00', days_since_last_note=50)
+        ctx, _ = _mock_session(summary)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock(return_value=fresh)):
+            result = await svc.get_summary(vault_id)
+        assert result is not None
+        assert [t['trend'] for t in result.themes] == ['dormant', 'dormant', 'dormant']
+        # Other theme fields preserved
+        assert result.themes[0]['name'] == 'A'
+        assert result.themes[1]['note_count'] == 3
+
+    @pytest.mark.asyncio
+    async def test_keeps_trends_when_vault_active(self):
+        svc = _make_service(VaultSummaryConfig(dormant_threshold_days=30))
+        vault_id = uuid4()
+        summary = VaultSummary(
+            vault_id=vault_id,
+            narrative='Test',
+            inventory={},
+            themes=[
+                {'name': 'A', 'note_count': 5, 'description': 'x', 'trend': 'growing'},
+                {'name': 'B', 'note_count': 3, 'description': 'y', 'trend': 'stable'},
+            ],
+        )
+        fresh = self._fresh(last_activity_at='2026-04-22T00:00:00+00:00', days_since_last_note=2)
+        ctx, _ = _mock_session(summary)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock(return_value=fresh)):
+            result = await svc.get_summary(vault_id)
+        assert result is not None
+        assert [t['trend'] for t in result.themes] == ['growing', 'stable']
+
+    @pytest.mark.asyncio
+    async def test_overlay_preserves_template_and_tag_counts(self):
+        svc = _make_service()
+        vault_id = uuid4()
+        summary = VaultSummary(
+            vault_id=vault_id,
+            narrative='Test',
+            inventory={
+                'by_template': {'daily': 10, 'meeting': 5},
+                'top_tags': {'work': 8, 'personal': 3},
+            },
+            themes=[],
+        )
+        fresh = self._fresh()
+        ctx, _ = _mock_session(summary)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock(return_value=fresh)):
+            result = await svc.get_summary(vault_id)
+        assert result is not None
+        assert result.inventory['by_template'] == {'daily': 10, 'meeting': 5}
+        assert result.inventory['top_tags'] == {'work': 8, 'personal': 3}
+
+    @pytest.mark.asyncio
+    async def test_handles_empty_vault(self):
+        svc = _make_service()
+        vault_id = uuid4()
+        summary = VaultSummary(
+            vault_id=vault_id,
+            narrative='',
+            inventory={},
+            themes=[
+                {'name': 'A', 'note_count': 0, 'description': 'x', 'trend': 'stable'},
+            ],
+        )
+        fresh = self._fresh()
+        ctx, _ = _mock_session(summary)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock(return_value=fresh)):
+            result = await svc.get_summary(vault_id)
+        assert result is not None
+        assert result.inventory['last_activity_at'] is None
+        assert result.inventory['days_since_last_note'] is None
+        # Trend demotion should not run when last_activity is None
+        assert result.themes[0]['trend'] == 'stable'
+
+    @pytest.mark.asyncio
+    async def test_none_summary_skips_overlay(self):
+        svc = _make_service()
+        vault_id = uuid4()
+        ctx, _ = _mock_session(None)
+        svc.metastore.session = lambda: ctx
+        with patch.object(svc, '_compute_inventory', AsyncMock()) as mock_inv:
+            result = await svc.get_summary(vault_id)
+        assert result is None
+        mock_inv.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_compute_inventory_returns_last_activity_fields(self):
+        """_compute_inventory adds last_activity_at (ISO) and days_since_last_note."""
+        svc = _make_service()
+        vault_id = uuid4()
+        last_activity = datetime(2026, 4, 15, tzinfo=timezone.utc)
+        frozen_now = datetime(2026, 4, 24, tzinfo=timezone.utc)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen_now if tz is None else frozen_now.astimezone(tz)
+
+        session = AsyncMock()
+        total_res = MagicMock()
+        total_res.scalar = MagicMock(return_value=10)
+        ent_res = MagicMock()
+        ent_res.scalar = MagicMock(return_value=5)
+        date_res = MagicMock()
+        date_res.one_or_none = MagicMock(return_value=None)
+        meta_res = MagicMock()
+        meta_res.all = MagicMock(return_value=[])
+        r7_res = MagicMock()
+        r7_res.scalar = MagicMock(return_value=2)
+        r30_res = MagicMock()
+        r30_res.scalar = MagicMock(return_value=5)
+        la_res = MagicMock()
+        la_res.scalar = MagicMock(return_value=last_activity)
+        session.execute = AsyncMock(
+            side_effect=[total_res, ent_res, date_res, meta_res, r7_res, r30_res, la_res]
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        svc.metastore.session = lambda: ctx
+
+        with patch('memex_core.services.vault_summary.datetime', _FrozenDatetime):
+            inv = await svc._compute_inventory(vault_id)
+
+        assert inv['last_activity_at'] == last_activity.isoformat()
+        assert inv['days_since_last_note'] == 9
+        assert inv['recent_activity'] == {'7d': 2, '30d': 5}
+
+    @pytest.mark.asyncio
+    async def test_compute_inventory_empty_vault_nulls(self):
+        """_compute_inventory handles max(created_at) == None (empty vault)."""
+        svc = _make_service()
+        vault_id = uuid4()
+
+        session = AsyncMock()
+        total_res = MagicMock()
+        total_res.scalar = MagicMock(return_value=0)
+        ent_res = MagicMock()
+        ent_res.scalar = MagicMock(return_value=0)
+        date_res = MagicMock()
+        date_res.one_or_none = MagicMock(return_value=None)
+        meta_res = MagicMock()
+        meta_res.all = MagicMock(return_value=[])
+        r7_res = MagicMock()
+        r7_res.scalar = MagicMock(return_value=0)
+        r30_res = MagicMock()
+        r30_res.scalar = MagicMock(return_value=0)
+        la_res = MagicMock()
+        la_res.scalar = MagicMock(return_value=None)
+        session.execute = AsyncMock(
+            side_effect=[total_res, ent_res, date_res, meta_res, r7_res, r30_res, la_res]
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        svc.metastore.session = lambda: ctx
+
+        inv = await svc._compute_inventory(vault_id)
+
+        assert inv['last_activity_at'] is None
+        assert inv['days_since_last_note'] is None
 
 
 class TestDeleteSummary:

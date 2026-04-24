@@ -95,6 +95,7 @@ class TestVaultSummaryUpdateSignature:
         assert 'current_themes' in fields
         assert 'new_notes' in fields
         assert 'vault_stats' in fields
+        assert 'current_time' in fields
 
     def test_output_fields(self):
         fields = VaultSummaryUpdateSignature.output_fields
@@ -108,6 +109,7 @@ class TestVaultSummaryFullSignature:
         assert 'notes' in fields
         assert 'vault_note_count' in fields
         assert 'max_narrative_tokens' in fields
+        assert 'current_time' in fields
 
     def test_output_fields(self):
         fields = VaultSummaryFullSignature.output_fields
@@ -121,6 +123,7 @@ class TestVaultTopicExtractSignature:
         assert 'notes' in fields
         assert 'batch_index' in fields
         assert 'total_batches' in fields
+        assert 'current_time' in fields
 
     def test_output_fields(self):
         fields = VaultTopicExtractSignature.output_fields
@@ -133,8 +136,25 @@ class TestVaultTopicMergeSignature:
         fields = VaultTopicMergeSignature.input_fields
         assert 'batch_results' in fields
         assert 'vault_note_count' in fields
+        assert 'current_time' in fields
 
     def test_output_fields(self):
         fields = VaultTopicMergeSignature.output_fields
         assert 'narrative' in fields
         assert 'themes' in fields
+
+
+class TestSignaturesExposeCurrentTime:
+    """All four theme-producing signatures must ground trend on current_time."""
+
+    def test_all_signatures_declare_current_time_input(self):
+        signatures = [
+            VaultSummaryUpdateSignature,
+            VaultSummaryFullSignature,
+            VaultTopicExtractSignature,
+            VaultTopicMergeSignature,
+        ]
+        for sig in signatures:
+            assert 'current_time' in sig.input_fields, (
+                f'{sig.__name__} missing current_time input field'
+            )

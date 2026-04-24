@@ -92,13 +92,14 @@ class TestVersionTrackingNoInfiniteLoop:
 
         # Phase 2: compute_inventory session
         inv_session = AsyncMock()
-        inv_results = [MagicMock() for _ in range(6)]
+        inv_results = [MagicMock() for _ in range(7)]
         inv_results[0].scalar.return_value = 21  # total_notes
         inv_results[1].scalar.return_value = 5  # total_entities
         inv_results[2].one_or_none.return_value = None  # date_range
         inv_results[3].all.return_value = []  # doc_metadata
         inv_results[4].scalar.return_value = 2  # recent_7d
         inv_results[5].scalar.return_value = 10  # recent_30d
+        inv_results[6].scalar.return_value = None  # last_activity_at
         inv_session.execute = AsyncMock(side_effect=inv_results)
         inv_ctx = AsyncMock()
         inv_ctx.__aenter__ = AsyncMock(return_value=inv_session)
@@ -221,13 +222,14 @@ class TestComputeInventory:
         vault_id = uuid4()
 
         session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
+        results = [MagicMock() for _ in range(7)]
         results[0].scalar.return_value = 0  # total_notes
         results[1].scalar.return_value = 0  # total_entities
         results[2].one_or_none.return_value = (None, None)  # date_range
         results[3].all.return_value = []  # doc_metadata
         results[4].scalar.return_value = 0  # recent_7d
         results[5].scalar.return_value = 0  # recent_30d
+        results[6].scalar.return_value = None  # last_activity_at
         session.execute = AsyncMock(side_effect=results)
 
         ctx = AsyncMock()
@@ -252,7 +254,7 @@ class TestComputeInventory:
         vault_id = uuid4()
 
         session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
+        results = [MagicMock() for _ in range(7)]
         results[0].scalar.return_value = 3
 
         results[1].scalar.return_value = 2
@@ -279,6 +281,7 @@ class TestComputeInventory:
 
         results[4].scalar.return_value = 1
         results[5].scalar.return_value = 3
+        results[6].scalar.return_value = None  # last_activity_at
         session.execute = AsyncMock(side_effect=results)
 
         ctx = AsyncMock()
@@ -300,7 +303,7 @@ class TestComputeInventory:
         vault_id = uuid4()
 
         session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
+        results = [MagicMock() for _ in range(7)]
         results[0].scalar.return_value = 2
         results[1].scalar.return_value = 0
         results[2].one_or_none.return_value = (None, None)
@@ -314,6 +317,7 @@ class TestComputeInventory:
 
         results[4].scalar.return_value = 0
         results[5].scalar.return_value = 0
+        results[6].scalar.return_value = None  # last_activity_at
         session.execute = AsyncMock(side_effect=results)
 
         ctx = AsyncMock()
@@ -333,7 +337,7 @@ class TestComputeInventory:
         vault_id = uuid4()
 
         session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
+        results = [MagicMock() for _ in range(7)]
         results[0].scalar.return_value = 1
         results[1].scalar.return_value = 0
         results[2].one_or_none.return_value = (None, None)
@@ -344,6 +348,7 @@ class TestComputeInventory:
 
         results[4].scalar.return_value = 0
         results[5].scalar.return_value = 0
+        results[6].scalar.return_value = None  # last_activity_at
         session.execute = AsyncMock(side_effect=results)
 
         ctx = AsyncMock()

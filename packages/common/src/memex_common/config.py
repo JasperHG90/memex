@@ -1073,6 +1073,15 @@ class VaultSummaryConfig(BaseModel):
         le=500,
         description='Maximum token count for the vault narrative text.',
     )
+    dormant_threshold_days: int = Field(
+        default=30,
+        ge=1,
+        description='Age in days since the most recent note past which all theme trends '
+        'are forced to "dormant" on read, independent of the cached LLM value. '
+        'Time-sensitive inventory fields (recent_activity, last_activity_at, '
+        'days_since_last_note) are always recomputed on read; this threshold '
+        'governs only the trend demotion.',
+    )
 
 
 class ServerConfig(BaseModel):
