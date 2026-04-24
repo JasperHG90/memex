@@ -1304,6 +1304,27 @@ def test_recent_notes_returns_note_list(config, vault_id):
     assert kwargs['date_field'] == 'created_at'
 
 
+def test_recent_notes_rejects_invalid_date_by(config, vault_id):
+    """Unknown date_by values → tool_error without calling the API.
+
+    Mirrors the validation on ``handle_list_notes``; both handlers forward
+    ``date_by`` to the same canonical set in the client.
+    """
+    api = Mock()
+    api.get_recent_notes = AsyncMock()
+    out = dispatch(
+        'memex_recent_notes',
+        {'date_by': 'updated_at'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert "'updated_at'" in data['error']
+    api.get_recent_notes.assert_not_awaited()
+
+
 # -- memex_search_user_notes (AC-059, AC-060) --
 
 
@@ -2715,6 +2736,41 @@ def test_add_assets_rejects_too_many_items(config, vault_id):
     data = json.loads(out)
     assert 'error' in data
     assert 'too many' in data['error'].lower()
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_add_assets_rejects_oversized_asset(config, vault_id, monkeypatch):
+    """Decoded payload bytes are capped symmetrically with ``handle_get_resources``.
+
+    Without this cap a caller could stream a multi-hundred-MiB base64 blob
+    through the tool layer before the server-side writer rejects it.
+    Monkeypatch shrinks ``_MAX_RESOURCE_BYTES`` so the test doesn't need to
+    allocate ~50 MiB. The error surfaces which filename tripped the cap so
+    the caller can identify the culprit in a multi-asset request.
+    """
+    from memex_hermes_plugin.memex import tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [
+                {'filename': 'small.png', 'content_b64': _b64.b64encode(b'ok').decode('ascii')},
+                {'filename': 'big.png', 'content_b64': _b64.b64encode(b'TOOBIG!').decode('ascii')},
+            ],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'exceeds max size' in data['error']
+    assert "'big.png'" in data['error']
     api.add_note_assets.assert_not_awaited()
 
 

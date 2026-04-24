@@ -1914,9 +1914,14 @@ def handle_recent_notes(
     except ValueError as e:
         return tool_error(str(e))
 
+    date_by = args.get('date_by') or 'created_at'
+    if date_by not in _VALID_DATE_BY:
+        return tool_error(
+            f'Invalid date_by: {date_by!r}. Must be one of: {", ".join(sorted(_VALID_DATE_BY))}'
+        )
+
     vault_ids = _resolve_vault_ids(api, args, vault_id)
     limit = min(int(args.get('limit') or 20), 200)
-    date_by = args.get('date_by') or 'created_at'
 
     try:
         notes = run_sync(
@@ -2517,9 +2522,15 @@ def handle_add_assets(
         return tool_error('Duplicate filenames in assets payload.')
 
     try:
-        files: dict[str, bytes] = {
-            a['filename']: base64.b64decode(a['content_b64'], validate=True) for a in assets
-        }
+        files: dict[str, bytes] = {}
+        for a in assets:
+            decoded = base64.b64decode(a['content_b64'], validate=True)
+            if len(decoded) > _MAX_RESOURCE_BYTES:
+                return tool_error(
+                    f'Asset {a["filename"]!r} exceeds max size '
+                    f'({len(decoded)} > {_MAX_RESOURCE_BYTES} bytes)'
+                )
+            files[a['filename']] = decoded
     except (binascii.Error, ValueError, TypeError, KeyError) as e:
         return tool_error(f'Invalid asset payload: {e}')
 
