@@ -368,7 +368,9 @@ def _scope_from_key(key: str) -> str:
         if colon_idx > 0:
             return f'project:{rest[:colon_idx]}'
         return 'project'
-    return key.split(':', 1)[0] if ':' in key else 'unknown'
+    # ':leading' (empty prefix before the colon) is treated as unknown.
+    result = key.split(':', 1)[0] if ':' in key else ''
+    return result or 'unknown'
 
 
 # ── Add note ──

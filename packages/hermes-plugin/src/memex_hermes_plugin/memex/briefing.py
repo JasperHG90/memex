@@ -92,7 +92,14 @@ _ROUTING_GUIDE = """### How to use Memex tools
 
 Match the tool to the query type:
 
-- **Title known** → `memex_retrieve_notes(query="title fragment")`.
+- **Title known** → `memex_find_note(query="title fragment")` for title lookups.
+  Returns note IDs and match scores.
+- **Vault scoping** — pass `vault_ids=["my-vault", "rituals"]` or `vault_ids=["*"]`
+  for all vaults. Omit to use the session-bound vault. Do NOT use `tags` for
+  vault filtering — `tags` filters note metadata (e.g. "meeting", "bug").
+- **Vault discovery** → `memex_list_vaults()` to enumerate available vaults;
+  `memex_get_vault_summary(vault_id="...")` for a precomputed narrative view
+  of a vault's contents.
 - **Content / document lookup** → call `memex_recall` AND `memex_retrieve_notes`
   in the same assistant message. Recall returns distilled facts; retrieve_notes
   returns source documents. Use both only when the query genuinely benefits —
@@ -104,6 +111,17 @@ Match the tool to the query type:
   `memex_get_entity_mentions` and/or `memex_get_entity_cooccurrences` with the
   returned entity_id. The latter two are safe to call in parallel if both are
   needed; otherwise pick the one that fits the question.
+- **Batch fetch** — hydrate IDs from prior calls: `memex_get_entities(entity_ids=[...])`
+  and `memex_get_memory_units(unit_ids=[...])` accept lists of UUIDs and return
+  the batch. Faster than serial single-ID fetches.
+- **Lineage / relationships** → `memex_get_memory_links(unit_ids=[...])` for typed
+  links (temporal / semantic / causal / contradiction) between memory units;
+  `memex_get_lineage(entity_type=..., entity_id=...)` for the provenance chain
+  (note ↔ memory_unit ↔ observation ↔ mental_model).
+- **KV store** → persist facts and preferences across sessions with
+  `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)`
+  / `memex_kv_list()`. Keys MUST start with a namespace: `global:`, `user:`,
+  `project:<id>:`, or `app:<id>:`. Deletion is CLI-only (use `memex kv delete`).
 - **Capturing work** → `memex_retain`. Pass the session note key below for
   incremental progress captures; omit it for a standalone note."""
 

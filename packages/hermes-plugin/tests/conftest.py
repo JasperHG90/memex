@@ -40,8 +40,20 @@ def _install_hermes_stubs() -> None:
 _install_hermes_stubs()
 
 
+# Hermes stubs are now installed in sys.modules (see ``_install_hermes_stubs``
+# above), so the following module imports are safe to place at the top of the
+# file despite needing to follow the stub registration.
+from datetime import datetime, timezone  # noqa: E402
+from uuid import uuid4  # noqa: E402
+
 import pytest  # noqa: E402
 
+from memex_common.schemas import (  # noqa: E402
+    FindNoteResult,
+    NodeDTO,
+    NoteDTO,
+    VaultDTO,
+)
 from memex_hermes_plugin.memex import async_bridge  # noqa: E402
 
 
@@ -53,3 +65,71 @@ def _reset_async_bridge():
         async_bridge._reset_for_tests()
     except Exception:
         pass
+
+
+# --- Shared fixtures for new-tool tests (pre-installed by Stream 1) ---
+# Each stream fills in the fixtures relevant to its tools; fixtures that
+# multiple streams use go here (not in stream-specific test sections).
+
+
+@pytest.fixture
+def _fake_vault_dto():
+    """Factory for VaultDTOs — used by ``memex_list_vaults`` + ``memex_get_vault_summary`` tests."""
+
+    def _build(name: str = 'v', is_active: bool = False, note_count: int = 0) -> VaultDTO:
+        return VaultDTO(id=uuid4(), name=name, is_active=is_active, note_count=note_count)
+
+    return _build
+
+
+@pytest.fixture
+def _fake_find_note_result():
+    """Factory for FindNoteResult DTOs — used by ``memex_find_note`` tests."""
+
+    def _build(title: str = 'Matched note', score: float = 0.9) -> FindNoteResult:
+        return FindNoteResult(
+            note_id=uuid4(),
+            title=title,
+            score=score,
+            vault_id=uuid4(),
+            created_at=datetime.now(timezone.utc),
+            status='active',
+        )
+
+    return _build
+
+
+@pytest.fixture
+def _fake_note_dto():
+    """Factory for NoteDTOs — used by ``memex_read_note`` / ``memex_get_notes_metadata`` tests."""
+
+    def _build(title: str = 'A note', vault_id=None) -> NoteDTO:
+        return NoteDTO(
+            id=uuid4(),
+            title=title,
+            vault_id=vault_id or uuid4(),
+            created_at=datetime.now(timezone.utc),
+            original_text='Hello, world.',
+        )
+
+    return _build
+
+
+@pytest.fixture
+def _fake_node_dto():
+    """Factory for NodeDTOs — used by ``memex_get_nodes`` tests."""
+
+    def _build(title: str = 'Section', text: str = 'body') -> NodeDTO:
+        return NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            title=title,
+            text=text,
+            level=1,
+            seq=0,
+            status='active',
+            created_at=datetime.now(timezone.utc),
+        )
+
+    return _build
