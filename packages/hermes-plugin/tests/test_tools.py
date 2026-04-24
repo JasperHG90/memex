@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -390,6 +391,10 @@ def test_retain_content_is_structured_markdown_via_gemini():
         },
     }
 
+    # Model pinned to match the rest of the repo's LLM tests. Update in lockstep
+    # with `packages/core/tests/integration/memory/**` when the Gemini line
+    # rolls forward — this is a contract test, not a capability benchmark, so
+    # any model strong enough to follow a tool schema will do.
     resp = litellm.completion(
         model='gemini/gemini-3-flash-preview',
         messages=[
@@ -434,8 +439,6 @@ def test_retain_content_is_structured_markdown_via_gemini():
 
     # Anti-pattern: a top-level ``**Label:** value`` line (outside a bullet).
     # Bullets like ``- **sub-label**: detail`` are allowed.
-    import re
-
     inline_label = re.compile(r'^\*\*[A-Z][^*]{0,40}:\*\*\s+\S')
     offenders = [
         line
