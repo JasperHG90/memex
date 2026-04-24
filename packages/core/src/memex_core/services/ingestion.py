@@ -11,7 +11,7 @@ import re
 import tempfile
 from datetime import date, datetime, timezone
 from typing import Any, AsyncGenerator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import dspy
 import stamina
@@ -415,7 +415,10 @@ ingested_at: {now}
                 logger.info(f'Document {note_uuid} exists but content changed. Incremental update.')
 
         # 3. Open Transaction
-        async with AsyncTransaction(self.metastore, self.filestore, note_uuid) as txn:
+        # Staging txn_id must be unique per in-flight transaction, not derived from
+        # note_uuid — two concurrent ingests of the same content would collide on
+        # the filestore's _active_stages dict and clobber each other's temp paths.
+        async with AsyncTransaction(self.metastore, self.filestore, str(uuid4())) as txn:
             # 4. Stage Files (FS)
             asset_path = f'assets/{vault_name}/{note_uuid}'
             asset_files_list = []
@@ -603,7 +606,10 @@ ingested_at: {now}
         """
         from memex_core.api import inject_user_notes
 
-        chunk_txn_id = chunk[0][2]
+        # Staging txn_id must be unique per in-flight transaction; deriving it from
+        # the note UUID (the idempotency key) causes concurrent ingests of the same
+        # content to collide on the filestore's _active_stages dict.
+        chunk_txn_id = uuid4()
         processed_ids: list[str] = []
         _pending_contradictions: list = []
 
