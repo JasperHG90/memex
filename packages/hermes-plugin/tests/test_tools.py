@@ -356,6 +356,10 @@ def test_recall_forwards_api_errors(config, vault_id):
 # Live LLM check: RETAIN_SCHEMA steers the model to structured markdown.
 # ---------------------------------------------------------------------------
 
+# Module-import-time env read (matches the convention used in
+# `packages/core/tests/integration/memory/models/test_int_litellm_backends.py`).
+# Fine for CI because the job env is stable; if you inject keys per-test via a
+# fixture, inline the `skipif` expression instead.
 _HAS_GEMINI_KEY = bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'))
 
 
