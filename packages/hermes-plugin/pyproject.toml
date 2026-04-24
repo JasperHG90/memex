@@ -49,8 +49,11 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-# Fast unit suite by default; integration suite is opt-in.
-addopts = "-m 'not hermes_integration'"
+# Fast unit suite by default; both hermes_integration and llm are opt-in so
+# a dev with a Gemini key in their environment doesn't accidentally hit the
+# real API on every local run.
+addopts = "-m 'not hermes_integration and not llm'"
 markers = [
   "hermes_integration: tests that clone + install hermes-agent and exercise the real plugin loader (slow; opt-in)",
+  "llm: tests that make live LLM API calls (skipif no GEMINI_API_KEY / GOOGLE_API_KEY; opt-in)",
 ]
