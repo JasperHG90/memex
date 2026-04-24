@@ -63,8 +63,9 @@ K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
 
 # Namespace for deterministic virtual MemoryUnit ids synthesized from
-# MentalModel observations. Derived from uuid5(NAMESPACE_URL, ...) — stable
-# across processes, unlike Python's PYTHONHASHSEED-salted hash().
+# MentalModel observations. Stable across processes, unlike Python's
+# PYTHONHASHSEED-salted hash(). Reproducible via:
+#   uuid5(uuid.NAMESPACE_URL, 'memex/retrieval/virtual-mental-model-observation')
 _VIRTUAL_UNIT_NS = UUID('bf63d7e5-1e6a-5cf4-9f33-2e85d3a48d38')
 
 

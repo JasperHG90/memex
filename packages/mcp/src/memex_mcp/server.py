@@ -1131,8 +1131,18 @@ def _build_memory_unit_model(
     unit_metadata = res.metadata if isinstance(res.metadata, dict) else {}
     tags = unit_metadata.get('tags', [])
 
+    # Virtual metadata stores UUIDs as strings (JSONB round-trip); coerce to
+    # UUID at the MCP boundary so the Pydantic model stays typed, and skip
+    # malformed entries rather than raising — corrupted metadata must not
+    # break the whole response.
     is_virtual = bool(unit_metadata.get('virtual'))
-    mental_model_id = unit_metadata.get('mental_model_id') if is_virtual else None
+    mental_model_id_raw = unit_metadata.get('mental_model_id') if is_virtual else None
+    mental_model_id_uuid: UUID | None = None
+    if mental_model_id_raw:
+        try:
+            mental_model_id_uuid = UUID(str(mental_model_id_raw))
+        except (ValueError, TypeError):
+            mental_model_id_uuid = None
     evidence_ids_raw = unit_metadata.get('evidence_ids', []) if is_virtual else []
     evidence_ids: list[UUID] = []
     for eid in evidence_ids_raw or []:
@@ -1153,7 +1163,7 @@ def _build_memory_unit_model(
         'status': getattr(res, 'status', 'active'),
         'superseded_by': supersessions,
         'virtual': is_virtual,
-        'mental_model_id': UUID(str(mental_model_id)) if mental_model_id else None,
+        'mental_model_id': mental_model_id_uuid,
         'evidence_ids': evidence_ids,
     }
 

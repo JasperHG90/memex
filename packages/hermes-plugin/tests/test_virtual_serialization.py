@@ -67,12 +67,12 @@ def test_serialize_memory_unit_omits_virtual_fields_for_real_units():
 
 def test_serialize_memory_unit_full_flags_virtual():
     mm_id = uuid4()
-    evidence_ids = [uuid4()]
+    evidence_ids = [uuid4(), uuid4()]
     out = _serialize_memory_unit_full(_virtual_unit(mm_id, evidence_ids))
 
     assert out['virtual'] is True
     assert out['mental_model_id'] == str(mm_id)
-    assert out['evidence_ids'] == [str(evidence_ids[0])]
+    assert out['evidence_ids'] == [str(e) for e in evidence_ids]
     assert out['note_id'] is None
 
 
