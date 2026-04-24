@@ -1,0 +1,166 @@
+name: Hermes Issue Triage
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Issue number to triage (required when running manually).
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: hermes-issue-triage-${{ github.event.issue.number || inputs.issue-number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    if: >-
+      github.event_name == 'issues' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request == null && contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/triage') || startsWith(github.event.comment.body, '/Triage') || startsWith(github.event.comment.body, '/TRIAGE')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: issue
+        run: echo "number=${{ github.event.issue.number || inputs.issue-number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.issue.outputs.number }}
+          ISSUE_JSON: ${{ runner.temp }}/issue.json
+          ISSUE_MD: ${{ runner.temp }}/issue.md
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE_NUM" \
+            --json number,title,body,labels,author \
+            > "$ISSUE_JSON"
+          jq -r '
+            "# Issue #\(.number)\n\n" +
+            "## Title\n\(.title)\n\n" +
+            "## Author\n@\(.author.login)\n\n" +
+            "## Existing labels\n\(if (.labels|length) > 0 then (.labels | map(.name) | join(", ")) else "(none)" end)\n\n" +
+            "## Body\n\(.body // "(empty)")\n"
+          ' "$ISSUE_JSON" > "$ISSUE_MD"
+
+      - name: Ensure triage labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ensure() {
+            local out rc=0
+            out=$(gh label create "$1" --color "$2" --description "$3" 2>&1) || rc=$?
+            if [ $rc -ne 0 ] && ! printf '%s' "$out" | grep -q "already exists"; then
+              echo "::warning::failed to create label $1: $out"
+            fi
+          }
+          ensure "priority/critical"   "b60205" "Urgent — blocks users or core functionality"
+          ensure "priority/high"       "d93f0b" "Important — should be addressed soon"
+          ensure "priority/medium"     "fbca04" "Normal priority"
+          ensure "priority/low"        "0e8a16" "Nice to have"
+          ensure "rfc"                 "5319e7" "Request for Comments"
+          ensure "question"            "cc317c" "Further information is requested"
+          ensure "documentation"       "0075ca" "Improvements or additions to documentation"
+          for area in core cli mcp common eval firefox-extension claude-code-plugin hermes-plugin docs ci; do
+            ensure "area/$area" "1d76db" "Affects $area"
+          done
+
+      - id: hermes
+        uses: JasperHG90/toiminnot/actions/hermes@0c29e3265ba4c99a88c03d9926c6771c9759adab  # main as of 2026-04-24
+        with:
+          system_prompt_file: .github/prompts/issue-triage-system.md
+          skills_dir: packages/claude-code-plugin/skills
+          user_message: '@${{ runner.temp }}/issue.md'
+          api_key: ${{ secrets.OLLAMA_API_KEY }}
+          max_iterations: '12'
+          quiet_mode: 'false'
+
+      - name: Apply triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.issue.outputs.number }}
+          RESPONSE_FILE: ${{ steps.hermes.outputs.response_file }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, re, subprocess, sys
+
+          issue = os.environ['ISSUE_NUM']
+          response_path = os.environ['RESPONSE_FILE']
+          if not os.path.isfile(response_path):
+              print('::error::Hermes produced no response file', file=sys.stderr)
+              sys.exit(1)
+          response = open(response_path).read()
+
+          m = re.search(r'<!--\s*hermes-triage:\s*(\{.*?\})\s*-->', response, re.DOTALL)
+          payload = {}
+          if m:
+              try:
+                  payload = json.loads(m.group(1))
+              except json.JSONDecodeError as e:
+                  print(f'::warning::could not parse hermes-triage trailer: {e}', file=sys.stderr)
+
+          ALLOWED_TYPE_LABELS = {'bug', 'enhancement', 'rfc', 'question', 'documentation'}
+          ALLOWED_AREA_LABELS = {
+              f'area/{a}' for a in (
+                  'core', 'cli', 'mcp', 'common', 'eval',
+                  'firefox-extension', 'claude-code-plugin',
+                  'hermes-plugin', 'docs', 'ci',
+              )
+          }
+          ALLOWED_PRIORITY_LABELS = {f'priority/{p}' for p in ('critical', 'high', 'medium', 'low')}
+          ALLOWED = ALLOWED_TYPE_LABELS | ALLOWED_AREA_LABELS | ALLOWED_PRIORITY_LABELS
+
+          priority = (payload.get('priority') or '').strip().lower()
+          raw_labels = [l.strip() for l in (payload.get('labels') or []) if isinstance(l, str) and l.strip()]
+          if priority in {'critical', 'high', 'medium', 'low'}:
+              raw_labels.insert(0, f'priority/{priority}')
+
+          # Deduplicate while preserving order.
+          seen = set()
+          raw_labels = [l for l in raw_labels if not (l in seen or seen.add(l))]
+
+          # Validate against allowlist so a hallucinated label can't fail the whole step.
+          labels = [l for l in raw_labels if l in ALLOWED]
+          rejected = [l for l in raw_labels if l not in ALLOWED]
+          if rejected:
+              print(f'::warning::rejected unknown labels: {rejected}', file=sys.stderr)
+
+          comment_body = re.sub(r'\n*<!--\s*hermes-triage:.*?-->\s*$', '', response, flags=re.DOTALL).strip()
+          if not comment_body:
+              comment_body = response
+
+          with open('/tmp/hermes-comment.md', 'w') as f:
+              f.write(comment_body)
+
+          subprocess.check_call(['gh', 'issue', 'comment', issue, '-F', '/tmp/hermes-comment.md'])
+
+          # Apply labels one at a time so a single failure doesn't drop the rest.
+          applied, failed = [], []
+          for label in labels:
+              try:
+                  subprocess.check_call(['gh', 'issue', 'edit', issue, '--add-label', label])
+                  applied.append(label)
+              except subprocess.CalledProcessError:
+                  print(f'::warning::failed to apply label: {label}', file=sys.stderr)
+                  failed.append(label)
+
+          if applied:
+              print(f'Applied labels: {", ".join(applied)}')
+          if failed:
+              print(f'Failed labels: {", ".join(failed)}')
+          if not labels:
+              print('No labels to apply.')
+          PY

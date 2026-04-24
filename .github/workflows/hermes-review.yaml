@@ -42,16 +42,16 @@ jobs:
         run: gh pr diff "${{ steps.pr.outputs.number }}" > "${{ runner.temp }}/pr.patch"
 
       - id: hermes
-        uses: ./.github/actions/hermes
+        uses: JasperHG90/toiminnot/actions/hermes@0c29e3265ba4c99a88c03d9926c6771c9759adab  # main as of 2026-04-24
         with:
-          system-prompt-file: .github/prompts/review-system.md
-          skills-dir: packages/claude-code-plugin/skills
-          user-message: '@${{ runner.temp }}/pr.patch'
-          api-key: ${{ secrets.OLLAMA_API_KEY }}
-          max-iterations: '12'
-          quiet-mode: 'false'
+          system_prompt_file: .github/prompts/review-system.md
+          skills_dir: packages/claude-code-plugin/skills
+          user_message: '@${{ runner.temp }}/pr.patch'
+          api_key: ${{ secrets.OLLAMA_API_KEY }}
+          max_iterations: '12'
+          quiet_mode: 'false'
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr review "${{ steps.pr.outputs.number }}" --comment -F "${{ steps.hermes.outputs.response-file }}"
+        run: gh pr review "${{ steps.pr.outputs.number }}" --comment -F "${{ steps.hermes.outputs.response_file }}"
