@@ -1196,7 +1196,9 @@ _VALID_KV_NAMESPACES = ('global:', 'user:', 'project:', 'app:')
 
 def _serialize_memory_unit(unit: Any) -> dict[str, Any]:
     """Trim a MemoryUnitDTO to the fields useful to the model."""
-    return {
+    metadata = getattr(unit, 'metadata', None) or {}
+    is_virtual = bool(metadata.get('virtual')) if isinstance(metadata, dict) else False
+    out: dict[str, Any] = {
         'id': str(getattr(unit, 'id', '')),
         'text': getattr(unit, 'text', ''),
         'type': getattr(unit, 'fact_type', None),
@@ -1204,6 +1206,13 @@ def _serialize_memory_unit(unit: Any) -> dict[str, Any]:
         'note_id': str(u) if (u := getattr(unit, 'note_id', None)) else None,
         'mentioned_at': (m.isoformat() if (m := getattr(unit, 'mentioned_at', None)) else None),
     }
+    if is_virtual:
+        # Synthesized from a MentalModel observation; `id` is a deterministic
+        # placeholder, not a DB row — agents must not point-lookup it.
+        out['virtual'] = True
+        out['mental_model_id'] = metadata.get('mental_model_id')
+        out['evidence_ids'] = metadata.get('evidence_ids', [])
+    return out
 
 
 def _serialize_note_result(result: Any) -> dict[str, Any]:
@@ -2108,7 +2117,8 @@ def _serialize_memory_unit_full(unit: Any) -> dict[str, Any]:
         lnk for lnk in links_raw if isinstance(lnk, dict) and lnk.get('relation') == 'contradiction'
     ]
 
-    return {
+    is_virtual = bool(metadata.get('virtual')) if isinstance(metadata, dict) else False
+    out: dict[str, Any] = {
         'id': str(getattr(unit, 'id', '')),
         'text': getattr(unit, 'text', ''),
         'fact_type': getattr(unit, 'fact_type', None),
@@ -2117,6 +2127,11 @@ def _serialize_memory_unit_full(unit: Any) -> dict[str, Any]:
         'superseded_by': superseded,
         'contradictions': contradictions,
     }
+    if is_virtual:
+        out['virtual'] = True
+        out['mental_model_id'] = metadata.get('mental_model_id')
+        out['evidence_ids'] = metadata.get('evidence_ids', [])
+    return out
 
 
 def handle_get_memory_links(

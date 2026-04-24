@@ -123,6 +123,12 @@ class McpMemoryUnitBase(BaseModel):
     links: list[McpMemoryLink] = Field(default_factory=list)
     staleness: Staleness | None = None
     previously_returned: bool = False
+    # Virtual units are synthesized from MentalModel observations — their `id`
+    # is a deterministic placeholder, not a DB row. When `virtual=True`, agents
+    # should not point-lookup `id`; resolve via `evidence_ids` instead.
+    virtual: bool = False
+    mental_model_id: UUID | None = None
+    evidence_ids: list[UUID] = Field(default_factory=list)
 
     @field_validator('tags', mode='before')
     @classmethod

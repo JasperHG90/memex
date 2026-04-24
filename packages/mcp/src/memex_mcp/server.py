@@ -1131,6 +1131,16 @@ def _build_memory_unit_model(
     unit_metadata = res.metadata if isinstance(res.metadata, dict) else {}
     tags = unit_metadata.get('tags', [])
 
+    is_virtual = bool(unit_metadata.get('virtual'))
+    mental_model_id = unit_metadata.get('mental_model_id') if is_virtual else None
+    evidence_ids_raw = unit_metadata.get('evidence_ids', []) if is_virtual else []
+    evidence_ids: list[UUID] = []
+    for eid in evidence_ids_raw or []:
+        try:
+            evidence_ids.append(UUID(str(eid)))
+        except (ValueError, TypeError):
+            continue
+
     base_kwargs: dict[str, Any] = {
         'id': res.id,
         'text': res.text,
@@ -1142,6 +1152,9 @@ def _build_memory_unit_model(
         'tags': tags,
         'status': getattr(res, 'status', 'active'),
         'superseded_by': supersessions,
+        'virtual': is_virtual,
+        'mental_model_id': UUID(str(mental_model_id)) if mental_model_id else None,
+        'evidence_ids': evidence_ids,
     }
 
     links_raw = unit_metadata.get('links', [])
