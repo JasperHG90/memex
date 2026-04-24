@@ -107,6 +107,13 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_get_memory_units',
         'memex_get_memory_links',
         'memex_get_lineage',
+        # Stream 4 (lifecycle/templates)
+        'memex_set_note_status',
+        'memex_update_user_notes',
+        'memex_rename_note',
+        'memex_get_template',
+        'memex_list_templates',
+        'memex_register_template',
     }
     assert expected_minimum.issubset(names)
 
@@ -154,6 +161,13 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_get_memory_units',
             'memex_get_memory_links',
             'memex_get_lineage',
+            # Stream 4 (lifecycle/templates)
+            'memex_set_note_status',
+            'memex_update_user_notes',
+            'memex_rename_note',
+            'memex_get_template',
+            'memex_list_templates',
+            'memex_register_template',
         }
         assert expected_minimum.issubset(names)
 

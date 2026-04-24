@@ -685,7 +685,138 @@ GET_LINEAGE_SCHEMA: dict[str, Any] = {
 }
 
 # --- Lifecycle/templates (Stream 4) ---
-# <streams append here>
+
+_VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'appended', 'archived'})
+
+SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_set_note_status',
+    'description': (
+        'Set note lifecycle status: active, superseded, appended, or archived. '
+        'Use to supersede an outdated note, mark it as appended, or archive it. '
+        'When superseded, all memory units are marked stale. Optionally link to '
+        'the replacing/parent note via linked_note_id.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'note_id': {
+                'type': 'string',
+                'description': 'Note UUID to update.',
+            },
+            'status': {
+                'type': 'string',
+                'description': 'New status: active, superseded, appended, or archived.',
+            },
+            'linked_note_id': {
+                'type': 'string',
+                'description': 'UUID of the note that supersedes/contains this one (optional).',
+            },
+        },
+        'required': ['note_id', 'status'],
+    },
+}
+
+UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
+    'name': 'memex_update_user_notes',
+    'description': (
+        'Update user_notes on an existing note and reprocess into the memory graph. '
+        'Pass null or omit user_notes to delete all user annotations. Old user_notes '
+        'memory units are deleted and new ones extracted.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'note_id': {
+                'type': 'string',
+                'description': 'Note UUID to update.',
+            },
+            'user_notes': {
+                'type': ['string', 'null'],
+                'description': 'New user_notes text, or null to delete all annotations.',
+            },
+        },
+        'required': ['note_id'],
+    },
+}
+
+RENAME_NOTE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_rename_note',
+    'description': ('Rename a note. Updates the title in metadata, page index, and doc_metadata.'),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'note_id': {
+                'type': 'string',
+                'description': 'Note UUID to rename.',
+            },
+            'new_title': {
+                'type': 'string',
+                'description': 'New title for the note.',
+            },
+        },
+        'required': ['note_id', 'new_title'],
+    },
+}
+
+GET_TEMPLATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_template',
+    'description': (
+        'Get a markdown template for memex_retain. Use memex_list_templates '
+        'to discover available template slugs.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'slug': {
+                'type': 'string',
+                'description': 'Template slug. Use memex_list_templates to discover available slugs.',
+            },
+        },
+        'required': ['slug'],
+    },
+}
+
+LIST_TEMPLATES_SCHEMA: dict[str, Any] = {
+    'name': 'memex_list_templates',
+    'description': (
+        'List all available note templates with metadata (slug, display name, '
+        'description, source layer).'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {},
+    },
+}
+
+REGISTER_TEMPLATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_register_template',
+    'description': (
+        'Register a new note template from inline markdown content. Stored in '
+        'the global scope by default.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'slug': {
+                'type': 'string',
+                'description': 'Template identifier (e.g. sprint_retro).',
+            },
+            'template': {
+                'type': 'string',
+                'description': 'Markdown template content. Should include YAML frontmatter.',
+            },
+            'name': {
+                'type': 'string',
+                'description': 'Human-readable template name (optional).',
+            },
+            'description': {
+                'type': 'string',
+                'description': 'Short description of the template (optional).',
+            },
+        },
+        'required': ['slug', 'template'],
+    },
+}
 
 # --- Assets (Stream 5) ---
 # <streams append here>
@@ -720,7 +851,12 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     GET_MEMORY_LINKS_SCHEMA,
     GET_LINEAGE_SCHEMA,
     # --- Lifecycle/templates (Stream 4) ---
-    # <Stream 4 appends>
+    SET_NOTE_STATUS_SCHEMA,
+    UPDATE_USER_NOTES_SCHEMA,
+    RENAME_NOTE_SCHEMA,
+    GET_TEMPLATE_SCHEMA,
+    LIST_TEMPLATES_SCHEMA,
+    REGISTER_TEMPLATE_SCHEMA,
     # --- Assets (Stream 5) ---
     # <Stream 5 appends>
     # --- KV store (Stream 5) ---
@@ -1676,6 +1812,217 @@ def handle_get_lineage(
     return json.dumps(_serialize_lineage(response))
 
 
+# --- Lifecycle/templates (Stream 4) ---
+
+
+def _parse_uuid(raw: Any, label: str = 'note_id') -> UUID:
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f'Invalid {label}: {raw!r}') from exc
+
+
+def _build_template_registry() -> Any:
+    """Build a ``TemplateRegistry`` for the current hermes process.
+
+    Uses the same layering the MCP server uses — builtin → global → local —
+    with paths sourced from Memex's own ``MemexConfig`` (filestore root) and
+    the current working directory for local overrides. Reflects the RFC
+    decision that templates are bundled client-side; no HTTP call.
+    """
+    import pathlib
+
+    from memex_common.templates import BUILTIN_PROMPTS_DIR, TemplateRegistry
+
+    dirs: list[tuple[str, pathlib.Path]] = [('builtin', BUILTIN_PROMPTS_DIR)]
+    try:
+        from memex_common.config import MemexConfig
+
+        root = MemexConfig().server.file_store.root
+        if '://' not in root:
+            dirs.append(('global', pathlib.Path(root) / 'templates'))
+    except Exception as exc:
+        logger.debug('Template registry: skipping global layer (%s)', exc)
+    dirs.append(('local', pathlib.Path('.memex/templates')))
+    return TemplateRegistry(dirs)
+
+
+def handle_set_note_status(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        note_id_raw = _require(args, 'note_id')
+        status = _require(args, 'status')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    if status not in _VALID_NOTE_STATUSES:
+        return tool_error(
+            f'Invalid status: {status!r}. Must be one of: {sorted(_VALID_NOTE_STATUSES)}'
+        )
+
+    try:
+        note_uuid = _parse_uuid(note_id_raw, label='note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    linked_raw = args.get('linked_note_id') or None
+    linked_uuid: UUID | None = None
+    if linked_raw:
+        try:
+            linked_uuid = _parse_uuid(linked_raw, label='linked_note_id')
+        except ValueError as e:
+            return tool_error(str(e))
+
+    try:
+        run_sync(
+            api.set_note_status(note_uuid, status, linked_uuid),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_set_note_status failed: %s', e)
+        return tool_error(f'Set note status failed: {e}')
+
+    return json.dumps(
+        {
+            'status': status,
+            'note_id': str(note_uuid),
+            'linked_note_id': str(linked_uuid) if linked_uuid else None,
+        }
+    )
+
+
+def handle_update_user_notes(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        note_id_raw = _require(args, 'note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        note_uuid = _parse_uuid(note_id_raw, label='note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    # Explicit ``null`` and missing key both clear annotations.
+    user_notes = args.get('user_notes')
+
+    try:
+        result = run_sync(
+            api.update_user_notes(note_uuid, user_notes),
+            timeout=60.0,
+        )
+    except Exception as e:
+        logger.warning('memex_update_user_notes failed: %s', e)
+        return tool_error(f'Update user notes failed: {e}')
+
+    return json.dumps(result if isinstance(result, dict) else {'result': result})
+
+
+def handle_rename_note(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        note_id_raw = _require(args, 'note_id')
+        new_title = _require(args, 'new_title')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        note_uuid = _parse_uuid(note_id_raw, label='note_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        run_sync(
+            api.update_note_title(note_uuid, new_title),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_rename_note failed: %s', e)
+        return tool_error(f'Rename note failed: {e}')
+
+    return json.dumps({'status': 'ok', 'note_id': str(note_uuid), 'new_title': new_title})
+
+
+def handle_get_template(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        slug = _require(args, 'slug')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    try:
+        registry = _build_template_registry()
+        content = registry.get_template(slug)
+    except KeyError as e:
+        return tool_error(f'Unknown template: {slug!r} — {e}')
+    except Exception as e:
+        logger.warning('memex_get_template failed: %s', e)
+        return tool_error(f'Get template failed: {e}')
+
+    return json.dumps({'slug': slug, 'content': content})
+
+
+def handle_list_templates(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        registry = _build_template_registry()
+        templates = registry.list_templates()
+    except Exception as e:
+        logger.warning('memex_list_templates failed: %s', e)
+        return tool_error(f'List templates failed: {e}')
+
+    results = [
+        {
+            'slug': t.slug,
+            'display_name': t.display_name,
+            'description': t.description,
+            'source': t.source,
+        }
+        for t in templates or []
+    ]
+    return json.dumps({'count': len(results), 'results': results})
+
+
+def handle_register_template(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    try:
+        slug = _require(args, 'slug')
+        template = _require(args, 'template')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    name = args.get('name') or None
+    description = args.get('description') or None
+
+    try:
+        registry = _build_template_registry()
+        info = registry.register_from_content(
+            slug=slug,
+            template=template,
+            name=name,
+            description=description,
+            scope='global',
+        )
+    except Exception as e:
+        logger.warning('memex_register_template failed: %s', e)
+        return tool_error(f'Register template failed: {e}')
+
+    return json.dumps(
+        {
+            'slug': info.slug,
+            'display_name': info.display_name,
+            'description': info.description,
+            'source': info.source,
+        }
+    )
+
+
 HANDLERS = {
     # --- Vault-scoped (Stream 1) ---
     'memex_recall': handle_recall,
@@ -1702,7 +2049,12 @@ HANDLERS = {
     'memex_get_memory_links': handle_get_memory_links,
     'memex_get_lineage': handle_get_lineage,
     # --- Lifecycle/templates (Stream 4) ---
-    # <Stream 4 appends>
+    'memex_set_note_status': handle_set_note_status,
+    'memex_update_user_notes': handle_update_user_notes,
+    'memex_rename_note': handle_rename_note,
+    'memex_get_template': handle_get_template,
+    'memex_list_templates': handle_list_templates,
+    'memex_register_template': handle_register_template,
     # --- Assets (Stream 5) ---
     # <Stream 5 appends>
     # --- KV store (Stream 5) ---
@@ -1758,7 +2110,12 @@ __all__ = [
     'GET_MEMORY_LINKS_SCHEMA',
     'GET_MEMORY_UNITS_SCHEMA',
     # --- Lifecycle/templates (Stream 4) ---
-    # <Stream 4 appends>
+    'GET_TEMPLATE_SCHEMA',
+    'LIST_TEMPLATES_SCHEMA',
+    'REGISTER_TEMPLATE_SCHEMA',
+    'RENAME_NOTE_SCHEMA',
+    'SET_NOTE_STATUS_SCHEMA',
+    'UPDATE_USER_NOTES_SCHEMA',
     # --- Assets (Stream 5) ---
     # <Stream 5 appends>
     # --- KV store (Stream 5) ---
