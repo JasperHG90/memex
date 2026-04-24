@@ -94,6 +94,23 @@ def test_tool_descriptions_are_neutral():
         )
 
 
+def test_retain_content_description_instructs_on_structure():
+    """The retain tool must instruct the agent to emit real `##` sections.
+
+    Without a template, hermes was seen producing walls of `**Label:**` lines
+    with no blank lines — extraction had to infer structure. This guard fails
+    loudly if the contract gets deleted.
+    """
+    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_retain')
+    desc = retain['parameters']['properties']['content']['description']
+    assert '##' in desc, 'retain content description must show `##` section usage'
+    assert '# <Title>' in desc, 'retain content description must show the H1 template'
+    # Explicitly call out the inline bold-label anti-pattern we're replacing.
+    assert '**Label:**' in desc, (
+        'retain content description must name the `**Label:**` anti-pattern'
+    )
+
+
 def test_recall_returns_serialized_results(config, vault_id):
     api = Mock()
     api.search = AsyncMock(return_value=[_fake_memory_unit('X is Y')])

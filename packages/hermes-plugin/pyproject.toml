@@ -53,4 +53,5 @@ dev = [
 addopts = "-m 'not hermes_integration'"
 markers = [
   "hermes_integration: tests that clone + install hermes-agent and exercise the real plugin loader (slow; opt-in)",
+  "llm: tests that make live LLM API calls (requires ANTHROPIC_API_KEY; opt-in)",
 ]
