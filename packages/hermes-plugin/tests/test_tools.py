@@ -7,25 +7,74 @@ DTOs so a schema drift in the client is caught here, not in production.
 
 from __future__ import annotations
 
+import base64 as _b64
 import json
-from unittest.mock import AsyncMock, Mock
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from memex_common.schemas import (
     BlockSummaryDTO,
     EntityDTO,
     IngestResponse,
+    KVEntryDTO,
+    LineageDirection,
+    LineageResponse,
+    MemoryLinkDTO,
     MemoryUnitDTO,
+    NoteDTO,
     NoteSearchResult,
     SurveyFact,
     SurveyResponse,
     SurveyTopic,
+    VaultDTO,
+    VaultSummaryDTO,
 )
 
 from memex_hermes_plugin.memex.config import HermesMemexConfig
-from memex_hermes_plugin.memex.tools import ALL_SCHEMAS, dispatch
+from memex_hermes_plugin.memex.tools import (
+    ADD_ASSETS_SCHEMA,
+    ALL_SCHEMAS,
+    FIND_NOTE_SCHEMA,
+    GET_ENTITIES_SCHEMA,
+    GET_ENTITY_COOCCURRENCES_SCHEMA,
+    GET_ENTITY_MENTIONS_SCHEMA,
+    GET_LINEAGE_SCHEMA,
+    GET_MEMORY_LINKS_SCHEMA,
+    GET_MEMORY_UNITS_SCHEMA,
+    GET_NODES_SCHEMA,
+    GET_NOTES_METADATA_SCHEMA,
+    GET_PAGE_INDICES_SCHEMA,
+    GET_RESOURCES_SCHEMA,
+    GET_TEMPLATE_SCHEMA,
+    GET_VAULT_SUMMARY_SCHEMA,
+    KV_GET_SCHEMA,
+    KV_LIST_SCHEMA,
+    KV_SEARCH_SCHEMA,
+    KV_WRITE_SCHEMA,
+    LIST_ASSETS_SCHEMA,
+    LIST_ENTITIES_SCHEMA,
+    LIST_NOTES_SCHEMA,
+    LIST_TEMPLATES_SCHEMA,
+    LIST_VAULTS_SCHEMA,
+    READ_NOTE_SCHEMA,
+    RECALL_SCHEMA,
+    RECENT_NOTES_SCHEMA,
+    REGISTER_TEMPLATE_SCHEMA,
+    RENAME_NOTE_SCHEMA,
+    RETRIEVE_NOTES_SCHEMA,
+    SEARCH_USER_NOTES_SCHEMA,
+    SET_NOTE_STATUS_SCHEMA,
+    SURVEY_SCHEMA,
+    UPDATE_USER_NOTES_SCHEMA,
+    VaultResolutionError,
+    _resolve_vault_ids,
+    _scope_from_key,
+    dispatch,
+)
 
 
 @pytest.fixture
@@ -381,21 +430,6 @@ def test_recall_forwards_api_errors(config, vault_id):
 # ---------------------------------------------------------------------------
 # Stream 1: vault-scoping helper + bug-fix regressions
 # ---------------------------------------------------------------------------
-
-import httpx  # noqa: E402
-
-from memex_common.schemas import VaultDTO  # noqa: E402
-
-from memex_hermes_plugin.memex.tools import (  # noqa: E402
-    GET_ENTITY_COOCCURRENCES_SCHEMA,
-    GET_ENTITY_MENTIONS_SCHEMA,
-    LIST_ENTITIES_SCHEMA,
-    RECALL_SCHEMA,
-    RETRIEVE_NOTES_SCHEMA,
-    SURVEY_SCHEMA,
-    VaultResolutionError,
-    _resolve_vault_ids,
-)
 
 
 def _fake_vault(vault_id=None, name: str = 'v') -> VaultDTO:
@@ -769,24 +803,6 @@ def test_vault_resolution_error_carries_failing_name():
 # Stream 2: read/discovery tools
 # ---------------------------------------------------------------------------
 
-from datetime import datetime, timezone  # noqa: E402
-
-from memex_common.schemas import VaultSummaryDTO  # noqa: E402
-
-from memex_hermes_plugin.memex.tools import (  # noqa: E402
-    FIND_NOTE_SCHEMA,
-    GET_NODES_SCHEMA,
-    GET_NOTES_METADATA_SCHEMA,
-    GET_PAGE_INDICES_SCHEMA,
-    GET_VAULT_SUMMARY_SCHEMA,
-    LIST_NOTES_SCHEMA,
-    LIST_VAULTS_SCHEMA,
-    READ_NOTE_SCHEMA,
-    RECENT_NOTES_SCHEMA,
-    SEARCH_USER_NOTES_SCHEMA,
-)
-
-
 # -- memex_list_vaults (AC-018, AC-019) --
 
 
@@ -1106,19 +1122,21 @@ def _fake_note_list_item(title='Listed', vid=None):
 
 
 def test_list_notes_schema_shape():
-    """AC-054: optional vault_ids, after, before, limit, template, tags, status, date_by."""
+    """AC-054: optional vault_ids, after, before, limit, offset, template, tags, status, date_by."""
     props = LIST_NOTES_SCHEMA['parameters']['properties']
     for expected in (
         'vault_ids',
         'after',
         'before',
         'limit',
+        'offset',
         'template',
         'tags',
         'status',
         'date_by',
     ):
         assert expected in props
+    assert props['offset']['type'] == 'integer'
     assert LIST_NOTES_SCHEMA['parameters'].get('required', []) == []
 
 
@@ -1159,6 +1177,25 @@ def test_list_notes_rejects_invalid_date(config, vault_id):
     assert 'error' in json.loads(out)
     assert 'not-a-date' in json.loads(out)['error']
     api.list_notes.assert_not_awaited()
+
+
+def test_list_notes_forwards_offset(config, vault_id):
+    """offset parameter threads through to api.list_notes; defaults to 0 when absent."""
+    api = Mock()
+    api.list_notes = AsyncMock(return_value=[])
+
+    dispatch(
+        'memex_list_notes',
+        {'limit': 25, 'offset': 50},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert api.list_notes.call_args.kwargs['offset'] == 50
+
+    api.list_notes.reset_mock()
+    dispatch('memex_list_notes', {}, api=api, config=config, vault_id=vault_id)
+    assert api.list_notes.call_args.kwargs['offset'] == 0
 
 
 # -- memex_recent_notes (AC-057, AC-058) --
@@ -1222,20 +1259,6 @@ def test_search_user_notes_forwards_source_context(config, vault_id):
 # ---------------------------------------------------------------------------
 # Stream 3: entities/memory/lineage
 # ---------------------------------------------------------------------------
-
-
-from memex_common.schemas import (  # noqa: E402
-    LineageDirection,
-    LineageResponse,
-    MemoryLinkDTO,
-)
-
-from memex_hermes_plugin.memex.tools import (  # noqa: E402
-    GET_ENTITIES_SCHEMA,
-    GET_LINEAGE_SCHEMA,
-    GET_MEMORY_LINKS_SCHEMA,
-    GET_MEMORY_UNITS_SCHEMA,
-)
 
 
 def _fake_memory_link(
@@ -1730,18 +1753,6 @@ def test_get_lineage_rejects_invalid_entity_id(config, vault_id):
 # tools that expose note lifecycle operations (rename, status, user_notes)
 # and the client-side ``TemplateRegistry`` (get, list, register).
 # ---------------------------------------------------------------------------
-
-from unittest.mock import patch  # noqa: E402
-
-from memex_hermes_plugin.memex.tools import (  # noqa: E402
-    GET_TEMPLATE_SCHEMA,
-    LIST_TEMPLATES_SCHEMA,
-    REGISTER_TEMPLATE_SCHEMA,
-    RENAME_NOTE_SCHEMA,
-    SET_NOTE_STATUS_SCHEMA,
-    UPDATE_USER_NOTES_SCHEMA,
-)
-
 
 # -- Schema registration (AC-027, AC-051, AC-073) ----------------------------
 
@@ -2249,21 +2260,6 @@ def test_template_registry_built_with_builtin_global_local_layers(tmp_path):
 # ---------------------------------------------------------------------------
 # Stream 5: assets + KV store
 # ---------------------------------------------------------------------------
-
-import base64 as _b64  # noqa: E402
-
-from memex_common.schemas import KVEntryDTO, NoteDTO  # noqa: E402
-
-from memex_hermes_plugin.memex.tools import (  # noqa: E402
-    ADD_ASSETS_SCHEMA,
-    GET_RESOURCES_SCHEMA,
-    KV_GET_SCHEMA,
-    KV_LIST_SCHEMA,
-    KV_SEARCH_SCHEMA,
-    KV_WRITE_SCHEMA,
-    LIST_ASSETS_SCHEMA,
-    _scope_from_key,
-)
 
 
 def _fake_kv_entry(key: str = 'user:work:employer', value: str = 'ACME') -> KVEntryDTO:

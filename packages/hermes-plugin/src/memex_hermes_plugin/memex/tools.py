@@ -496,6 +496,10 @@ LIST_NOTES_SCHEMA: dict[str, Any] = {
                 'type': 'integer',
                 'description': 'Max notes to return (default: 100).',
             },
+            'offset': {
+                'type': 'integer',
+                'description': 'Number of notes to skip for pagination (default: 0).',
+            },
             'template': {
                 'type': 'string',
                 'description': 'Filter by template slug (e.g. "general_note").',
@@ -1690,9 +1694,10 @@ def handle_get_page_indices(
 def handle_get_nodes(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    raw = args.get('node_ids')
-    if not raw:
-        return tool_error('Missing required parameter: node_ids')
+    try:
+        raw = _require(args, 'node_ids')
+    except ValueError as e:
+        return tool_error(str(e))
 
     uuids: list[UUID] = []
     for nid in raw:
@@ -1716,9 +1721,10 @@ def handle_get_nodes(
 def handle_get_notes_metadata(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    raw = args.get('note_ids')
-    if not raw:
-        return tool_error('Missing required parameter: note_ids')
+    try:
+        raw = _require(args, 'note_ids')
+    except ValueError as e:
+        return tool_error(str(e))
 
     uuids: list[UUID] = []
     for nid in raw:
@@ -1752,6 +1758,7 @@ def handle_list_notes(
 
     vault_ids = _resolve_vault_ids(api, args, vault_id)
     limit = min(int(args.get('limit') or 100), 500)
+    offset = max(int(args.get('offset') or 0), 0)
     date_by = args.get('date_by') or 'created_at'
 
     try:
@@ -1765,7 +1772,7 @@ def handle_list_notes(
                 status=args.get('status') or None,
                 date_field=date_by,
                 limit=limit,
-                offset=0,
+                offset=offset,
             ),
             timeout=30.0,
         )
