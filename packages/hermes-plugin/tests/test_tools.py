@@ -8,6 +8,7 @@ DTOs so a schema drift in the client is caught here, not in production.
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -349,3 +350,89 @@ def test_recall_forwards_api_errors(config, vault_id):
     api.search = AsyncMock(side_effect=RuntimeError('backend down'))
     out = dispatch('memex_recall', {'query': 'x'}, api=api, config=config, vault_id=vault_id)
     assert 'backend down' in json.loads(out)['error']
+
+
+# ---------------------------------------------------------------------------
+# Live LLM check: RETAIN_SCHEMA steers the model to structured markdown.
+# ---------------------------------------------------------------------------
+
+_HAS_GEMINI_KEY = bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'))
+
+
+@pytest.mark.llm
+@pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
+def test_retain_content_is_structured_markdown_via_gemini():
+    """Real LLM round-trip: ``RETAIN_SCHEMA`` must actually steer the model to
+    emit ``# Title`` + ``## Section`` markdown (not ``**Label:**`` run-on prose).
+
+    Uses ``litellm`` + ``gemini/gemini-3-flash-preview`` to match the rest of
+    the repo's LLM-gated tests; static schema assertions alone don't prove
+    the contract works — only a live call does.
+    """
+    import litellm
+
+    from memex_hermes_plugin.memex.tools import RETAIN_SCHEMA
+
+    tool = {
+        'type': 'function',
+        'function': {
+            'name': RETAIN_SCHEMA['name'],
+            'description': RETAIN_SCHEMA['description'],
+            'parameters': RETAIN_SCHEMA['parameters'],
+        },
+    }
+
+    resp = litellm.completion(
+        model='gemini/gemini-3-flash-preview',
+        messages=[
+            {
+                'role': 'user',
+                'content': (
+                    "Today at 00:00 UTC our 'Daily reflect' cron ran, but the "
+                    'assistant could not retrieve its conclusions later. The '
+                    'reflection output was buried inside a raw Hermes session '
+                    'log instead of being indexed as a standalone summary, so '
+                    'semantic search for "conclusions" missed it. The '
+                    'assistant fell back to a generalized summary of recent '
+                    'activity. Capture this as a structured post-mortem via '
+                    'memex_retain with name "Retrieval Failure: Daily '
+                    'Reflection Conclusions", a one-sentence description, '
+                    'and content covering date, symptom, root cause, outcome, '
+                    'and lesson.'
+                ),
+            }
+        ],
+        tools=[tool],
+        tool_choice={'type': 'function', 'function': {'name': 'memex_retain'}},
+        temperature=0,
+        api_key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'),
+    )
+
+    tool_calls = resp.choices[0].message.tool_calls or []
+    assert tool_calls, f'model did not call a tool: {resp.choices[0].message!r}'
+    retain = next((tc for tc in tool_calls if tc.function.name == 'memex_retain'), None)
+    assert retain is not None, f'model called a different tool: {tool_calls!r}'
+
+    args = json.loads(retain.function.arguments)
+    body = args.get('content', '')
+    assert body, f'memex_retain called with empty content; args={args!r}'
+
+    # Structural assertions — brittle-by-design; this IS the contract.
+    assert body.lstrip().startswith('# '), (
+        f'body must open with a single `# Title`. Got: {body[:80]!r}'
+    )
+    assert '\n## ' in body, f'body must contain at least one `##` section heading. Got:\n{body}'
+
+    # Anti-pattern: a top-level ``**Label:** value`` line (outside a bullet).
+    # Bullets like ``- **sub-label**: detail`` are allowed.
+    import re
+
+    inline_label = re.compile(r'^\*\*[A-Z][^*]{0,40}:\*\*\s+\S')
+    offenders = [
+        line
+        for line in body.splitlines()
+        if inline_label.match(line.lstrip()) and not line.lstrip().startswith(('-', '*'))
+    ]
+    assert not offenders, 'inline `**Label:** value` anti-pattern leaked into body:\n' + '\n'.join(
+        offenders
+    )
