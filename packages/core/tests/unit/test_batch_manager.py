@@ -97,3 +97,51 @@ async def test_run_job_failure(manager, mock_api, mock_session):
     assert job.status == BatchJobStatus.FAILED
     assert 'Fatal Error' in job.error_info
     mock_session.commit.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_job_partial_failure_logs_warning(manager, mock_api, mock_session, caplog):
+    """Regression for issue #41 residual: when ingest_batch_internal yields a final result
+    with failed_count > 0, the batch manager must log a warning rather than the
+    unconditional 'completed successfully' info message. Job status stays COMPLETED
+    (no new status value), but operators now have a loud signal."""
+    import logging
+
+    job_id = uuid4()
+    vault_id = uuid4()
+    notes = [MagicMock(), MagicMock()]
+
+    job = BatchJob(
+        id=job_id, vault_id=vault_id, status=BatchJobStatus.PENDING, notes_count=len(notes)
+    )
+    mock_session.exec.return_value.first.return_value = job
+
+    async def mock_ingest_gen(*args, **kwargs):
+        yield {
+            'processed_count': 1,
+            'skipped_count': 0,
+            'failed_count': 1,
+            'note_ids': [str(uuid4())],
+            'errors': [{'chunk_start': 1, 'error': 'simulated chunk failure'}],
+        }
+
+    mock_api.ingest_batch_internal.side_effect = mock_ingest_gen
+
+    with caplog.at_level(logging.INFO, logger='memex.core.processing.batch'):
+        await manager._run_job(job_id, notes, vault_id)
+
+    assert job.status == BatchJobStatus.COMPLETED
+    assert job.failed_count == 1
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    info_success_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and 'completed successfully' in r.getMessage()
+    ]
+    assert warning_records, 'expected a WARNING about partial failures'
+    assert not info_success_records, (
+        'must not emit the "completed successfully" info log when failed_count > 0'
+    )
+    assert '1 failed chunks' in warning_records[0].getMessage()
+    assert 'simulated chunk failure' in warning_records[0].getMessage()

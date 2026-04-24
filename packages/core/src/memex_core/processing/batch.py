@@ -255,7 +255,20 @@ class JobManager:
                     job.progress = f'Completed: {total_notes}/{total_notes} processed'
 
                     await session.commit()
-                    logger.info(f'Batch job {job_id} completed successfully.')
+                    failed_count = job.failed_count or 0
+                    if failed_count > 0:
+                        errors = final_results.get('errors') or []
+                        logger.warning(
+                            'Batch job %s completed with %d failed chunks '
+                            '(processed=%d, skipped=%d). First errors: %s',
+                            job_id,
+                            failed_count,
+                            job.processed_count or 0,
+                            job.skipped_count or 0,
+                            errors[:3],
+                        )
+                    else:
+                        logger.info(f'Batch job {job_id} completed successfully.')
 
             except Exception as e:
                 logger.error(f'Batch job {job_id} failed: {e}', exc_info=True)

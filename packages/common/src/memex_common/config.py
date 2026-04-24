@@ -516,6 +516,22 @@ class PageIndexTextSplitting(BaseModel):
         default=None,
         description='Model for PageIndex LLM calls. If None, uses server default.',
     )
+    scan_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        description='Max concurrent LLM scan calls during page_index extraction. '
+        'Reduce on memory-constrained hosts (e.g. set to 1 on a Jetson Orin Nano) '
+        'to prevent GPU/RAM exhaustion. Separate from ExtractionConfig.max_concurrency, '
+        'which governs fact extraction.',
+    )
+    gap_rescan_threshold_tokens: int = Field(
+        default=2000,
+        ge=500,
+        description='Minimum gap size (in tokens) between detected headers that '
+        'triggers a secondary LLM re-scan to recover omitted headers. '
+        'Gaps larger than scan_chunk_size_tokens are sub-chunked using the same '
+        'chunking logic as the primary scan.',
+    )
 
 
 TextSplitting = Annotated[
