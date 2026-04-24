@@ -65,11 +65,7 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
-    """Every landed stream's tools must be registered. Uses a superset
-    (``expected <= names``) assertion so each stream can append without fighting
-    over the exact set; Stream 6 will tighten this back to strict equality once
-    all 27 tools are registered (AC-086).
-    """
+    """All 34 tools (7 pre-existing + 27 new) must be registered exactly (AC-086)."""
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
         'memex_recall',
@@ -122,7 +118,7 @@ def test_all_schemas_have_required_fields():
         | stream_4_lifecycle_templates
         | stream_5_assets_kv
     )
-    assert expected <= names
+    assert names == expected
     for s in ALL_SCHEMAS:
         assert 'description' in s
         assert s['parameters']['type'] == 'object'

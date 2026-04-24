@@ -75,14 +75,11 @@ def test_get_tool_schemas_respects_memory_mode(tmp_path: Path, monkeypatch: pyte
 
 
 def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
-    """Subset assertion: each landed stream appends its own tool names.
-    Stream 6 will tighten back to strict equality with the full 27-tool set
-    once all streams have merged (AC-086).
-    """
+    """Hybrid mode exposes exactly the 34 Memex tools (AC-086)."""
     provider, *_ = provider_with_stubbed_api
     schemas = provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
-    expected_minimum = {
+    expected = {
         # Stream 1 (vault-scoped)
         'memex_recall',
         'memex_retrieve_notes',
@@ -123,7 +120,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_kv_search',
         'memex_kv_list',
     }
-    assert expected_minimum.issubset(names)
+    assert names == expected
 
 
 # Regression for v0.1.13 bug:
@@ -134,17 +131,16 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
 #
 # These tests cover the pre-init path explicitly.
 class TestGetToolSchemasBeforeInitialize:
-    def test_returns_all_seven_schemas_pre_init(self):
+    def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
-        pre-init. Name retains 'seven' for historical continuity; assertion
-        uses ``issubset`` so streams 2-5 don't trip it. Stream 6 will tighten
-        back to strict equality with all 27 names.
+        pre-init. After Stream 6 we register exactly 34 tools (7 baseline
+        + 27 new), and the assertion is strict equality.
         """
         p = MemexMemoryProvider()
         # NOTE: no initialize() call.
         schemas = p.get_tool_schemas()
         names = {s['name'] for s in schemas}
-        expected_minimum = {
+        expected = {
             # Stream 1 (vault-scoped)
             'memex_recall',
             'memex_retrieve_notes',
@@ -176,8 +172,16 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_get_template',
             'memex_list_templates',
             'memex_register_template',
+            # Stream 5 (assets/KV)
+            'memex_list_assets',
+            'memex_get_resources',
+            'memex_add_assets',
+            'memex_kv_write',
+            'memex_kv_get',
+            'memex_kv_search',
+            'memex_kv_list',
         }
-        assert expected_minimum.issubset(names)
+        assert names == expected
 
     def test_each_schema_is_well_formed(self):
         p = MemexMemoryProvider()
@@ -189,11 +193,10 @@ class TestGetToolSchemasBeforeInitialize:
     def test_ever_only_empty_when_explicit_context_mode(self, tmp_path: Path, monkeypatch):
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
-        Uses ``>= 7`` so later streams appending tools don't break this guard.
         """
-        # Pre-init: at least Stream 1's 7 tools (later streams add more).
+        # Pre-init: full 34-tool set (7 Stream 1 baseline + 27 new).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) >= 7
+        assert len(p.get_tool_schemas()) == 34
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))
