@@ -114,6 +114,14 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_get_template',
         'memex_list_templates',
         'memex_register_template',
+        # Stream 5 (assets/KV)
+        'memex_list_assets',
+        'memex_get_resources',
+        'memex_add_assets',
+        'memex_kv_write',
+        'memex_kv_get',
+        'memex_kv_search',
+        'memex_kv_list',
     }
     assert expected_minimum.issubset(names)
 
