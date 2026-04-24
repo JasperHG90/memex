@@ -903,6 +903,31 @@ def test_get_vault_summary_none_returns_informative_error(config, vault_id):
     assert 'next background reflection cycle' in data['error']
 
 
+def test_get_vault_summary_distinguishes_resolve_error_from_other_errors(config, vault_id):
+    """Non-``VaultResolutionError`` failures surface a distinct ``Vault summary failed`` message.
+
+    Previously the broad ``except Exception`` returned the same ``Unknown vault: ...``
+    text as the named-resolution path, masking bugs. ``list_vaults`` is triggered
+    via the ``*`` wildcard and does not go through the ``VaultResolutionError``
+    wrap in ``_resolve_vault_ids``.
+    """
+    api = Mock()
+    api.list_vaults = AsyncMock(side_effect=RuntimeError('boom'))
+    api.get_vault_summary = AsyncMock()
+    out = dispatch(
+        'memex_get_vault_summary',
+        {'vault_id': '*'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault summary failed' in data['error']
+    assert 'boom' in data['error']
+    api.get_vault_summary.assert_not_awaited()
+
+
 # -- memex_find_note (AC-024..AC-026) --
 
 
@@ -1196,6 +1221,23 @@ def test_list_notes_forwards_offset(config, vault_id):
     api.list_notes.reset_mock()
     dispatch('memex_list_notes', {}, api=api, config=config, vault_id=vault_id)
     assert api.list_notes.call_args.kwargs['offset'] == 0
+
+
+def test_list_notes_rejects_invalid_status(config, vault_id):
+    """Unknown status values → tool_error without calling the API."""
+    api = Mock()
+    api.list_notes = AsyncMock()
+    out = dispatch(
+        'memex_list_notes',
+        {'status': 'bogus'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert "'bogus'" in data['error']
+    api.list_notes.assert_not_awaited()
 
 
 # -- memex_recent_notes (AC-057, AC-058) --
@@ -2329,20 +2371,22 @@ def test_list_assets_schema_shape():
 
 
 def test_get_resources_schema_shape():
-    """AC-045: required paths array of string."""
+    """AC-045: required paths array of string; maxItems cap."""
     params = GET_RESOURCES_SCHEMA['parameters']
     assert params['required'] == ['paths']
     assert params['properties']['paths']['type'] == 'array'
     assert params['properties']['paths']['items']['type'] == 'string'
+    assert params['properties']['paths']['maxItems'] == 50
 
 
 def test_add_assets_schema_shape():
-    """AC-048: required note_id + assets[{filename, content_b64}]; divergence note in description."""
+    """AC-048: required note_id + assets[{filename, content_b64}]; divergence + maxItems."""
     assert 'diverges from MCP' in ADD_ASSETS_SCHEMA['description']
     params = ADD_ASSETS_SCHEMA['parameters']
     assert set(params['required']) == {'note_id', 'assets'}
     item = params['properties']['assets']['items']
     assert set(item['required']) == {'filename', 'content_b64'}
+    assert params['properties']['assets']['maxItems'] == 20
     # Divergence invariant: no file_paths property (Hermes receives bytes, not paths).
     assert 'file_paths' not in params['properties']
 
@@ -2615,6 +2659,44 @@ def test_add_assets_rejects_duplicate_filenames(config, vault_id):
     api.add_note_assets.assert_not_awaited()
 
 
+def test_add_assets_rejects_too_many_items(config, vault_id):
+    """Enforcing the 20-item cap prevents clients from bypassing the schema limit."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    assets = [
+        {'filename': f'f{i}.png', 'content_b64': _b64.b64encode(b'x').decode('ascii')}
+        for i in range(21)
+    ]
+    out = dispatch(
+        'memex_add_assets',
+        {'note_id': str(uuid4()), 'assets': assets},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'too many' in data['error'].lower()
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_get_resources_rejects_too_many_paths(config, vault_id):
+    """Enforcing the 50-path cap prevents clients from bypassing the schema limit."""
+    api = Mock()
+    api.get_resource = AsyncMock()
+    out = dispatch(
+        'memex_get_resources',
+        {'paths': [f'p{i}.png' for i in range(51)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'too many' in data['error'].lower()
+    api.get_resource.assert_not_awaited()
+
+
 # -- Handler tests: kv_write (#25) --
 
 
@@ -2627,11 +2709,18 @@ def test_add_assets_rejects_duplicate_filenames(config, vault_id):
         ('app:claude-code:theme', 'app'),
         ('project:justid', 'project'),
         ('nocolon', 'unknown'),
+        (':leading', 'unknown'),
     ],
 )
 def test_scope_from_key_parametrized(key, expected_scope):
     """AC-079 scope derivation across all 4 namespace shapes + edges (RFC-012)."""
     assert _scope_from_key(key) == expected_scope
+
+
+def test_scope_from_key_empty_prefix():
+    """':leading' (empty prefix before the colon) must not render as empty string."""
+    assert _scope_from_key(':leading') == 'unknown'
+    assert _scope_from_key(':') == 'unknown'
 
 
 def test_scope_from_key_matches_mcp_source_of_truth():

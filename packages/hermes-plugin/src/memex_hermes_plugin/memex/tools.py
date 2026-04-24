@@ -29,7 +29,7 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from tools.registry import tool_error  # type: ignore[import-not-found]
@@ -39,6 +39,67 @@ from .config import HermesMemexConfig
 from .templates import HERMES_USER_NOTE_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# API protocol — structural surface used by the handlers
+# ---------------------------------------------------------------------------
+
+
+class MemexAPIProtocol(Protocol):
+    """Structural protocol covering the async methods ``RemoteMemexAPI`` exposes
+    and that the handlers below call.
+
+    Return types are intentionally ``Any`` — the handlers use ``getattr`` for
+    DTO fields and are robust to minor schema drift. Keeping the Protocol
+    lightweight is important: tests pass ``unittest.mock.Mock`` instances that
+    satisfy the surface structurally.
+    """
+
+    # Ingestion & retrieval
+    async def ingest(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def search_notes(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def search_entities(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def survey(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def find_notes_by_title(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Notes / nodes
+    async def list_notes(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_recent_notes(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_note(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_note_metadata(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_note_page_index(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_nodes(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_notes_metadata(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def update_note_title(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def update_user_notes(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def set_note_status(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Entities / memory / lineage
+    async def get_entities(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_entity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_entity_cooccurrences(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_entity_mentions(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_memory_links(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Vaults
+    async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def resolve_vault_identifier(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_vault_summary(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Assets / resources
+    async def add_note_assets(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_resource(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # KV + embeddings
+    async def embed_text(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_put(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_get(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_list(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_search(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +136,7 @@ def _vault_ids_schema() -> dict[str, Any]:
 
 
 def _resolve_vault_ids(
-    api: Any, args: dict[str, Any], bound_vault_id: UUID | None
+    api: MemexAPIProtocol, args: dict[str, Any], bound_vault_id: UUID | None
 ) -> list[UUID] | None:
     """Resolve user-supplied ``vault_ids`` to a concrete list of UUIDs.
 
@@ -862,7 +923,8 @@ GET_RESOURCES_SCHEMA: dict[str, Any] = {
             'paths': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': 'Resource paths to fetch.',
+                'maxItems': 50,
+                'description': 'Resource paths to fetch (max 50 per call).',
             },
         },
         'required': ['paths'],
@@ -897,7 +959,8 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
                     },
                     'required': ['filename', 'content_b64'],
                 },
-                'description': 'List of {filename, content_b64} objects.',
+                'maxItems': 20,
+                'description': 'List of {filename, content_b64} objects (max 20 per call).',
             },
         },
         'required': ['note_id', 'assets'],
@@ -1083,6 +1146,13 @@ def _is_unsafe_asset_filename(filename: str) -> bool:
     return False
 
 
+# Bulk-input caps on list-type tool arguments. These mirror the ``maxItems``
+# values declared in the tool schemas; the handlers also enforce them
+# defensively because some clients ignore schema-level limits.
+_MAX_GET_RESOURCES_PATHS = 50
+_MAX_ADD_ASSETS_ITEMS = 20
+
+
 def _serialize_memory_unit(unit: Any) -> dict[str, Any]:
     """Trim a MemoryUnitDTO to the fields useful to the model."""
     return {
@@ -1156,7 +1226,9 @@ def _scope_from_key(key: str) -> str:
         if colon_idx > 0:
             return f'project:{rest[:colon_idx]}'
         return 'project'
-    return key.split(':', 1)[0] if ':' in key else 'unknown'
+    # ':leading' (empty prefix before the colon) is treated as unknown.
+    result = key.split(':', 1)[0] if ':' in key else ''
+    return result or 'unknown'
 
 
 def _serialize_kv_entry(entry: Any) -> dict[str, Any]:
@@ -1179,7 +1251,7 @@ def _serialize_kv_entry(entry: Any) -> dict[str, Any]:
 
 
 def handle_recall(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1215,7 +1287,7 @@ def handle_recall(
 
 
 def handle_retrieve_notes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1246,7 +1318,7 @@ def handle_retrieve_notes(
 
 
 def handle_survey(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1301,7 +1373,7 @@ def handle_survey(
 
 
 def handle_retain(
-    api: Any,
+    api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
     args: dict[str, Any],
@@ -1345,7 +1417,7 @@ def handle_retain(
 
 
 def handle_list_entities(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1373,7 +1445,7 @@ def handle_list_entities(
 
 
 def handle_get_entity_mentions(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         entity_id = _require(args, 'entity_id')
@@ -1413,7 +1485,7 @@ def handle_get_entity_mentions(
 
 
 def handle_get_entity_cooccurrences(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         entity_id = _require(args, 'entity_id')
@@ -1552,7 +1624,7 @@ def _parse_iso_or_raise(value: str, field: str) -> Any:
 
 
 def handle_list_vaults(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         vaults = run_sync(api.list_vaults(), timeout=30.0)
@@ -1564,7 +1636,7 @@ def handle_list_vaults(
 
 
 def handle_get_vault_summary(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     raw = args.get('vault_id')
     if not raw and vault_id is None:
@@ -1584,7 +1656,7 @@ def handle_get_vault_summary(
         return tool_error(f'Unknown vault: {raw!r}')
     except Exception as e:
         logger.warning('memex_get_vault_summary resolve failed: %s', e)
-        return tool_error(f'Unknown vault: {raw!r}')
+        return tool_error(f'Vault summary failed: {e}')
 
     if not resolved:
         return tool_error('No vault specified and no session-bound vault.')
@@ -1621,7 +1693,7 @@ def handle_get_vault_summary(
 
 
 def handle_find_note(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1648,7 +1720,7 @@ def handle_find_note(
 
 
 def handle_read_note(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         note_id = _require(args, 'note_id')
@@ -1670,7 +1742,7 @@ def handle_read_note(
 
 
 def handle_get_page_indices(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         note_id = _require(args, 'note_id')
@@ -1692,7 +1764,7 @@ def handle_get_page_indices(
 
 
 def handle_get_nodes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         raw = _require(args, 'node_ids')
@@ -1719,7 +1791,7 @@ def handle_get_nodes(
 
 
 def handle_get_notes_metadata(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         raw = _require(args, 'note_ids')
@@ -1746,7 +1818,7 @@ def handle_get_notes_metadata(
 
 
 def handle_list_notes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         parsed_after = _parse_iso_or_raise(args['after'], 'after') if args.get('after') else None
@@ -1755,6 +1827,12 @@ def handle_list_notes(
         )
     except ValueError as e:
         return tool_error(str(e))
+
+    status = args.get('status') or None
+    if status is not None and status not in _VALID_NOTE_STATUSES:
+        return tool_error(
+            f'Invalid status: {status!r}. Must be one of: {", ".join(sorted(_VALID_NOTE_STATUSES))}'
+        )
 
     vault_ids = _resolve_vault_ids(api, args, vault_id)
     limit = min(int(args.get('limit') or 100), 500)
@@ -1769,7 +1847,7 @@ def handle_list_notes(
                 before=parsed_before,
                 template=args.get('template') or None,
                 tags=args.get('tags') or None,
-                status=args.get('status') or None,
+                status=status,
                 date_field=date_by,
                 limit=limit,
                 offset=offset,
@@ -1784,7 +1862,7 @@ def handle_list_notes(
 
 
 def handle_recent_notes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         parsed_after = _parse_iso_or_raise(args['after'], 'after') if args.get('after') else None
@@ -1818,7 +1896,7 @@ def handle_recent_notes(
 
 
 def handle_search_user_notes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         query = _require(args, 'query')
@@ -1864,7 +1942,7 @@ def _serialize_lineage(resp: Any) -> dict[str, Any]:
 
 
 def handle_get_entities(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     raw_ids = args.get('entity_ids') or []
     uuids: list[UUID] = []
@@ -1910,7 +1988,7 @@ def _serialize_full_entity(ent: Any) -> dict[str, Any]:
 
 
 def handle_get_memory_units(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Fetch memory units by ID.
 
@@ -1978,7 +2056,7 @@ def _serialize_memory_unit_full(unit: Any) -> dict[str, Any]:
 
 
 def handle_get_memory_links(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     raw_ids = args.get('unit_ids') or []
     link_type = args.get('link_type') or None
@@ -2021,7 +2099,7 @@ def handle_get_memory_links(
 
 
 def handle_get_lineage(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     from memex_common.schemas import LineageDirection
 
@@ -2107,7 +2185,7 @@ def _build_template_registry() -> Any:
 
 
 def handle_set_note_status(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         note_id_raw = _require(args, 'note_id')
@@ -2152,7 +2230,7 @@ def handle_set_note_status(
 
 
 def handle_update_user_notes(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         note_id_raw = _require(args, 'note_id')
@@ -2180,7 +2258,7 @@ def handle_update_user_notes(
 
 
 def handle_rename_note(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         note_id_raw = _require(args, 'note_id')
@@ -2206,7 +2284,7 @@ def handle_rename_note(
 
 
 def handle_get_template(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         slug = _require(args, 'slug')
@@ -2226,7 +2304,7 @@ def handle_get_template(
 
 
 def handle_list_templates(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         registry = _build_template_registry()
@@ -2248,7 +2326,7 @@ def handle_list_templates(
 
 
 def handle_register_template(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
         slug = _require(args, 'slug')
@@ -2286,7 +2364,7 @@ def handle_register_template(
 
 
 def handle_list_assets(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """List asset filenames/paths/mime types for a note.
 
@@ -2322,7 +2400,7 @@ def handle_list_assets(
 
 
 def handle_get_resources(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Fetch assets by path; return base64-encoded bytes with per-path failure isolation."""
     try:
@@ -2332,6 +2410,9 @@ def handle_get_resources(
 
     if not isinstance(paths, list):
         return tool_error("'paths' must be an array of strings")
+
+    if len(paths) > _MAX_GET_RESOURCES_PATHS:
+        return tool_error(f'Too many paths: {len(paths)} (max {_MAX_GET_RESOURCES_PATHS}).')
 
     results: list[dict[str, Any]] = []
     for path in paths:
@@ -2353,7 +2434,7 @@ def handle_get_resources(
 
 
 def handle_add_assets(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Attach base64-encoded files to a note (diverges from MCP file_paths input)."""
     try:
@@ -2367,6 +2448,9 @@ def handle_add_assets(
         return tool_error(f'Invalid note_id: {note_id_str!r}')
 
     assets = args.get('assets') or []
+
+    if len(assets) > _MAX_ADD_ASSETS_ITEMS:
+        return tool_error(f'Too many assets: {len(assets)} (max {_MAX_ADD_ASSETS_ITEMS}).')
 
     for a in assets:
         if not isinstance(a, dict):
@@ -2414,7 +2498,7 @@ def handle_add_assets(
 
 
 def handle_kv_write(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Write a fact or preference to the KV store with semantic embedding."""
     try:
@@ -2446,7 +2530,7 @@ def handle_kv_write(
 
 
 def handle_kv_get(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Exact key lookup in the KV store. Returns JSON null on miss."""
     try:
@@ -2466,7 +2550,7 @@ def handle_kv_get(
 
 
 def handle_kv_search(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Semantic search over KV store entries."""
     try:
@@ -2490,7 +2574,7 @@ def handle_kv_search(
 
 
 def handle_kv_list(
-    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """List KV entries, optionally filtered by namespace prefixes."""
     namespaces = args.get('namespaces') or None
@@ -2551,7 +2635,7 @@ def dispatch(
     tool_name: str,
     args: dict[str, Any],
     *,
-    api: Any,
+    api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
 ) -> str:
@@ -2571,6 +2655,7 @@ __all__ = [
     'GET_ENTITY_MENTIONS_SCHEMA',
     'HANDLERS',
     'LIST_ENTITIES_SCHEMA',
+    'MemexAPIProtocol',
     'RECALL_SCHEMA',
     'RETAIN_SCHEMA',
     'RETRIEVE_NOTES_SCHEMA',
