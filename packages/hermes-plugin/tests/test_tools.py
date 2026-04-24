@@ -1765,9 +1765,15 @@ def test_set_note_status_schema_requires_note_id_and_status():
 
 
 def test_update_user_notes_schema_allows_null_user_notes():
-    """AC-052: ``user_notes`` may be null (for deletion)."""
+    """AC-052: ``user_notes`` may be null (for deletion).
+
+    Expressed as ``type: "string"`` + ``nullable: true`` rather than a
+    ``["string", "null"]`` union so strict JSON-schema validators (which
+    reject multi-typed properties) accept the schema.
+    """
     props = UPDATE_USER_NOTES_SCHEMA['parameters']['properties']
-    assert 'null' in props['user_notes']['type']
+    assert props['user_notes']['type'] == 'string'
+    assert props['user_notes']['nullable'] is True
 
 
 def test_rename_note_schema_requires_both_fields():

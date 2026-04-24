@@ -734,7 +734,8 @@ UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
                 'description': 'Note UUID to update.',
             },
             'user_notes': {
-                'type': ['string', 'null'],
+                'type': 'string',
+                'nullable': True,
                 'description': 'New user_notes text, or null to delete all annotations.',
             },
         },
@@ -1562,21 +1563,28 @@ def handle_get_vault_summary(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     raw = args.get('vault_id')
+    if not raw and vault_id is None:
+        return tool_error('No vault specified and no session-bound vault.')
+
+    # Delegate to _resolve_vault_ids so UUID-parsing and name-resolution stay in
+    # one place. It takes a plural ``vault_ids`` key; we pass a single-element
+    # list and unwrap the first result.
     try:
-        if raw:
-            try:
-                target = UUID(str(raw))
-            except (ValueError, TypeError):
-                target = run_sync(api.resolve_vault_identifier(str(raw)), timeout=30.0)
-                if not isinstance(target, UUID):
-                    target = UUID(str(target))
-        elif vault_id is not None:
-            target = vault_id
-        else:
-            return tool_error('No vault specified and no session-bound vault.')
+        resolved = _resolve_vault_ids(
+            api,
+            {'vault_ids': [raw]} if raw else {},
+            vault_id,
+        )
+    except VaultResolutionError as exc:
+        logger.warning('memex_get_vault_summary resolve failed: %s', exc)
+        return tool_error(f'Unknown vault: {raw!r}')
     except Exception as e:
         logger.warning('memex_get_vault_summary resolve failed: %s', e)
         return tool_error(f'Unknown vault: {raw!r}')
+
+    if not resolved:
+        return tool_error('No vault specified and no session-bound vault.')
+    target = resolved[0]
 
     try:
         summary = run_sync(api.get_vault_summary(target), timeout=30.0)
@@ -1897,6 +1905,14 @@ def _serialize_full_entity(ent: Any) -> dict[str, Any]:
 def handle_get_memory_units(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
+    """Fetch memory units by ID.
+
+    Issues one ``api.get_memory_unit`` call per ID — ``RemoteMemexAPI`` does
+    not currently expose a batch ``get_memory_units`` endpoint. If one is
+    added later, adopt the try-batch-then-fallback pattern used by
+    ``handle_get_entities`` (batch call wrapped in try/except, falling back
+    to the per-ID loop on failure).
+    """
     raw_ids = args.get('unit_ids') or []
     uuids: list[UUID] = []
     for uid_str in raw_ids:
@@ -1906,6 +1922,8 @@ def handle_get_memory_units(
             continue
 
     items: list[dict[str, Any]] = []
+    # Singular per-ID loop — no batch API available; see docstring for the
+    # pattern to adopt if RemoteMemexAPI grows a batch variant.
     for uid in uuids:
         try:
             unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
@@ -2258,7 +2276,14 @@ def handle_register_template(
 def handle_list_assets(
     api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    """List asset filenames/paths/mime types for a note."""
+    """List asset filenames/paths/mime types for a note.
+
+    Known perf trade-off: fetches the full ``NoteDTO`` via ``api.get_note`` to
+    read ``note.assets``. ``NoteDTO.original_text`` may be large. The lighter
+    ``api.get_note_metadata`` endpoint exposes only a ``has_assets: bool``
+    flag, not the asset list. If the server ever adds an asset-list-only
+    endpoint (e.g. ``GET /notes/{id}/assets``), swap to that here.
+    """
     try:
         note_id_str = _require(args, 'note_id')
     except ValueError as e:
