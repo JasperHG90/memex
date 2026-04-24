@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64 as _b64
 import json
+import os
+import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -185,6 +187,23 @@ def test_tool_descriptions_are_neutral():
             f'{schema["name"]} leaked a "parallel" hint into its description; '
             'routing belongs in the system prompt block (briefing.py).'
         )
+
+
+def test_retain_content_description_instructs_on_structure():
+    """The retain tool must instruct the agent to emit real `##` sections.
+
+    Without a template, hermes was seen producing walls of `**Label:**` lines
+    with no blank lines — extraction had to infer structure. This guard fails
+    loudly if the contract gets deleted.
+    """
+    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_retain')
+    desc = retain['parameters']['properties']['content']['description']
+    assert '##' in desc, 'retain content description must show `##` section usage'
+    assert '# <Title>' in desc, 'retain content description must show the H1 template'
+    # Explicitly call out the inline bold-label anti-pattern we're replacing.
+    assert '**Label:**' in desc, (
+        'retain content description must name the `**Label:**` anti-pattern'
+    )
 
 
 def test_recall_returns_serialized_results(config, vault_id):
@@ -2939,3 +2958,100 @@ def test_kv_list_no_namespaces_passes_none(config, vault_id):
     api.kv_list = AsyncMock(return_value=[])
     dispatch('memex_kv_list', {}, api=api, config=config, vault_id=vault_id)
     assert api.kv_list.call_args.kwargs['namespaces'] is None
+
+
+# ---------------------------------------------------------------------------
+# Live LLM check: RETAIN_SCHEMA steers the model to structured markdown.
+# ---------------------------------------------------------------------------
+
+# Module-import-time env + dependency checks (matches the convention used in
+# `packages/core/tests/integration/memory/models/test_int_litellm_backends.py`).
+# Fine for CI because the job env is stable; if you inject keys per-test via a
+# fixture, inline the `skipif` expression instead.
+import importlib.util as _ilu  # noqa: E402
+
+_HAS_GEMINI_KEY = bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'))
+_HAS_LITELLM = _ilu.find_spec('litellm') is not None
+
+
+@pytest.mark.llm
+@pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
+@pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
+def test_retain_content_is_structured_markdown_via_gemini():
+    """Real LLM round-trip: ``RETAIN_SCHEMA`` must actually steer the model to
+    emit ``# Title`` + ``## Section`` markdown (not ``**Label:**`` run-on prose).
+
+    Uses ``litellm`` + ``gemini/gemini-3-flash-preview`` to match the rest of
+    the repo's LLM-gated tests; static schema assertions alone don't prove
+    the contract works — only a live call does.
+    """
+    import litellm
+
+    from memex_hermes_plugin.memex.tools import RETAIN_SCHEMA
+
+    tool = {
+        'type': 'function',
+        'function': {
+            'name': RETAIN_SCHEMA['name'],
+            'description': RETAIN_SCHEMA['description'],
+            'parameters': RETAIN_SCHEMA['parameters'],
+        },
+    }
+
+    # Model pinned to match the rest of the repo's LLM tests. Update in lockstep
+    # with `packages/core/tests/integration/memory/**` when the Gemini line
+    # rolls forward — this is a contract test, not a capability benchmark, so
+    # any model strong enough to follow a tool schema will do.
+    resp = litellm.completion(
+        model='gemini/gemini-3-flash-preview',
+        messages=[
+            {
+                'role': 'user',
+                'content': (
+                    "Today at 00:00 UTC our 'Daily reflect' cron ran, but the "
+                    'assistant could not retrieve its conclusions later. The '
+                    'reflection output was buried inside a raw Hermes session '
+                    'log instead of being indexed as a standalone summary, so '
+                    'semantic search for "conclusions" missed it. The '
+                    'assistant fell back to a generalized summary of recent '
+                    'activity. Capture this as a structured post-mortem via '
+                    'memex_retain with name "Retrieval Failure: Daily '
+                    'Reflection Conclusions", a one-sentence description, '
+                    'and content covering date, symptom, root cause, outcome, '
+                    'and lesson.'
+                ),
+            }
+        ],
+        tools=[tool],
+        tool_choice={'type': 'function', 'function': {'name': 'memex_retain'}},
+        temperature=0,
+        timeout=30,
+        api_key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'),
+    )
+
+    tool_calls = resp.choices[0].message.tool_calls or []
+    assert tool_calls, f'model did not call a tool: {resp.choices[0].message!r}'
+    retain = next((tc for tc in tool_calls if tc.function.name == 'memex_retain'), None)
+    assert retain is not None, f'model called a different tool: {tool_calls!r}'
+
+    args = json.loads(retain.function.arguments)
+    body = args.get('content', '')
+    assert body, f'memex_retain called with empty content; args={args!r}'
+
+    # Structural assertions — brittle-by-design; this IS the contract.
+    assert body.lstrip().startswith('# '), (
+        f'body must open with a single `# Title`. Got: {body[:80]!r}'
+    )
+    assert '\n## ' in body, f'body must contain at least one `##` section heading. Got:\n{body}'
+
+    # Anti-pattern: a top-level ``**Label:** value`` line (outside a bullet).
+    # Bullets like ``- **sub-label**: detail`` are allowed.
+    inline_label = re.compile(r'^\*\*[A-Z][^*]{0,40}:\*\*\s+\S')
+    offenders = [
+        line
+        for line in body.splitlines()
+        if inline_label.match(line.lstrip()) and not line.lstrip().startswith(('-', '*'))
+    ]
+    assert not offenders, 'inline `**Label:** value` anti-pattern leaked into body:\n' + '\n'.join(
+        offenders
+    )

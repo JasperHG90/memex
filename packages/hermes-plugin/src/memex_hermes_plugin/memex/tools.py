@@ -308,7 +308,27 @@ RETAIN_SCHEMA: dict[str, Any] = {
             },
             'content': {
                 'type': 'string',
-                'description': 'Full markdown body of the note.',
+                'description': (
+                    'Full markdown body of the note. Use real headers, not '
+                    'bold labels. Shape:\n'
+                    '\n'
+                    '# <Title>\n'
+                    '\n'
+                    '<one-paragraph summary>\n'
+                    '\n'
+                    '## <Section>\n'
+                    '<body>\n'
+                    '\n'
+                    '## <Section>\n'
+                    '- **<sub-label>**: <detail>\n'
+                    '\n'
+                    'Rules: one `#` title matching `name`; `##` for each '
+                    'section; blank line between sections; put facts, dates, '
+                    'and decisions under `##` headings (e.g. `## Date`, '
+                    '`## Symptom`, `## Root Cause`), never as inline '
+                    '`**Label:**` lines. Use `- **sub-label**: value` bullets '
+                    'for short fielded items inside a section.'
+                ),
             },
             'tags': {
                 'type': 'array',
