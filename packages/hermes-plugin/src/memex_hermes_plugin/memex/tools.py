@@ -152,8 +152,6 @@ def _resolve_vault_ids(
     ``api.resolve_vault_identifier`` fails. The dispatcher catches it and
     returns a ``tool_error`` JSON string referencing the failing name.
     """
-    import httpx
-
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
     supplied = args.get('vault_ids')
@@ -175,9 +173,10 @@ def _resolve_vault_ids(
             pass
         try:
             r = run_sync(api.resolve_vault_identifier(str(raw)), timeout=30.0)
-        except httpx.HTTPStatusError as exc:
-            raise VaultResolutionError(str(raw)) from exc
         except Exception as exc:
+            # Wraps every backend failure (HTTP 404, timeouts, network errors)
+            # into a single sentinel so the dispatcher reports the offending
+            # name uniformly.
             raise VaultResolutionError(str(raw)) from exc
         resolved.append(r if isinstance(r, UUID) else UUID(str(r)))
     return resolved
@@ -444,14 +443,19 @@ GET_VAULT_SUMMARY_SCHEMA: dict[str, Any] = {
     'description': (
         'Return the precomputed narrative summary for a vault: themes, key '
         'entities, inventory stats. Use to orient on "what\'s in vault X?" '
-        'without running expensive searches.'
+        'without running expensive searches. Returns '
+        '``{"summaries": [...], "errors": [...]}`` so the ``*`` wildcard can '
+        'fan out across every vault with per-vault error isolation.'
     ),
     'parameters': {
         'type': 'object',
         'properties': {
             'vault_id': {
                 'type': 'string',
-                'description': ('Vault UUID or name. Omit to use the session-bound vault.'),
+                'description': (
+                    'Vault UUID or name. Pass "*" to fan out across all '
+                    'vaults. Omit to use the session-bound vault.'
+                ),
             },
         },
     },
@@ -1672,6 +1676,23 @@ def handle_list_vaults(
     return json.dumps({'results': [_serialize_vault(v) for v in vaults or []]})
 
 
+def _serialize_vault_summary(summary: Any) -> dict[str, Any]:
+    created = getattr(summary, 'created_at', None)
+    updated = getattr(summary, 'updated_at', None)
+    return {
+        'id': str(getattr(summary, 'id', '')),
+        'vault_id': str(getattr(summary, 'vault_id', '')),
+        'narrative': getattr(summary, 'narrative', ''),
+        'themes': getattr(summary, 'themes', []) or [],
+        'inventory': getattr(summary, 'inventory', {}) or {},
+        'key_entities': getattr(summary, 'key_entities', []) or [],
+        'version': getattr(summary, 'version', 0),
+        'notes_incorporated': getattr(summary, 'notes_incorporated', 0),
+        'created_at': created.isoformat() if created else None,
+        'updated_at': updated.isoformat() if updated else None,
+    }
+
+
 def handle_get_vault_summary(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
@@ -1679,9 +1700,11 @@ def handle_get_vault_summary(
     if not raw and vault_id is None:
         return tool_error('No vault specified and no session-bound vault.')
 
-    # Delegate to _resolve_vault_ids so UUID-parsing and name-resolution stay in
-    # one place. It takes a plural ``vault_ids`` key; we pass a single-element
-    # list and unwrap the first result.
+    # Delegate to _resolve_vault_ids so UUID-parsing, name-resolution, and the
+    # ``*`` wildcard expansion all stay in one place. It takes a plural
+    # ``vault_ids`` key; we wrap the single arg in a one-element list. When
+    # the user passes ``*``, the helper expands to every vault and we fan out
+    # below, returning per-vault summaries with per-vault error isolation.
     try:
         resolved = _resolve_vault_ids(
             api,
@@ -1697,36 +1720,30 @@ def handle_get_vault_summary(
 
     if not resolved:
         return tool_error('No vault specified and no session-bound vault.')
-    target = resolved[0]
 
-    try:
-        summary = run_sync(api.get_vault_summary(target), timeout=30.0)
-    except Exception as e:
-        logger.warning('memex_get_vault_summary failed: %s', e)
-        return tool_error(f'Get vault summary failed: {e}')
+    summaries: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for target in resolved:
+        try:
+            summary = run_sync(api.get_vault_summary(target), timeout=30.0)
+        except Exception as e:
+            logger.warning('memex_get_vault_summary failed for %s: %s', target, e)
+            errors.append({'vault_id': str(target), 'error': str(e)})
+            continue
+        if summary is None:
+            errors.append(
+                {
+                    'vault_id': str(target),
+                    'error': (
+                        'vault summary not yet generated — it will be computed '
+                        'on the next background reflection cycle.'
+                    ),
+                }
+            )
+            continue
+        summaries.append(_serialize_vault_summary(summary))
 
-    if summary is None:
-        return tool_error(
-            'vault summary not yet generated — it will be computed on the '
-            'next background reflection cycle.'
-        )
-
-    created = getattr(summary, 'created_at', None)
-    updated = getattr(summary, 'updated_at', None)
-    return json.dumps(
-        {
-            'id': str(getattr(summary, 'id', '')),
-            'vault_id': str(getattr(summary, 'vault_id', '')),
-            'narrative': getattr(summary, 'narrative', ''),
-            'themes': getattr(summary, 'themes', []) or [],
-            'inventory': getattr(summary, 'inventory', {}) or {},
-            'key_entities': getattr(summary, 'key_entities', []) or [],
-            'version': getattr(summary, 'version', 0),
-            'notes_incorporated': getattr(summary, 'notes_incorporated', 0),
-            'created_at': created.isoformat() if created else None,
-            'updated_at': updated.isoformat() if updated else None,
-        }
-    )
+    return json.dumps({'summaries': summaries, 'errors': errors})
 
 
 def handle_find_note(
@@ -2516,6 +2533,20 @@ def handle_add_assets(
         fn = a.get('filename')
         if _is_unsafe_asset_filename(fn):
             return tool_error(f'Invalid filename: {fn!r}')
+        # Pre-decode size guard: reject before allocating the decoded bytes.
+        # ``len(b64) * 3 // 4`` is a tight upper bound on the decoded size
+        # (slight over-estimate when ``=`` padding is present), so a payload
+        # whose estimate exceeds the cap is guaranteed to also exceed it after
+        # decode. This stops a multi-hundred-MiB base64 string from being
+        # allocated in memory before the post-decode check rejects it.
+        b64 = a.get('content_b64')
+        if not isinstance(b64, str):
+            return tool_error(f'Asset {fn!r} has non-string content_b64')
+        if (len(b64) * 3) // 4 > _MAX_RESOURCE_BYTES:
+            return tool_error(
+                f'Asset {fn!r} exceeds max size '
+                f'(~{(len(b64) * 3) // 4} > {_MAX_RESOURCE_BYTES} bytes)'
+            )
 
     filenames = [a['filename'] for a in assets]
     if len(set(filenames)) != len(filenames):
@@ -2525,6 +2556,8 @@ def handle_add_assets(
         files: dict[str, bytes] = {}
         for a in assets:
             decoded = base64.b64decode(a['content_b64'], validate=True)
+            # Post-decode check kept as defense-in-depth: the pre-check is
+            # an upper-bound estimate, so the exact bytes are still verified.
             if len(decoded) > _MAX_RESOURCE_BYTES:
                 return tool_error(
                     f'Asset {a["filename"]!r} exceeds max size '
@@ -2728,7 +2761,6 @@ __all__ = [
     'RETRIEVE_NOTES_SCHEMA',
     'SURVEY_SCHEMA',
     'VaultResolutionError',
-    '_resolve_vault_ids',
     'dispatch',
     # --- Read/discovery (Stream 2) ---
     'FIND_NOTE_SCHEMA',

@@ -12,6 +12,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
@@ -876,8 +877,13 @@ def _fake_vault_summary(vid=None) -> VaultSummaryDTO:
     )
 
 
-def test_get_vault_summary_returns_summary_dict(config, vault_id):
-    """AC-021: vault name resolves; summary includes required keys."""
+def test_get_vault_summary_returns_summary_in_summaries_list(config, vault_id):
+    """AC-021: vault name resolves; summary returned as ``{summaries: [...]}``.
+
+    Single-vault response is always a 1-element list so callers can iterate
+    uniformly across single-vault and ``*`` (multi-vault) requests without
+    type-switching on the response shape.
+    """
     api = Mock()
     resolved = uuid4()
     api.resolve_vault_identifier = AsyncMock(return_value=resolved)
@@ -890,6 +896,10 @@ def test_get_vault_summary_returns_summary_dict(config, vault_id):
         vault_id=vault_id,
     )
     data = json.loads(out)
+    assert set(data) == {'summaries', 'errors'}
+    assert data['errors'] == []
+    assert len(data['summaries']) == 1
+    summary = data['summaries'][0]
     assert {
         'narrative',
         'themes',
@@ -897,9 +907,69 @@ def test_get_vault_summary_returns_summary_dict(config, vault_id):
         'key_entities',
         'notes_incorporated',
         'updated_at',
-    } <= set(data)
+    } <= set(summary)
     api.resolve_vault_identifier.assert_awaited_once_with('rituals')
     api.get_vault_summary.assert_awaited_once_with(resolved)
+
+
+def test_get_vault_summary_wildcard_fans_out_across_all_vaults(config, vault_id):
+    """``vault_id='*'`` returns summaries from every vault, not just the first.
+
+    Regression guard for the round-5 MED finding: previously the handler took
+    ``resolved[0]`` and silently dropped the rest of the wildcard expansion.
+    """
+    api = Mock()
+    vault_ids = [uuid4(), uuid4(), uuid4()]
+    api.list_vaults = AsyncMock(
+        return_value=[_fake_vault(vault_id=vid, name=f'v{i}') for i, vid in enumerate(vault_ids)]
+    )
+    api.get_vault_summary = AsyncMock(side_effect=[_fake_vault_summary(vid) for vid in vault_ids])
+    out = dispatch(
+        'memex_get_vault_summary',
+        {'vault_id': '*'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['errors'] == []
+    assert len(data['summaries']) == len(vault_ids)
+    returned_vault_ids = {s['vault_id'] for s in data['summaries']}
+    assert returned_vault_ids == {str(vid) for vid in vault_ids}
+    assert api.get_vault_summary.await_count == len(vault_ids)
+
+
+def test_get_vault_summary_wildcard_isolates_per_vault_failures(config, vault_id):
+    """A single vault failing under ``*`` does not poison the others.
+
+    Mirrors the per-path failure isolation in ``handle_get_resources``: errors
+    surface in the ``errors`` array with the offending ``vault_id`` so the
+    caller sees which one failed without losing the successful summaries.
+    """
+    api = Mock()
+    good_vid, bad_vid = uuid4(), uuid4()
+    api.list_vaults = AsyncMock(
+        return_value=[
+            _fake_vault(vault_id=good_vid, name='good'),
+            _fake_vault(vault_id=bad_vid, name='bad'),
+        ]
+    )
+    api.get_vault_summary = AsyncMock(
+        side_effect=[_fake_vault_summary(good_vid), RuntimeError('vault DB exploded')]
+    )
+    out = dispatch(
+        'memex_get_vault_summary',
+        {'vault_id': '*'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['summaries']) == 1
+    assert data['summaries'][0]['vault_id'] == str(good_vid)
+    assert len(data['errors']) == 1
+    assert data['errors'][0]['vault_id'] == str(bad_vid)
+    assert 'vault DB exploded' in data['errors'][0]['error']
 
 
 def test_get_vault_summary_falls_back_to_bound_vault(config, vault_id):
@@ -913,22 +983,24 @@ def test_get_vault_summary_falls_back_to_bound_vault(config, vault_id):
 
 
 def test_get_vault_summary_none_returns_informative_error(config, vault_id):
-    """AC-023: None summary → tool_error with "next background reflection cycle"."""
+    """AC-023: None summary → reported in errors[] with "next background reflection cycle"."""
     api = Mock()
     api.get_vault_summary = AsyncMock(return_value=None)
     out = dispatch('memex_get_vault_summary', {}, api=api, config=config, vault_id=vault_id)
     data = json.loads(out)
-    assert 'error' in data
-    assert 'next background reflection cycle' in data['error']
+    assert data['summaries'] == []
+    assert len(data['errors']) == 1
+    assert 'next background reflection cycle' in data['errors'][0]['error']
+    assert data['errors'][0]['vault_id'] == str(vault_id)
 
 
 def test_get_vault_summary_distinguishes_resolve_error_from_other_errors(config, vault_id):
-    """Non-``VaultResolutionError`` failures surface a distinct ``Vault summary failed`` message.
+    """Non-``VaultResolutionError`` failures during *resolve* still surface a top-level error.
 
-    Previously the broad ``except Exception`` returned the same ``Unknown vault: ...``
-    text as the named-resolution path, masking bugs. ``list_vaults`` is triggered
-    via the ``*`` wildcard and does not go through the ``VaultResolutionError``
-    wrap in ``_resolve_vault_ids``.
+    The wildcard path triggers ``api.list_vaults``, which doesn't go through
+    the ``VaultResolutionError`` wrap. A ``RuntimeError`` here means the
+    handler couldn't even enumerate vaults — it's a top-level ``tool_error``,
+    not a per-vault entry in ``errors``.
     """
     api = Mock()
     api.list_vaults = AsyncMock(side_effect=RuntimeError('boom'))
@@ -2771,6 +2843,71 @@ def test_add_assets_rejects_oversized_asset(config, vault_id, monkeypatch):
     assert 'error' in data
     assert 'exceeds max size' in data['error']
     assert "'big.png'" in data['error']
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_add_assets_rejects_oversized_b64_before_decode(config, vault_id, monkeypatch):
+    """Pre-decode size guard: oversized b64 string is rejected without allocation.
+
+    Round-5 MED finding: the post-decode check still let Python allocate the
+    decoded bytes before rejecting them — an OOM vector for a multi-hundred-MiB
+    payload. Verify that an oversized b64 *string* is rejected without
+    ``base64.b64decode`` ever being called on it. We patch ``b64decode`` to
+    raise ``AssertionError`` if invoked: if the pre-check fires, decode is
+    skipped; if the pre-check is missing, the AssertionError surfaces.
+    """
+    from memex_hermes_plugin.memex import tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+
+    decoded_calls: list[str] = []
+
+    def _record_call(*args: Any, **kwargs: Any) -> bytes:
+        decoded_calls.append('called')
+        raise AssertionError('b64decode must not be called for oversized payloads')
+
+    monkeypatch.setattr(tools_mod.base64, 'b64decode', _record_call)
+
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    # 32 chars of b64 → ``32 * 3 // 4 = 24`` estimated bytes, far above the
+    # 4-byte cap we set above.
+    big_b64 = 'A' * 32
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [{'filename': 'huge.bin', 'content_b64': big_b64}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'exceeds max size' in data['error']
+    assert "'huge.bin'" in data['error']
+    assert decoded_calls == [], 'b64decode was invoked despite pre-check'
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_add_assets_rejects_non_string_b64(config, vault_id):
+    """``content_b64`` must be a string; defensive check for misshaped payloads."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [{'filename': 'a.png', 'content_b64': 12345}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'non-string content_b64' in data['error']
     api.add_note_assets.assert_not_awaited()
 
 
