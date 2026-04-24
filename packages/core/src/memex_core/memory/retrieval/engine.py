@@ -3,7 +3,7 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from uuid import UUID
+from uuid import UUID, uuid5
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Sequence
@@ -61,6 +61,12 @@ def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.
 # RRF Constant
 K_RRF = 60
 CANDIDATE_POOL_SIZE = 60
+
+# Namespace for deterministic virtual MemoryUnit ids synthesized from
+# MentalModel observations. Stable across processes, unlike Python's
+# PYTHONHASHSEED-salted hash(). Reproducible via:
+#   uuid5(uuid.NAMESPACE_URL, 'memex/retrieval/virtual-mental-model-observation')
+_VIRTUAL_UNIT_NS = UUID('bf63d7e5-1e6a-5cf4-9f33-2e85d3a48d38')
 
 
 @dataclass
@@ -1315,7 +1321,7 @@ class RetrievalEngine:
                 if mid:
                     evidence_ids.append(str(mid))
 
-            virtual_id = UUID(int=hash(str(model.id) + title) & (2**128 - 1))
+            virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
             units.append(
                 MemoryUnit(
                     id=virtual_id,
@@ -1324,12 +1330,13 @@ class RetrievalEngine:
                     status=ContentStatus.ACTIVE,
                     event_date=model.last_refreshed,
                     vault_id=model.vault_id,
-                    note_id=model.id,
+                    note_id=None,
                     embedding=[],
                     unit_metadata={
                         'observation': True,
                         'virtual': True,
                         'trend': str(trend.value) if hasattr(trend, 'value') else str(trend),
+                        'mental_model_id': str(model.id),
                         'evidence_ids': evidence_ids,
                     },
                 )
