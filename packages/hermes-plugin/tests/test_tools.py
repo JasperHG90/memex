@@ -356,15 +356,19 @@ def test_recall_forwards_api_errors(config, vault_id):
 # Live LLM check: RETAIN_SCHEMA steers the model to structured markdown.
 # ---------------------------------------------------------------------------
 
-# Module-import-time env read (matches the convention used in
+# Module-import-time env + dependency checks (matches the convention used in
 # `packages/core/tests/integration/memory/models/test_int_litellm_backends.py`).
 # Fine for CI because the job env is stable; if you inject keys per-test via a
 # fixture, inline the `skipif` expression instead.
+import importlib.util as _ilu  # noqa: E402
+
 _HAS_GEMINI_KEY = bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'))
+_HAS_LITELLM = _ilu.find_spec('litellm') is not None
 
 
 @pytest.mark.llm
 @pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
+@pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
 def test_retain_content_is_structured_markdown_via_gemini():
     """Real LLM round-trip: ``RETAIN_SCHEMA`` must actually steer the model to
     emit ``# Title`` + ``## Section`` markdown (not ``**Label:**`` run-on prose).
@@ -409,6 +413,7 @@ def test_retain_content_is_structured_markdown_via_gemini():
         tools=[tool],
         tool_choice={'type': 'function', 'function': {'name': 'memex_retain'}},
         temperature=0,
+        timeout=30,
         api_key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'),
     )
 
