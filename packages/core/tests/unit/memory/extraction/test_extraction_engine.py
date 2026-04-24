@@ -279,3 +279,30 @@ async def test_persist_page_index_skips_duplicate_blocks(extractor, mock_session
     assert len(chunks) == 1  # only first block stored
     assert chunks[0].chunk_index == 0
     assert chunks[0].content_hash == block_hash
+
+
+class TestMakeLmPropagatesTimeout:
+    """Regression for issue #40: ModelConfig.timeout must reach dspy.LM.
+
+    ModelConfig.timeout (120s default) was added to the schema but dropped at
+    4 of 5 dspy.LM(...) construction sites. A hung provider call could wedge
+    the event loop, blocking unrelated requests including /api/v1/health.
+    """
+
+    def test_make_lm_passes_timeout_and_num_retries(self) -> None:
+        from memex_core.memory.extraction.engine import _make_lm
+        from memex_common.config import ModelConfig
+
+        cfg = ModelConfig(model='openai/gpt-4o-mini', timeout=42, num_retries=7)
+
+        with patch('memex_core.memory.extraction.engine.dspy.LM') as mock_lm:
+            _make_lm(cfg)
+
+        assert mock_lm.call_count == 1
+        kwargs = mock_lm.call_args.kwargs
+        assert kwargs.get('timeout') == 42, (
+            f'timeout not propagated from ModelConfig; got kwargs={kwargs!r}'
+        )
+        assert kwargs.get('num_retries') == 7, (
+            f'num_retries not propagated from ModelConfig; got kwargs={kwargs!r}'
+        )

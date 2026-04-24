@@ -93,6 +93,8 @@ class ReflectionEngine:
                     api_key=model_config.api_key.get_secret_value()
                     if model_config.api_key
                     else None,
+                    timeout=model_config.timeout,
+                    num_retries=model_config.num_retries,
                 )
             else:
                 self.lm = dspy.settings.lm
@@ -104,6 +106,8 @@ class ReflectionEngine:
                         api_key=model_config.api_key.get_secret_value()
                         if model_config.api_key
                         else None,
+                        timeout=model_config.timeout,
+                        num_retries=model_config.num_retries,
                     )
         except (ValueError, RuntimeError, OSError, KeyError, AttributeError) as e:
             logger.warning(
