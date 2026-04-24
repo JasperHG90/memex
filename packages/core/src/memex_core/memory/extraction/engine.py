@@ -110,6 +110,8 @@ def _make_lm(model_cfg: 'memex_core.config.ModelConfig') -> dspy.LM:
         reasoning_effort=model_cfg.reasoning_effort.value
         if model_cfg.reasoning_effort is not None
         else None,
+        timeout=model_cfg.timeout,
+        num_retries=model_cfg.num_retries,
     )
 
 
@@ -684,6 +686,8 @@ class ExtractionEngine:
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
+            scan_max_concurrency=ts.scan_max_concurrency,
+            gap_rescan_threshold_tokens=ts.gap_rescan_threshold_tokens,
         )
 
         logger.info(
@@ -956,6 +960,8 @@ class ExtractionEngine:
             max_node_length=ts.max_node_length_tokens * CHARS_PER_TOKEN,
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
+            scan_max_concurrency=ts.scan_max_concurrency,
+            gap_rescan_threshold_tokens=ts.gap_rescan_threshold_tokens,
         )
 
         logger.info(

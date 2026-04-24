@@ -62,6 +62,8 @@ async def get_memory_engine(
             model=model_config.model,
             api_base=str(model_config.base_url) if model_config.base_url else None,
             api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
+            timeout=model_config.timeout,
+            num_retries=model_config.num_retries,
         )
         predictor = dspy.Predict(ExtractSemanticFacts)
         entity_resolver = EntityResolver()
@@ -109,6 +111,8 @@ def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | No
             model=model_config.model,
             api_base=str(model_config.base_url) if model_config.base_url else None,
             api_key=model_config.api_key.get_secret_value() if model_config.api_key else None,
+            timeout=model_config.timeout,
+            num_retries=model_config.num_retries,
         )
         engine = ContradictionEngine(lm=lm, config=contradiction_config)
         logger.info(

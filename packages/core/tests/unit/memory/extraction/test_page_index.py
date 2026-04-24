@@ -833,3 +833,146 @@ class TestScanDocumentParallel:
 
         # Boundary is <= so exactly at limit should be a single call
         mock_chunk.assert_called_once_with(boundary_text, '', 0)
+
+    @pytest.mark.asyncio
+    async def test_scan_respects_semaphore(self) -> None:
+        """With scan_max_concurrency=1, concurrent scan tasks must execute sequentially.
+
+        Regression for issue #40: unbounded asyncio.gather over `_process_single_chunk`
+        could fan out past host capacity on memory-constrained runners.
+        """
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), scan_max_concurrency=1)
+        large_text = 'word ' * 50_000  # ~50K tokens -> multiple chunks
+
+        windows: list[tuple[float, float]] = []
+
+        async def _fake_chunk(chunk: str, prev: str, offset: int) -> list:
+            # Mimic _process_single_chunk's semaphore-gated body: acquire, work,
+            # release. We bypass the real LLM but record [enter, exit] windows.
+            async with indexer._scan_semaphore:
+                start = time.perf_counter()
+                await asyncio.sleep(0.02)
+                end = time.perf_counter()
+                windows.append((start, end))
+            return []
+
+        with patch.object(indexer, '_process_single_chunk', side_effect=_fake_chunk):
+            await indexer._scan_document_parallel(large_text, max_scan_tokens=20_000)
+
+        assert len(windows) >= 3, f'expected multiple chunks, got {len(windows)}'
+        # With concurrency=1, windows must not overlap.
+        sorted_windows = sorted(windows, key=lambda w: w[0])
+        for (_, prev_end), (next_start, _) in zip(sorted_windows, sorted_windows[1:]):
+            assert next_start >= prev_end - 1e-3, (
+                f'windows overlap: prev ended at {prev_end}, next started at {next_start}'
+            )
+
+
+class TestDetectAndFillGaps:
+    """Regression tests for _detect_and_fill_gaps chunking oversized gaps (issue #40)."""
+
+    def _make_indexer(self, gap_rescan_threshold_tokens: int = 2000) -> AsyncMarkdownPageIndex:
+        return AsyncMarkdownPageIndex(
+            lm=MagicMock(),
+            scan_max_concurrency=5,
+            gap_rescan_threshold_tokens=gap_rescan_threshold_tokens,
+        )
+
+    @pytest.mark.asyncio
+    async def test_oversized_gap_is_chunked_not_submitted_whole(self) -> None:
+        """A gap several times larger than scan_chunk_size_tokens must fan out
+        into multiple scan tasks, not a single oversize LLM call.
+
+        Regression for issue #40: a 139K-char gap was submitted as one ~35K-token
+        prompt, producing the wedge observed on the Jetson Orin Nano.
+        """
+        from memex_core.memory.extraction.models import DetectedHeader
+
+        indexer = self._make_indexer()
+        # Small max_scan_tokens to force chunking with a manageable text size.
+        max_scan_tokens = 500
+        # Big enough to produce multiple chunks at max_scan_tokens=500.
+        gap_text = 'word ' * 3_500  # ~3.5K tokens → ~7 chunks
+        headers = [
+            DetectedHeader(
+                reasoning='sentinel end-header',
+                exact_text='## End',
+                clean_title='End',
+                level_hint='h2',
+                start_index=len(gap_text),
+            )
+        ]
+        full_text = gap_text + '## End\nfin.\n'
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            result = await indexer._detect_and_fill_gaps(
+                headers, full_text, max_scan_tokens=max_scan_tokens
+            )
+
+        assert mock_chunk.call_count > 1, (
+            f'expected oversized gap to fan out into multiple scan tasks, '
+            f'got {mock_chunk.call_count}'
+        )
+        # All scan-task offsets must land inside the gap (start at 0).
+        offsets = [call.args[2] for call in mock_chunk.call_args_list]
+        assert offsets[0] == 0
+        # Sorted offsets should be strictly increasing.
+        assert offsets == sorted(offsets)
+        assert result == headers  # no new headers from mocked scanner
+
+    @pytest.mark.asyncio
+    async def test_small_gap_below_threshold_is_skipped(self) -> None:
+        """A gap below gap_rescan_threshold_tokens should not trigger a rescan."""
+        from memex_core.memory.extraction.models import DetectedHeader
+
+        indexer = self._make_indexer(gap_rescan_threshold_tokens=2000)
+        small_gap = 'word ' * 200  # ~200 tokens, below threshold
+        headers = [
+            DetectedHeader(
+                reasoning='sentinel end-header',
+                exact_text='## End',
+                clean_title='End',
+                level_hint='h2',
+                start_index=len(small_gap),
+            )
+        ]
+        full_text = small_gap + '## End\nfin.\n'
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            result = await indexer._detect_and_fill_gaps(headers, full_text, max_scan_tokens=20_000)
+
+        mock_chunk.assert_not_called()
+        assert result == headers
+
+    @pytest.mark.asyncio
+    async def test_tail_gap_above_threshold_is_chunked(self) -> None:
+        """A tail gap (text after the last detected header) must also be chunked."""
+        from memex_core.memory.extraction.models import DetectedHeader
+
+        indexer = self._make_indexer()
+        header = DetectedHeader(
+            reasoning='sentinel intro header',
+            exact_text='## Intro',
+            clean_title='Intro',
+            level_hint='h2',
+            start_index=0,
+        )
+        tail_text = 'word ' * 3_500  # ~3.5K tokens → multiple chunks at 500 tokens
+        full_text = '## Intro\n' + tail_text
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ) as mock_chunk:
+            await indexer._detect_and_fill_gaps([header], full_text, max_scan_tokens=500)
+
+        assert mock_chunk.call_count > 1
+        # All tail-chunk offsets must be at or beyond the end of the header.
+        offsets = [call.args[2] for call in mock_chunk.call_args_list]
+        assert min(offsets) >= len('## Intro')

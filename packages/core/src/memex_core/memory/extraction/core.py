@@ -3,7 +3,7 @@ import hashlib
 import logging
 import re
 import asyncio
-from typing import cast
+from typing import Any, Coroutine, cast
 
 import dspy
 import regex as regex_lib
@@ -876,7 +876,13 @@ class AsyncMarkdownPageIndex(dspy.Module):
     - **LLM path**: unstructured or poorly-structured documents requiring LLM scanning
     """
 
-    def __init__(self, lm: dspy.LM) -> None:
+    def __init__(
+        self,
+        lm: dspy.LM,
+        *,
+        scan_max_concurrency: int = 5,
+        gap_rescan_threshold_tokens: int = 2000,
+    ) -> None:
         super().__init__()
         self.lm = lm
         self.scanner = dspy.ChainOfThought(ScanChunk)
@@ -884,6 +890,12 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self.summarizer = dspy.ChainOfThought(SummarizeSection)
         self.parent_summarizer = dspy.ChainOfThought(SummarizeParentSection)
         self.block_summarizer = dspy.ChainOfThought(SummarizeBlock)
+        self.scan_max_concurrency = scan_max_concurrency
+        self.gap_rescan_threshold_tokens = gap_rescan_threshold_tokens
+        # The extractor is only ever instantiated from inside an async entry
+        # point (index_document), so constructing the Semaphore here is safe —
+        # it binds to the running loop on first acquire.
+        self._scan_semaphore = asyncio.Semaphore(scan_max_concurrency)
         self._logger = logging.getLogger('memex.core.memory.extraction.page_index')
 
     async def aforward(
@@ -965,7 +977,9 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self._logger.info('[LLM Path] Document is not well-structured. Running full LLM scan.')
 
         flat_headers = await self._scan_document_parallel(full_text, max_scan_tokens)
-        flat_headers = await self._detect_and_fill_gaps(flat_headers, full_text, max_gap_size=4000)
+        flat_headers = await self._detect_and_fill_gaps(
+            flat_headers, full_text, max_scan_tokens=max_scan_tokens
+        )
 
         if not flat_headers:
             if regex_headers:
@@ -1037,37 +1051,66 @@ class AsyncMarkdownPageIndex(dspy.Module):
 
     # ---- LLM-dependent scanning ----
 
-    async def _scan_document_parallel(
-        self, text: str, max_scan_tokens: int
-    ) -> list[DetectedHeader]:
+    def _build_scan_tasks(
+        self,
+        text: str,
+        max_scan_tokens: int,
+        *,
+        offset_base: int = 0,
+        context_prefix: str = '',
+        overlap_chars: int = 200,
+    ) -> list[Coroutine[Any, Any, list[DetectedHeader]]]:
+        """Split *text* into overlapping scan chunks and return scan coroutines.
+
+        If *text* fits in ``max_scan_tokens``, returns a single coroutine.
+        Otherwise, slices *text* into overlapping chunks of ``max_scan_tokens``
+        tokens and returns one coroutine per chunk. ``offset_base`` lets callers
+        translate chunk-local positions back to parent-document coordinates
+        (used when rescanning a gap inside a larger document).
+
+        ``overlap_chars`` controls how many characters of the previous slice
+        bleed into the next one, so a header split across a chunk boundary is
+        still detected. Callers wanting tighter overlap on dense gap rescans
+        (where the whole region is a single paragraph of prose) can lower it.
+        """
         doc_tokens = estimate_token_count(text)
 
         if doc_tokens <= max_scan_tokens:
-            self._logger.info(
-                f'[LLM Path] Scanning full document ({doc_tokens} tokens) in single call.'
-            )
-            return deduplicate_and_sort([await self._process_single_chunk(text, '', 0)])
+            return [self._process_single_chunk(text, context_prefix, offset_base)]
 
         chars_per_token = len(text) / doc_tokens if doc_tokens > 0 else 4.0
         chunk_chars = int(max_scan_tokens * chars_per_token)
-        overlap_chars = 200
-        tasks = []
-        num_chunks = 0
+        tasks: list[Coroutine[Any, Any, list[DetectedHeader]]] = []
 
         for start in range(0, len(text), chunk_chars - overlap_chars):
             end = min(start + chunk_chars, len(text))
             chunk = text[start:end]
-            ctx_start = max(0, start - 200)
-            prev_context = text[ctx_start:start]
-
             if len(chunk) < 50:
                 continue
-            tasks.append(self._process_single_chunk(chunk, prev_context, start))
-            num_chunks += 1
+            if start == 0:
+                prev_context = context_prefix
+            else:
+                ctx_start = max(0, start - 200)
+                prev_context = text[ctx_start:start]
+            tasks.append(self._process_single_chunk(chunk, prev_context, offset_base + start))
 
-        self._logger.info(
-            f'[LLM Path] Scanning document ({doc_tokens} tokens) in {num_chunks} chunks.'
-        )
+        return tasks
+
+    async def _scan_document_parallel(
+        self, text: str, max_scan_tokens: int
+    ) -> list[DetectedHeader]:
+        doc_tokens = estimate_token_count(text)
+        tasks = self._build_scan_tasks(text, max_scan_tokens)
+
+        if len(tasks) <= 1:
+            self._logger.info(
+                f'[LLM Path] Scanning full document ({doc_tokens} tokens) in single call.'
+            )
+        else:
+            self._logger.info(
+                f'[LLM Path] Scanning document ({doc_tokens} tokens) in {len(tasks)} chunks '
+                f'(max_concurrency={self.scan_max_concurrency}).'
+            )
         results = await asyncio.gather(*tasks)
         return deduplicate_and_sort(results)
 
@@ -1075,68 +1118,89 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self, chunk: str, prev_context: str, offset: int
     ) -> list[DetectedHeader]:
         valid_headers: list[DetectedHeader] = []
-        try:
-            pred = await run_dspy_operation(
-                lm=self.lm,
-                predictor=self.scanner,
-                input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
-                operation_name='extraction.header_scan',
-            )
+        # Gate the LLM call on the per-extractor semaphore so concurrent scan
+        # tasks (from document parallelism *and* gap refill) don't fan out past
+        # scan_max_concurrency on memory-constrained hosts.
+        async with self._scan_semaphore:
+            try:
+                pred = await run_dspy_operation(
+                    lm=self.lm,
+                    predictor=self.scanner,
+                    input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
+                    operation_name='extraction.header_scan',
+                )
 
-            for h in pred.detected_headers:
-                try:
-                    rel_idx = chunk.index(h.exact_text)
-                    h.start_index = offset + rel_idx
-                    valid_headers.append(h)
-                    continue
-                except ValueError:
-                    pass
-
-                tolerance = max(2, int(len(h.exact_text) * 0.15))
-                try:
-                    pattern = f'({regex_lib.escape(h.exact_text)}){{e<={tolerance}}}'
-                    match = regex_lib.search(pattern, chunk)
-                    if match:
-                        h.exact_text = match.group(0)
-                        h.start_index = offset + match.start()
+                for h in pred.detected_headers:
+                    try:
+                        rel_idx = chunk.index(h.exact_text)
+                        h.start_index = offset + rel_idx
                         valid_headers.append(h)
-                except (regex_lib.error, ValueError, RuntimeError) as e:
-                    self._logger.debug('Fuzzy regex match failed for header: %s', e)
-        except (ValueError, RuntimeError, OSError, KeyError) as e:
-            self._logger.error(f'Scanner Error at offset {offset}: {e}')
+                        continue
+                    except ValueError:
+                        pass
+
+                    tolerance = max(2, int(len(h.exact_text) * 0.15))
+                    try:
+                        pattern = f'({regex_lib.escape(h.exact_text)}){{e<={tolerance}}}'
+                        match = regex_lib.search(pattern, chunk)
+                        if match:
+                            h.exact_text = match.group(0)
+                            h.start_index = offset + match.start()
+                            valid_headers.append(h)
+                    except (regex_lib.error, ValueError, RuntimeError) as e:
+                        self._logger.debug('Fuzzy regex match failed for header: %s', e)
+            except (ValueError, RuntimeError, OSError, KeyError) as e:
+                self._logger.error(f'Scanner Error at offset {offset}: {e}')
 
         return valid_headers
 
     async def _detect_and_fill_gaps(
-        self, flat_headers: list[DetectedHeader], full_text: str, max_gap_size: int
+        self,
+        flat_headers: list[DetectedHeader],
+        full_text: str,
+        *,
+        max_scan_tokens: int,
     ) -> list[DetectedHeader]:
-        new_headers_tasks = []
+        new_headers_tasks: list[Coroutine[Any, Any, list[DetectedHeader]]] = []
         current_idx = 0
 
         for header in flat_headers:
             if header.start_index is None:
                 continue
 
-            gap_size = header.start_index - current_idx
-            if gap_size > max_gap_size:
-                self._logger.debug(f'   > Omission Detected: {gap_size} chars. Re-scanning.')
-                gap_text = full_text[current_idx : header.start_index]
+            gap_text = full_text[current_idx : header.start_index]
+            gap_tokens = estimate_token_count(gap_text)
+            if gap_tokens > self.gap_rescan_threshold_tokens:
+                self._logger.debug(
+                    f'   > Omission Detected: {gap_tokens} tokens '
+                    f'({len(gap_text)} chars). Re-scanning.'
+                )
                 gap_context = full_text[max(0, current_idx - 200) : current_idx]
-                new_headers_tasks.append(
-                    self._process_single_chunk(gap_text, gap_context, offset=current_idx)
+                new_headers_tasks.extend(
+                    self._build_scan_tasks(
+                        gap_text,
+                        max_scan_tokens,
+                        offset_base=current_idx,
+                        context_prefix=gap_context,
+                    )
                 )
 
             current_idx = header.start_index + len(header.exact_text)
 
-        final_gap = len(full_text) - current_idx
-        if final_gap > max_gap_size:
-            self._logger.debug(f'   > Tail Omission Detected: {final_gap} chars. Re-scanning.')
-            gap_text = full_text[current_idx:]
-            new_headers_tasks.append(
-                self._process_single_chunk(
-                    gap_text,
-                    full_text[max(0, current_idx - 200) : current_idx],
-                    offset=current_idx,
+        tail_text = full_text[current_idx:]
+        tail_tokens = estimate_token_count(tail_text)
+        if tail_tokens > self.gap_rescan_threshold_tokens:
+            self._logger.debug(
+                f'   > Tail Omission Detected: {tail_tokens} tokens '
+                f'({len(tail_text)} chars). Re-scanning.'
+            )
+            tail_context = full_text[max(0, current_idx - 200) : current_idx]
+            new_headers_tasks.extend(
+                self._build_scan_tasks(
+                    tail_text,
+                    max_scan_tokens,
+                    offset_base=current_idx,
+                    context_prefix=tail_context,
                 )
             )
 
@@ -1356,6 +1420,9 @@ async def index_document(
     max_node_length: int = 5000,
     block_token_target: int = 1000,
     short_doc_threshold: int = 2000,
+    *,
+    scan_max_concurrency: int = 5,
+    gap_rescan_threshold_tokens: int = 2000,
 ) -> PageIndexOutput:
     """Top-level function to index a document using PageIndex.
 
@@ -1369,6 +1436,10 @@ async def index_document(
         max_node_length: Max characters per node before refinement.
         block_token_target: Target token count per block.
         short_doc_threshold: Documents below this with no headers bypass PageIndex.
+        scan_max_concurrency: Cap on concurrent LLM scan calls during page_index
+            extraction. Lower this on memory-constrained hosts.
+        gap_rescan_threshold_tokens: Minimum gap size (tokens) between detected
+            headers that triggers a secondary LLM re-scan.
 
     Returns:
         PageIndexOutput with TOC tree, blocks, and coverage information.
@@ -1407,7 +1478,11 @@ async def index_document(
         )
 
     # Full PageIndex
-    indexer = AsyncMarkdownPageIndex(lm=lm)
+    indexer = AsyncMarkdownPageIndex(
+        lm=lm,
+        scan_max_concurrency=scan_max_concurrency,
+        gap_rescan_threshold_tokens=gap_rescan_threshold_tokens,
+    )
     # Wrap in timeout — individual LLM calls have their own timeout via dspy.LM,
     # but the full page-index pipeline (multiple sequential LLM calls) can hang
     # if any single call stalls silently.
