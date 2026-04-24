@@ -102,6 +102,11 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_list_notes',
         'memex_recent_notes',
         'memex_search_user_notes',
+        # Stream 3 (entities/memory/lineage)
+        'memex_get_entities',
+        'memex_get_memory_units',
+        'memex_get_memory_links',
+        'memex_get_lineage',
     }
     assert expected_minimum.issubset(names)
 
@@ -124,7 +129,8 @@ class TestGetToolSchemasBeforeInitialize:
         # NOTE: no initialize() call.
         schemas = p.get_tool_schemas()
         names = {s['name'] for s in schemas}
-        stream_1_baseline = {
+        expected_minimum = {
+            # Stream 1 (vault-scoped)
             'memex_recall',
             'memex_retrieve_notes',
             'memex_survey',
@@ -132,8 +138,24 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_list_entities',
             'memex_get_entity_mentions',
             'memex_get_entity_cooccurrences',
+            # Stream 2 (read/discovery)
+            'memex_list_vaults',
+            'memex_get_vault_summary',
+            'memex_find_note',
+            'memex_read_note',
+            'memex_get_page_indices',
+            'memex_get_nodes',
+            'memex_get_notes_metadata',
+            'memex_list_notes',
+            'memex_recent_notes',
+            'memex_search_user_notes',
+            # Stream 3 (entities/memory/lineage)
+            'memex_get_entities',
+            'memex_get_memory_units',
+            'memex_get_memory_links',
+            'memex_get_lineage',
         }
-        assert stream_1_baseline.issubset(names)
+        assert expected_minimum.issubset(names)
 
     def test_each_schema_is_well_formed(self):
         p = MemexMemoryProvider()

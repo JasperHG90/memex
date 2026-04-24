@@ -581,7 +581,108 @@ SEARCH_USER_NOTES_SCHEMA: dict[str, Any] = {
 }
 
 # --- Entities/memory/lineage (Stream 3) ---
-# <streams append here>
+
+GET_ENTITIES_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_entities',
+    'description': (
+        'Batch lookup of entity details by ID. Returns canonical name, type, '
+        'mention count, and optional description for each entity.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'List of entity UUIDs to fetch.',
+            },
+        },
+        'required': ['entity_ids'],
+    },
+}
+
+GET_MEMORY_UNITS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_memory_units',
+    'description': (
+        'Batch lookup of memory units (facts, events, observations) by ID. '
+        'Includes status and supersession info.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'List of memory unit UUIDs to fetch.',
+            },
+        },
+        'required': ['unit_ids'],
+    },
+}
+
+GET_MEMORY_LINKS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_memory_links',
+    'description': (
+        'Retrieve typed relationship links (semantic, temporal, causal, '
+        'contradiction) for a list of memory units. Returns a flat list — each '
+        'link carries its unit_id so callers can re-group by source unit. '
+        'Intended for ~10 unit_ids at a time; larger batches multiply API calls.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Memory unit UUIDs.',
+            },
+            'link_type': {
+                'type': 'string',
+                'description': 'Filter to one link type: semantic, temporal, causal, contradiction.',
+            },
+            'limit': {
+                'type': 'integer',
+                'description': 'Max links per unit (default: 20, max: 100).',
+            },
+        },
+        'required': ['unit_ids'],
+    },
+}
+
+GET_LINEAGE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_lineage',
+    'description': (
+        'Trace provenance between documents and facts. '
+        'Upstream: mental_model → observation → memory_unit → note. '
+        'Downstream: note → memory_unit → observation → mental_model.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_type': {
+                'type': 'string',
+                'description': 'Entity type: mental_model, observation, memory_unit, or note.',
+            },
+            'entity_id': {
+                'type': 'string',
+                'description': 'UUID of the entity.',
+            },
+            'direction': {
+                'type': 'string',
+                'description': 'Traversal direction: upstream (default), downstream, or both.',
+            },
+            'depth': {
+                'type': 'integer',
+                'description': 'Max recursion depth (default: 3).',
+            },
+            'limit': {
+                'type': 'integer',
+                'description': 'Max children per node (default: 5).',
+            },
+        },
+        'required': ['entity_type', 'entity_id'],
+    },
+}
 
 # --- Lifecycle/templates (Stream 4) ---
 # <streams append here>
@@ -614,7 +715,10 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     RECENT_NOTES_SCHEMA,
     SEARCH_USER_NOTES_SCHEMA,
     # --- Entities/memory/lineage (Stream 3) ---
-    # <Stream 3 appends>
+    GET_ENTITIES_SCHEMA,
+    GET_MEMORY_UNITS_SCHEMA,
+    GET_MEMORY_LINKS_SCHEMA,
+    GET_LINEAGE_SCHEMA,
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---
@@ -1362,6 +1466,216 @@ def handle_search_user_notes(
     return json.dumps({'count': len(items), 'results': items})
 
 
+# --- Entities/memory/lineage (Stream 3) ---
+
+
+_LINEAGE_ENTITY_TYPES = frozenset({'mental_model', 'observation', 'memory_unit', 'note'})
+
+
+def _serialize_lineage(resp: Any) -> dict[str, Any]:
+    """Recursively serialize a ``LineageResponse`` for JSON output."""
+    return {
+        'entity_type': getattr(resp, 'entity_type', None),
+        'entity': getattr(resp, 'entity', None) or {},
+        'derived_from': [
+            _serialize_lineage(child) for child in (getattr(resp, 'derived_from', None) or [])
+        ],
+    }
+
+
+def handle_get_entities(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    raw_ids = args.get('entity_ids') or []
+    uuids: list[UUID] = []
+    for eid in raw_ids:
+        try:
+            uuids.append(UUID(str(eid)))
+        except (ValueError, TypeError):
+            continue
+
+    if not uuids:
+        return json.dumps({'results': []})
+
+    items: list[dict[str, Any]] = []
+    try:
+        entities = run_sync(api.get_entities(uuids), timeout=30.0)
+        for ent in entities or []:
+            items.append(_serialize_full_entity(ent))
+        return json.dumps({'results': items})
+    except Exception as batch_exc:
+        logger.warning('get_entities batch failed, falling back to singular: %s', batch_exc)
+
+    for uid in uuids:
+        try:
+            ent = run_sync(api.get_entity(uid), timeout=30.0)
+        except Exception as e:
+            logger.warning('get_entity(%s) failed: %s', uid, e)
+            continue
+        if ent is None:
+            continue
+        items.append(_serialize_full_entity(ent))
+    return json.dumps({'results': items})
+
+
+def _serialize_full_entity(ent: Any) -> dict[str, Any]:
+    metadata = getattr(ent, 'metadata', None) or {}
+    return {
+        'id': str(getattr(ent, 'id', '')),
+        'name': getattr(ent, 'name', ''),
+        'type': getattr(ent, 'entity_type', None),
+        'mention_count': getattr(ent, 'mention_count', 0),
+        'description': metadata.get('description') if isinstance(metadata, dict) else None,
+    }
+
+
+def handle_get_memory_units(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    raw_ids = args.get('unit_ids') or []
+    uuids: list[UUID] = []
+    for uid_str in raw_ids:
+        try:
+            uuids.append(UUID(str(uid_str)))
+        except (ValueError, TypeError):
+            continue
+
+    items: list[dict[str, Any]] = []
+    for uid in uuids:
+        try:
+            unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
+        except Exception as e:
+            logger.warning('get_memory_unit(%s) failed: %s', uid, e)
+            continue
+        if unit is None:
+            continue
+        items.append(_serialize_memory_unit_full(unit))
+
+    return json.dumps({'results': items})
+
+
+def _serialize_memory_unit_full(unit: Any) -> dict[str, Any]:
+    """Serialize a MemoryUnitDTO with supersession/contradiction context."""
+    superseded = []
+    for s in getattr(unit, 'superseded_by', None) or []:
+        superseded.append(
+            {
+                'unit_id': str(getattr(s, 'unit_id', '')),
+                'unit_text': getattr(s, 'unit_text', ''),
+                'relation': getattr(s, 'relation', None),
+                'note_title': getattr(s, 'note_title', None),
+            }
+        )
+
+    metadata = getattr(unit, 'metadata', None) or {}
+    links_raw = metadata.get('links', []) if isinstance(metadata, dict) else []
+    contradictions = [lnk for lnk in links_raw if isinstance(lnk, dict)]
+
+    return {
+        'id': str(getattr(unit, 'id', '')),
+        'text': getattr(unit, 'text', ''),
+        'fact_type': getattr(unit, 'fact_type', None),
+        'status': getattr(unit, 'status', None),
+        'note_id': str(n) if (n := getattr(unit, 'note_id', None)) else None,
+        'superseded_by': superseded,
+        'contradictions': contradictions,
+    }
+
+
+def handle_get_memory_links(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    raw_ids = args.get('unit_ids') or []
+    link_type = args.get('link_type') or None
+    limit = min(int(args.get('limit') or 20), 100)
+
+    uuids: list[UUID] = []
+    for uid_str in raw_ids:
+        try:
+            uuids.append(UUID(str(uid_str)))
+        except (ValueError, TypeError):
+            continue
+
+    if not uuids:
+        return json.dumps({'results': []})
+
+    all_links: list[dict[str, Any]] = []
+    for uid in uuids:
+        try:
+            links = run_sync(
+                api.get_memory_links(unit_id=uid, link_type=link_type, limit=limit),
+                timeout=30.0,
+            )
+        except Exception as e:
+            logger.warning('get_memory_links(%s) failed: %s', uid, e)
+            continue
+        for lnk in links or []:
+            all_links.append(
+                {
+                    'unit_id': str(getattr(lnk, 'unit_id', '')),
+                    'note_id': str(n) if (n := getattr(lnk, 'note_id', None)) else None,
+                    'note_title': getattr(lnk, 'note_title', None),
+                    'relation': getattr(lnk, 'relation', None),
+                    'weight': getattr(lnk, 'weight', None),
+                    'time': t.isoformat() if (t := getattr(lnk, 'time', None)) else None,
+                    'metadata': getattr(lnk, 'metadata', None) or {},
+                }
+            )
+
+    return json.dumps({'results': all_links})
+
+
+def handle_get_lineage(
+    api: Any, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+) -> str:
+    from memex_common.schemas import LineageDirection
+
+    try:
+        entity_type = _require(args, 'entity_type')
+        entity_id = _require(args, 'entity_id')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    if entity_type not in _LINEAGE_ENTITY_TYPES:
+        return tool_error(
+            f'Invalid entity_type: {entity_type}. '
+            f'Must be one of: {", ".join(sorted(_LINEAGE_ENTITY_TYPES))}'
+        )
+
+    try:
+        uuid_obj = UUID(str(entity_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid UUID: {entity_id}')
+
+    direction_raw = args.get('direction') or 'upstream'
+    try:
+        dir_enum = LineageDirection(direction_raw)
+    except ValueError:
+        return tool_error(
+            f'Invalid direction: {direction_raw}. Must be upstream, downstream, or both.'
+        )
+
+    depth = int(args.get('depth') or 3)
+    limit = int(args.get('limit') or 5)
+
+    try:
+        response = run_sync(
+            api.get_lineage(
+                entity_type=entity_type,
+                entity_id=uuid_obj,
+                direction=dir_enum,
+                depth=depth,
+                limit=limit,
+            ),
+            timeout=60.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_lineage failed: %s', e)
+        return tool_error(f'Lineage failed: {e}')
+
+    return json.dumps(_serialize_lineage(response))
+
+
 HANDLERS = {
     # --- Vault-scoped (Stream 1) ---
     'memex_recall': handle_recall,
@@ -1383,7 +1697,10 @@ HANDLERS = {
     'memex_recent_notes': handle_recent_notes,
     'memex_search_user_notes': handle_search_user_notes,
     # --- Entities/memory/lineage (Stream 3) ---
-    # <Stream 3 appends>
+    'memex_get_entities': handle_get_entities,
+    'memex_get_memory_units': handle_get_memory_units,
+    'memex_get_memory_links': handle_get_memory_links,
+    'memex_get_lineage': handle_get_lineage,
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---
@@ -1436,7 +1753,10 @@ __all__ = [
     'RECENT_NOTES_SCHEMA',
     'SEARCH_USER_NOTES_SCHEMA',
     # --- Entities/memory/lineage (Stream 3) ---
-    # <Stream 3 appends>
+    'GET_ENTITIES_SCHEMA',
+    'GET_LINEAGE_SCHEMA',
+    'GET_MEMORY_LINKS_SCHEMA',
+    'GET_MEMORY_UNITS_SCHEMA',
     # --- Lifecycle/templates (Stream 4) ---
     # <Stream 4 appends>
     # --- Assets (Stream 5) ---

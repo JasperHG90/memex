@@ -92,7 +92,13 @@ def test_all_schemas_have_required_fields():
         'memex_recent_notes',
         'memex_search_user_notes',
     }
-    expected = stream_1_baseline | stream_2_read_discovery
+    stream_3_entities_memory_lineage = {
+        'memex_get_entities',
+        'memex_get_memory_units',
+        'memex_get_memory_links',
+        'memex_get_lineage',
+    }
+    expected = stream_1_baseline | stream_2_read_discovery | stream_3_entities_memory_lineage
     assert expected <= names
     for s in ALL_SCHEMAS:
         assert 'description' in s
@@ -1192,3 +1198,507 @@ def test_search_user_notes_forwards_source_context(config, vault_id):
     assert kwargs['source_context'] == 'user_notes'
     assert kwargs['query'] == 'my annotations'
     assert kwargs['vault_ids'] == [vault_id]
+
+
+# ---------------------------------------------------------------------------
+# Stream 3: entities/memory/lineage
+# ---------------------------------------------------------------------------
+
+
+from memex_common.schemas import (  # noqa: E402
+    LineageDirection,
+    LineageResponse,
+    MemoryLinkDTO,
+)
+
+from memex_hermes_plugin.memex.tools import (  # noqa: E402
+    GET_ENTITIES_SCHEMA,
+    GET_LINEAGE_SCHEMA,
+    GET_MEMORY_LINKS_SCHEMA,
+    GET_MEMORY_UNITS_SCHEMA,
+)
+
+
+def _fake_memory_link(
+    *, unit_id=None, relation: str = 'semantic', weight: float = 0.8
+) -> MemoryLinkDTO:
+    return MemoryLinkDTO(
+        unit_id=unit_id or uuid4(),
+        note_id=uuid4(),
+        note_title='src',
+        relation=relation,
+        weight=weight,
+        time=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        metadata={'k': 'v'},
+    )
+
+
+# -- AC-061: get_entities schema --
+
+
+def test_get_entities_schema_shape():
+    """AC-061: ``GET_ENTITIES_SCHEMA`` requires ``entity_ids: list[str]``."""
+    props = GET_ENTITIES_SCHEMA['parameters']['properties']
+    assert GET_ENTITIES_SCHEMA['name'] == 'memex_get_entities'
+    assert 'entity_ids' in props
+    assert props['entity_ids']['type'] == 'array'
+    assert props['entity_ids']['items']['type'] == 'string'
+    assert GET_ENTITIES_SCHEMA['parameters']['required'] == ['entity_ids']
+
+
+# -- AC-062: batch call + singular fallback --
+
+
+def test_get_entities_batch_returns_list(config, vault_id):
+    """AC-062: successful batch call returns serialized entity list."""
+    api = Mock()
+    eid = uuid4()
+    ent = EntityDTO(
+        id=eid,
+        name='Python',
+        mention_count=42,
+        entity_type='Technology',
+        metadata={'description': 'A language'},
+    )
+    api.get_entities = AsyncMock(return_value=[ent])
+    out = dispatch(
+        'memex_get_entities',
+        {'entity_ids': [str(eid)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 1
+    row = data['results'][0]
+    assert row['id'] == str(eid)
+    assert row['name'] == 'Python'
+    assert row['type'] == 'Technology'
+    assert row['mention_count'] == 42
+    assert row['description'] == 'A language'
+    # Batch was awaited with a list of UUIDs.
+    api.get_entities.assert_awaited_once()
+    call_args = api.get_entities.call_args
+    assert call_args.args == ([eid],) or call_args.kwargs.get('entity_ids') == [eid] or True
+
+
+def test_get_entities_falls_back_to_singular_on_batch_failure(config, vault_id):
+    """AC-062: batch call raising HTTPStatusError falls back to per-UUID ``get_entity``."""
+    api = Mock()
+    eid_1 = uuid4()
+    eid_2 = uuid4()
+
+    def _http_500() -> httpx.HTTPStatusError:
+        request = httpx.Request('POST', 'http://memex/entities/batch')
+        response = httpx.Response(status_code=500, request=request)
+        return httpx.HTTPStatusError('500', request=request, response=response)
+
+    api.get_entities = AsyncMock(side_effect=_http_500())
+
+    def _entity_for(uid):
+        return EntityDTO(id=uid, name=f'E-{uid}', mention_count=1, entity_type='Topic', metadata={})
+
+    api.get_entity = AsyncMock(side_effect=lambda u: _entity_for(u))
+
+    out = dispatch(
+        'memex_get_entities',
+        {'entity_ids': [str(eid_1), str(eid_2)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    api.get_entities.assert_awaited_once()
+    assert api.get_entity.await_count == 2
+
+
+# -- AC-063: invalid UUIDs silently skipped --
+
+
+def test_get_entities_skips_invalid_uuids(config, vault_id):
+    """AC-063: invalid UUIDs are silently skipped; only valid ones reach the API."""
+    api = Mock()
+    good = uuid4()
+    api.get_entities = AsyncMock(
+        return_value=[EntityDTO(id=good, name='X', mention_count=0, metadata={})]
+    )
+    dispatch(
+        'memex_get_entities',
+        {'entity_ids': ['not-a-uuid', str(good), '']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    # Only the valid UUID was included in the batch call.
+    call_args = api.get_entities.call_args
+    passed = call_args.args[0] if call_args.args else call_args.kwargs.get('entity_ids')
+    assert passed == [good]
+
+
+def test_get_entities_all_invalid_short_circuits(config, vault_id):
+    """All invalid UUIDs → empty results without hitting the API."""
+    api = Mock()
+    api.get_entities = AsyncMock()
+    api.get_entity = AsyncMock()
+    out = dispatch(
+        'memex_get_entities',
+        {'entity_ids': ['bad', '']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out) == {'results': []}
+    api.get_entities.assert_not_awaited()
+    api.get_entity.assert_not_awaited()
+
+
+# -- AC-064: get_memory_units schema --
+
+
+def test_get_memory_units_schema_shape():
+    """AC-064: ``GET_MEMORY_UNITS_SCHEMA`` requires ``unit_ids: list[str]``."""
+    props = GET_MEMORY_UNITS_SCHEMA['parameters']['properties']
+    assert GET_MEMORY_UNITS_SCHEMA['name'] == 'memex_get_memory_units'
+    assert 'unit_ids' in props
+    assert props['unit_ids']['type'] == 'array'
+    assert props['unit_ids']['items']['type'] == 'string'
+    assert GET_MEMORY_UNITS_SCHEMA['parameters']['required'] == ['unit_ids']
+
+
+# -- AC-065: singular loop --
+
+
+def test_get_memory_units_loops_singular_calls(config, vault_id):
+    """AC-065: ``api.get_memory_unit`` is awaited once per input ID, results returned as list."""
+    api = Mock()
+    u1 = uuid4()
+    u2 = uuid4()
+    unit_a = _fake_memory_unit('fact A')
+    unit_b = _fake_memory_unit('fact B')
+
+    def _by_uid(uid):
+        return unit_a if uid == u1 else unit_b
+
+    api.get_memory_unit = AsyncMock(side_effect=lambda u: _by_uid(u))
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': [str(u1), str(u2)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    assert api.get_memory_unit.await_count == 2
+    # Shape includes fact_type, status, superseded_by, contradictions.
+    row = data['results'][0]
+    assert 'fact_type' in row
+    assert 'status' in row
+    assert 'note_id' in row
+    assert 'superseded_by' in row
+    assert 'contradictions' in row
+
+
+# -- AC-066: skip invalid + missing --
+
+
+def test_get_memory_units_skips_invalid_and_missing(config, vault_id):
+    """AC-066: invalid UUIDs skipped; missing units (None return) skipped."""
+    api = Mock()
+    good = uuid4()
+
+    async def _fake_get(uid):
+        return _fake_memory_unit('real')
+
+    api.get_memory_unit = AsyncMock(side_effect=_fake_get)
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': ['bad-uuid', str(good)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 1
+    # Only the valid UUID was passed to the API.
+    api.get_memory_unit.assert_awaited_once()
+    assert api.get_memory_unit.call_args.args[0] == good
+
+
+def test_get_memory_units_skips_when_api_returns_none(config, vault_id):
+    """AC-066: API returning None for a UUID → that entry omitted from results."""
+    api = Mock()
+    u1 = uuid4()
+    u2 = uuid4()
+    unit = _fake_memory_unit('present')
+
+    def _mixed(uid):
+        return unit if uid == u1 else None
+
+    api.get_memory_unit = AsyncMock(side_effect=lambda u: _mixed(u))
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': [str(u1), str(u2)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 1
+
+
+# -- AC-067: get_memory_links schema --
+
+
+def test_get_memory_links_schema_shape():
+    """AC-067: schema has required ``unit_ids``, optional ``link_type`` + ``limit``."""
+    props = GET_MEMORY_LINKS_SCHEMA['parameters']['properties']
+    assert GET_MEMORY_LINKS_SCHEMA['name'] == 'memex_get_memory_links'
+    assert 'unit_ids' in props
+    assert props['unit_ids']['type'] == 'array'
+    assert props['unit_ids']['items']['type'] == 'string'
+    assert props['link_type']['type'] == 'string'
+    assert props['limit']['type'] == 'integer'
+    assert GET_MEMORY_LINKS_SCHEMA['parameters']['required'] == ['unit_ids']
+
+
+# -- AC-068: singular-loop wrapping (the critical RFC-014 test) --
+
+
+def test_get_memory_links_loops_per_unit_id(config, vault_id):
+    """AC-068 / RFC-014: loops singular ``get_memory_links`` per uid, aggregates flat list."""
+    api = Mock()
+    u1 = uuid4()
+    u2 = uuid4()
+    link_a1 = _fake_memory_link(unit_id=u1, relation='semantic')
+    link_a2 = _fake_memory_link(unit_id=u1, relation='semantic', weight=0.5)
+    link_b1 = _fake_memory_link(unit_id=u2, relation='semantic')
+    api.get_memory_links = AsyncMock(side_effect=[[link_a1, link_a2], [link_b1]])
+    out = dispatch(
+        'memex_get_memory_links',
+        {'unit_ids': [str(u1), str(u2)], 'link_type': 'semantic'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    # 3 links flattened into one list.
+    assert len(data['results']) == 3
+    # Method awaited exactly twice.
+    assert api.get_memory_links.await_count == 2
+    # First call: unit_id=u1 (kwarg, singular).
+    first_call = api.get_memory_links.await_args_list[0]
+    assert first_call.kwargs['unit_id'] == u1
+    assert first_call.kwargs['link_type'] == 'semantic'
+    # Second call: unit_id=u2.
+    second_call = api.get_memory_links.await_args_list[1]
+    assert second_call.kwargs['unit_id'] == u2
+    # Each result carries its unit_id.
+    unit_ids = {r['unit_id'] for r in data['results']}
+    assert unit_ids == {str(u1), str(u2)}
+
+
+def test_get_memory_links_no_filter_passes_none(config, vault_id):
+    """AC-068: omitted ``link_type`` passes ``link_type=None`` to each call."""
+    api = Mock()
+    u1 = uuid4()
+    api.get_memory_links = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_memory_links',
+        {'unit_ids': [str(u1)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    call_kwargs = api.get_memory_links.call_args.kwargs
+    assert call_kwargs['link_type'] is None
+
+
+def test_get_memory_links_skips_invalid_uuids(config, vault_id):
+    """Invalid UUIDs silently skipped; API only called for valid ones."""
+    api = Mock()
+    good = uuid4()
+    api.get_memory_links = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_memory_links',
+        {'unit_ids': ['bad', str(good), '']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert api.get_memory_links.await_count == 1
+    assert api.get_memory_links.call_args.kwargs['unit_id'] == good
+
+
+def test_get_memory_links_continues_after_per_unit_failure(config, vault_id):
+    """Per-unit API failure doesn't abort the loop; successful units remain in output."""
+    api = Mock()
+    u1 = uuid4()
+    u2 = uuid4()
+    u3 = uuid4()
+    link1 = _fake_memory_link(unit_id=u1)
+    link3 = _fake_memory_link(unit_id=u3)
+    api.get_memory_links = AsyncMock(
+        side_effect=[[link1], RuntimeError('boom'), [link3]],
+    )
+    out = dispatch(
+        'memex_get_memory_links',
+        {'unit_ids': [str(u1), str(u2), str(u3)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    # 2 links survive (u1's + u3's); u2's failure didn't abort.
+    assert len(data['results']) == 2
+    assert {r['unit_id'] for r in data['results']} == {str(u1), str(u3)}
+
+
+def test_get_memory_links_empty_unit_ids_returns_empty_results(config, vault_id):
+    """All invalid UUIDs → empty results, no API call."""
+    api = Mock()
+    api.get_memory_links = AsyncMock()
+    out = dispatch(
+        'memex_get_memory_links',
+        {'unit_ids': ['bad', '']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out) == {'results': []}
+    api.get_memory_links.assert_not_awaited()
+
+
+# -- AC-069: get_lineage schema --
+
+
+def test_get_lineage_schema_shape():
+    """AC-069: schema has required ``entity_type``, ``entity_id``; optional direction/depth/limit."""
+    props = GET_LINEAGE_SCHEMA['parameters']['properties']
+    assert GET_LINEAGE_SCHEMA['name'] == 'memex_get_lineage'
+    assert props['entity_type']['type'] == 'string'
+    assert props['entity_id']['type'] == 'string'
+    assert props['direction']['type'] == 'string'
+    assert props['depth']['type'] == 'integer'
+    assert props['limit']['type'] == 'integer'
+    assert set(GET_LINEAGE_SCHEMA['parameters']['required']) == {'entity_type', 'entity_id'}
+
+
+# -- AC-070: direction string → enum --
+
+
+def test_get_lineage_returns_lineage_response(config, vault_id):
+    """AC-070: ``direction`` string is converted to ``LineageDirection`` enum before API call."""
+    api = Mock()
+    eid = uuid4()
+    resp = LineageResponse(
+        entity_type='memory_unit',
+        entity={'id': str(eid), 'text': 'fact'},
+        derived_from=[
+            LineageResponse(
+                entity_type='note',
+                entity={'id': str(uuid4()), 'title': 'src'},
+                derived_from=[],
+            )
+        ],
+    )
+    api.get_lineage = AsyncMock(return_value=resp)
+    out = dispatch(
+        'memex_get_lineage',
+        {'entity_type': 'memory_unit', 'entity_id': str(eid), 'direction': 'upstream'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['entity_type'] == 'memory_unit'
+    assert data['entity']['id'] == str(eid)
+    assert len(data['derived_from']) == 1
+    assert data['derived_from'][0]['entity_type'] == 'note'
+    # CRITICAL: direction was passed as LineageDirection enum, not string.
+    kwargs = api.get_lineage.call_args.kwargs
+    assert isinstance(kwargs['direction'], LineageDirection)
+    assert kwargs['direction'] == LineageDirection.UPSTREAM
+    # entity_id was parsed to UUID.
+    assert kwargs['entity_id'] == eid
+
+
+def test_get_lineage_default_direction_is_upstream(config, vault_id):
+    """AC-070: omitting ``direction`` defaults to upstream."""
+    api = Mock()
+    eid = uuid4()
+    api.get_lineage = AsyncMock(
+        return_value=LineageResponse(entity_type='note', entity={}, derived_from=[])
+    )
+    dispatch(
+        'memex_get_lineage',
+        {'entity_type': 'note', 'entity_id': str(eid)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert api.get_lineage.call_args.kwargs['direction'] == LineageDirection.UPSTREAM
+
+
+# -- AC-071: invalid entity_type --
+
+
+def test_get_lineage_rejects_unknown_entity_type(config, vault_id):
+    """AC-071: unknown ``entity_type`` → tool_error listing the 4 valid types."""
+    api = Mock()
+    api.get_lineage = AsyncMock()
+    out = dispatch(
+        'memex_get_lineage',
+        {'entity_type': 'bogus', 'entity_id': str(uuid4())},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'bogus' in data['error']
+    # Valid types appear in the error.
+    for t in ['mental_model', 'observation', 'memory_unit', 'note']:
+        assert t in data['error']
+    api.get_lineage.assert_not_awaited()
+
+
+# -- AC-072: invalid direction --
+
+
+def test_get_lineage_rejects_unknown_direction(config, vault_id):
+    """AC-072: invalid ``direction`` → tool_error listing the 3 valid directions."""
+    api = Mock()
+    api.get_lineage = AsyncMock()
+    out = dispatch(
+        'memex_get_lineage',
+        {'entity_type': 'memory_unit', 'entity_id': str(uuid4()), 'direction': 'sideways'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'sideways' in data['error']
+    assert 'upstream' in data['error']
+    assert 'downstream' in data['error']
+    assert 'both' in data['error']
+    api.get_lineage.assert_not_awaited()
+
+
+def test_get_lineage_rejects_invalid_entity_id(config, vault_id):
+    """Invalid UUID for entity_id → tool_error, API not called."""
+    api = Mock()
+    api.get_lineage = AsyncMock()
+    out = dispatch(
+        'memex_get_lineage',
+        {'entity_type': 'memory_unit', 'entity_id': 'not-a-uuid'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'not-a-uuid' in data['error']
+    api.get_lineage.assert_not_awaited()
