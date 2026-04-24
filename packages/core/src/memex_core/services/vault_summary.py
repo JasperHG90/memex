@@ -138,8 +138,17 @@ class VaultSummaryService:
         session, so in-place mutation does not trigger any write. Only
         time-varying fields are touched; template/domain/tag aggregates keep
         their persisted values.
+
+        Consistency: the row fetch in ``get_summary`` and the fresh-fields
+        query here run in separate transactions. A concurrent write between
+        the two can make the overlaid fields mildly inconsistent with the
+        persisted row (e.g. a note that appears in ``recent_activity`` but
+        not yet in the persisted ``total_notes``). Acceptable for the
+        display-only read path; writers (``update_summary``,
+        ``regenerate_summary``) use ``_compute_inventory`` and persist a
+        single coherent snapshot.
         """
-        fresh = await self._compute_inventory(summary.vault_id)
+        fresh = await self._compute_fresh_fields(summary.vault_id)
 
         inventory = dict(summary.inventory) if summary.inventory else {}
         inventory['recent_activity'] = fresh['recent_activity']
@@ -147,9 +156,8 @@ class VaultSummaryService:
         inventory['days_since_last_note'] = fresh['days_since_last_note']
 
         existing_date_range = dict(inventory.get('date_range') or {})
-        fresh_date_range = fresh.get('date_range') or {}
-        if fresh_date_range.get('latest'):
-            existing_date_range['latest'] = fresh_date_range['latest']
+        if fresh.get('date_range_latest'):
+            existing_date_range['latest'] = fresh['date_range_latest']
         if existing_date_range:
             inventory['date_range'] = existing_date_range
 
@@ -166,6 +174,72 @@ class VaultSummaryService:
             summary.themes = demoted
 
         return summary
+
+    async def _compute_fresh_fields(
+        self,
+        vault_id: UUID,
+        _now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Compute only the time-sensitive overlay fields. 3 SQL queries.
+
+        Used by the read path (``get_summary``) to avoid the full
+        ``_compute_inventory`` cost on every call. Returns a dict with
+        ``recent_activity`` (7d/30d counts), ``last_activity_at`` (ISO
+        string or None), ``days_since_last_note`` (int or None), and
+        ``date_range_latest`` (ISO string or None).
+
+        ``_now`` is injected for deterministic testing; defaults to wall-clock.
+        """
+        now = _now if _now is not None else datetime.now(timezone.utc)
+        async with self.metastore.session() as session:
+            recent_7d = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Note)
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                    .where(col(Note.created_at) >= now - timedelta(days=7))
+                )
+            ).scalar() or 0
+
+            recent_30d = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Note)
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                    .where(col(Note.created_at) >= now - timedelta(days=30))
+                )
+            ).scalar() or 0
+
+            max_row = (
+                await session.execute(
+                    select(func.max(Note.created_at), func.max(Note.publish_date))
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                )
+            ).one_or_none()
+
+        last_activity_raw = max_row[0] if max_row else None
+        publish_latest_raw = max_row[1] if max_row else None
+
+        last_activity_at: str | None = None
+        days_since_last_note: int | None = None
+        if last_activity_raw is not None:
+            last_activity_utc = last_activity_raw
+            if last_activity_utc.tzinfo is None:
+                last_activity_utc = last_activity_utc.replace(tzinfo=timezone.utc)
+            last_activity_at = last_activity_utc.isoformat()
+            days_since_last_note = max((now - last_activity_utc).days, 0)
+
+        return {
+            'recent_activity': {'7d': recent_7d, '30d': recent_30d},
+            'last_activity_at': last_activity_at,
+            'days_since_last_note': days_since_last_note,
+            'date_range_latest': publish_latest_raw.isoformat()
+            if publish_latest_raw is not None
+            else None,
+        }
 
     async def delete_summary(self, vault_id: UUID) -> bool:
         """Delete the vault summary. Returns True if a summary was deleted."""
@@ -450,10 +524,17 @@ class VaultSummaryService:
     # Computed fields (no LLM)
     # ------------------------------------------------------------------ #
 
-    async def _compute_inventory(self, vault_id: UUID) -> dict[str, Any]:
-        """Compute content inventory from DB aggregates. No LLM calls."""
+    async def _compute_inventory(
+        self,
+        vault_id: UUID,
+        _now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Compute content inventory from DB aggregates. No LLM calls.
+
+        ``_now`` is injected for deterministic testing; defaults to wall-clock.
+        """
         async with self.metastore.session() as session:
-            now = datetime.now(timezone.utc)
+            now = _now if _now is not None else datetime.now(timezone.utc)
 
             # Total active notes
             total_stmt = (
