@@ -6,7 +6,11 @@ import asyncio
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
-from memex_hermes_plugin.memex.briefing import BriefingCache, format_briefing_block
+from memex_hermes_plugin.memex.briefing import (
+    BriefingCache,
+    _ROUTING_GUIDE,
+    format_briefing_block,
+)
 
 
 def test_cache_returns_empty_on_timeout():
@@ -101,3 +105,78 @@ def test_format_block_skips_briefing_section_when_empty():
         kv_instructions_if_no_vault=False,
     )
     assert '---' not in block
+
+
+# --- Routing-guide bullets (AC-087..AC-092) ---
+
+
+def test_routing_guide_explains_vault_scoping():
+    """AC-087: Vault scoping bullet must name vault_ids and warn against tags."""
+    assert '**Vault scoping**' in _ROUTING_GUIDE
+    assert 'vault_ids' in _ROUTING_GUIDE
+    assert 'Do NOT use `tags`' in _ROUTING_GUIDE
+
+
+def test_routing_guide_documents_vault_discovery():
+    """AC-088: Vault discovery bullet names list_vaults and get_vault_summary."""
+    assert '**Vault discovery**' in _ROUTING_GUIDE
+    assert 'memex_list_vaults' in _ROUTING_GUIDE
+    assert 'memex_get_vault_summary' in _ROUTING_GUIDE
+
+
+def test_routing_guide_title_bullet_uses_find_note():
+    """AC-089: Title known bullet must reference memex_find_note, not memex_retrieve_notes."""
+    assert '**Title known**' in _ROUTING_GUIDE
+    assert 'memex_find_note' in _ROUTING_GUIDE
+    # Title-known bullet must no longer point at retrieve_notes for title lookups.
+    title_line_end = _ROUTING_GUIDE.index('\n', _ROUTING_GUIDE.index('**Title known**'))
+    title_bullet = _ROUTING_GUIDE[_ROUTING_GUIDE.index('**Title known**') : title_line_end + 120]
+    assert 'memex_retrieve_notes' not in title_bullet
+
+
+def test_routing_guide_documents_kv_store():
+    """AC-090: KV store bullet names all 4 KV tools and 4 namespace prefixes."""
+    assert '**KV store**' in _ROUTING_GUIDE
+    for tool in ('memex_kv_write', 'memex_kv_get', 'memex_kv_search', 'memex_kv_list'):
+        assert tool in _ROUTING_GUIDE
+    for prefix in ('`global:`', '`user:`', '`project:<id>:`', '`app:<id>:`'):
+        assert prefix in _ROUTING_GUIDE
+    assert 'CLI-only' in _ROUTING_GUIDE
+
+
+def test_routing_guide_documents_lineage():
+    """AC-091: Lineage bullet names get_memory_links and get_lineage."""
+    assert '**Lineage / relationships**' in _ROUTING_GUIDE
+    assert 'memex_get_memory_links' in _ROUTING_GUIDE
+    assert 'memex_get_lineage' in _ROUTING_GUIDE
+    # Mention of typed-link kinds and provenance chain.
+    assert 'temporal' in _ROUTING_GUIDE
+    assert 'causal' in _ROUTING_GUIDE
+    assert 'mental_model' in _ROUTING_GUIDE
+
+
+def test_routing_guide_documents_batch_fetch():
+    """AC-092: Batch fetch bullet names get_entities and get_memory_units."""
+    assert '**Batch fetch**' in _ROUTING_GUIDE
+    assert 'memex_get_entities' in _ROUTING_GUIDE
+    assert 'memex_get_memory_units' in _ROUTING_GUIDE
+
+
+def test_routing_guide_bullets_render_in_formatted_block():
+    """Guide must flow through format_briefing_block end-to-end."""
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    for marker in (
+        '**Vault scoping**',
+        '**Vault discovery**',
+        '**Batch fetch**',
+        '**Lineage / relationships**',
+        '**KV store**',
+        'memex_find_note',
+    ):
+        assert marker in block
