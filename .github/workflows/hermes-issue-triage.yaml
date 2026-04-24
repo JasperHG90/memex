@@ -60,7 +60,11 @@ jobs:
         run: |
           set -euo pipefail
           ensure() {
-            gh label create "$1" --color "$2" --description "$3" 2>/dev/null || true
+            local out rc=0
+            out=$(gh label create "$1" --color "$2" --description "$3" 2>&1) || rc=$?
+            if [ $rc -ne 0 ] && ! printf '%s' "$out" | grep -q "already exists"; then
+              echo "::warning::failed to create label $1: $out"
+            fi
           }
           ensure "priority/critical"   "b60205" "Urgent — blocks users or core functionality"
           ensure "priority/high"       "d93f0b" "Important — should be addressed soon"
@@ -94,7 +98,11 @@ jobs:
           import json, os, re, subprocess, sys
 
           issue = os.environ['ISSUE_NUM']
-          response = open(os.environ['RESPONSE_FILE']).read()
+          response_path = os.environ['RESPONSE_FILE']
+          if not os.path.isfile(response_path):
+              print('::error::Hermes produced no response file', file=sys.stderr)
+              sys.exit(1)
+          response = open(response_path).read()
 
           m = re.search(r'<!--\s*hermes-triage:\s*(\{.*?\})\s*-->', response, re.DOTALL)
           payload = {}
