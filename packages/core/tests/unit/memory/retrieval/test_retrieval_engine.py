@@ -59,8 +59,17 @@ async def test_convert_mm_to_units():
     assert len(units) == 2
     assert units[0].text == '[Test Model] Obs 1: Content 1'
     assert units[0].fact_type == 'observation'
-    assert units[0].note_id == mm_id
+    # Virtual units have no backing Note row — note_id must stay None so
+    # downstream point-lookups don't 404 on a MentalModel id.
+    assert units[0].note_id is None
+    assert units[0].unit_metadata['mental_model_id'] == str(mm_id)
     assert units[0].unit_metadata['observation'] is True
+    assert units[0].unit_metadata['virtual'] is True
+    # Synthetic id must be a well-formed uuid5 (no 64-bit-hash leading-zero artifact).
+    assert units[0].id.int >> 64 != 0
+    # Stable across calls — same (model.id, title) → same id.
+    units_again = engine._convert_mm_to_units(model)
+    assert units_again[0].id == units[0].id
     # New observation with recent evidence defaults to 'new'
     assert units[0].unit_metadata['trend'] == 'new'
 
