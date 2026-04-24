@@ -161,6 +161,8 @@ def _resolve_vault_ids(
         return [bound_vault_id] if bound_vault_id else None
 
     if ALL_VAULTS_WILDCARD in supplied:
+        if len(supplied) > 1:
+            logger.debug("vault_ids=['*', ...]: wildcard dominates; other entries ignored")
         vaults = run_sync(api.list_vaults(), timeout=30.0)
         return [v.id for v in vaults or []]
 
@@ -756,6 +758,10 @@ GET_LINEAGE_SCHEMA: dict[str, Any] = {
 
 _VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'appended', 'archived'})
 
+# Canonical set accepted by ``client.list_notes(date_field=...)`` — see the
+# docstring at ``packages/common/src/memex_common/client.py:list_notes``.
+_VALID_DATE_BY = frozenset({'coalesce', 'created_at', 'publish_date'})
+
 SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
@@ -1127,7 +1133,7 @@ def _require(args: dict[str, Any], name: str) -> Any:
     return value
 
 
-def _is_unsafe_asset_filename(filename: str) -> bool:
+def _is_unsafe_asset_filename(filename: Any) -> bool:
     """Reject path-traversal-capable or hidden filenames before they hit the asset store.
 
     A safe filename is a plain basename: no separators, no parent-dir components,
@@ -1135,15 +1141,17 @@ def _is_unsafe_asset_filename(filename: str) -> bool:
     with the vault/note prefix, so traversal here would let a caller escape the note's
     asset directory.
     """
+    if not isinstance(filename, str) or not filename:
+        return True
     if '/' in filename or '\\' in filename:
         return True
     if filename.startswith('.'):
         return True
-    parts = filename.replace('\\', '/').split('/')
-    if any(p in {'', '.', '..'} for p in parts):
+    if '..' in filename:
         return True
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in filename):
-        return True
+    for c in filename:
+        if ord(c) < 32:
+            return True
     return False
 
 
@@ -1152,6 +1160,10 @@ def _is_unsafe_asset_filename(filename: str) -> bool:
 # defensively because some clients ignore schema-level limits.
 _MAX_GET_RESOURCES_PATHS = 50
 _MAX_ADD_ASSETS_ITEMS = 20
+
+# Per-asset byte cap for ``handle_get_resources``. A single oversized asset
+# would otherwise OOM the host when base64-encoded (base64 inflates by ~33%).
+_MAX_RESOURCE_BYTES = 50 * 1024 * 1024  # 50 MiB
 
 # Canonical KV key namespaces per RFC-012. Hermes is the ``key`` holder here;
 # ``_scope_from_key`` above derives these from stored entries.
@@ -1839,10 +1851,15 @@ def handle_list_notes(
             f'Invalid status: {status!r}. Must be one of: {", ".join(sorted(_VALID_NOTE_STATUSES))}'
         )
 
+    date_by = args.get('date_by') or 'created_at'
+    if date_by not in _VALID_DATE_BY:
+        return tool_error(
+            f'Invalid date_by: {date_by!r}. Must be one of: {", ".join(sorted(_VALID_DATE_BY))}'
+        )
+
     vault_ids = _resolve_vault_ids(api, args, vault_id)
     limit = min(int(args.get('limit') or 100), 500)
     offset = max(int(args.get('offset') or 0), 0)
-    date_by = args.get('date_by') or 'created_at'
 
     try:
         notes = run_sync(
@@ -2200,7 +2217,7 @@ def handle_set_note_status(
 
     if status not in _VALID_NOTE_STATUSES:
         return tool_error(
-            f'Invalid status: {status!r}. Must be one of: {sorted(_VALID_NOTE_STATUSES)}'
+            f'Invalid status: {status!r}. Must be one of: {", ".join(sorted(_VALID_NOTE_STATUSES))}'
         )
 
     try:
@@ -2423,6 +2440,17 @@ def handle_get_resources(
     for path in paths:
         try:
             content_bytes = run_sync(api.get_resource(path), timeout=30.0)
+            if len(content_bytes) > _MAX_RESOURCE_BYTES:
+                results.append(
+                    {
+                        'path': path,
+                        'error': (
+                            f'Resource exceeds max size '
+                            f'({len(content_bytes)} > {_MAX_RESOURCE_BYTES} bytes)'
+                        ),
+                    }
+                )
+                continue
             mime_type, _ = mimetypes.guess_type(path)
             results.append(
                 {
@@ -2461,8 +2489,6 @@ def handle_add_assets(
         if not isinstance(a, dict):
             return tool_error(f'Invalid asset entry: {a!r}')
         fn = a.get('filename')
-        if not isinstance(fn, str) or not fn:
-            return tool_error(f'Invalid filename: {fn!r}')
         if _is_unsafe_asset_filename(fn):
             return tool_error(f'Invalid filename: {fn!r}')
 

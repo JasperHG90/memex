@@ -40,8 +40,20 @@ def _install_hermes_stubs() -> None:
 _install_hermes_stubs()
 
 
+# Hermes stubs are now installed in sys.modules (see ``_install_hermes_stubs``
+# above), so the following module imports are safe to place at the top of the
+# file despite needing to follow the stub registration.
+from datetime import datetime, timezone  # noqa: E402
+from uuid import uuid4  # noqa: E402
+
 import pytest  # noqa: E402
 
+from memex_common.schemas import (  # noqa: E402
+    FindNoteResult,
+    NodeDTO,
+    NoteDTO,
+    VaultDTO,
+)
 from memex_hermes_plugin.memex import async_bridge  # noqa: E402
 
 
@@ -63,9 +75,6 @@ def _reset_async_bridge():
 @pytest.fixture
 def _fake_vault_dto():
     """Factory for VaultDTOs — used by ``memex_list_vaults`` + ``memex_get_vault_summary`` tests."""
-    from uuid import uuid4
-
-    from memex_common.schemas import VaultDTO
 
     def _build(name: str = 'v', is_active: bool = False, note_count: int = 0) -> VaultDTO:
         return VaultDTO(id=uuid4(), name=name, is_active=is_active, note_count=note_count)
@@ -76,10 +85,6 @@ def _fake_vault_dto():
 @pytest.fixture
 def _fake_find_note_result():
     """Factory for FindNoteResult DTOs — used by ``memex_find_note`` tests."""
-    from datetime import datetime, timezone
-    from uuid import uuid4
-
-    from memex_common.schemas import FindNoteResult
 
     def _build(title: str = 'Matched note', score: float = 0.9) -> FindNoteResult:
         return FindNoteResult(
@@ -97,10 +102,6 @@ def _fake_find_note_result():
 @pytest.fixture
 def _fake_note_dto():
     """Factory for NoteDTOs — used by ``memex_read_note`` / ``memex_get_notes_metadata`` tests."""
-    from datetime import datetime, timezone
-    from uuid import uuid4
-
-    from memex_common.schemas import NoteDTO
 
     def _build(title: str = 'A note', vault_id=None) -> NoteDTO:
         return NoteDTO(
@@ -117,10 +118,6 @@ def _fake_note_dto():
 @pytest.fixture
 def _fake_node_dto():
     """Factory for NodeDTOs — used by ``memex_get_nodes`` tests."""
-    from datetime import datetime, timezone
-    from uuid import uuid4
-
-    from memex_common.schemas import NodeDTO
 
     def _build(title: str = 'Section', text: str = 'body') -> NodeDTO:
         return NodeDTO(

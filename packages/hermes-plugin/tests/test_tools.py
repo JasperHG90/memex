@@ -1240,6 +1240,23 @@ def test_list_notes_rejects_invalid_status(config, vault_id):
     api.list_notes.assert_not_awaited()
 
 
+def test_list_notes_rejects_invalid_date_by(config, vault_id):
+    """Unknown date_by values → tool_error without calling the API."""
+    api = Mock()
+    api.list_notes = AsyncMock()
+    out = dispatch(
+        'memex_list_notes',
+        {'date_by': 'updated_at'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert "'updated_at'" in data['error']
+    api.list_notes.assert_not_awaited()
+
+
 # -- memex_recent_notes (AC-057, AC-058) --
 
 
@@ -2615,6 +2632,7 @@ def test_add_assets_rejects_invalid_base64(config, vault_id):
         '.hidden',
         'sub/../sneaky.png',
         'with\x00null.png',
+        '',
     ],
 )
 def test_add_assets_rejects_path_traversal_filenames(config, vault_id, filename):
@@ -2696,6 +2714,35 @@ def test_get_resources_rejects_too_many_paths(config, vault_id):
     assert 'error' in data
     assert 'too many' in data['error'].lower()
     api.get_resource.assert_not_awaited()
+
+
+def test_get_resources_rejects_oversized_asset(config, vault_id, monkeypatch):
+    """Oversized assets produce a per-path error entry instead of being base64-encoded.
+
+    Uses monkeypatch to shrink the cap so we don't have to allocate ~50 MiB.
+    One good asset and one oversized asset are fetched together to assert the
+    existing per-path failure isolation still holds.
+    """
+    from memex_hermes_plugin.memex import tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+
+    api = Mock()
+    api.get_resource = AsyncMock(side_effect=[b'ok', b'TOOBIG!'])
+    out = dispatch(
+        'memex_get_resources',
+        {'paths': ['small.png', 'big.png']},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    results = json.loads(out)['results']
+    assert len(results) == 2
+    assert 'content_b64' in results[0]
+    assert results[0]['path'] == 'small.png'
+    assert 'error' in results[1]
+    assert 'exceeds max size' in results[1]['error']
+    assert 'content_b64' not in results[1]
 
 
 # -- Handler tests: kv_write (#25) --
