@@ -2529,6 +2529,61 @@ def test_add_assets_rejects_invalid_base64(config, vault_id):
     api.add_note_assets.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    'filename',
+    [
+        '../evil.png',
+        'a/b.png',
+        '..',
+        '\\evil.png',
+        '.hidden',
+        'sub/../sneaky.png',
+        'with\x00null.png',
+    ],
+)
+def test_add_assets_rejects_path_traversal_filenames(config, vault_id, filename):
+    """Path-traversal-capable or hidden filenames → tool_error; API not awaited."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [{'filename': filename, 'content_b64': _b64.b64encode(b'x').decode('ascii')}],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'filename' in data['error'].lower() or 'invalid' in data['error'].lower()
+    api.add_note_assets.assert_not_awaited()
+
+
+def test_add_assets_rejects_duplicate_filenames(config, vault_id):
+    """Duplicate filenames in the same payload would silently overwrite — reject instead."""
+    api = Mock()
+    api.add_note_assets = AsyncMock()
+    out = dispatch(
+        'memex_add_assets',
+        {
+            'note_id': str(uuid4()),
+            'assets': [
+                {'filename': 'a.png', 'content_b64': _b64.b64encode(b'one').decode('ascii')},
+                {'filename': 'a.png', 'content_b64': _b64.b64encode(b'two').decode('ascii')},
+            ],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'duplicate' in data['error'].lower()
+    api.add_note_assets.assert_not_awaited()
+
+
 # -- Handler tests: kv_write (#25) --
 
 

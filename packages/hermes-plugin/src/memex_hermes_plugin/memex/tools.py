@@ -1058,6 +1058,26 @@ def _require(args: dict[str, Any], name: str) -> Any:
     return value
 
 
+def _is_unsafe_asset_filename(filename: str) -> bool:
+    """Reject path-traversal-capable or hidden filenames before they hit the asset store.
+
+    A safe filename is a plain basename: no separators, no parent-dir components,
+    no leading dot, and no control characters. ``add_note_assets`` joins the filename
+    with the vault/note prefix, so traversal here would let a caller escape the note's
+    asset directory.
+    """
+    if '/' in filename or '\\' in filename:
+        return True
+    if filename.startswith('.'):
+        return True
+    parts = filename.replace('\\', '/').split('/')
+    if any(p in {'', '.', '..'} for p in parts):
+        return True
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in filename):
+        return True
+    return False
+
+
 def _serialize_memory_unit(unit: Any) -> dict[str, Any]:
     """Trim a MemoryUnitDTO to the fields useful to the model."""
     return {
@@ -2310,6 +2330,20 @@ def handle_add_assets(
         return tool_error(f'Invalid note_id: {note_id_str!r}')
 
     assets = args.get('assets') or []
+
+    for a in assets:
+        if not isinstance(a, dict):
+            return tool_error(f'Invalid asset entry: {a!r}')
+        fn = a.get('filename')
+        if not isinstance(fn, str) or not fn:
+            return tool_error(f'Invalid filename: {fn!r}')
+        if _is_unsafe_asset_filename(fn):
+            return tool_error(f'Invalid filename: {fn!r}')
+
+    filenames = [a['filename'] for a in assets]
+    if len(set(filenames)) != len(filenames):
+        return tool_error('Duplicate filenames in assets payload.')
+
     try:
         files: dict[str, bytes] = {
             a['filename']: base64.b64decode(a['content_b64'], validate=True) for a in assets
