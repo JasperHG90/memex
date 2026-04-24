@@ -3,7 +3,7 @@ import hashlib
 import logging
 import re
 import asyncio
-from typing import cast
+from typing import Any, Coroutine, cast
 
 import dspy
 import regex as regex_lib
@@ -892,7 +892,9 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self.block_summarizer = dspy.ChainOfThought(SummarizeBlock)
         self.scan_max_concurrency = scan_max_concurrency
         self.gap_rescan_threshold_tokens = gap_rescan_threshold_tokens
-        # Lazily bound to the running event loop on first acquire.
+        # The extractor is only ever instantiated from inside an async entry
+        # point (index_document), so constructing the Semaphore here is safe —
+        # it binds to the running loop on first acquire.
         self._scan_semaphore = asyncio.Semaphore(scan_max_concurrency)
         self._logger = logging.getLogger('memex.core.memory.extraction.page_index')
 
@@ -1057,7 +1059,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
         offset_base: int = 0,
         context_prefix: str = '',
         overlap_chars: int = 200,
-    ) -> list:
+    ) -> list[Coroutine[Any, Any, list[DetectedHeader]]]:
         """Split *text* into overlapping scan chunks and return scan coroutines.
 
         If *text* fits in ``max_scan_tokens``, returns a single coroutine.
@@ -1065,6 +1067,11 @@ class AsyncMarkdownPageIndex(dspy.Module):
         tokens and returns one coroutine per chunk. ``offset_base`` lets callers
         translate chunk-local positions back to parent-document coordinates
         (used when rescanning a gap inside a larger document).
+
+        ``overlap_chars`` controls how many characters of the previous slice
+        bleed into the next one, so a header split across a chunk boundary is
+        still detected. Callers wanting tighter overlap on dense gap rescans
+        (where the whole region is a single paragraph of prose) can lower it.
         """
         doc_tokens = estimate_token_count(text)
 
@@ -1073,7 +1080,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
 
         chars_per_token = len(text) / doc_tokens if doc_tokens > 0 else 4.0
         chunk_chars = int(max_scan_tokens * chars_per_token)
-        tasks: list = []
+        tasks: list[Coroutine[Any, Any, list[DetectedHeader]]] = []
 
         for start in range(0, len(text), chunk_chars - overlap_chars):
             end = min(start + chunk_chars, len(text))
@@ -1154,7 +1161,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
         *,
         max_scan_tokens: int,
     ) -> list[DetectedHeader]:
-        new_headers_tasks: list = []
+        new_headers_tasks: list[Coroutine[Any, Any, list[DetectedHeader]]] = []
         current_idx = 0
 
         for header in flat_headers:

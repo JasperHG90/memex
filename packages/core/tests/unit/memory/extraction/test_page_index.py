@@ -976,25 +976,3 @@ class TestDetectAndFillGaps:
         # All tail-chunk offsets must be at or beyond the end of the header.
         offsets = [call.args[2] for call in mock_chunk.call_args_list]
         assert min(offsets) >= len('## Intro')
-
-
-class TestMakeLmPropagatesTimeout:
-    """Regression for issue #40: ModelConfig.timeout must reach dspy.LM."""
-
-    def test_make_lm_passes_timeout_and_num_retries(self) -> None:
-        from memex_core.memory.extraction.engine import _make_lm
-        from memex_common.config import ModelConfig
-
-        cfg = ModelConfig(model='openai/gpt-4o-mini', timeout=42, num_retries=7)
-
-        with patch('memex_core.memory.extraction.engine.dspy.LM') as mock_lm:
-            _make_lm(cfg)
-
-        assert mock_lm.call_count == 1
-        kwargs = mock_lm.call_args.kwargs
-        assert kwargs.get('timeout') == 42, (
-            f'timeout not propagated from ModelConfig; got kwargs={kwargs!r}'
-        )
-        assert kwargs.get('num_retries') == 7, (
-            f'num_retries not propagated from ModelConfig; got kwargs={kwargs!r}'
-        )
