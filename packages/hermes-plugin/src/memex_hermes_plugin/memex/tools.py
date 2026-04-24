@@ -773,6 +773,7 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
             },
             'status': {
                 'type': 'string',
+                'enum': ['active', 'superseded', 'appended', 'archived'],
                 'description': 'New status: active, superseded, appended, or archived.',
             },
             'linked_note_id': {
@@ -1151,6 +1152,10 @@ def _is_unsafe_asset_filename(filename: str) -> bool:
 # defensively because some clients ignore schema-level limits.
 _MAX_GET_RESOURCES_PATHS = 50
 _MAX_ADD_ASSETS_ITEMS = 20
+
+# Canonical KV key namespaces per RFC-012. Hermes is the ``key`` holder here;
+# ``_scope_from_key`` above derives these from stored entries.
+_VALID_KV_NAMESPACES = ('global:', 'user:', 'project:', 'app:')
 
 
 def _serialize_memory_unit(unit: Any) -> dict[str, Any]:
@@ -2506,6 +2511,11 @@ def handle_kv_write(
         key = _require(args, 'key')
     except ValueError as e:
         return tool_error(str(e))
+
+    if not isinstance(key, str) or not key.startswith(_VALID_KV_NAMESPACES):
+        return tool_error(
+            f'Invalid key {key!r}: must start with one of {", ".join(_VALID_KV_NAMESPACES)}'
+        )
 
     ttl_seconds = args.get('ttl_seconds')
 

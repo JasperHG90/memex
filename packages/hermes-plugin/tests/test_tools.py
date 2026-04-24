@@ -1844,6 +1844,7 @@ def test_set_note_status_schema_requires_note_id_and_status():
     required = SET_NOTE_STATUS_SCHEMA['parameters']['required']
     assert 'note_id' in props and 'status' in props and 'linked_note_id' in props
     assert set(required) == {'note_id', 'status'}
+    assert props['status'].get('enum') == ['active', 'superseded', 'appended', 'archived']
 
 
 def test_update_user_notes_schema_allows_null_user_notes():
@@ -2780,6 +2781,28 @@ def test_kv_write_missing_required_params(config, vault_id):
     api.kv_put = AsyncMock()
     out = dispatch('memex_kv_write', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
     assert 'error' in json.loads(out)
+    api.embed_text.assert_not_awaited()
+    api.kv_put.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    'bad_key',
+    ['noscope', 'unknown:foo', 'Global:foo', 'usre:work:x', ':leading', '  user:foo'],
+)
+def test_kv_write_rejects_bad_namespace(config, vault_id, bad_key):
+    """Keys outside the four RFC-012 namespaces (global:/user:/project:/app:) → tool_error."""
+    api = Mock()
+    api.embed_text = AsyncMock()
+    api.kv_put = AsyncMock()
+    out = dispatch(
+        'memex_kv_write',
+        {'value': 'v', 'key': bad_key},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
     api.embed_text.assert_not_awaited()
     api.kv_put.assert_not_awaited()
 
