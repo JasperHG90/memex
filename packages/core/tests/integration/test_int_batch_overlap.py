@@ -296,6 +296,77 @@ async def test_int_single_note_bg_overlap_returns_409(api, metastore, init_globa
 
 
 @pytest.mark.asyncio
+async def test_int_409_overlap_emits_audit_log(api, metastore, init_global_vault, overlap_notes):
+    """F19: the 409 path must emit an `ingestion.overlap_rejected` audit
+    event. The event records the existing job_id and the request path so
+    operators have a queryable trail of duplicate submissions. The audit
+    write is fire-and-forget (no `await`) — we wait briefly for the
+    background task to drain before querying.
+    """
+    import asyncio
+
+    from memex_core.server import app
+
+    await api.initialize()
+    app.state.api = api
+    # AuditService is wired in lifespan; tests bypass lifespan, so wire it
+    # directly here matching the production shape.
+    from memex_core.services.audit import AuditService
+
+    app.state.audit_service = AuditService(metastore)
+
+    payload = {
+        'notes': [
+            {
+                'name': 'note',
+                'description': 'audit log overlap test',
+                'content': base64.b64encode(b'audit-overlap-' + str(i).encode()).decode('ascii'),
+            }
+            for i in range(len(overlap_notes))
+        ]
+    }
+
+    with _patch_run_job_to_noop(api):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
+            first = await ac.post('/api/v1/ingestions/batch', json=payload)
+            assert first.status_code == 202, first.text
+
+            second = await ac.post('/api/v1/ingestions/batch', json=payload)
+            assert second.status_code == 409, second.text
+
+            # Audit write is fire-and-forget; let the background task drain.
+            for _ in range(20):
+                entries = await app.state.audit_service.query(
+                    action='ingestion.overlap_rejected', limit=10
+                )
+                if entries:
+                    break
+                await asyncio.sleep(0.05)
+
+    assert entries, 'F19: expected an `ingestion.overlap_rejected` audit entry after the 409'
+    # SQLAlchemy 2.x returns `Row` objects for `select(Model)`; unwrap to the
+    # AuditLog instance via the `.AuditLog` attribute (the column-class name)
+    # or the row's first element, whichever is present.
+    raw = entries[0]
+    from memex_core.memory.sql_models import AuditLog as _AuditLogModel
+
+    if hasattr(raw, _AuditLogModel.__name__):
+        entry = getattr(raw, _AuditLogModel.__name__)
+    elif isinstance(raw, tuple):
+        entry = raw[0]
+    else:
+        entry = raw
+    assert entry.action == 'ingestion.overlap_rejected'
+    assert entry.resource_type == 'batch_job'
+    # resource_id is the existing job's UUID stringified.
+    first_job_id = first.json()['job_id']
+    assert entry.resource_id == first_job_id
+    # Forward-compat field present (currently always 0 per RFC §A4 deferral).
+    assert entry.details.get('overlapping_keys_count') == 0
+    assert entry.details.get('path') == '/api/v1/ingestions/batch'
+
+
+@pytest.mark.asyncio
 async def test_int_openapi_declares_409_for_single_note_bg_routes(api, init_global_vault):
     """F1: every `/ingestions/*` route whose BG path can route through
     `JobManager` must declare the 409 response in its OpenAPI spec — not

@@ -452,3 +452,79 @@ async def test_run_job_partial_failure_logs_warning(manager, mock_api, mock_sess
     )
     assert '1 failed chunks' in warning_records[0].getMessage()
     assert 'simulated chunk failure' in warning_records[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# F8: explicit ARRAY(String) bindparam pin on the overlap-query :keys param
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_job_overlap_query_explicit_array_binding(manager, mock_api, mock_metastore):
+    """F8: the overlap-query SQL must pin `:keys` to ARRAY(String) so the
+    asyncpg layer doesn't fall back to implicit type inference. Inspect the
+    statement object's bindparams to assert the type pin is present.
+    """
+    from sqlalchemy.dialects.postgresql import ARRAY
+
+    session = _make_overlap_session(mock_metastore, overlap_row=None)
+
+    with patch.object(manager, '_run_job', new_callable=AsyncMock):
+        await manager.create_job([_make_note_dto(content=b'bind')], vault_id=uuid4())
+
+    overlap_call = session.execute.call_args_list[1]
+    stmt = overlap_call.args[0]
+    keys_param = stmt._bindparams.get('keys')
+    assert keys_param is not None, (
+        'overlap query must declare a :keys bindparam (post-F8 pin); '
+        f'got bindparams={list(stmt._bindparams)!r}'
+    )
+    assert isinstance(keys_param.type, ARRAY), (
+        f'F8: :keys bindparam must be pinned to ARRAY(String); '
+        f'got type={type(keys_param.type).__name__}'
+    )
+
+
+# ---------------------------------------------------------------------------
+# F9: explicit rejection of empty `notes` lists at the storage boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_empty_notes(manager, mock_api):
+    """F9: the dedup invariant ("at least one key required") must be enforced
+    at the JobManager boundary, not only at the Pydantic HTTP layer."""
+    with pytest.raises(ValueError, match='at least one note'):
+        await manager.create_job([], vault_id=uuid4())
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_empty_notes_before_session(manager, mock_api, mock_metastore):
+    """F9: the empty-list check must run BEFORE opening a metastore session,
+    so callers don't pay the connection cost for invalid input. Asserts no
+    session.execute() is ever called when notes=[]."""
+    session = mock_metastore.session.return_value.__aenter__.return_value
+    session.execute = AsyncMock()
+
+    with pytest.raises(ValueError):
+        await manager.create_job([], vault_id=uuid4())
+
+    session.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_job_concurrent_empty_batch_rejected(manager, mock_api):
+    """F9 TOCTOU close: 5 concurrent `create_job(notes=[])` calls all raise
+    ValueError. Without the explicit rejection, two of the 5 would silently
+    succeed (the bypass mode adversarial review flagged at AC-020 (rev))."""
+    import asyncio
+
+    results = await asyncio.gather(
+        *[manager.create_job([], vault_id=uuid4()) for _ in range(5)],
+        return_exceptions=True,
+    )
+    assert len(results) == 5
+    assert all(isinstance(r, ValueError) for r in results), (
+        f'all 5 concurrent empty-batch submissions must raise ValueError; '
+        f'got types: {[type(r).__name__ for r in results]}'
+    )

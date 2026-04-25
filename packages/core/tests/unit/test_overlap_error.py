@@ -6,7 +6,7 @@ overlaps an in-flight job. The HTTP layer translates it to 409 + Location header
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from memex_core.processing.batch import OverlapError
 
@@ -62,3 +62,38 @@ def test_overlap_error_message_includes_id_status_and_count():
 def test_overlap_error_is_exception_subclass():
     err = OverlapError(existing_id=uuid4(), status='pending')
     assert isinstance(err, Exception)
+
+
+# ---------------------------------------------------------------------------
+# F16: existing_id is coerced to UUID regardless of input shape
+# ---------------------------------------------------------------------------
+
+
+def test_overlap_error_existing_id_is_always_uuid_when_given_uuid():
+    """F16: the field type is documented as `UUID`. Direct UUID input passes
+    through as-is."""
+    eid = uuid4()
+    err = OverlapError(existing_id=eid, status='pending')
+    assert isinstance(err.existing_id, UUID)
+    assert err.existing_id == eid
+
+
+def test_overlap_error_existing_id_is_coerced_from_str():
+    """F16: a stringified UUID (which can sneak in from raw asyncpg rows or a
+    future serialization layer) is coerced to a real `UUID` so HTTP-layer
+    callers building the `Location` header don't accidentally serialize the
+    raw string twice."""
+    eid = uuid4()
+    err = OverlapError(existing_id=str(eid), status='pending')
+    assert isinstance(err.existing_id, UUID)
+    assert err.existing_id == eid
+
+
+def test_overlap_error_existing_id_coercion_rejects_garbage():
+    """F16: an obviously-invalid input still surfaces as a clear ValueError
+    from `UUID()` rather than producing a corrupt OverlapError that would
+    fail later when the HTTP layer tries to build the Location header."""
+    import pytest
+
+    with pytest.raises((ValueError, TypeError)):
+        OverlapError(existing_id='not-a-uuid', status='pending')

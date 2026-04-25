@@ -42,6 +42,8 @@ from memex_common.schemas import (
 
 from memex_core.api import MemexAPI, NoteInput
 from memex_core.processing.batch import OverlapError
+from memex_core.server.auth import _get_audit_service
+from memex_core.services.audit import audit_event
 from memex_core.services.ingestion import (
     _convert_to_markdown,
     _needs_conversion,
@@ -84,7 +86,7 @@ _OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
 }
 
 
-def _overlap_to_409(e: OverlapError) -> JSONResponse:
+def _overlap_to_409(e: OverlapError, request: Request) -> JSONResponse:
     """Translate an `OverlapError` into the AC-021 409 response.
 
     Used by every ingestion route whose background path can route through
@@ -94,7 +96,22 @@ def _overlap_to_409(e: OverlapError) -> JSONResponse:
     header — without this helper a future plumbing change risks reintroducing
     the F1 500-leak (an uncaught `OverlapError` falling through to FastAPI's
     default handler).
+
+    F19: also emits an `ingestion.overlap_rejected` audit event so operators
+    have a queryable trail of submissions that were rejected as duplicates.
+    `audit_event` is fire-and-forget (no `await`) so the 409 response is not
+    blocked on audit-log I/O; if `audit_service` is not configured (e.g. the
+    server was started without auth wiring), the helper no-ops cleanly.
     """
+    audit_event(
+        _get_audit_service(request),
+        action='ingestion.overlap_rejected',
+        resource_type='batch_job',
+        resource_id=str(e.existing_id),
+        existing_status=e.status,
+        overlapping_keys_count=len(e.overlapping_keys),
+        path=request.url.path,
+    )
     return JSONResponse(
         status_code=409,
         content=BatchJobStatus(
@@ -141,6 +158,7 @@ async def ingest_note(
     request: Annotated[NoteCreateDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     background: Annotated[bool, Query()] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> IngestResponse | JSONResponse:
@@ -204,7 +222,7 @@ async def ingest_note(
         # The background path calls `create_job`, which raises OverlapError when
         # the incoming note's idempotency key collides with an in-flight job in
         # the same vault. Translate to 409 + Location for AC-021 uniformity.
-        return _overlap_to_409(e)
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
 
@@ -222,6 +240,7 @@ async def ingest_url(
     request: Annotated[IngestURLRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     background: Annotated[bool, Query()] = False,
 ) -> IngestResponse | JSONResponse:
     try:
@@ -258,7 +277,7 @@ async def ingest_url(
         # but a future plumbing change that routes through `create_job` would.
         # Catching here keeps the AC-021 contract uniform across all five
         # `/ingestions/*` BG paths and avoids reintroducing the F1 500 leak.
-        return _overlap_to_409(e)
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
 
@@ -294,6 +313,7 @@ async def ingest_file(
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     files: list[UploadFile] = File(...),
     metadata: str | None = Body(None),
     background: bool = Query(False),
@@ -434,7 +454,7 @@ async def ingest_upload(
         # Defensive: matches the AC-021 contract uniformly across BG paths so
         # a future change that routes file-upload through `create_job` cannot
         # reintroduce the F1 500 leak.
-        return _overlap_to_409(e)
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
 
@@ -526,7 +546,7 @@ async def ingest_webhook(
         # Defensive: matches the AC-021 contract uniformly across BG paths so
         # a future change that routes webhook ingestion through `create_job`
         # cannot reintroduce the F1 500 leak.
-        return _overlap_to_409(e)
+        return _overlap_to_409(e, request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')
 
@@ -541,6 +561,7 @@ async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
 ):
     """
     Asynchronously ingest a batch of notes.
@@ -557,7 +578,7 @@ async def ingest_batch(
         )
         return BatchJobStatus(job_id=job_id, status='pending')
     except OverlapError as e:
-        return _overlap_to_409(e)
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 

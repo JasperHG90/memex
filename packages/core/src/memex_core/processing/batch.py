@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.types import String
 
 from memex_core.context import background_session
 from memex_core.memory.sql_models import BatchJob, BatchJobStatus
@@ -31,15 +33,22 @@ class OverlapError(Exception):
 
     def __init__(
         self,
-        existing_id: UUID,
+        existing_id: UUID | str,
         status: str,
         overlapping_keys: list[str] | None = None,
     ) -> None:
-        self.existing_id = existing_id
+        # Coerce to a real UUID so callers (including the HTTP layer building
+        # the `Location` header) can rely on `existing_id` being a `UUID`
+        # instance regardless of whether the overlap-detection path returned
+        # a UUID (asyncpg + UUID column) or a stringified one (driver fallback,
+        # raw asyncpg row, future serialization layer). The `UUID(str(x))`
+        # idiom accepts both UUID and str without sacrificing the type
+        # contract documented on the field.
+        self.existing_id = UUID(str(existing_id))
         self.status = status
         self.overlapping_keys = overlapping_keys if overlapping_keys is not None else []
         super().__init__(
-            f'Batch overlaps with in-flight job {existing_id} '
+            f'Batch overlaps with in-flight job {self.existing_id} '
             f'(status={status}, overlap={len(self.overlapping_keys)} keys)'
         )
 
@@ -104,9 +113,28 @@ class JobManager:
             UUID: The created Job ID.
 
         Raises:
+            ValueError: When ``notes`` is an empty list. The dedup invariant
+                requires at least one key — an empty `unnest(CAST(:keys AS
+                text[]))` evaluates to FALSE on `EXISTS`, which would let two
+                concurrent empty-batch submissions both INSERT and silently
+                bypass dedup. Reject explicitly at the storage boundary.
             OverlapError: When an in-flight job in the same vault has any
                 idempotency key in common with this batch.
         """
+        # F9: reject empty `notes` lists at the storage boundary so the dedup
+        # invariant ("at least one key required") is enforced engine-side, not
+        # only by Pydantic `min_length=1` validation at the HTTP layer. Without
+        # this guard, two concurrent `create_job(notes=[])` calls both pass the
+        # overlap check and both INSERT — the bypass mode adversarial review
+        # flagged at AC-020 (rev). HTTP-layer callers always synthesize a
+        # non-empty list, so this guard does not affect happy-path traffic.
+        if not notes:
+            raise ValueError(
+                'create_job requires at least one note; got an empty list. '
+                'The dedup invariant ("at least one idempotency key per batch") '
+                'cannot be enforced on an empty unnest array.'
+            )
+
         # Local import: NoteInput pulls in the rest of api.py, which imports
         # back into this module; defer to runtime to avoid the cycle.
         from memex_core.api import NoteInput
@@ -135,6 +163,15 @@ class JobManager:
             # deployment ever grows past ~65k vaults we can swap to
             # `hashtextextended` (PG ≥ 11, returns int8) — already feasible
             # because migration 021 guards PG ≥ 11.
+            #
+            # F22: the cast is `cast(:vault_id AS text)` rather than the more
+            # conventional `:vault_id::text` because asyncpg's parser can't
+            # disambiguate `::` (Postgres cast) from its own colon-prefixed
+            # bind-parameter syntax when both appear in the same statement —
+            # under asyncpg the `::text` form raises `syntax error at or near
+            # ":"`. The SQL-standard `cast(... AS text)` is semantically
+            # identical, parses cleanly, and keeps `pg_stat_statements` query
+            # text readable.
             await session.execute(
                 sa.text('SELECT pg_advisory_xact_lock(hashtext(cast(:vault_id AS text)))'),
                 {'vault_id': str(target_vault_id)},
@@ -146,6 +183,14 @@ class JobManager:
             # `input_note_keys @> jsonb_build_array(k)` — the `@>` operator is
             # supported by the `jsonb_path_ops` GIN index on this column
             # (migration 021), so the per-key probe is index-aided.
+            #
+            # The `:keys` bindparam is explicitly pinned to ARRAY(String)
+            # (Postgres `text[]`) instead of relying on asyncpg's implicit type
+            # inference from the Python list value. Without the pin, an empty
+            # list (`[]`) or a future driver release that tightens inference
+            # could fail at runtime with a cryptic asyncpg type error. The
+            # `CAST(:keys AS text[])` in the SQL is kept as belt-and-suspenders
+            # so the cast is visible in pg_stat_statements query strings.
             overlap_stmt = sa.text(
                 """
                 SELECT id, status
@@ -158,7 +203,7 @@ class JobManager:
                   )
                 LIMIT 1
                 """
-            )
+            ).bindparams(sa.bindparam('keys', type_=ARRAY(String)))
             result = await session.execute(
                 overlap_stmt,
                 {'vault_id': target_vault_id, 'keys': input_keys},
