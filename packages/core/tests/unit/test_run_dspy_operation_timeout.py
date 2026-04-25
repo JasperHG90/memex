@@ -54,6 +54,31 @@ def _reset_circuit_breaker() -> None:
     llm_mod._circuit_breaker = CircuitBreaker()
 
 
+@pytest.fixture(autouse=True)
+def _restore_memex_logger_propagation() -> Any:
+    """Ensure ``memex.core.llm`` records reach pytest's caplog.
+
+    ``test_logging_config.py`` runs earlier in the suite and calls
+    ``configure_logging()``, which sets ``memex.propagate = False`` (see
+    ``packages/core/src/memex_core/logging_config.py:69``). Pytest's
+    ``caplog`` attaches its capture handler to the *root* logger, so when
+    ``memex`` doesn't propagate, ``caplog.records`` stays empty even though
+    the ``logger.error(...)`` call inside ``run_dspy_operation`` fires
+    (visible in captured stderr — see Phase 3 cross-suite investigation).
+
+    This fixture saves the propagate flag before each test and restores it
+    after, while temporarily setting it ``True`` for the test's duration.
+    Production loggers are unaffected — only the test's view of caplog.
+    """
+    memex_logger = logging.getLogger('memex')
+    saved = memex_logger.propagate
+    memex_logger.propagate = True
+    try:
+        yield
+    finally:
+        memex_logger.propagate = saved
+
+
 class _ProviderTimeoutPredictor:
     """Predictor whose ``acall`` raises ``litellm.exceptions.Timeout`` directly,
     mirroring what the dspy → litellm → httpx stack produces when the
