@@ -196,6 +196,72 @@ def test_watchdog_per_stage_tracking_isolates_stages(
     assert wd._last_progress_at['refine'] == 10.0
 
 
+def test_watchdog_run_thread_survives_uncaught_exception(
+    tmp_path, isolated_registry, gauges, caplog
+) -> None:
+    """F13 regression: the daemon thread MUST keep looping past an
+    unexpected exception from `check_once()`.
+
+    Pre-F13 `_run` caught only `(RuntimeError, OSError)`. A registry-shape
+    change or unexpected exception type (e.g. `KeyError`) would escape and
+    silently kill the thread — operator loses the watchdog with no signal.
+
+    Post-F13 `_run` catches `Exception` and continues. The thread should
+    still be alive after a poisoned registry forces a few error cycles,
+    and the error should appear in the captured log.
+
+    Drives a real thread (with a short check interval) but limits wall
+    clock to under a second.
+    """
+
+    class _PoisonedRegistry:
+        """Registry whose collect() raises an unusual exception type
+        outside the (RuntimeError, OSError) tuple the prior _run caught."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def collect(self):  # noqa: ANN201
+            self.calls += 1
+            raise KeyError('simulated registry corruption')
+
+    poisoned = _PoisonedRegistry()
+    dump_path = str(tmp_path / 'dump.txt')
+    gauges['extraction'].labels(stage='scan').inc()  # ensures a stage is in flight
+
+    wd = _Watchdog(
+        stale_threshold_s=60.0,  # long; we don't expect a fire (collect raises)
+        dump_path=dump_path,
+        clock=time.monotonic,
+        check_interval_s=0.02,  # short so the loop runs several times in 0.2 s
+        registry=poisoned,  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level('ERROR', logger='memex.core.wedge_watchdog'):
+        wd.start()
+        # Let the daemon thread cycle through at least 3 check iterations.
+        # 0.02 s interval × 3 = 0.06 s; allow 0.2 s headroom for scheduling jitter.
+        time.sleep(0.2)
+        # Snapshot state before stop so we test the live thread.
+        is_alive_during = wd._thread.is_alive()
+        collect_calls = poisoned.calls
+        wd.stop()
+        wd._thread.join(timeout=0.5)
+
+    assert is_alive_during is True, (
+        'Watchdog thread died on KeyError from registry.collect(). F13 regression — '
+        '_run must catch Exception, not just (RuntimeError, OSError).'
+    )
+    assert collect_calls >= 3, (
+        f'Watchdog thread only ran {collect_calls} check iterations before exiting. '
+        'A surviving thread should have run at least 3 in 0.2 s with check_interval_s=0.02.'
+    )
+    # Each iteration should log the error (defence-in-depth: caplog.records is
+    # the documented pytest fixture; we don't enforce a specific record count
+    # because per-test reset fixtures may interfere with capture, but the
+    # collect_calls assertion above already proves the thread survived).
+
+
 def test_watchdog_fires_only_once(tmp_path, fake_clock, isolated_registry, gauges) -> None:
     """Once-and-only-once semantics — operator restart re-arms (AC-016)."""
     dump_path = str(tmp_path / 'dump.txt')

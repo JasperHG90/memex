@@ -21,12 +21,35 @@ splits the construction across multiple lines.
 
 Regex-based, not AST-based — keep it simple per AC-006.
 
-Known limitation (F21 in Phase 3 review): a ``timeout=`` token appearing in a
-comment within the 8-line window would be a false-negative. The guard treats
-the surrounding text uniformly. AST-based scanning (``ast.parse``, walk
-``Call`` nodes whose ``func.attr == 'LM'``) is the long-term fix and would
-also obviate the 8-line window heuristic; deferred since the false-negative
-risk is low (no current site puts ``timeout=`` in comments).
+Known limitations (F21 in Phase 3 review). The 8-line grep window has two
+classes of false-negative that a future AST-based replacement should fix:
+
+* **Mode A — neighbour shadowing.** Two unrelated ``dspy.LM(...)`` constructors
+  within 8 lines of each other (or one constructor that itself spans more
+  than 8 lines) can let a ``timeout=`` from a *different* constructor satisfy
+  the missing-kwarg check on the unguarded constructor. Concretely: if an
+  upstream call site puts ``dspy.LM(model=..., timeout=120)`` immediately
+  before ``dspy.LM(model=...)`` (no timeout), grep's window for the second
+  one will include the first one's ``timeout=`` and the test will pass.
+
+* **Mode B — comment-block bypass.** A comment block above an unguarded
+  constructor that mentions ``timeout=`` in passing (e.g. example code or a
+  rationale note like ``# remember to add timeout=N here``) shadows the
+  actual missing kwarg. The guard treats commented text and code text
+  uniformly.
+
+**Long-term mitigation**: switch to AST-based scanning. Walk the parsed
+module, collect every ``Call`` node whose ``func.attr == 'LM'``, then check
+the literal ``keywords`` list for a ``timeout`` kwarg. That eliminates both
+modes (windowing disappears; comments are not part of the AST). The change
+is a ~30-line rewrite of this test; tracked as a follow-up — out of scope
+for the rework batch per ticket #52.
+
+**Short-term mitigation**: code review must manually verify any new
+``dspy.LM(...)`` site that passes this guard. Specifically, when adding a
+new constructor: confirm ``timeout=`` is on the *actual* constructor's
+keyword list (not in a neighbouring constructor or in a comment block
+within the 8-line window).
 """
 
 from __future__ import annotations

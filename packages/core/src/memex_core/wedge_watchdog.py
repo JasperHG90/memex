@@ -161,11 +161,23 @@ class _Watchdog:
         # Sleep on the stop event so shutdown doesn't have to wait a full
         # check_interval. wait() returns True when set, False on timeout —
         # either way we fall out of the loop or do another check.
+        #
+        # F13 (Phase 3): catch `Exception` (not just `(RuntimeError, OSError)`)
+        # so the daemon thread survives any unexpected error from
+        # `self.check_once()` — e.g. a prometheus_client registry-shape
+        # change that raises something outside the prior narrow tuple, or
+        # a bug in `_read_inflight_per_stage`. Pre-F13 the thread would
+        # silently exit and the operator would have no in-process watchdog
+        # at all, with no log trail. Post-F13 the loop logs via
+        # `logger.exception` (preserving the bug for debugging) and
+        # continues to the next interval — the watchdog stays alive across
+        # a single bad iteration. `BaseException` is intentionally NOT
+        # caught (KeyboardInterrupt, SystemExit must still terminate).
         while not self._stop.wait(self._check_interval_s):
             try:
                 self.check_once()
-            except (RuntimeError, OSError):
-                logger.exception('Wedge watchdog check failed')
+            except Exception:
+                logger.exception('Wedge watchdog check failed; loop continues')
 
 
 # Module-level singleton. None until configure_watchdog() is called from
