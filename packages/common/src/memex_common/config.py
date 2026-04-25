@@ -557,6 +557,15 @@ class ExtractionConfig(BaseModel):
         description='Maximum number of concurrent LLM calls for fact extraction.',
     )
 
+    wedge_watchdog_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description='Opt-in wedge watchdog. When set, an OS-thread watchdog '
+        'fires once and dumps all-thread tracebacks via faulthandler when no '
+        'extraction stage has decremented within this many seconds while at '
+        'least one in-flight gauge is > 0. None (default) disables it.',
+    )
+
     @property
     def active_strategy(self) -> ExtractionStrategy:
         """Return the active extraction strategy name."""
