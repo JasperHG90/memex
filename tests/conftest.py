@@ -100,6 +100,24 @@ def reset_circuit_breaker():
     get_circuit_breaker().reset()
 
 
+@pytest.fixture(autouse=True)
+def _configure_offload_semaphores():
+    """Initialise sync-offload semaphores for tests that bypass the FastAPI
+    lifespan (CLI / direct-engine instantiation).
+
+    Production wires this in ``server/__init__.py`` before warmup. E2E tests
+    that drive the server through TestClient/AsyncClient pick it up via the
+    lifespan; direct-engine tests (e.g. `RetrievalEngine(...).retrieve(...)`)
+    don't, and would hit ``RuntimeError: configure_offload_semaphores must be
+    called`` on the first gated to_thread.
+    """
+    from memex_common.config import ServerConfig
+    from memex_core.memory.retrieval._offload import configure_offload_semaphores
+
+    configure_offload_semaphores(ServerConfig())
+    yield
+
+
 @pytest.fixture(scope='session')
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     postgres.start()
