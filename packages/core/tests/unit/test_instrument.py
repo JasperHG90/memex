@@ -20,41 +20,8 @@ from prometheus_client import REGISTRY
 from memex_core.instrument import _instrument, _resolve_gauge
 
 
-@pytest.fixture(autouse=True)
-def _reset_gauges():
-    """Module-level prometheus gauges persist across tests.
-
-    Per the testing-specialist's earlier note (and our own watchdog test
-    suite), use per-test fresh state by resetting the affected stage
-    children.
-    """
-    from memex_core.metrics import EXTRACTION_INFLIGHT, SYNC_OFFLOAD_INFLIGHT
-
-    yield
-
-    # Decrement to floor — any leak should be visible in the next test.
-    for stage in ('scan', 'refine', 'summarize', 'block_summarize'):
-        # Read current value via collect() so we don't poke private API.
-        for metric in EXTRACTION_INFLIGHT.collect():
-            for sample in metric.samples:
-                if sample.labels.get('stage') == stage:
-                    while sample.value > 0:
-                        EXTRACTION_INFLIGHT.labels(stage=stage).dec()
-                        sample = next(
-                            s
-                            for m in EXTRACTION_INFLIGHT.collect()
-                            for s in m.samples
-                            if s.labels.get('stage') == stage
-                        )
-                        if sample.value <= 0:
-                            break
-    for stage in ('rerank', 'embed', 'ner'):
-        for metric in SYNC_OFFLOAD_INFLIGHT.collect():
-            for sample in metric.samples:
-                if sample.labels.get('stage') == stage:
-                    while sample.value > 0:
-                        SYNC_OFFLOAD_INFLIGHT.labels(stage=stage).dec()
-                        break  # collect again next loop
+# NB: `_reset_inflight_gauges` autouse fixture lives in `conftest.py` (F7) —
+# it provides pre-yield + post-yield gauge resets across every unit test.
 
 
 def _read_gauge(name: str, stage: str) -> float:

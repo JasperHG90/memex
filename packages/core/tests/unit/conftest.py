@@ -41,6 +41,57 @@ def setup_unit_test_env():
 
 
 @pytest.fixture(autouse=True)
+def _reset_inflight_gauges():
+    """Per-test reset of `memex_extraction_inflight` + `memex_sync_offload_inflight`
+    stage children — both PRE-yield (so this test starts from a known-zero
+    state) and POST-yield (so a leak in this test doesn't bleed into the
+    next).
+
+    F7 (Phase 3 adversarial fix): the previous version of this fixture lived
+    in `test_instrument.py` only and ran post-yield. That left two gaps:
+
+    1. **Per-file scope** — tests in `test_pr2_observability.py` and
+       elsewhere that drove the real production wrappers had no reset, so
+       a previous gauge increment from `test_instrument.py` could leak
+       into them and break `assert observed == [before + 1]` invariants.
+    2. **Post-yield only** — a test that ran AFTER another test that
+       happened to leave a non-zero gauge would observe the leak in its
+       `before` snapshot and pass for the wrong reason.
+
+    Resolution: promote to conftest (covers every unit test in the tree)
+    and add a pre-yield reset (every test starts from gauge==0). The
+    post-yield reset stays as a defence-in-depth guard against a buggy
+    test that exits with the gauge non-zero.
+    """
+    from memex_core.metrics import EXTRACTION_INFLIGHT, SYNC_OFFLOAD_INFLIGHT
+
+    def _drain(gauge, stages):
+        for stage in stages:
+            for metric in gauge.collect():
+                for sample in metric.samples:
+                    if sample.labels.get('stage') == stage and sample.value > 0:
+                        # Decrement by the observed value to floor.
+                        for _ in range(int(sample.value)):
+                            gauge.labels(stage=stage).dec()
+
+    extraction_stages = ('scan', 'refine', 'summarize', 'block_summarize')
+    sync_offload_stages = ('rerank', 'embed', 'ner')
+
+    # Pre-yield reset: enter every test from a known-zero gauge state.
+    _drain(EXTRACTION_INFLIGHT, extraction_stages)
+    _drain(SYNC_OFFLOAD_INFLIGHT, sync_offload_stages)
+    try:
+        yield
+    finally:
+        # Post-yield reset: defence in depth. A test that exits with the
+        # gauge non-zero (e.g. an unhandled exception inside `_instrument`
+        # *before* the `try/finally` decrement could fire) would otherwise
+        # leak state into the next test's pre-yield observation.
+        _drain(EXTRACTION_INFLIGHT, extraction_stages)
+        _drain(SYNC_OFFLOAD_INFLIGHT, sync_offload_stages)
+
+
+@pytest.fixture(autouse=True)
 def _configure_offload_semaphores_default():
     """Initialise sync-offload semaphores so gated to_thread sites are callable.
 
