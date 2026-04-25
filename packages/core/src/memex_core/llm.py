@@ -29,14 +29,26 @@ except ImportError:
 
 T = TypeVar('T')
 
-# Module-level circuit breaker. ``run_dspy_operation`` resolves
-# ``_circuit_breaker`` *at call time* (not by capturing a closure), so a
-# call to ``configure_circuit_breaker(...)`` at app startup is observed
-# by every subsequent LLM call. Importers that bind ``_circuit_breaker``
-# into a local name at import time (``from memex_core.llm import
-# _circuit_breaker``) would see a stale reference; use
-# ``get_circuit_breaker()`` instead. F20 (Phase 3 review) tightened
-# this comment to make the late-binding contract explicit.
+# Module-level circuit breaker. Shared across every production caller of
+# ``run_dspy_operation`` — ``memory/extraction/engine.py``,
+# ``memory/reflect/reflection.py``, etc. The shared-state design is
+# intentional: one circuit breaker per process tracks aggregate LLM
+# failures, so one provider outage trips the breaker for every site.
+#
+# ``run_dspy_operation`` resolves ``_circuit_breaker`` *at call time* (not
+# by capturing a closure), so a call to ``configure_circuit_breaker(...)``
+# at app startup is observed by every subsequent LLM call. Importers that
+# bind ``_circuit_breaker`` into a local name at import time
+# (``from memex_core.llm import _circuit_breaker``) would see a stale
+# reference; use ``get_circuit_breaker()`` instead.
+#
+# Tests reassign the module-level reference via the ``_reset_circuit_breaker``
+# autouse fixture (see ``test_run_dspy_operation_timeout.py``,
+# ``test_tracing_operation.py``) so each test starts with a fresh
+# breaker. After test teardown, the next test's autouse fixture
+# reconfigures; production processes never see the test instances.
+# F20 (Phase 3 review) expanded this comment to document the
+# late-binding contract + test-isolation pattern explicitly.
 _circuit_breaker = CircuitBreaker()
 
 # Circuit breaker state encoding for Prometheus gauge
