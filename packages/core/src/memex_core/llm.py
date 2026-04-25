@@ -158,6 +158,10 @@ async def run_dspy_operation(
         # asyncio.wait_for fired before the provider surfaced a socket
         # timeout — Python-side stall (CPU-bound predictor body, scheduling
         # starvation, provider swallowing its own deadline).
+        # Catch ordering depends on litellm.exceptions.Timeout NOT being a
+        # subclass of TimeoutError (it derives from openai.APITimeoutError
+        # → openai.APIError → Exception as of litellm 1.80.x). If a future
+        # release restructures that hierarchy, both blocks must be revisited.
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start

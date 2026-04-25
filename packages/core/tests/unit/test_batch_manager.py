@@ -168,7 +168,7 @@ async def test_create_job_detects_pending_overlap(manager, mock_api, mock_metast
     `OverlapError` carrying the existing job's id and status; do not insert."""
     existing_id = uuid4()
     session = _make_overlap_session(
-        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PENDING.value)
+        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PENDING.value, [])
     )
 
     notes = [_make_note_dto(content=b'p1'), _make_note_dto(content=b'p2')]
@@ -179,9 +179,42 @@ async def test_create_job_detects_pending_overlap(manager, mock_api, mock_metast
     err = excinfo.value
     assert err.existing_id == existing_id
     assert err.status == BatchJobStatus.PENDING.value
-    # Forward-compat field present, currently empty.
+    # No keys overlapped under this mocked existing_keys=[] — exercises the
+    # "row matched, but mocked subset is empty" path.
     assert err.overlapping_keys == []
     # Crucially: no row was inserted.
+    session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_job_overlapping_keys_subset_returned(manager, mock_api, mock_metastore):
+    """OverlapError carries the actual subset of keys that overlapped, computed
+    as ``set(input_keys) & set(existing_input_keys)`` so operators receiving a
+    409 can see which incoming notes hit the in-flight job without querying DB.
+    """
+    from memex_core.api import NoteInput
+
+    existing_id = uuid4()
+    notes = [
+        _make_note_dto(content=b'shared-1'),
+        _make_note_dto(content=b'shared-2'),
+        _make_note_dto(content=b'fresh-only'),
+    ]
+    expected_input_keys = sorted({NoteInput.calculate_idempotency_key_from_dto(n) for n in notes})
+    # Existing job already holds the first two keys plus an unrelated one.
+    existing_keys = [expected_input_keys[0], expected_input_keys[1], 'unrelated']
+
+    session = _make_overlap_session(
+        mock_metastore,
+        overlap_row=(existing_id, BatchJobStatus.PENDING.value, existing_keys),
+    )
+
+    with pytest.raises(OverlapError) as excinfo:
+        await manager.create_job(notes, vault_id=uuid4())
+
+    err = excinfo.value
+    assert err.existing_id == existing_id
+    assert err.overlapping_keys == sorted([expected_input_keys[0], expected_input_keys[1]])
     session.add.assert_not_called()
 
 
@@ -192,7 +225,7 @@ async def test_create_job_detects_processing_overlap(manager, mock_api, mock_met
     here we simulate the row coming back from that filter."""
     existing_id = uuid4()
     session = _make_overlap_session(
-        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PROCESSING.value)
+        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PROCESSING.value, [])
     )
 
     notes = [_make_note_dto(content=b'q')]
@@ -275,7 +308,7 @@ async def test_create_job_overlap_on_any_key_match(manager, mock_api, mock_metas
     accidentally substitute `@>` with `=`) and that any returned row raises."""
     existing_id = uuid4()
     session = _make_overlap_session(
-        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PENDING.value)
+        mock_metastore, overlap_row=(existing_id, BatchJobStatus.PENDING.value, [])
     )
 
     # Three notes -> three keys; partial overlap with the existing job is enough.

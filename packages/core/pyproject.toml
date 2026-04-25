@@ -16,8 +16,13 @@ dependencies = [
     "asyncpg>=0.31.0",
     "asyncstdlib>=3.13.1",
     "cachetools>=6.2.4",
+    # dspy upper bound: 3.1+ exposes a real `acall` coroutine for
+    # ChainOfThought; the to_thread fallback in llm.py is a dead path on 3.1.
+    # Pinning <3.2.0 until the dead-path can be revalidated against newer DSPy.
     "dspy>=3.1.0,<3.2.0",
     "fsspec>=2026.1.0",
+    # httpx upper bound: socket-timeout plumbing in dspy.LM(timeout=) flows
+    # through this httpx version; revalidate against 0.29.x before bumping.
     "httpx>=0.28.1,<0.29.0",
     "langchain-text-splitters>=1.1.0",
     "onnxruntime>=1.23.2",
@@ -49,6 +54,9 @@ dependencies = [
     "dateparser>=1.2.2",
     "pymupdf-layout>=1.27.2",
     "python-multipart>=0.0.22",
+    # litellm upper bound: the catch ordering for litellm.exceptions.Timeout
+    # vs. asyncio.TimeoutError in llm.py depends on Timeout NOT being a
+    # TimeoutError subclass (true on 1.80.x). Bumping needs that re-checked.
     "litellm>=1.80.16,<1.81.0",
     "stamina>=25.2.0",
 ]

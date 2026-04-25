@@ -8,9 +8,15 @@ Contract for callers:
         async with _instrument('scan'):
             await run_dspy_operation(...)
 
-The wrapper goes *inside* the semaphore acquire so the gauge reflects real
-concurrent in-flight, not blocked-on-semaphore tasks, and wraps only the
-call that would actually wedge.
+    # equivalent (and used at most call sites):
+    async with self._scan_semaphore, _instrument('scan'):
+        await run_dspy_operation(...)
+
+``_instrument`` must be entered *after* the semaphore is acquired so the
+gauge reflects real concurrent in-flight, not blocked-on-semaphore tasks.
+``async with A, B:`` enters A first, then B — both forms above satisfy this.
+The wrapper covers only the call that would actually wedge, never the
+surrounding bookkeeping.
 
 Valid stages:
 

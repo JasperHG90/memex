@@ -26,9 +26,9 @@ class OverlapError(Exception):
     in the same vault. The HTTP layer translates this to a 409 with a ``Location``
     header pointing at the existing job.
 
-    ``overlapping_keys`` is a forward-compatible field carrying the subset of
-    keys that overlapped. Currently always ``[]`` (subset computation is
-    deferred); future code may populate it without changing this signature.
+    ``overlapping_keys`` is the sorted subset of keys that overlapped, computed
+    from the existing job's ``input_note_keys`` and the incoming batch's keys.
+    May be ``[]`` if a caller constructs the error directly without the subset.
     """
 
     def __init__(
@@ -163,9 +163,12 @@ class JobManager:
             # The :keys bindparam is pinned to ARRAY(String) so empty lists
             # and tighter future driver inference don't error at runtime;
             # the in-SQL CAST is kept so pg_stat_statements shows the type.
+            # Also returns the existing row's input_note_keys so the
+            # OverlapError can carry the actual subset of overlapping keys
+            # for operator debuggability.
             overlap_stmt = sa.text(
                 """
-                SELECT id, status
+                SELECT id, status, input_note_keys
                 FROM batch_jobs
                 WHERE vault_id = :vault_id
                   AND status IN ('pending', 'processing')
@@ -182,11 +185,12 @@ class JobManager:
             )
             row = result.first()
             if row is not None:
-                existing_id, status_str = row
+                existing_id, status_str, existing_keys = row
+                overlap = sorted(set(input_keys) & set(existing_keys or []))
                 raise OverlapError(
                     existing_id=existing_id,
                     status=status_str,
-                    overlapping_keys=[],
+                    overlapping_keys=overlap,
                 )
 
             job = BatchJob(
