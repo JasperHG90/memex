@@ -136,7 +136,7 @@ class JobManager:
             # `hashtextextended` (PG ≥ 11, returns int8) — already feasible
             # because migration 021 guards PG ≥ 11.
             await session.execute(
-                sa.text('SELECT pg_advisory_xact_lock(hashtext(:vault_id::text))'),
+                sa.text('SELECT pg_advisory_xact_lock(hashtext(cast(:vault_id AS text)))'),
                 {'vault_id': str(target_vault_id)},
             )
 

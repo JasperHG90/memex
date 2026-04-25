@@ -316,9 +316,10 @@ async def test_create_job_acquires_advisory_lock_before_select(manager, mock_api
         'first SQL statement must be `pg_advisory_xact_lock(...)` — the TOCTOU '
         'close depends on the lock being acquired before the overlap query.'
     )
-    assert 'hashtext' in first_sql and '::text' in first_sql, (
-        'advisory-lock key must be hashtext over the vault_id cast to text; '
-        'hashtext requires text input but vault_id is a UUID, hence the cast.'
+    assert 'hashtext' in first_sql, 'advisory-lock key must be hashtext-based'
+    assert '::text' in first_sql or 'as text' in first_sql.lower(), (
+        'advisory-lock key must cast vault_id to text — hashtext requires text input '
+        'but vault_id is a UUID. Both `::text` and `cast(... AS text)` are accepted.'
     )
     assert 'batch_jobs' in second_sql.lower() and '@>' in second_sql, (
         'second SQL statement must be the overlap-check SELECT against batch_jobs.'
