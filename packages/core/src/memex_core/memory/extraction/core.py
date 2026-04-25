@@ -881,6 +881,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
         lm: dspy.LM,
         *,
         scan_max_concurrency: int = 5,
+        refine_max_concurrency: int = 5,
+        summarize_max_concurrency: int = 5,
         gap_rescan_threshold_tokens: int = 2000,
     ) -> None:
         super().__init__()
@@ -891,11 +893,15 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self.parent_summarizer = dspy.ChainOfThought(SummarizeParentSection)
         self.block_summarizer = dspy.ChainOfThought(SummarizeBlock)
         self.scan_max_concurrency = scan_max_concurrency
+        self.refine_max_concurrency = refine_max_concurrency
+        self.summarize_max_concurrency = summarize_max_concurrency
         self.gap_rescan_threshold_tokens = gap_rescan_threshold_tokens
         # The extractor is only ever instantiated from inside an async entry
         # point (index_document), so constructing the Semaphore here is safe —
         # it binds to the running loop on first acquire.
         self._scan_semaphore = asyncio.Semaphore(scan_max_concurrency)
+        self._refine_semaphore = asyncio.Semaphore(refine_max_concurrency)
+        self._summary_semaphore = asyncio.Semaphore(summarize_max_concurrency)
         self._logger = logging.getLogger('memex.core.memory.extraction.page_index')
 
     async def aforward(
@@ -1259,48 +1265,58 @@ class AsyncMarkdownPageIndex(dspy.Module):
     async def _process_single_node_refinement(
         self, node: TOCNode, full_text: str, max_len: int
     ) -> TOCNode:
-        node_len = (node.end_index or 0) - (node.start_index or 0)
+        # Gate the per-node work (chunk scan + tree-build) on the refine
+        # semaphore so peer refinement tasks fan out at most
+        # refine_max_concurrency at a time. The recursive call into
+        # _refine_tree_recursively is deliberately *outside* this `async with`
+        # block — holding the semaphore through recursion would deadlock when
+        # tree depth exceeds refine_max_concurrency (every parent would hold a
+        # slot waiting on its children).
+        async with self._refine_semaphore:
+            node_len = (node.end_index or 0) - (node.start_index or 0)
 
-        if node_len > max_len and not node.children:
-            self._logger.debug(f"   > Deep Dive: Refining '{node.title}' ({node_len} chars)")
+            if node_len > max_len and not node.children:
+                self._logger.debug(f"   > Deep Dive: Refining '{node.title}' ({node_len} chars)")
 
-            section_text = full_text[node.start_index : node.end_index]
+                section_text = full_text[node.start_index : node.end_index]
 
-            sub_headers = await self._process_single_chunk(
-                section_text,
-                prev_context=f'...Inside section: {node.title}...',
-                offset=cast(int, node.start_index),
-            )
-
-            if sub_headers:
-                for idx, h in enumerate(sub_headers):
-                    h.id = idx
-                sub_headers = [
-                    h
-                    for h in sub_headers
-                    if cast(int, h.start_index) > cast(int, node.start_index) + 50
-                ]
-
-                sub_headers = verify_headers(sub_headers, full_text)
-                sub_headers = [h for h in sub_headers if h.verified]
+                sub_headers = await self._process_single_chunk(
+                    section_text,
+                    prev_context=f'...Inside section: {node.title}...',
+                    offset=cast(int, node.start_index),
+                )
 
                 if sub_headers:
                     for idx, h in enumerate(sub_headers):
                         h.id = idx
+                    sub_headers = [
+                        h
+                        for h in sub_headers
+                        if cast(int, h.start_index) > cast(int, node.start_index) + 50
+                    ]
 
-                    sub_tree = await self._build_logical_tree(sub_headers)
-                    hydrate_tree(sub_tree, sub_headers, full_text, parent_end_index=node.end_index)
+                    sub_headers = verify_headers(sub_headers, full_text)
+                    sub_headers = [h for h in sub_headers if h.verified]
 
-                    for child in sub_tree:
-                        child._assign_content_hash_ids()
+                    if sub_headers:
+                        for idx, h in enumerate(sub_headers):
+                            h.id = idx
 
-                    node.children = sub_tree
+                        sub_tree = await self._build_logical_tree(sub_headers)
+                        hydrate_tree(
+                            sub_tree, sub_headers, full_text, parent_end_index=node.end_index
+                        )
 
-                    if sub_tree:
-                        new_cutoff = sub_tree[0].start_index
-                        node.content = full_text[node.start_index : new_cutoff]
-                        node.token_estimate = estimate_token_count(node.content)
-                        node.id = content_hash_md5(node.content)
+                        for child in sub_tree:
+                            child._assign_content_hash_ids()
+
+                        node.children = sub_tree
+
+                        if sub_tree:
+                            new_cutoff = sub_tree[0].start_index
+                            node.content = full_text[node.start_index : new_cutoff]
+                            node.token_estimate = estimate_token_count(node.content)
+                            node.id = content_hash_md5(node.content)
 
         if node.children:
             node.children = await self._refine_tree_recursively(node.children, full_text, max_len)
@@ -1332,10 +1348,13 @@ class AsyncMarkdownPageIndex(dspy.Module):
     async def _summarize_single_node(self, node: TOCNode) -> None:
         try:
             safe_content = node.content if node.content else ''
+            # Gate via run_dspy_operation's semaphore= kwarg so peer leaf
+            # summary tasks fan out at most summarize_max_concurrency at a time.
             pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.summarizer,
                 input_kwargs={'title': node.title, 'content': safe_content},
+                semaphore=self._summary_semaphore,
                 operation_name='extraction.summarize',
             )
             node.summary = pred.summary
@@ -1352,6 +1371,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     f"[Section header only: '{node.title}']\nChild sections: {children_titles}"
                 )
 
+            # Gate via the shared summary semaphore.
             pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.parent_summarizer,
@@ -1360,6 +1380,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     'content': safe_content,
                     'children_titles': children_titles,
                 },
+                semaphore=self._summary_semaphore,
                 operation_name='extraction.summarize_parent',
             )
             node.summary = pred.summary
@@ -1396,10 +1417,14 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self, block: PageIndexBlock, section_summaries_text: str
     ) -> None:
         try:
+            # Gate via the shared summary semaphore — block summaries call the
+            # same provider as leaf summaries with the same RAM profile, so
+            # AC-003 has them share a single capacity budget by default.
             pred = await run_dspy_operation(
                 lm=self.lm,
                 predictor=self.block_summarizer,
                 input_kwargs={'section_summaries': section_summaries_text},
+                semaphore=self._summary_semaphore,
                 operation_name='extraction.summarize_block',
             )
             summary = pred.block_summary
@@ -1422,6 +1447,8 @@ async def index_document(
     short_doc_threshold: int = 2000,
     *,
     scan_max_concurrency: int = 5,
+    refine_max_concurrency: int = 5,
+    summarize_max_concurrency: int = 5,
     gap_rescan_threshold_tokens: int = 2000,
 ) -> PageIndexOutput:
     """Top-level function to index a document using PageIndex.
@@ -1438,6 +1465,11 @@ async def index_document(
         short_doc_threshold: Documents below this with no headers bypass PageIndex.
         scan_max_concurrency: Cap on concurrent LLM scan calls during page_index
             extraction. Lower this on memory-constrained hosts.
+        refine_max_concurrency: Cap on concurrent _refine_tree_recursively LLM
+            calls. Lower this on memory-constrained hosts.
+        summarize_max_concurrency: Cap on concurrent leaf, parent, and block
+            summary LLM calls (shared across the three summary fan-outs). Lower
+            this on memory-constrained hosts.
         gap_rescan_threshold_tokens: Minimum gap size (tokens) between detected
             headers that triggers a secondary LLM re-scan.
 
@@ -1481,6 +1513,8 @@ async def index_document(
     indexer = AsyncMarkdownPageIndex(
         lm=lm,
         scan_max_concurrency=scan_max_concurrency,
+        refine_max_concurrency=refine_max_concurrency,
+        summarize_max_concurrency=summarize_max_concurrency,
         gap_rescan_threshold_tokens=gap_rescan_threshold_tokens,
     )
     # Wrap in timeout — individual LLM calls have their own timeout via dspy.LM,

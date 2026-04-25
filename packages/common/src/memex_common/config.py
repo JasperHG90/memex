@@ -524,6 +524,20 @@ class PageIndexTextSplitting(BaseModel):
         'to prevent GPU/RAM exhaustion. Separate from ExtractionConfig.max_concurrency, '
         'which governs fact extraction.',
     )
+    refine_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        description='Max concurrent _refine_tree_recursively LLM calls. '
+        'Mirrors scan_max_concurrency. Reduce on memory-constrained hosts.',
+    )
+    summarize_max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        description='Max concurrent leaf, parent, and block summary LLM calls. '
+        'Shared across the three summary fan-outs '
+        '(_generate_summaries_parallel leaf + parent, _generate_block_summaries). '
+        'Reduce on memory-constrained hosts.',
+    )
     gap_rescan_threshold_tokens: int = Field(
         default=2000,
         ge=500,

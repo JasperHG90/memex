@@ -16,9 +16,9 @@ dependencies = [
     "asyncpg>=0.31.0",
     "asyncstdlib>=3.13.1",
     "cachetools>=6.2.4",
-    "dspy>=3.1.0",
+    "dspy>=3.1.0,<3.2.0",
     "fsspec>=2026.1.0",
-    "httpx>=0.28.1",
+    "httpx>=0.28.1,<0.29.0",
     "langchain-text-splitters>=1.1.0",
     "onnxruntime>=1.23.2",
     "pgvector>=0.4.2",
@@ -49,7 +49,7 @@ dependencies = [
     "dateparser>=1.2.2",
     "pymupdf-layout>=1.27.2",
     "python-multipart>=0.0.22",
-    "litellm==1.80.16",
+    "litellm>=1.80.16,<1.81.0",
     "stamina>=25.2.0",
 ]
 
