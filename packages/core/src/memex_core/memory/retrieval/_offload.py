@@ -42,6 +42,14 @@ def configure_offload_semaphores(cfg: ServerConfig) -> None:
 
     Tests may call this with a small-cap config to drive concurrency assertions
     without monkeypatching globals; per-test reconfiguration is supported.
+
+    Observability asymmetry (F18 — Phase 3 review): semaphores are constructed
+    ONCE here from ``cfg.<x>_max_concurrency`` and never recomputed; timeouts
+    are read live from ``_CFG.<x>_call_timeout`` at every gated call site.
+    Mutating ``_CFG.reranker_call_timeout`` in place therefore updates the
+    timeout the next call observes but does NOT update the cap (the existing
+    Semaphore is preserved). To change a cap at runtime, callers must call
+    ``configure_offload_semaphores(new_cfg)`` again.
     """
     global _RERANKER_SEMAPHORE, _EMBEDDING_SEMAPHORE, _NER_SEMAPHORE, _CFG
     _RERANKER_SEMAPHORE = asyncio.Semaphore(cfg.reranker_max_concurrency)
