@@ -976,3 +976,69 @@ class TestDetectAndFillGaps:
         # All tail-chunk offsets must be at or beyond the end of the header.
         offsets = [call.args[2] for call in mock_chunk.call_args_list]
         assert min(offsets) >= len('## Intro')
+
+
+class TestConcurrencyKwargFlow:
+    """AC-004: refine + summarize kwargs flow from index_document to semaphores."""
+
+    def test_default_semaphores_have_value_5(self) -> None:
+        """Default ctor: all three semaphores expose ._value == 5 (back-compat)."""
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock())
+        assert indexer._scan_semaphore._value == 5
+        assert indexer._refine_semaphore._value == 5
+        assert indexer._summary_semaphore._value == 5
+
+    def test_custom_semaphore_values_propagate(self) -> None:
+        """AC-004: ctor kwargs flow through to the semaphores' _value attribute."""
+        indexer = AsyncMarkdownPageIndex(
+            lm=MagicMock(),
+            scan_max_concurrency=2,
+            refine_max_concurrency=3,
+            summarize_max_concurrency=7,
+        )
+        assert indexer._scan_semaphore._value == 2
+        assert indexer._refine_semaphore._value == 3
+        assert indexer._summary_semaphore._value == 7
+
+    @pytest.mark.asyncio
+    async def test_index_document_threads_concurrency_kwargs_to_indexer(self) -> None:
+        """AC-004: index_document(...) passes the new kwargs to AsyncMarkdownPageIndex.
+
+        Use the short-doc-bypass path's *opposite* — a doc with regex headers — so
+        the indexer is actually constructed. Patch the constructor to capture
+        kwargs without running the real LLM-call pipeline.
+        """
+        text_with_headers = '# H1\n\n' + ('word ' * 1000) + '\n\n## H2\n\nbody\n'
+        captured_kwargs: dict[str, Any] = {}
+
+        class _StubIndexer:
+            def __init__(self, **kwargs: Any) -> None:
+                captured_kwargs.update(kwargs)
+
+            async def aforward(self, *_args: Any, **_kwargs: Any) -> PageIndexOutput:
+                return PageIndexOutput(
+                    toc=[],
+                    blocks=[],
+                    node_to_block_map={},
+                    coverage_ratio=1.0,
+                    path_used='stub',
+                )
+
+        with patch(
+            'memex_core.memory.extraction.core.AsyncMarkdownPageIndex',
+            _StubIndexer,
+        ):
+            await index_document(
+                full_text=text_with_headers,
+                lm=MagicMock(),
+                short_doc_threshold=10,  # force past short-doc bypass
+                scan_max_concurrency=2,
+                refine_max_concurrency=3,
+                summarize_max_concurrency=7,
+                gap_rescan_threshold_tokens=1500,
+            )
+
+        assert captured_kwargs['scan_max_concurrency'] == 2
+        assert captured_kwargs['refine_max_concurrency'] == 3
+        assert captured_kwargs['summarize_max_concurrency'] == 7
+        assert captured_kwargs['gap_rescan_threshold_tokens'] == 1500

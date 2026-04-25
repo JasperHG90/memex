@@ -881,6 +881,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
         lm: dspy.LM,
         *,
         scan_max_concurrency: int = 5,
+        refine_max_concurrency: int = 5,
+        summarize_max_concurrency: int = 5,
         gap_rescan_threshold_tokens: int = 2000,
     ) -> None:
         super().__init__()
@@ -891,11 +893,15 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self.parent_summarizer = dspy.ChainOfThought(SummarizeParentSection)
         self.block_summarizer = dspy.ChainOfThought(SummarizeBlock)
         self.scan_max_concurrency = scan_max_concurrency
+        self.refine_max_concurrency = refine_max_concurrency
+        self.summarize_max_concurrency = summarize_max_concurrency
         self.gap_rescan_threshold_tokens = gap_rescan_threshold_tokens
         # The extractor is only ever instantiated from inside an async entry
         # point (index_document), so constructing the Semaphore here is safe —
         # it binds to the running loop on first acquire.
         self._scan_semaphore = asyncio.Semaphore(scan_max_concurrency)
+        self._refine_semaphore = asyncio.Semaphore(refine_max_concurrency)
+        self._summary_semaphore = asyncio.Semaphore(summarize_max_concurrency)
         self._logger = logging.getLogger('memex.core.memory.extraction.page_index')
 
     async def aforward(
@@ -1422,6 +1428,8 @@ async def index_document(
     short_doc_threshold: int = 2000,
     *,
     scan_max_concurrency: int = 5,
+    refine_max_concurrency: int = 5,
+    summarize_max_concurrency: int = 5,
     gap_rescan_threshold_tokens: int = 2000,
 ) -> PageIndexOutput:
     """Top-level function to index a document using PageIndex.
@@ -1438,6 +1446,11 @@ async def index_document(
         short_doc_threshold: Documents below this with no headers bypass PageIndex.
         scan_max_concurrency: Cap on concurrent LLM scan calls during page_index
             extraction. Lower this on memory-constrained hosts.
+        refine_max_concurrency: Cap on concurrent _refine_tree_recursively LLM
+            calls. Lower this on memory-constrained hosts.
+        summarize_max_concurrency: Cap on concurrent leaf, parent, and block
+            summary LLM calls (shared across the three summary fan-outs). Lower
+            this on memory-constrained hosts.
         gap_rescan_threshold_tokens: Minimum gap size (tokens) between detected
             headers that triggers a secondary LLM re-scan.
 
@@ -1481,6 +1494,8 @@ async def index_document(
     indexer = AsyncMarkdownPageIndex(
         lm=lm,
         scan_max_concurrency=scan_max_concurrency,
+        refine_max_concurrency=refine_max_concurrency,
+        summarize_max_concurrency=summarize_max_concurrency,
         gap_rescan_threshold_tokens=gap_rescan_threshold_tokens,
     )
     # Wrap in timeout — individual LLM calls have their own timeout via dspy.LM,
