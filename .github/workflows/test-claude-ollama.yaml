@@ -1,0 +1,46 @@
+name: Test Claude Code Action via Ollama Cloud
+
+# Experimental: routes anthropics/claude-code-action through Ollama Cloud's
+# Anthropic-compatible API. Run manually only; do NOT add PR/comment triggers
+# until tool-use fidelity is verified.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt to send to Claude Code.
+        required: true
+        default: 'Summarize the top-level structure of this repository in 5 bullets.'
+      model:
+        description: Ollama Cloud model tag (e.g. glm-4.6:cloud, qwen3-coder:480b-cloud, kimi-k2:cloud).
+        required: true
+        default: 'glm-4.6:cloud'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: test-claude-ollama-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_BASE_URL: https://ollama.com
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.OLLAMA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.OLLAMA_API_KEY }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: |
+            --model ${{ inputs.model }}
+            --max-turns 5
