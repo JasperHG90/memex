@@ -41,6 +41,7 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI, NoteInput
+from memex_core.processing.batch import OverlapError
 from memex_core.services.ingestion import (
     _convert_to_markdown,
     _needs_conversion,
@@ -452,7 +453,29 @@ async def ingest_webhook(
         raise _handle_error(e, 'Webhook ingestion failed')
 
 
-@router.post('/ingestions/batch', response_model=BatchJobStatus, status_code=202)
+@router.post(
+    '/ingestions/batch',
+    response_model=BatchJobStatus,
+    status_code=202,
+    responses={
+        409: {
+            'model': BatchJobStatus,
+            'description': (
+                'Overlapping batch — the incoming notes share idempotency keys with '
+                'an in-flight (PENDING or PROCESSING) job in the same vault. The '
+                'response body identifies the existing job and the `Location` header '
+                'points at its status endpoint so the caller can poll instead of '
+                'starting a duplicate.'
+            ),
+            'headers': {
+                'Location': {
+                    'description': "Path to the existing job's status endpoint.",
+                    'schema': {'type': 'string'},
+                },
+            },
+        },
+    },
+)
 async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -460,7 +483,9 @@ async def ingest_batch(
 ):
     """
     Asynchronously ingest a batch of notes.
-    Returns 202 Accepted with a job_id for status tracking.
+    Returns 202 Accepted with a job_id for status tracking, or 409 Conflict with
+    a `Location` header when the submission overlaps an in-flight job in the
+    same vault.
     """
     try:
         job_id = await api.batch_manager.create_job(
@@ -470,6 +495,15 @@ async def ingest_batch(
             background_tasks=background_tasks,
         )
         return BatchJobStatus(job_id=job_id, status='pending')
+    except OverlapError as e:
+        return JSONResponse(
+            status_code=409,
+            content=BatchJobStatus(
+                job_id=e.existing_id,
+                status=e.status,
+            ).model_dump(mode='json'),
+            headers={'Location': f'/api/v1/ingestions/{e.existing_id}'},
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 
