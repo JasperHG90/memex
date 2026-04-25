@@ -14,6 +14,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger('memex.core.processing.batch')
 
 
+class OverlapError(Exception):
+    """Raised when a new batch overlaps an in-flight job in the same vault.
+
+    Surfaced by ``JobManager.create_job`` when the incoming batch's idempotency
+    keys overlap any ``PENDING`` or ``PROCESSING`` job's stored ``input_note_keys``
+    in the same vault. The HTTP layer translates this to a 409 with a ``Location``
+    header pointing at the existing job.
+
+    ``overlapping_keys`` is a forward-compatible field carrying the subset of keys
+    that overlapped. It is currently always ``[]`` (subset computation is deferred
+    per RFC-002 §A4); future code may populate it without changing this signature.
+    """
+
+    def __init__(
+        self,
+        existing_id: UUID,
+        status: str,
+        overlapping_keys: list[str] | None = None,
+    ) -> None:
+        self.existing_id = existing_id
+        self.status = status
+        self.overlapping_keys = overlapping_keys if overlapping_keys is not None else []
+        super().__init__(
+            f'Batch overlaps with in-flight job {existing_id} '
+            f'(status={status}, overlap={len(self.overlapping_keys)} keys)'
+        )
+
+
 class JobManager:
     """
     Manages asynchronous batch ingestion jobs.
