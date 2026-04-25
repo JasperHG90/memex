@@ -978,6 +978,277 @@ class TestDetectAndFillGaps:
         assert min(offsets) >= len('## Intro')
 
 
+class TestSemaphoreGating:
+    """AC-001/002/003: refine + summary fan-out sites observe their semaphore caps."""
+
+    @pytest.mark.asyncio
+    async def test_refine_respects_semaphore(self) -> None:
+        """AC-001: with refine_max_concurrency=1, _refine_tree_recursively peers
+        cannot overlap.
+
+        We patch `_process_single_node_refinement`'s LLM-doing inner step
+        (`_process_single_chunk`) into a counter that records [enter, exit]
+        windows under the refine semaphore. Then we drive
+        `_refine_tree_recursively` with a flat tree of nodes that all need
+        refinement. With cap=1 the windows must not overlap.
+        """
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), refine_max_concurrency=1)
+
+        # Build 5 peer nodes that will all trip the "node_len > max_len and
+        # not node.children" branch in _process_single_node_refinement so the
+        # LLM-gated body runs (we don't actually need _process_single_chunk
+        # to find any sub-headers — we only care that the gated body executes).
+        nodes = []
+        for i in range(5):
+            node = TOCNode(
+                original_header_id=i,
+                title=f'Section {i}',
+                level=1,
+                reasoning='test',
+                content='x' * 6000,
+                start_index=i * 6000,
+                end_index=(i + 1) * 6000,
+            )
+            nodes.append(node)
+
+        windows: list[tuple[float, float]] = []
+
+        async def _fake_chunk(*_args: Any, **_kwargs: Any) -> list:
+            start = time.perf_counter()
+            await asyncio.sleep(0.02)
+            end = time.perf_counter()
+            windows.append((start, end))
+            return []
+
+        with patch.object(indexer, '_process_single_chunk', side_effect=_fake_chunk):
+            await indexer._refine_tree_recursively(nodes, full_text='x' * 30_000, max_len=5000)
+
+        assert len(windows) == 5
+        sorted_windows = sorted(windows, key=lambda w: w[0])
+        for (_, prev_end), (next_start, _) in zip(sorted_windows, sorted_windows[1:]):
+            assert next_start >= prev_end - 1e-3, (
+                f'refine windows overlap with cap=1: prev ended at {prev_end}, '
+                f'next started at {next_start}'
+            )
+
+    @pytest.mark.asyncio
+    async def test_summarize_leaf_respects_semaphore(self) -> None:
+        """AC-002: leaf-summary fan-out observes summarize_max_concurrency."""
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), summarize_max_concurrency=1)
+
+        # 5 leaf nodes (no children, content over 50 chars) that
+        # _generate_summaries_parallel will route to _summarize_single_node.
+        leaves = [
+            TOCNode(
+                original_header_id=i,
+                title=f'Leaf {i}',
+                level=2,
+                reasoning='test',
+                content='word ' * 60,
+            )
+            for i in range(5)
+        ]
+
+        windows: list[tuple[float, float]] = []
+
+        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
+            assert semaphore is indexer._summary_semaphore, (
+                f'expected _summary_semaphore, got {semaphore!r}'
+            )
+            async with semaphore:
+                start = time.perf_counter()
+                await asyncio.sleep(0.02)
+                end = time.perf_counter()
+                windows.append((start, end))
+                pred = MagicMock()
+                pred.summary = SectionSummary(what='ok')
+                return pred
+
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
+        ):
+            await indexer._generate_summaries_parallel(leaves)
+
+        assert len(windows) == 5
+        sorted_windows = sorted(windows, key=lambda w: w[0])
+        for (_, prev_end), (next_start, _) in zip(sorted_windows, sorted_windows[1:]):
+            assert next_start >= prev_end - 1e-3, (
+                f'leaf summary windows overlap with cap=1: prev {prev_end}, next {next_start}'
+            )
+
+    @pytest.mark.asyncio
+    async def test_summarize_parent_respects_semaphore(self) -> None:
+        """AC-002: parent-summary fan-out observes summarize_max_concurrency."""
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), summarize_max_concurrency=1)
+
+        # Build 5 parent nodes (each has children); _generate_summaries_parallel
+        # will route them to _summarize_parent_node.
+        parents = []
+        for i in range(5):
+            child = TOCNode(
+                original_header_id=10 + i,
+                title=f'Child {i}',
+                level=3,
+                reasoning='test',
+                content='word ' * 60,
+            )
+            parent = TOCNode(
+                original_header_id=i,
+                title=f'Parent {i}',
+                level=2,
+                reasoning='test',
+                content='word ' * 60,
+                children=[child],
+            )
+            parents.append(parent)
+
+        windows: list[tuple[float, float]] = []
+
+        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
+            assert semaphore is indexer._summary_semaphore
+            async with semaphore:
+                start = time.perf_counter()
+                await asyncio.sleep(0.02)
+                end = time.perf_counter()
+                windows.append((start, end))
+                pred = MagicMock()
+                pred.summary = SectionSummary(what='ok')
+                return pred
+
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
+        ):
+            await indexer._generate_summaries_parallel(parents)
+
+        # Both leaves AND parents are summarised — 5 leaves + 5 parents = 10 calls.
+        assert len(windows) == 10
+        sorted_windows = sorted(windows, key=lambda w: w[0])
+        for (_, prev_end), (next_start, _) in zip(sorted_windows, sorted_windows[1:]):
+            assert next_start >= prev_end - 1e-3, (
+                f'parent summary windows overlap with cap=1: prev {prev_end}, next {next_start}'
+            )
+
+    @pytest.mark.asyncio
+    async def test_summarize_with_cap_two_allows_overlap(self) -> None:
+        """Sanity: cap=2 lets at most 2 leaf-summary windows overlap (proves the
+        semaphore is the *binding* constraint, not just incidental sequencing)."""
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), summarize_max_concurrency=2)
+        leaves = [
+            TOCNode(
+                original_header_id=i,
+                title=f'Leaf {i}',
+                level=2,
+                reasoning='test',
+                content='word ' * 60,
+            )
+            for i in range(8)
+        ]
+
+        events: list[tuple[float, str]] = []
+
+        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
+            async with semaphore:
+                events.append((time.perf_counter(), 'enter'))
+                await asyncio.sleep(0.02)
+                events.append((time.perf_counter(), 'exit'))
+                pred = MagicMock()
+                pred.summary = SectionSummary(what='ok')
+                return pred
+
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
+        ):
+            await indexer._generate_summaries_parallel(leaves)
+
+        # At every point in time, in-flight count = (#enters seen) - (#exits seen).
+        events.sort(key=lambda e: e[0])
+        in_flight = 0
+        max_in_flight = 0
+        for _t, kind in events:
+            if kind == 'enter':
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            else:
+                in_flight -= 1
+        assert max_in_flight == 2, (
+            f'expected max in-flight 2 (cap=2 with 8 tasks), got {max_in_flight}'
+        )
+
+    @pytest.mark.asyncio
+    async def test_block_summarize_respects_semaphore(self) -> None:
+        """AC-003: block-summary fan-out observes summarize_max_concurrency."""
+        import asyncio
+        import time
+
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), summarize_max_concurrency=1)
+
+        # Build a pre-summarised TOC so collect_node_summaries_for_block returns
+        # at least one section_pair per block, which routes the block through
+        # _summarize_single_block instead of the no-section fast-path.
+        nodes: list[TOCNode] = []
+        blocks: list[PageIndexBlock] = []
+        node_to_block_map: dict[str, str] = {}
+        for i in range(5):
+            node = TOCNode(
+                original_header_id=i,
+                title=f'Section {i}',
+                level=2,
+                reasoning='test',
+                content='word ' * 60,
+                summary=SectionSummary(what='already summarised'),
+            )
+            node.id = f'node-{i}'
+            block = PageIndexBlock(
+                id=f'block-{i}',
+                seq=i,
+                content='word ' * 60,
+                token_count=60,
+                titles_included=[f'Section {i}'],
+                start_index=i * 100,
+                end_index=(i + 1) * 100,
+            )
+            nodes.append(node)
+            blocks.append(block)
+            node_to_block_map[node.id] = block.id
+
+        windows: list[tuple[float, float]] = []
+
+        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
+            assert semaphore is indexer._summary_semaphore
+            async with semaphore:
+                start = time.perf_counter()
+                await asyncio.sleep(0.02)
+                end = time.perf_counter()
+                windows.append((start, end))
+                pred = MagicMock()
+                pred.block_summary = BlockSummary(topic='t', key_points=['kp.'])
+                return pred
+
+        with patch(
+            'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
+        ):
+            await indexer._generate_block_summaries(blocks, nodes, node_to_block_map)
+
+        assert len(windows) == 5
+        sorted_windows = sorted(windows, key=lambda w: w[0])
+        for (_, prev_end), (next_start, _) in zip(sorted_windows, sorted_windows[1:]):
+            assert next_start >= prev_end - 1e-3, (
+                f'block summary windows overlap with cap=1: prev {prev_end}, next {next_start}'
+            )
+
+
 class TestConcurrencyKwargFlow:
     """AC-004: refine + summarize kwargs flow from index_document to semaphores."""
 
