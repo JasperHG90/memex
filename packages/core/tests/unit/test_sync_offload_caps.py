@@ -86,9 +86,36 @@ class TestServerConfigSchema:
             'ner_max_concurrency',
         ],
     )
-    def test_concurrency_caps_enforce_le_64(self, field: str) -> None:
+    def test_concurrency_caps_enforce_le_4(self, field: str) -> None:
         with pytest.raises(ValidationError):
-            ServerConfig.model_validate({field: 65})
+            ServerConfig.model_validate({field: 5})
+
+    @pytest.mark.parametrize(
+        'field',
+        [
+            'reranker_max_concurrency',
+            'embedding_max_concurrency',
+            'ner_max_concurrency',
+        ],
+    )
+    def test_offload_caps_match_ac_012_ceiling(self, field: str) -> None:
+        """AC-012 (F4 regression guard): the schema ceiling on the three
+        offload concurrency caps is `le=4`, NOT `le=64`. The cap is a
+        memory-safety rail — `le=4` matches the upper-bound the requirements
+        doc commits to, the docs page recommends, and the worst-case combined
+        peak (cap × per-call peak memory) the Jetson example tolerates.
+        Without this regression test the schema can silently drift back to
+        a permissive ceiling that lets operators configure values the
+        memory-budget recipe doesn't validate.
+        """
+        info = ServerConfig.model_fields[field]
+        # Field metadata holds the validators; we want the `le` constraint.
+        le_values = [m.le for m in info.metadata if hasattr(m, 'le') and m.le is not None]
+        assert le_values, f'ServerConfig.{field} must declare an le= constraint per AC-012'
+        assert le_values[0] == 4, (
+            f'ServerConfig.{field}.le == {le_values[0]}; AC-012 requires le=4. '
+            f'See F4 in the Phase 3 adversarial review.'
+        )
 
     @pytest.mark.parametrize(
         'field',
@@ -127,12 +154,12 @@ class TestOffloadModule:
         cfg = ServerConfig(
             reranker_max_concurrency=2,
             embedding_max_concurrency=3,
-            ner_max_concurrency=5,
+            ner_max_concurrency=4,
         )
         _offload.configure_offload_semaphores(cfg)
         assert _offload.get_reranker_semaphore()._value == 2
         assert _offload.get_embedding_semaphore()._value == 3
-        assert _offload.get_ner_semaphore()._value == 5
+        assert _offload.get_ner_semaphore()._value == 4
 
     def test_semaphore_identity_is_stable(self) -> None:
         """One model = one semaphore: repeated calls return the same object."""
@@ -549,31 +576,58 @@ class TestWarmupOrdering:
         )
 
     def test_warmup_to_thread_calls_acquire_semaphores(self) -> None:
-        """Each of the 4 warmup to_thread calls is wrapped in `async with
-        get_<X>_semaphore():` (W1 — gate-with-startup-pre-acquire).
+        """Each of the 4 routed-to-W1 warmup to_thread calls (3 in the
+        Warming/Warmed marker block + 1 in the litellm dim probe just below)
+        is wrapped in `async with get_<X>_semaphore():` (W1 —
+        gate-with-startup-pre-acquire). Per RFC-001 §"Step 1.5.4" Option W1
+        the AC-009 audit table classifies all 4 sites as routed warmup, not
+        only the 3 inside the marker block.
+
+        F15 (Phase 3 adversarial): a previous version of this test only
+        walked the Warming/Warmed marker window and missed the dim-probe
+        site at server/__init__.py:158-161; that site was gated correctly
+        but unverified by a test, leaving silent regression risk. This
+        test now spans both regions.
         """
-        src = (CORE_SRC / 'server' / '__init__.py').read_text()
-        # Find the "Warming ONNX model arenas" marker, then walk forward
-        # past the closing "ONNX model arenas warmed" log line; in that
-        # window every asyncio.to_thread must be inside an async-with.
-        start = src.find('Warming ONNX model arenas')
-        end = src.find('ONNX model arenas warmed.')
-        assert start != -1 and end != -1
-        warmup_block = src[start:end]
-        # Every asyncio.to_thread in the warmup block is preceded by a semaphore acquire.
-        to_thread_count = warmup_block.count('asyncio.to_thread(')
+        src_path = CORE_SRC / 'server' / '__init__.py'
+        src = src_path.read_text()
+        # F15 fix: the routed-warmup span extends from the "Warming ONNX
+        # model arenas" marker through the litellm dim probe block. The
+        # probe is conditional on isinstance(config.server.embedding_model,
+        # LitellmEmbeddingBackend) so its body does not appear inside the
+        # Warming/Warmed pair, but it IS a warmup-class call — same model
+        # at startup, same gating story.
+        warmup_start = src.find('Warming ONNX model arenas')
+        # End at the first non-warmup site marker. We stop at MemexAPI(
+        # which is where post-warmup application initialisation begins.
+        post_warmup = src.find('MemexAPI(')
+        assert warmup_start != -1, 'server/__init__.py warmup-start marker not found'
+        assert post_warmup != -1, 'server/__init__.py post-warmup MemexAPI() not found'
+        assert warmup_start < post_warmup, (
+            f'warmup-start (idx {warmup_start}) must precede post-warmup MemexAPI() '
+            f'(idx {post_warmup}); routed-warmup window is empty or inverted'
+        )
+        warmup_window = src[warmup_start:post_warmup]
+        # AC-009 audit table: 4 routed-warmup asyncio.to_thread sites
+        # (embed warmup, reranker warmup, ner warmup, embed dim probe).
+        to_thread_count = warmup_window.count('asyncio.to_thread(')
+        assert to_thread_count == 4, (
+            f'Expected 4 routed-warmup asyncio.to_thread calls (embed, '
+            f'rerank, ner, dim-probe); found {to_thread_count}. F15 audit: '
+            f'a missing site means either someone deleted gating or added '
+            f'an ungated warmup call.'
+        )
+        # Each must be preceded by its production semaphore acquire.
         sem_acquire_count = (
-            warmup_block.count('get_embedding_semaphore()')
-            + warmup_block.count('get_reranker_semaphore()')
-            + warmup_block.count('get_ner_semaphore()')
+            warmup_window.count('get_embedding_semaphore()')
+            + warmup_window.count('get_reranker_semaphore()')
+            + warmup_window.count('get_ner_semaphore()')
         )
-        assert to_thread_count == 3, (
-            f'Expected 3 asyncio.to_thread calls in warmup block (embed, '
-            f'rerank, ner); found {to_thread_count}'
-        )
-        assert sem_acquire_count >= 3, (
-            f'Each warmup to_thread must acquire its production semaphore; '
-            f'found {sem_acquire_count} acquisitions'
+        assert sem_acquire_count >= 4, (
+            f'Each routed-warmup to_thread must acquire its production '
+            f'semaphore; found {sem_acquire_count} acquisitions for 4 sites. '
+            f'F15: dim-probe at server/__init__.py:158-161 is a routed site, '
+            f'not exempt.'
         )
 
 

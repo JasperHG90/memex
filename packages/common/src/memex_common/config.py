@@ -1151,7 +1151,7 @@ class ServerConfig(BaseModel):
     reranker_max_concurrency: int = Field(
         default=4,
         ge=1,
-        le=64,
+        le=4,
         description=(
             'Max concurrent reranker score calls. Shared across both reranker '
             'asyncio.to_thread sites (memory/retrieval/document_search.py:243 + '
@@ -1166,7 +1166,7 @@ class ServerConfig(BaseModel):
     embedding_max_concurrency: int = Field(
         default=4,
         ge=1,
-        le=64,
+        le=4,
         description=(
             'Max concurrent embedding model calls. Shared across all three '
             'embedding asyncio.to_thread sites (api.py:1287 + '
@@ -1179,7 +1179,7 @@ class ServerConfig(BaseModel):
     ner_max_concurrency: int = Field(
         default=4,
         ge=1,
-        le=64,
+        le=4,
         description=(
             'Max concurrent NER model calls (memory/retrieval/engine.py:322). '
             'Reduce on memory-constrained hosts (e.g. set to 2 on a Jetson '
