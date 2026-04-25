@@ -6,6 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from conftest import (  # type: ignore[attr-defined]
+    _mock_inventory_session,
+    _one_or_none_result,
+)
 
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
@@ -36,24 +40,6 @@ def _mock_session(existing_summary: VaultSummary | None = None):
     return ctx, session
 
 
-def _scalar_result(value):
-    r = MagicMock()
-    r.scalar = MagicMock(return_value=value)
-    return r
-
-
-def _one_or_none_result(value):
-    r = MagicMock()
-    r.one_or_none = MagicMock(return_value=value)
-    return r
-
-
-def _all_result(rows):
-    r = MagicMock()
-    r.all = MagicMock(return_value=rows)
-    return r
-
-
 def _max_row(*values):
     """Build a SQLAlchemy-style row supporting [0], [1] subscript access."""
     row = MagicMock()
@@ -70,28 +56,6 @@ def _mock_session_with_results(*results):
     ctx.__aenter__ = AsyncMock(return_value=session)
     ctx.__aexit__ = AsyncMock(return_value=False)
     return ctx, session
-
-
-def _mock_inventory_session(
-    *,
-    total_notes=0,
-    total_entities=0,
-    date_range=None,
-    doc_metadata=None,
-    recent_7d=0,
-    recent_30d=0,
-    last_activity=None,
-):
-    """Mock the 7 SQL queries issued by ``_compute_inventory``, keyed by purpose."""
-    return _mock_session_with_results(
-        _scalar_result(total_notes),
-        _scalar_result(total_entities),
-        _one_or_none_result(date_range),
-        _all_result(doc_metadata or []),
-        _scalar_result(recent_7d),
-        _scalar_result(recent_30d),
-        _scalar_result(last_activity),
-    )
 
 
 def _mock_fresh_fields_session(

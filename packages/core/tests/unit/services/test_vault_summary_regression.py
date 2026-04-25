@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import pytest
 
+from conftest import _mock_inventory_session  # type: ignore[attr-defined]
+
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
 from memex_core.services.vault_summary import VaultSummaryService
@@ -27,57 +29,6 @@ def _make_service(config: VaultSummaryConfig | None = None) -> VaultSummaryServi
         lm=lm,
         config=config or VaultSummaryConfig(),
     )
-
-
-def _scalar_result(value):
-    r = MagicMock()
-    r.scalar = MagicMock(return_value=value)
-    return r
-
-
-def _one_or_none_result(value):
-    r = MagicMock()
-    r.one_or_none = MagicMock(return_value=value)
-    return r
-
-
-def _all_result(rows):
-    r = MagicMock()
-    r.all = MagicMock(return_value=rows)
-    return r
-
-
-def _mock_inventory_session(
-    *,
-    total_notes=0,
-    total_entities=0,
-    date_range=None,
-    doc_metadata=None,
-    recent_7d=0,
-    recent_30d=0,
-    last_activity=None,
-):
-    """Mock the 7 SQL queries issued by ``_compute_inventory``, keyed by purpose.
-
-    Mirrored in test_vault_summary_service.py. Adding a new query in
-    ``_compute_inventory`` requires updating only this helper.
-    """
-    session = AsyncMock()
-    session.execute = AsyncMock(
-        side_effect=[
-            _scalar_result(total_notes),
-            _scalar_result(total_entities),
-            _one_or_none_result(date_range),
-            _all_result(doc_metadata or []),
-            _scalar_result(recent_7d),
-            _scalar_result(recent_30d),
-            _scalar_result(last_activity),
-        ]
-    )
-    ctx = AsyncMock()
-    ctx.__aenter__ = AsyncMock(return_value=session)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    return ctx, session
 
 
 # ─── 1. Version-tracking regression: no infinite loop ───

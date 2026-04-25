@@ -27,6 +27,7 @@ from uuid import UUID
 
 import dspy
 from sqlalchemy import update as sa_update
+from sqlalchemy.orm import make_transient
 from sqlmodel import col, func, select
 
 from memex_common.config import VaultSummaryConfig
@@ -62,18 +63,35 @@ def _themes_to_dicts(themes: list[LLMTheme | dict[str, Any]]) -> list[dict[str, 
 
 
 def _to_utc_iso(value: datetime | None) -> str | None:
-    """Serialize a datetime as ISO 8601 UTC, defaulting naive timestamps to UTC.
+    """Serialize a datetime as ISO 8601, tagging naive values as UTC.
 
-    Postgres ``TIMESTAMP WITH TIME ZONE`` columns return aware datetimes, but
-    naive values can leak in from older rows or storage backends without tz
-    support. Normalizing here keeps every inventory/overlay timestamp ending
-    in ``+00:00`` so API consumers don't have to special-case both shapes.
+    Postgres ``TIMESTAMP WITH TIME ZONE`` columns return aware datetimes via
+    asyncpg (already UTC), so for the production path this is effectively
+    "ensure aware, then format". Naive values can still leak in from older
+    rows or non-tz-aware storage backends, in which case we *assume* UTC
+    rather than convert from it. This function does NOT convert other
+    timezones to UTC — an aware ``-05:00`` value is preserved as-is.
+    Renaming-shy callers can read this as "to ISO, defaulting to UTC".
     """
     if value is None:
         return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.isoformat()
+
+
+def _days_ago(value: datetime | None, now: datetime) -> int | None:
+    """Whole days between ``value`` and ``now``, never negative.
+
+    Returns ``None`` if ``value`` is ``None``. Naive ``value`` is treated as
+    UTC, mirroring ``_to_utc_iso``. Clamping at 0 prevents future-dated
+    timestamps (clock skew, bad data) from producing negative counts.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return max((now - value).days, 0)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -149,10 +167,12 @@ class VaultSummaryService:
     async def _apply_freshness_overlay(self, summary: VaultSummary) -> VaultSummary:
         """Overlay fresh time-sensitive fields onto a detached summary.
 
-        The summary object is assumed to already be detached from its SQL
-        session, so in-place mutation does not trigger any write. Only
-        time-varying fields are touched; template/domain/tag aggregates keep
-        their persisted values.
+        The summary object is detached after ``get_summary``'s session exits;
+        ``make_transient`` makes that intent explicit so any future caller that
+        accidentally re-attaches the object via ``session.add``/``merge`` won't
+        leak the overlay-only mutations into the database. Only time-varying
+        fields are touched; template/domain/tag aggregates keep their
+        persisted values.
 
         Consistency: the row fetch in ``get_summary`` and the fresh-fields
         query here run in separate transactions. A concurrent write between
@@ -163,6 +183,7 @@ class VaultSummaryService:
         ``regenerate_summary``) use ``_compute_inventory`` and persist a
         single coherent snapshot.
         """
+        make_transient(summary)
         fresh = await self._compute_fresh_fields(summary.vault_id)
 
         inventory = dict(summary.inventory) if summary.inventory else {}
@@ -232,17 +253,10 @@ class VaultSummaryService:
         last_activity_raw = max_row[0] if max_row else None
         publish_latest_raw = max_row[1] if max_row else None
 
-        days_since_last_note: int | None = None
-        if last_activity_raw is not None:
-            last_activity_utc = last_activity_raw
-            if last_activity_utc.tzinfo is None:
-                last_activity_utc = last_activity_utc.replace(tzinfo=timezone.utc)
-            days_since_last_note = max((now - last_activity_utc).days, 0)
-
         return {
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
             'last_activity_at': _to_utc_iso(last_activity_raw),
-            'days_since_last_note': days_since_last_note,
+            'days_since_last_note': _days_ago(last_activity_raw, now),
             'date_range_latest': _to_utc_iso(publish_latest_raw),
         }
 
@@ -633,13 +647,6 @@ class VaultSummaryService:
                 )
             ).scalar()
 
-        days_since_last_note: int | None = None
-        if last_activity_row is not None:
-            last_activity_utc = last_activity_row
-            if last_activity_utc.tzinfo is None:
-                last_activity_utc = last_activity_utc.replace(tzinfo=timezone.utc)
-            days_since_last_note = max((now - last_activity_utc).days, 0)
-
         return {
             'total_notes': total_notes,
             'total_entities': total_entities,
@@ -649,7 +656,7 @@ class VaultSummaryService:
             'top_tags': dict(tag_counts.most_common(15)),
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
             'last_activity_at': _to_utc_iso(last_activity_row),
-            'days_since_last_note': days_since_last_note,
+            'days_since_last_note': _days_ago(last_activity_row, now),
         }
 
     async def _compute_key_entities(self, vault_id: UUID, limit: int = 10) -> list[dict[str, Any]]:
