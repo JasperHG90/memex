@@ -61,6 +61,21 @@ def _themes_to_dicts(themes: list[LLMTheme | dict[str, Any]]) -> list[dict[str, 
     return [t.model_dump() if isinstance(t, LLMTheme) else t for t in themes]
 
 
+def _to_utc_iso(value: datetime | None) -> str | None:
+    """Serialize a datetime as ISO 8601 UTC, defaulting naive timestamps to UTC.
+
+    Postgres ``TIMESTAMP WITH TIME ZONE`` columns return aware datetimes, but
+    naive values can leak in from older rows or storage backends without tz
+    support. Normalizing here keeps every inventory/overlay timestamp ending
+    in ``+00:00`` so API consumers don't have to special-case both shapes.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
 def _estimate_tokens(text: str) -> int:
     """Rough chars-to-tokens estimate (÷4)."""
     return len(text) // 4
@@ -217,27 +232,18 @@ class VaultSummaryService:
         last_activity_raw = max_row[0] if max_row else None
         publish_latest_raw = max_row[1] if max_row else None
 
-        last_activity_at: str | None = None
         days_since_last_note: int | None = None
         if last_activity_raw is not None:
             last_activity_utc = last_activity_raw
             if last_activity_utc.tzinfo is None:
                 last_activity_utc = last_activity_utc.replace(tzinfo=timezone.utc)
-            last_activity_at = last_activity_utc.isoformat()
             days_since_last_note = max((now - last_activity_utc).days, 0)
-
-        date_range_latest: str | None = None
-        if publish_latest_raw is not None:
-            publish_latest_utc = publish_latest_raw
-            if publish_latest_utc.tzinfo is None:
-                publish_latest_utc = publish_latest_utc.replace(tzinfo=timezone.utc)
-            date_range_latest = publish_latest_utc.isoformat()
 
         return {
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
-            'last_activity_at': last_activity_at,
+            'last_activity_at': _to_utc_iso(last_activity_raw),
             'days_since_last_note': days_since_last_note,
-            'date_range_latest': date_range_latest,
+            'date_range_latest': _to_utc_iso(publish_latest_raw),
         }
 
     async def delete_summary(self, vault_id: UUID) -> bool:
@@ -561,8 +567,8 @@ class VaultSummaryService:
             date_range: dict[str, str | None] = {'earliest': None, 'latest': None}
             if date_row and date_row[0]:
                 date_range = {
-                    'earliest': date_row[0].isoformat() if date_row[0] else None,
-                    'latest': date_row[1].isoformat() if date_row[1] else None,
+                    'earliest': _to_utc_iso(date_row[0]),
+                    'latest': _to_utc_iso(date_row[1]),
                 }
 
             # Template distribution, source domains, tags — from doc_metadata JSONB
@@ -627,13 +633,11 @@ class VaultSummaryService:
                 )
             ).scalar()
 
-        last_activity_at: str | None = None
         days_since_last_note: int | None = None
         if last_activity_row is not None:
             last_activity_utc = last_activity_row
             if last_activity_utc.tzinfo is None:
                 last_activity_utc = last_activity_utc.replace(tzinfo=timezone.utc)
-            last_activity_at = last_activity_utc.isoformat()
             days_since_last_note = max((now - last_activity_utc).days, 0)
 
         return {
@@ -644,7 +648,7 @@ class VaultSummaryService:
             'by_source_domain': dict(domain_counts.most_common(10)),
             'top_tags': dict(tag_counts.most_common(15)),
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
-            'last_activity_at': last_activity_at,
+            'last_activity_at': _to_utc_iso(last_activity_row),
             'days_since_last_note': days_since_last_note,
         }
 

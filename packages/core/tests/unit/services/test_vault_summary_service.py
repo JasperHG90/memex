@@ -420,6 +420,26 @@ class TestFreshnessOverlay:
         assert inv['last_activity_at'] is None
         assert inv['days_since_last_note'] is None
 
+    @pytest.mark.asyncio
+    async def test_compute_inventory_normalizes_naive_date_range(self):
+        """date_range.earliest and .latest get +00:00 even when DB returns naive."""
+        svc = _make_service()
+        vault_id = uuid4()
+        naive_earliest = datetime(2024, 1, 15)
+        naive_latest = datetime(2026, 4, 6)
+        date_row = _max_row(naive_earliest, naive_latest)
+
+        ctx, _ = _mock_inventory_session(
+            total_notes=3,
+            date_range=date_row,
+        )
+        svc.metastore.session = lambda: ctx
+
+        inv = await svc._compute_inventory(vault_id)
+
+        assert inv['date_range']['earliest'].endswith('+00:00')
+        assert inv['date_range']['latest'].endswith('+00:00')
+
 
 class TestDeleteSummary:
     @pytest.mark.asyncio
