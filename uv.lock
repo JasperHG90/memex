@@ -3168,7 +3168,7 @@ requires-dist = [
     { name = "greenlet", specifier = ">=3.3.0" },
     { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1.0" },
-    { name = "litellm", specifier = "==1.80.16" },
+    { name = "litellm", specifier = ">=1.80.16,<1.81.0" },
     { name = "markitdown", extras = ["docx", "outlook", "pdf", "pptx", "xlsx"], specifier = ">=0.1.2" },
     { name = "memex-common", editable = "packages/common" },
     { name = "metaphone", specifier = ">=0.6" },
