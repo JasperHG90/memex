@@ -36,6 +36,80 @@ def _mock_session(existing_summary: VaultSummary | None = None):
     return ctx, session
 
 
+def _scalar_result(value):
+    r = MagicMock()
+    r.scalar = MagicMock(return_value=value)
+    return r
+
+
+def _one_or_none_result(value):
+    r = MagicMock()
+    r.one_or_none = MagicMock(return_value=value)
+    return r
+
+
+def _all_result(rows):
+    r = MagicMock()
+    r.all = MagicMock(return_value=rows)
+    return r
+
+
+def _max_row(*values):
+    """Build a SQLAlchemy-style row supporting [0], [1] subscript access."""
+    row = MagicMock()
+    captured = list(values)
+    row.__getitem__ = lambda _self, idx: captured[idx]
+    return row
+
+
+def _mock_session_with_results(*results):
+    """Build a mock async session whose execute() yields ``results`` in order."""
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=results)
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx, session
+
+
+def _mock_inventory_session(
+    *,
+    total_notes=0,
+    total_entities=0,
+    date_range=None,
+    doc_metadata=None,
+    recent_7d=0,
+    recent_30d=0,
+    last_activity=None,
+):
+    """Mock the 7 SQL queries issued by ``_compute_inventory``, keyed by purpose."""
+    return _mock_session_with_results(
+        _scalar_result(total_notes),
+        _scalar_result(total_entities),
+        _one_or_none_result(date_range),
+        _all_result(doc_metadata or []),
+        _scalar_result(recent_7d),
+        _scalar_result(recent_30d),
+        _scalar_result(last_activity),
+    )
+
+
+def _mock_fresh_fields_session(
+    *,
+    recent_7d=0,
+    recent_30d=0,
+    last_activity=None,
+    publish_latest=None,
+):
+    """Mock the 2 SQL queries issued by ``_compute_fresh_fields``, keyed by purpose."""
+    has_max = last_activity is not None or publish_latest is not None
+    max_value = _max_row(last_activity, publish_latest) if has_max else None
+    return _mock_session_with_results(
+        _one_or_none_result((recent_7d, recent_30d)),
+        _one_or_none_result(max_value),
+    )
+
+
 def _make_note_metadata(count: int = 5) -> tuple[list[dict], list, list]:
     """Build note metadata + IDs as returned by _fetch_note_metadata."""
     ids = [uuid4() for _ in range(count)]
@@ -254,19 +328,12 @@ class TestFreshnessOverlay:
         last_activity = datetime(2026, 4, 15, tzinfo=timezone.utc)
         publish_latest = datetime(2026, 4, 20, tzinfo=timezone.utc)
 
-        session = AsyncMock()
-        r7_res = MagicMock()
-        r7_res.scalar = MagicMock(return_value=2)
-        r30_res = MagicMock()
-        r30_res.scalar = MagicMock(return_value=5)
-        max_row = MagicMock()
-        max_row.__getitem__ = lambda _self, idx: [last_activity, publish_latest][idx]
-        max_res = MagicMock()
-        max_res.one_or_none = MagicMock(return_value=max_row)
-        session.execute = AsyncMock(side_effect=[r7_res, r30_res, max_res])
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_fresh_fields_session(
+            recent_7d=2,
+            recent_30d=5,
+            last_activity=last_activity,
+            publish_latest=publish_latest,
+        )
         svc.metastore.session = lambda: ctx
 
         fresh = await svc._compute_fresh_fields(vault_id, _now=frozen_now)
@@ -282,17 +349,7 @@ class TestFreshnessOverlay:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        r7_res = MagicMock()
-        r7_res.scalar = MagicMock(return_value=0)
-        r30_res = MagicMock()
-        r30_res.scalar = MagicMock(return_value=0)
-        max_res = MagicMock()
-        max_res.one_or_none = MagicMock(return_value=None)
-        session.execute = AsyncMock(side_effect=[r7_res, r30_res, max_res])
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_fresh_fields_session()
         svc.metastore.session = lambda: ctx
 
         fresh = await svc._compute_fresh_fields(vault_id)
@@ -303,6 +360,30 @@ class TestFreshnessOverlay:
         assert fresh['recent_activity'] == {'7d': 0, '30d': 0}
 
     @pytest.mark.asyncio
+    async def test_compute_fresh_fields_normalizes_naive_publish_date(self):
+        """publish_date stored as naive datetime gets +00:00 in date_range_latest."""
+        svc = _make_service()
+        vault_id = uuid4()
+        frozen_now = datetime(2026, 4, 24, tzinfo=timezone.utc)
+        # Naive timestamps — what a buggy or pre-tz-migration DB might return
+        naive_last_activity = datetime(2026, 4, 15)
+        naive_publish_latest = datetime(2026, 4, 20)
+
+        ctx, _ = _mock_fresh_fields_session(
+            recent_7d=1,
+            recent_30d=3,
+            last_activity=naive_last_activity,
+            publish_latest=naive_publish_latest,
+        )
+        svc.metastore.session = lambda: ctx
+
+        fresh = await svc._compute_fresh_fields(vault_id, _now=frozen_now)
+
+        # Both fields end with +00:00, no naive-vs-aware drift
+        assert fresh['last_activity_at'].endswith('+00:00')
+        assert fresh['date_range_latest'].endswith('+00:00')
+
+    @pytest.mark.asyncio
     async def test_compute_inventory_accepts_injected_now(self):
         """_compute_inventory uses injected _now without patching datetime globally."""
         svc = _make_service()
@@ -310,27 +391,13 @@ class TestFreshnessOverlay:
         last_activity = datetime(2026, 4, 15, tzinfo=timezone.utc)
         frozen_now = datetime(2026, 4, 24, tzinfo=timezone.utc)
 
-        session = AsyncMock()
-        total_res = MagicMock()
-        total_res.scalar = MagicMock(return_value=10)
-        ent_res = MagicMock()
-        ent_res.scalar = MagicMock(return_value=5)
-        date_res = MagicMock()
-        date_res.one_or_none = MagicMock(return_value=None)
-        meta_res = MagicMock()
-        meta_res.all = MagicMock(return_value=[])
-        r7_res = MagicMock()
-        r7_res.scalar = MagicMock(return_value=2)
-        r30_res = MagicMock()
-        r30_res.scalar = MagicMock(return_value=5)
-        la_res = MagicMock()
-        la_res.scalar = MagicMock(return_value=last_activity)
-        session.execute = AsyncMock(
-            side_effect=[total_res, ent_res, date_res, meta_res, r7_res, r30_res, la_res]
+        ctx, _ = _mock_inventory_session(
+            total_notes=10,
+            total_entities=5,
+            recent_7d=2,
+            recent_30d=5,
+            last_activity=last_activity,
         )
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
         svc.metastore.session = lambda: ctx
 
         inv = await svc._compute_inventory(vault_id, _now=frozen_now)
@@ -345,27 +412,7 @@ class TestFreshnessOverlay:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        total_res = MagicMock()
-        total_res.scalar = MagicMock(return_value=0)
-        ent_res = MagicMock()
-        ent_res.scalar = MagicMock(return_value=0)
-        date_res = MagicMock()
-        date_res.one_or_none = MagicMock(return_value=None)
-        meta_res = MagicMock()
-        meta_res.all = MagicMock(return_value=[])
-        r7_res = MagicMock()
-        r7_res.scalar = MagicMock(return_value=0)
-        r30_res = MagicMock()
-        r30_res.scalar = MagicMock(return_value=0)
-        la_res = MagicMock()
-        la_res.scalar = MagicMock(return_value=None)
-        session.execute = AsyncMock(
-            side_effect=[total_res, ent_res, date_res, meta_res, r7_res, r30_res, la_res]
-        )
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_inventory_session()
         svc.metastore.session = lambda: ctx
 
         inv = await svc._compute_inventory(vault_id)

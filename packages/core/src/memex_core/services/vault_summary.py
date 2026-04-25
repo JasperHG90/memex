@@ -192,25 +192,17 @@ class VaultSummaryService:
         """
         now = _now if _now is not None else datetime.now(timezone.utc)
         async with self.metastore.session() as session:
-            recent_7d = (
+            recent_row = (
                 await session.execute(
-                    select(func.count())
+                    select(
+                        func.count().filter(col(Note.created_at) >= now - timedelta(days=7)),
+                        func.count().filter(col(Note.created_at) >= now - timedelta(days=30)),
+                    )
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
-                    .where(col(Note.created_at) >= now - timedelta(days=7))
                 )
-            ).scalar() or 0
-
-            recent_30d = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(Note)
-                    .where(col(Note.vault_id) == vault_id)
-                    .where(col(Note.status) == 'active')
-                    .where(col(Note.created_at) >= now - timedelta(days=30))
-                )
-            ).scalar() or 0
+            ).one_or_none()
 
             max_row = (
                 await session.execute(
@@ -220,6 +212,8 @@ class VaultSummaryService:
                 )
             ).one_or_none()
 
+        recent_7d = (recent_row[0] if recent_row else 0) or 0
+        recent_30d = (recent_row[1] if recent_row else 0) or 0
         last_activity_raw = max_row[0] if max_row else None
         publish_latest_raw = max_row[1] if max_row else None
 
@@ -232,13 +226,18 @@ class VaultSummaryService:
             last_activity_at = last_activity_utc.isoformat()
             days_since_last_note = max((now - last_activity_utc).days, 0)
 
+        date_range_latest: str | None = None
+        if publish_latest_raw is not None:
+            publish_latest_utc = publish_latest_raw
+            if publish_latest_utc.tzinfo is None:
+                publish_latest_utc = publish_latest_utc.replace(tzinfo=timezone.utc)
+            date_range_latest = publish_latest_utc.isoformat()
+
         return {
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
             'last_activity_at': last_activity_at,
             'days_since_last_note': days_since_last_note,
-            'date_range_latest': publish_latest_raw.isoformat()
-            if publish_latest_raw is not None
-            else None,
+            'date_range_latest': date_range_latest,
         }
 
     async def delete_summary(self, vault_id: UUID) -> bool:
