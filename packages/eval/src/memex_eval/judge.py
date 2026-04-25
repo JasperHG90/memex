@@ -53,7 +53,11 @@ class Judge:
                 'GOOGLE_API_KEY environment variable required for LLM judge. '
                 'Set it or use --no-llm-judge to skip.'
             )
-        self.lm = dspy.LM(model=model, api_key=api_key)
+        # timeout= is required by the AC-006 grep guard in
+        # packages/core/tests/unit/test_dspy_lm_timeout_guard.py and prevents the
+        # wedge mode (issue #50): a hung LiteLLM request without a socket
+        # deadline can pin the process indefinitely under memory pressure.
+        self.lm = dspy.LM(model=model, api_key=api_key, timeout=120)
         self._correctness = dspy.ChainOfThought(BinaryCorrectness)
         self._relevance = dspy.ChainOfThought(RetrievalRelevance)
         self._graded = dspy.ChainOfThought(GradedCorrectness)

@@ -73,7 +73,9 @@ async def generate_answer(query: str, memory: list[MemoryUnitDTO], model_name: s
     import dspy
 
     ResponseModel = _get_response_model()
-    lm = dspy.LM(model=model_name)
+    # timeout= is required by the AC-006 grep guard in
+    # packages/core/tests/unit/test_dspy_lm_timeout_guard.py — see issue #50.
+    lm = dspy.LM(model=model_name, timeout=120)
     predictor = dspy.Predict(ResponseModel)
 
     with dspy.context(lm=lm):
