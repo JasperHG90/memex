@@ -38,6 +38,10 @@ from memex_core.templates import MemexTemplateFromFile
 from memex_core.memory.engine import MemoryEngine, _build_contradiction_engine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
+from memex_core.memory.retrieval._offload import (
+    get_embedding_semaphore,
+    get_embedding_call_timeout,
+)
 from memex_core.memory.retrieval.document_search import NoteSearchEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_core.memory.reflect.models import (
@@ -1284,7 +1288,14 @@ class MemexAPI:
         Exposes the embedding model through the public API so that callers
         (MCP, CLI) do not need to import core internals.
         """
-        result = await asyncio.to_thread(self.embedding_model.encode, [text])
+        # Shared embedding cap: same model, one capacity budget across api.py +
+        # document_search.py + retrieval/engine.py. The thread keeps running on
+        # timeout — the cap is what prevents thread accumulation (see _offload.py).
+        async with get_embedding_semaphore():
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self.embedding_model.encode, [text]),
+                timeout=get_embedding_call_timeout(),
+            )
         return result[0].tolist()
 
     # --- KV store ---
