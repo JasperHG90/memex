@@ -314,10 +314,19 @@ class TestSingleNoteConversion:
             from memex_core.server.ingestion import ingest_note
 
             bg_tasks = MagicMock()
+            # F19/F1 added `http_request: Request` to the route signature so
+            # `_overlap_to_409` can emit `ingestion.overlap_rejected` audit
+            # events. This test exercises the synchronous PDF→Note path
+            # (`background=False`) which never raises `OverlapError`, so the
+            # request is never read; passing a MagicMock keeps the
+            # signature happy without coupling the test to Starlette's
+            # request shape.
+            http_request = MagicMock()
             await ingest_note(
                 request=dto,
                 api=mock_api,
                 background_tasks=bg_tasks,
+                http_request=http_request,
                 background=False,
                 auth=None,
             )
@@ -477,10 +486,19 @@ class TestImageMergeFromExtraction:
             from memex_core.server.ingestion import ingest_note
 
             bg_tasks = MagicMock()
+            # F19/F1 added `http_request: Request` to the route signature so
+            # `_overlap_to_409` can emit `ingestion.overlap_rejected` audit
+            # events. This test exercises the synchronous PDF→Note path
+            # (`background=False`) which never raises `OverlapError`, so the
+            # request is never read; passing a MagicMock keeps the
+            # signature happy without coupling the test to Starlette's
+            # request shape.
+            http_request = MagicMock()
             await ingest_note(
                 request=dto,
                 api=mock_api,
                 background_tasks=bg_tasks,
+                http_request=http_request,
                 background=False,
                 auth=None,
             )

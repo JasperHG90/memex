@@ -403,6 +403,7 @@ class ExtractionEngine:
         block_size = (
             ts.chunk_size_tokens * CHARS_PER_TOKEN if isinstance(ts, SimpleTextSplitting) else 4000
         )
+        # exempt: pure CPU sync chunker (incremental), no model load.
         new_blocks = await asyncio.to_thread(
             stable_chunk_text, combined_text, block_size=block_size
         )
@@ -687,6 +688,8 @@ class ExtractionEngine:
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
             scan_max_concurrency=ts.scan_max_concurrency,
+            refine_max_concurrency=ts.refine_max_concurrency,
+            summarize_max_concurrency=ts.summarize_max_concurrency,
             gap_rescan_threshold_tokens=ts.gap_rescan_threshold_tokens,
         )
 
@@ -961,6 +964,8 @@ class ExtractionEngine:
             block_token_target=ts.block_token_target,
             short_doc_threshold=ts.short_doc_threshold_tokens * CHARS_PER_TOKEN,
             scan_max_concurrency=ts.scan_max_concurrency,
+            refine_max_concurrency=ts.refine_max_concurrency,
+            summarize_max_concurrency=ts.summarize_max_concurrency,
             gap_rescan_threshold_tokens=ts.gap_rescan_threshold_tokens,
         )
 

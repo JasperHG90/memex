@@ -98,6 +98,47 @@ def test_token_fields_on_page_index_text_splitting():
     assert ts.min_node_tokens == 0
 
 
+def test_concurrency_fields_default_to_capable_host_sized_on_page_index_text_splitting():
+    """Defaults target capable hosts (workstations / fast remote LLMs).
+    Memory-constrained hosts tune down — see docs/how-to/memory-budget.md.
+    """
+    ts = PageIndexTextSplitting()
+    assert ts.scan_max_concurrency == 20
+    assert ts.refine_max_concurrency == 20
+    assert ts.summarize_max_concurrency == 20
+
+
+def test_concurrency_fields_round_trip_on_page_index_text_splitting():
+    """AC-005: custom values round-trip through Pydantic validation/serialisation."""
+    ts = PageIndexTextSplitting(
+        scan_max_concurrency=2,
+        refine_max_concurrency=3,
+        summarize_max_concurrency=4,
+    )
+    assert ts.scan_max_concurrency == 2
+    assert ts.refine_max_concurrency == 3
+    assert ts.summarize_max_concurrency == 4
+
+    dumped = ts.model_dump()
+    assert dumped['refine_max_concurrency'] == 3
+    assert dumped['summarize_max_concurrency'] == 4
+
+    revived = PageIndexTextSplitting.model_validate(dumped)
+    assert revived.refine_max_concurrency == 3
+    assert revived.summarize_max_concurrency == 4
+
+
+def test_concurrency_fields_reject_zero_on_page_index_text_splitting():
+    """AC-005: ge=1 constraint rejects zero (and by extension negative) values."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        PageIndexTextSplitting(refine_max_concurrency=0)
+    with pytest.raises(ValidationError):
+        PageIndexTextSplitting(summarize_max_concurrency=0)
+
+
 def test_search_strategies_config_defaults():
     s = SearchStrategiesConfig()
     assert s.semantic is True

@@ -41,6 +41,9 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI, NoteInput
+from memex_core.processing.batch import OverlapError
+from memex_core.server.auth import _get_audit_service
+from memex_core.services.audit import audit_event
 from memex_core.services.ingestion import (
     _convert_to_markdown,
     _needs_conversion,
@@ -58,6 +61,63 @@ from memex_core.server.common import _handle_error, get_api
 logger = logging.getLogger('memex.core.server.ingestion')
 
 router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_write)])
+
+
+# OpenAPI fragment for the 409 path. Reused by every `/ingestions/*` BG
+# route so the body type + `Location` header are documented uniformly.
+_OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
+    409: {
+        'model': BatchJobStatus,
+        'description': (
+            'Overlapping submission — the incoming notes share idempotency '
+            'keys with an in-flight (PENDING or PROCESSING) job in the same '
+            'vault. The response body identifies the existing job and the '
+            '`Location` header points at its status endpoint so the caller '
+            'can poll instead of starting a duplicate.'
+        ),
+        'headers': {
+            'Location': {
+                'description': "Path to the existing job's status endpoint.",
+                'schema': {'type': 'string'},
+            },
+        },
+    },
+}
+
+
+def _overlap_to_409(e: OverlapError, request: Request | None = None) -> JSONResponse:
+    """Translate an ``OverlapError`` into a 409 + ``Location`` response.
+
+    Centralised so every ingestion BG path returns the same body shape and
+    header — and so an uncaught ``OverlapError`` can't fall through to
+    FastAPI's default handler as a 500.
+
+    Also emits an ``ingestion.overlap_rejected`` audit event so operators
+    have a queryable trail of duplicate-rejected submissions. The emit is
+    fire-and-forget; if ``audit_service`` is not configured, it no-ops.
+
+    ``request`` is optional so unit tests can call routes directly without
+    mocking a Starlette ``Request``. Production traffic always supplies one
+    via DI.
+    """
+    if request is not None:
+        audit_event(
+            _get_audit_service(request),
+            action='ingestion.overlap_rejected',
+            resource_type='batch_job',
+            resource_id=str(e.existing_id),
+            existing_status=e.status,
+            overlapping_keys_count=len(e.overlapping_keys),
+            path=request.url.path,
+        )
+    return JSONResponse(
+        status_code=409,
+        content=BatchJobStatus(
+            job_id=e.existing_id,
+            status=e.status,
+        ).model_dump(mode='json'),
+        headers={'Location': f'/api/v1/ingestions/{e.existing_id}'},
+    )
 
 
 def _decode_base64_dict(
@@ -86,12 +146,17 @@ def _decode_base64_dict(
 @router.post(
     '/ingestions',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_note(
     request: Annotated[NoteCreateDTO, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     background: Annotated[bool, Query()] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> IngestResponse | JSONResponse:
@@ -151,6 +216,8 @@ async def ingest_note(
 
     except HTTPException:
         raise
+    except OverlapError as e:
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
 
@@ -158,12 +225,17 @@ async def ingest_note(
 @router.post(
     '/ingestions/url',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_url(
     request: Annotated[IngestURLRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     background: Annotated[bool, Query()] = False,
 ) -> IngestResponse | JSONResponse:
     try:
@@ -195,6 +267,10 @@ async def ingest_url(
         return IngestResponse(**result)
     except HTTPException:
         raise
+    except OverlapError as e:
+        # Defensive: create_single_job doesn't currently raise OverlapError,
+        # but a future plumbing change that routes through create_job would.
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
 
@@ -221,11 +297,16 @@ async def ingest_file(
 @router.post(
     '/ingestions/upload',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
     files: list[UploadFile] = File(...),
     metadata: str | None = Body(None),
     background: bool = Query(False),
@@ -362,6 +443,9 @@ async def ingest_upload(
 
     except HTTPException:
         raise
+    except OverlapError as e:
+        # Defensive — file-upload doesn't currently route through create_job.
+        return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
 
@@ -382,6 +466,7 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
     '/ingestions/webhook',
     status_code=202,
     response_model=BatchJobStatus,
+    responses=_OVERLAP_409_RESPONSE,
 )
 async def ingest_webhook(
     request: Request,
@@ -448,19 +533,30 @@ async def ingest_webhook(
             status_code=202,
             content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
         )
+    except OverlapError as e:
+        # Defensive — webhook ingestion doesn't currently route through create_job.
+        return _overlap_to_409(e, request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')
 
 
-@router.post('/ingestions/batch', response_model=BatchJobStatus, status_code=202)
+@router.post(
+    '/ingestions/batch',
+    response_model=BatchJobStatus,
+    status_code=202,
+    responses=_OVERLAP_409_RESPONSE,
+)
 async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     background_tasks: BackgroundTasks,
+    http_request: Request,
 ):
     """
     Asynchronously ingest a batch of notes.
-    Returns 202 Accepted with a job_id for status tracking.
+    Returns 202 Accepted with a job_id for status tracking, or 409 Conflict with
+    a `Location` header when the submission overlaps an in-flight job in the
+    same vault.
     """
     try:
         job_id = await api.batch_manager.create_job(
@@ -470,7 +566,15 @@ async def ingest_batch(
             background_tasks=background_tasks,
         )
         return BatchJobStatus(job_id=job_id, status='pending')
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+    except OverlapError as e:
+        return _overlap_to_409(e, http_request)
+    except ValueError as e:
+        # create_job rejects empty `notes` lists at the storage boundary
+        # with ValueError. The Pydantic schema also enforces min_length=1,
+        # so this is defence-in-depth for internal callers; surface as 422
+        # rather than hiding behind the broad MemexError catch as a 500.
+        raise HTTPException(status_code=422, detail=str(e))
+    except (MemexError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 
 

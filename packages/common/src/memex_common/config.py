@@ -516,13 +516,31 @@ class PageIndexTextSplitting(BaseModel):
         default=None,
         description='Model for PageIndex LLM calls. If None, uses server default.',
     )
+    # Three per-stage caps rather than one umbrella: scan / refine / summarize
+    # have materially different RAM and latency profiles, so sharing a cap
+    # couples three independent operational tradeoffs.
     scan_max_concurrency: int = Field(
-        default=5,
+        default=20,
         ge=1,
         description='Max concurrent LLM scan calls during page_index extraction. '
-        'Reduce on memory-constrained hosts (e.g. set to 1 on a Jetson Orin Nano) '
+        'Default tuned for capable hosts and remote LLM endpoints. Reduce on '
+        'memory-constrained hosts (e.g. set to 1-2 on a Jetson Orin Nano 8 GiB) '
         'to prevent GPU/RAM exhaustion. Separate from ExtractionConfig.max_concurrency, '
         'which governs fact extraction.',
+    )
+    refine_max_concurrency: int = Field(
+        default=20,
+        ge=1,
+        description='Max concurrent _refine_tree_recursively LLM calls. '
+        'Mirrors scan_max_concurrency. Reduce on memory-constrained hosts.',
+    )
+    summarize_max_concurrency: int = Field(
+        default=20,
+        ge=1,
+        description='Max concurrent leaf, parent, and block summary LLM calls. '
+        'Shared across the three summary fan-outs '
+        '(_generate_summaries_parallel leaf + parent, _generate_block_summaries). '
+        'Reduce on memory-constrained hosts.',
     )
     gap_rescan_threshold_tokens: int = Field(
         default=2000,
@@ -555,6 +573,15 @@ class ExtractionConfig(BaseModel):
     max_concurrency: int = Field(
         default=5,
         description='Maximum number of concurrent LLM calls for fact extraction.',
+    )
+
+    wedge_watchdog_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description='Opt-in wedge watchdog. When set, an OS-thread watchdog '
+        'fires once and dumps all-thread tracebacks via faulthandler when no '
+        'extraction stage has decremented within this many seconds while at '
+        'least one in-flight gauge is > 0. None (default) disables it.',
     )
 
     @property
@@ -1123,6 +1150,72 @@ class ServerConfig(BaseModel):
         default=0,
         description='Max texts per ONNX embedding inference call. '
         '0 = all at once (no batching). Lower values reduce peak GPU memory.',
+    )
+
+    reranker_max_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            'Max concurrent reranker score calls. Shared across both reranker '
+            'asyncio.to_thread sites (memory/retrieval/document_search.py:243 + '
+            'memory/retrieval/engine.py:1086) — one reranker model = one '
+            'capacity budget. Default tuned for capable hosts and HTTP-based '
+            '(LiteLLM) rerankers. Reduce on memory-constrained hosts (e.g. set '
+            'to 2 on a Jetson Orin Nano 8 GiB to coexist with '
+            'reranker_batch_size; see docs/how-to/memory-budget.md). Sister '
+            'lever to reranker_batch_size — both must be tuned together to '
+            'avoid the cuDNN allocation failure that neighboured the wedge in '
+            'issue #50.'
+        ),
+    )
+    embedding_max_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            'Max concurrent embedding model calls. Shared across all three '
+            'embedding asyncio.to_thread sites (api.py:1287 + '
+            'memory/retrieval/document_search.py:130 + '
+            'memory/retrieval/engine.py:208) — one embedding model = one '
+            'capacity budget. Default tuned for capable hosts and HTTP-based '
+            '(LiteLLM) embedders. Reduce on memory-constrained hosts; see '
+            'docs/how-to/memory-budget.md.'
+        ),
+    )
+    ner_max_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            'Max concurrent NER model calls (memory/retrieval/engine.py:322). '
+            'Default tuned for capable hosts. Reduce on memory-constrained '
+            'hosts (e.g. set to 2 on a Jetson Orin Nano 8 GiB); see '
+            'docs/how-to/memory-budget.md.'
+        ),
+    )
+    reranker_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for reranker model calls before the '
+            'awaiting coroutine raises TimeoutError. Note: the underlying '
+            'thread keeps running on timeout — the cap (reranker_max_concurrency) '
+            'is what prevents thread accumulation.'
+        ),
+    )
+    embedding_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for embedding model calls. Same '
+            'thread-keeps-running caveat as reranker_call_timeout.'
+        ),
+    )
+    ner_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for NER model calls. Same '
+            'thread-keeps-running caveat as reranker_call_timeout.'
+        ),
     )
 
     logging: LoggingConfig = Field(

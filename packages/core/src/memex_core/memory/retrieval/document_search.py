@@ -20,6 +20,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
+from memex_core.instrument import _instrument
+from memex_core.memory.retrieval._offload import (
+    get_embedding_call_timeout,
+    get_embedding_semaphore,
+    get_reranker_call_timeout,
+    get_reranker_semaphore,
+)
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_common.config import RetrievalConfig
 from memex_core.memory.retrieval.strategies import get_note_graph_strategy
@@ -127,7 +134,13 @@ class NoteSearchEngine:
                 query_weights.append(1.0)
 
         # 2. Embed all queries
-        all_embeddings = await asyncio.to_thread(self.embedder.encode, queries)
+        # Shared embedding cap across api.py + document_search.py + retrieval/engine.py
+        # — one model, one capacity budget. Thread keeps running on timeout.
+        async with get_embedding_semaphore(), _instrument('embed'):
+            all_embeddings = await asyncio.wait_for(
+                asyncio.to_thread(self.embedder.encode, queries),
+                timeout=get_embedding_call_timeout(),
+            )
 
         limit = request.limit
         if request.mmr_lambda is not None:
@@ -240,7 +253,14 @@ class NoteSearchEngine:
             overflow = results[MAX_RERANK_DOCS:]
 
             texts = [best_chunk_text_by_note.get(r.note_id, '') for r in rerank_candidates]
-            scores = await asyncio.to_thread(self.reranker.score, query, texts)
+            # Shared reranker cap across both reranker sites — one model,
+            # one capacity budget. wait_for cancels the coroutine but the
+            # underlying thread keeps running.
+            async with get_reranker_semaphore(), _instrument('rerank'):
+                scores = await asyncio.wait_for(
+                    asyncio.to_thread(self.reranker.score, query, texts),
+                    timeout=get_reranker_call_timeout(),
+                )
             normalized = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
             scored = sorted(zip(rerank_candidates, normalized), key=lambda x: x[1], reverse=True)

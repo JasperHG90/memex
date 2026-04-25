@@ -30,7 +30,16 @@ from memex_core.memory.retrieval.strategies import (
     MentalModelStrategy,
     get_graph_strategy,
 )
+from memex_core.instrument import _instrument
 from memex_core.memory.retrieval.expansion import QueryExpander
+from memex_core.memory.retrieval._offload import (
+    get_embedding_call_timeout,
+    get_embedding_semaphore,
+    get_ner_call_timeout,
+    get_ner_semaphore,
+    get_reranker_call_timeout,
+    get_reranker_semaphore,
+)
 from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
 from memex_core.memory.retrieval.temporal_concretizer import (
     TemporalConcretizer,
@@ -205,7 +214,14 @@ class RetrievalEngine:
 
         if misses:
             miss_texts = [q for _, q in misses]
-            encoded = await asyncio.to_thread(self.embedder.encode, miss_texts)
+            # Shared embedding cap across api.py + document_search.py +
+            # retrieval/engine.py — one model, one capacity budget. Thread
+            # keeps running on timeout; cap prevents thread accumulation.
+            async with get_embedding_semaphore(), _instrument('embed'):
+                encoded = await asyncio.wait_for(
+                    asyncio.to_thread(self.embedder.encode, miss_texts),
+                    timeout=get_embedding_call_timeout(),
+                )
             async with self._embedding_cache_lock:
                 for (idx, q), emb in zip(misses, encoded):
                     key = hashlib.sha256(q.encode()).hexdigest()
@@ -319,10 +335,14 @@ class RetrievalEngine:
         t0 = _t()
         if self.ner_model is not None:
             try:
-                filters['_ner_entities'] = await asyncio.to_thread(
-                    self.ner_model.predict, request.query
-                )
-            except (ValueError, RuntimeError, OSError) as e:
+                # NER cap: one model, one capacity budget. Thread keeps running
+                # on timeout; cap prevents thread accumulation.
+                async with get_ner_semaphore(), _instrument('ner'):
+                    filters['_ner_entities'] = await asyncio.wait_for(
+                        asyncio.to_thread(self.ner_model.predict, request.query),
+                        timeout=get_ner_call_timeout(),
+                    )
+            except (ValueError, RuntimeError, OSError, asyncio.TimeoutError) as e:
                 logger.warning('NER pre-extraction failed: %s', e)
         t_ner = _t() - t0
 
@@ -1083,7 +1103,14 @@ class RetrievalEngine:
                     )
                 )
 
-            scores = await asyncio.to_thread(self.reranker.score, query, formatted_texts)
+            # Shared reranker cap across both reranker sites — one model,
+            # one capacity budget. wait_for cancels the coroutine but the
+            # underlying thread keeps running.
+            async with get_reranker_semaphore(), _instrument('rerank'):
+                scores = await asyncio.wait_for(
+                    asyncio.to_thread(self.reranker.score, query, formatted_texts),
+                    timeout=get_reranker_call_timeout(),
+                )
 
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]

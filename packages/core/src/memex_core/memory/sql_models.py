@@ -1033,6 +1033,17 @@ class BatchJob(SQLModel, table=True):  # type: ignore
         description='List of created Note UUIDs.',
     )
 
+    input_note_keys: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb")),
+        description=(
+            'Sorted, deduped list of NoteInput.calculate_idempotency_key_from_dto '
+            'values for the incoming notes. Used by JobManager.create_job to detect '
+            'overlap with concurrent pending/processing jobs and return HTTP 409 '
+            'instead of starting a duplicate. Set once at row creation; never updated.'
+        ),
+    )
+
     error_info: Any | None = Field(
         default=None,
         sa_column=Column(JSONB),

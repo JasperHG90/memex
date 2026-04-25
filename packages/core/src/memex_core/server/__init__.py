@@ -44,9 +44,17 @@ from memex_core.server.survey import router as survey_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
+from memex_core.memory.retrieval._offload import (
+    configure_offload_semaphores,
+    get_embedding_semaphore,
+    get_ner_semaphore,
+    get_reranker_semaphore,
+)
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
 from memex_core.storage.metastore import get_metastore
+from memex_core.instrument import _instrument
+from memex_core.wedge_watchdog import configure_from_settings, shutdown_watchdog
 from memex_core.memory.models import (
     get_embedding_model,
     get_reranking_model,
@@ -118,15 +126,24 @@ async def lifespan(app: FastAPI):
     )
     ner_model = await get_ner_model()
 
-    # Warm ONNX model arenas with a dummy inference call so GPU memory is
-    # pre-allocated before real requests arrive. Prevents cold-start OOM on
-    # memory-constrained devices (e.g. Jetson with shared CPU/GPU memory).
+    # Initialise sync-offload semaphores before warmup so warmup acquires
+    # through the production gate — the invariant "every gated to_thread goes
+    # through its semaphore" then holds at startup as well as request time.
+    configure_offload_semaphores(config.server)
+
+    # Warm ONNX model arenas with a dummy inference so GPU memory is
+    # pre-allocated before real requests arrive — prevents cold-start OOM on
+    # memory-constrained devices. Warmup acquires through the production
+    # semaphore; no wait_for because warmup is sequential single-shot.
     logger.info('Warming ONNX model arenas...')
     _warmup_text = ['memex warmup probe']
-    await asyncio.to_thread(embedding_model.encode, _warmup_text)
+    async with get_embedding_semaphore(), _instrument('embed'):
+        await asyncio.to_thread(embedding_model.encode, _warmup_text)
     if reranking_model is not None:
-        await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
-    await asyncio.to_thread(ner_model.predict, _warmup_text[0])
+        async with get_reranker_semaphore(), _instrument('rerank'):
+            await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
+    async with get_ner_semaphore(), _instrument('ner'):
+        await asyncio.to_thread(ner_model.predict, _warmup_text[0])
     logger.info('ONNX model arenas warmed.')
 
     # Validate embedding dimensions match the database schema.
@@ -135,7 +152,10 @@ async def lifespan(app: FastAPI):
     from memex_core.memory.sql_models import EMBEDDING_DIMENSION
 
     if isinstance(config.server.embedding_model, LitellmEmbeddingBackend):
-        probe = await asyncio.to_thread(embedding_model.encode, ['memex embedding dimension probe'])
+        async with get_embedding_semaphore(), _instrument('embed'):
+            probe = await asyncio.to_thread(
+                embedding_model.encode, ['memex embedding dimension probe']
+            )
         actual_dim = probe.shape[-1] if hasattr(probe, 'shape') else len(probe[0])
         if actual_dim != EMBEDDING_DIMENSION:
             raise RuntimeError(
@@ -183,6 +203,22 @@ async def lifespan(app: FastAPI):
     app.state.api = api
     app.state.audit_service = AuditService(metastore)
 
+    # Opt-in wedge watchdog. When wedge_watchdog_seconds is set, an OS-thread
+    # watchdog dumps all-thread tracebacks via faulthandler if no extraction
+    # stage decrements within the threshold while a stage gauge is > 0. None
+    # (default) skips startup entirely.
+    wedge_threshold = config.server.memory.extraction.wedge_watchdog_seconds
+    watchdog = configure_from_settings(
+        wedge_watchdog_seconds=wedge_threshold,
+        log_file_path=config.server.logging.log_file,
+    )
+    if watchdog is not None:
+        logger.info(
+            'Wedge watchdog enabled. threshold=%ss dump_path=%s',
+            wedge_threshold,
+            watchdog.dump_path,
+        )
+
     # Start Scheduler Background Task
     scheduler_task = asyncio.create_task(run_scheduler_with_leader_election(config, api))
 
@@ -194,6 +230,8 @@ async def lifespan(app: FastAPI):
         await scheduler_task
     except asyncio.CancelledError:
         pass
+
+    shutdown_watchdog()
 
     await metastore.close()
 

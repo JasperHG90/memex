@@ -4,6 +4,7 @@ import time
 from typing import Any, TypeVar
 
 import dspy
+import litellm.exceptions
 
 from memex_core.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from memex_core.metrics import (
@@ -28,9 +29,13 @@ except ImportError:
 
 T = TypeVar('T')
 
-# Module-level circuit breaker instance shared across all LLM calls.
-# Initialised with default config; call configure_circuit_breaker() to
-# override from the application's CircuitBreakerConfig.
+# Process-wide circuit breaker. ``run_dspy_operation`` reads the global
+# directly, so ``configure_circuit_breaker(...)`` at app startup is observed
+# by every subsequent call (the rebind happens at module level). External
+# modules that need the current instance should call ``get_circuit_breaker()``
+# rather than binding the name at import time, since ``from memex_core.llm
+# import _circuit_breaker`` captures the original reference and won't see a
+# later reconfigure.
 _circuit_breaker = CircuitBreaker()
 
 # Circuit breaker state encoding for Prometheus gauge
@@ -88,6 +93,9 @@ async def run_dspy_operation(
     lm_ = lm.copy()
 
     async def _execute():
+        # The provider-timeout family is caught inside _execute so the outer
+        # handler can distinguish "provider socket deadline" (httpx/LiteLLM)
+        # from "asyncio.wait_for fired around _execute" (Python-side stall).
         if _tracer is not None and _oi_using_attributes is not None:
             with _tracer.start_as_current_span(operation_name, kind=_SpanKind.INTERNAL):
                 with _oi_using_attributes(metadata={'memex.stage': operation_name}):
@@ -95,12 +103,14 @@ async def run_dspy_operation(
                         if hasattr(predictor, 'acall'):
                             return await predictor.acall(**input_kwargs)
                         else:
+                            # dead path: DSPy 3.1+ always exposes acall.
                             return await asyncio.to_thread(predictor, **input_kwargs)
         else:
             with dspy.context(lm=lm_):
                 if hasattr(predictor, 'acall'):
                     return await predictor.acall(**input_kwargs)
                 else:
+                    # dead path: DSPy 3.1+ always exposes acall.
                     return await asyncio.to_thread(predictor, **input_kwargs)
 
     try:
@@ -123,16 +133,63 @@ async def run_dspy_operation(
 
         return result
 
-    except TimeoutError:
+    except litellm.exceptions.Timeout as e:
+        # Upstream LLM provider socket deadline (httpx/LiteLLM). Distinct
+        # 'socket_timeout' label lets dashboards tell "provider unhealthy"
+        # from "asyncio scheduling stall" — both used to share the
+        # status='timeout' bucket. The legacy 'timeout' bucket is kept for
+        # back-compat with existing alerts.
+        # Self-check the catch-ordering assumption: this branch is reached
+        # *before* the TimeoutError branch only because litellm.exceptions.
+        # Timeout is NOT a TimeoutError subclass on the supported litellm
+        # range. If a future release changes that, the TimeoutError branch
+        # below becomes dead code and this assert fires loudly.
+        assert not isinstance(e, TimeoutError), (
+            'litellm.exceptions.Timeout is now a TimeoutError subclass; '
+            'catch ordering in run_dspy_operation must be revisited.'
+        )
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='socket_timeout').inc()
         LLM_CALLS_TOTAL.labels(status='timeout').inc()
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
-        logger.error('DSPy operation timed out after %ds: %s', timeout, operation_name)
-        raise RuntimeError(f'LLM call timed out after {timeout}s ({operation_name})') from None
+        logger.error(
+            'LLM call socket timeout after %.3fs (httpx/LiteLLM-level, operation=%s): %s',
+            elapsed,
+            operation_name,
+            e,
+        )
+        raise RuntimeError(
+            f'LLM call timed out (upstream provider) after {elapsed:.3f}s ({operation_name})'
+        ) from e
+
+    except TimeoutError:
+        # asyncio.wait_for fired before the provider surfaced a socket
+        # timeout — Python-side stall (CPU-bound predictor body, scheduling
+        # starvation, provider swallowing its own deadline).
+        # Catch ordering depends on litellm.exceptions.Timeout NOT being a
+        # subclass of TimeoutError (it derives from openai.APITimeoutError
+        # → openai.APIError → Exception as of litellm 1.80.x). If a future
+        # release restructures that hierarchy, both blocks must be revisited.
+        await _circuit_breaker.record_failure()
+
+        elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='deadline_exceeded').inc()
+        LLM_CALLS_TOTAL.labels(status='timeout').inc()
+        LLM_CALL_DURATION_SECONDS.observe(elapsed)
+        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
+
+        logger.error(
+            'LLM call deadline exceeded after %ds (asyncio.wait_for, operation=%s)',
+            timeout,
+            operation_name,
+        )
+        raise RuntimeError(
+            f'LLM call timed out (asyncio.wait_for) after {timeout}s ({operation_name})'
+        ) from None
 
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         await _circuit_breaker.record_failure()
