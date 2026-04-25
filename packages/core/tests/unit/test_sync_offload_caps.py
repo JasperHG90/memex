@@ -504,6 +504,24 @@ class TestToThreadAudit:
                     f'`# exempt: <reason>` comment within 3 lines above'
                 )
 
+    def test_every_dead_path_site_has_rationale_comment(self) -> None:
+        """AC-009 four-bucket audit: each dead-fallback to_thread call
+        carries an inline `# dead path: <reason>` comment within 3 lines
+        above it. DSPy 3.1+ always exposes acall, so the to_thread branch
+        is unreachable on the extraction hot path; the comment makes the
+        audit grep-able and prevents future PRs from gating the wrong site.
+        """
+        for rel in DEAD_FALLBACK_FILES:
+            full = (CORE_SRC / rel).read_text().splitlines()
+            for i, line in enumerate(full):
+                if 'asyncio.to_thread(' not in line:
+                    continue
+                window = '\n'.join(full[max(0, i - 3) : i + 1])
+                assert 'dead path:' in window, (
+                    f'{rel}:{i + 1} asyncio.to_thread call missing '
+                    f'`# dead path: <reason>` comment within 3 lines above'
+                )
+
 
 # ---------------------------------------------------------------------------
 # W1 warmup ordering invariant
