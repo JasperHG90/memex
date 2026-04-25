@@ -1057,18 +1057,16 @@ class TestSemaphoreGating:
 
         windows: list[tuple[float, float]] = []
 
-        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
-            assert semaphore is indexer._summary_semaphore, (
-                f'expected _summary_semaphore, got {semaphore!r}'
-            )
-            async with semaphore:
-                start = time.perf_counter()
-                await asyncio.sleep(0.02)
-                end = time.perf_counter()
-                windows.append((start, end))
-                pred = MagicMock()
-                pred.summary = SectionSummary(what='ok')
-                return pred
+        async def _fake_run_dspy(*_args: Any, **_kwargs: Any) -> Any:
+            # Semaphore is acquired *outside* run_dspy_operation by
+            # _summarize_single_node, so this fake just records timing.
+            start = time.perf_counter()
+            await asyncio.sleep(0.02)
+            end = time.perf_counter()
+            windows.append((start, end))
+            pred = MagicMock()
+            pred.summary = SectionSummary(what='ok')
+            return pred
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
@@ -1113,16 +1111,16 @@ class TestSemaphoreGating:
 
         windows: list[tuple[float, float]] = []
 
-        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
-            assert semaphore is indexer._summary_semaphore
-            async with semaphore:
-                start = time.perf_counter()
-                await asyncio.sleep(0.02)
-                end = time.perf_counter()
-                windows.append((start, end))
-                pred = MagicMock()
-                pred.summary = SectionSummary(what='ok')
-                return pred
+        async def _fake_run_dspy(*_args: Any, **_kwargs: Any) -> Any:
+            # Semaphore is acquired *outside* run_dspy_operation by the
+            # _summarize_* call sites; this fake only records timing.
+            start = time.perf_counter()
+            await asyncio.sleep(0.02)
+            end = time.perf_counter()
+            windows.append((start, end))
+            pred = MagicMock()
+            pred.summary = SectionSummary(what='ok')
+            return pred
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
@@ -1212,14 +1210,16 @@ class TestSemaphoreGating:
 
         events: list[tuple[float, str]] = []
 
-        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
-            async with semaphore:
-                events.append((time.perf_counter(), 'enter'))
-                await asyncio.sleep(0.02)
-                events.append((time.perf_counter(), 'exit'))
-                pred = MagicMock()
-                pred.summary = SectionSummary(what='ok')
-                return pred
+        async def _fake_run_dspy(*_args: Any, **_kwargs: Any) -> Any:
+            # Semaphore is acquired *outside* run_dspy_operation by the call
+            # site; this fake only records enter/exit so the test can verify
+            # at most cap concurrent windows are observed.
+            events.append((time.perf_counter(), 'enter'))
+            await asyncio.sleep(0.02)
+            events.append((time.perf_counter(), 'exit'))
+            pred = MagicMock()
+            pred.summary = SectionSummary(what='ok')
+            return pred
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
@@ -1279,16 +1279,16 @@ class TestSemaphoreGating:
 
         windows: list[tuple[float, float]] = []
 
-        async def _fake_run_dspy(*_args: Any, semaphore=None, **_kwargs: Any) -> Any:
-            assert semaphore is indexer._summary_semaphore
-            async with semaphore:
-                start = time.perf_counter()
-                await asyncio.sleep(0.02)
-                end = time.perf_counter()
-                windows.append((start, end))
-                pred = MagicMock()
-                pred.block_summary = BlockSummary(topic='t', key_points=['kp.'])
-                return pred
+        async def _fake_run_dspy(*_args: Any, **_kwargs: Any) -> Any:
+            # Semaphore is acquired *outside* run_dspy_operation by
+            # _summarize_single_block; the fake only records timing.
+            start = time.perf_counter()
+            await asyncio.sleep(0.02)
+            end = time.perf_counter()
+            windows.append((start, end))
+            pred = MagicMock()
+            pred.block_summary = BlockSummary(topic='t', key_points=['kp.'])
+            return pred
 
         with patch(
             'memex_core.memory.extraction.core.run_dspy_operation', side_effect=_fake_run_dspy
@@ -1306,12 +1306,15 @@ class TestSemaphoreGating:
 class TestConcurrencyKwargFlow:
     """AC-004: refine + summarize kwargs flow from index_document to semaphores."""
 
-    def test_default_semaphores_have_value_5(self) -> None:
-        """Default ctor: all three semaphores expose ._value == 5 (back-compat)."""
+    def test_default_semaphores_match_capable_host_default(self) -> None:
+        """Default ctor mirrors PageIndexTextSplitting: all three semaphores
+        expose ._value == 20 (capable-host default; constrained hosts override
+        downward via the YAML config).
+        """
         indexer = AsyncMarkdownPageIndex(lm=MagicMock())
-        assert indexer._scan_semaphore._value == 5
-        assert indexer._refine_semaphore._value == 5
-        assert indexer._summary_semaphore._value == 5
+        assert indexer._scan_semaphore._value == 20
+        assert indexer._refine_semaphore._value == 20
+        assert indexer._summary_semaphore._value == 20
 
     def test_custom_semaphore_values_propagate(self) -> None:
         """AC-004: ctor kwargs flow through to the semaphores' _value attribute."""

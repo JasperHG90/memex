@@ -91,6 +91,11 @@ class _Watchdog:
     def fired(self) -> bool:
         return self._fired
 
+    @property
+    def dump_path(self) -> str:
+        """Path the watchdog will write the all-thread traceback dump to."""
+        return self._dump_path
+
     def _read_inflight_per_stage(self) -> dict[str, float]:
         """Return ``{stage: value}`` across both metric families.
 

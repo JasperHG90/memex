@@ -216,7 +216,7 @@ async def lifespan(app: FastAPI):
         logger.info(
             'Wedge watchdog enabled. threshold=%ss dump_path=%s',
             wedge_threshold,
-            watchdog._dump_path,
+            watchdog.dump_path,
         )
 
     # Start Scheduler Background Task

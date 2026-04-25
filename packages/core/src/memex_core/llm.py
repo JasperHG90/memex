@@ -29,10 +29,13 @@ except ImportError:
 
 T = TypeVar('T')
 
-# Process-wide circuit breaker resolved at call time, so
-# ``configure_circuit_breaker(...)`` at app startup is observed by every
-# subsequent LLM call. Importers that bind this name at import time would see
-# a stale reference; use ``get_circuit_breaker()`` instead.
+# Process-wide circuit breaker. ``run_dspy_operation`` reads the global
+# directly, so ``configure_circuit_breaker(...)`` at app startup is observed
+# by every subsequent call (the rebind happens at module level). External
+# modules that need the current instance should call ``get_circuit_breaker()``
+# rather than binding the name at import time, since ``from memex_core.llm
+# import _circuit_breaker`` captures the original reference and won't see a
+# later reconfigure.
 _circuit_breaker = CircuitBreaker()
 
 # Circuit breaker state encoding for Prometheus gauge

@@ -882,9 +882,9 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self,
         lm: dspy.LM,
         *,
-        scan_max_concurrency: int = 5,
-        refine_max_concurrency: int = 5,
-        summarize_max_concurrency: int = 5,
+        scan_max_concurrency: int = 20,
+        refine_max_concurrency: int = 20,
+        summarize_max_concurrency: int = 20,
         gap_rescan_threshold_tokens: int = 2000,
     ) -> None:
         super().__init__()
@@ -1351,14 +1351,14 @@ class AsyncMarkdownPageIndex(dspy.Module):
     async def _summarize_single_node(self, node: TOCNode) -> None:
         try:
             safe_content = node.content if node.content else ''
-            # Gate via run_dspy_operation's semaphore= kwarg so peer leaf
-            # summary tasks fan out at most summarize_max_concurrency at a time.
-            async with _instrument('summarize'):
+            # Acquire the semaphore *before* entering _instrument so the gauge
+            # reflects real concurrent in-flight rather than counting tasks
+            # that are still blocked waiting on the cap.
+            async with self._summary_semaphore, _instrument('summarize'):
                 pred = await run_dspy_operation(
                     lm=self.lm,
                     predictor=self.summarizer,
                     input_kwargs={'title': node.title, 'content': safe_content},
-                    semaphore=self._summary_semaphore,
                     operation_name='extraction.summarize',
                 )
             node.summary = pred.summary
@@ -1375,8 +1375,9 @@ class AsyncMarkdownPageIndex(dspy.Module):
                     f"[Section header only: '{node.title}']\nChild sections: {children_titles}"
                 )
 
-            # Gate via the shared summary semaphore.
-            async with _instrument('summarize'):
+            # Semaphore acquired before _instrument so the gauge reflects real
+            # concurrent in-flight, not blocked-on-cap tasks.
+            async with self._summary_semaphore, _instrument('summarize'):
                 pred = await run_dspy_operation(
                     lm=self.lm,
                     predictor=self.parent_summarizer,
@@ -1385,7 +1386,6 @@ class AsyncMarkdownPageIndex(dspy.Module):
                         'content': safe_content,
                         'children_titles': children_titles,
                     },
-                    semaphore=self._summary_semaphore,
                     operation_name='extraction.summarize_parent',
                 )
             node.summary = pred.summary
@@ -1423,13 +1423,14 @@ class AsyncMarkdownPageIndex(dspy.Module):
     ) -> None:
         try:
             # Block summaries share the summary semaphore with leaf summaries —
-            # same provider, same RAM profile, one capacity budget.
-            async with _instrument('block_summarize'):
+            # same provider, same RAM profile, one capacity budget. Semaphore
+            # acquired before _instrument so the gauge reflects real
+            # concurrent in-flight, not blocked-on-cap tasks.
+            async with self._summary_semaphore, _instrument('block_summarize'):
                 pred = await run_dspy_operation(
                     lm=self.lm,
                     predictor=self.block_summarizer,
                     input_kwargs={'section_summaries': section_summaries_text},
-                    semaphore=self._summary_semaphore,
                     operation_name='extraction.summarize_block',
                 )
             summary = pred.block_summary
@@ -1451,9 +1452,9 @@ async def index_document(
     block_token_target: int = 1000,
     short_doc_threshold: int = 2000,
     *,
-    scan_max_concurrency: int = 5,
-    refine_max_concurrency: int = 5,
-    summarize_max_concurrency: int = 5,
+    scan_max_concurrency: int = 20,
+    refine_max_concurrency: int = 20,
+    summarize_max_concurrency: int = 20,
     gap_rescan_threshold_tokens: int = 2000,
 ) -> PageIndexOutput:
     """Top-level function to index a document using PageIndex.
