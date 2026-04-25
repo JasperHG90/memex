@@ -98,6 +98,49 @@ Recommended starting point for an unvalidated device:
 
 For x86 hosts with a discrete GPU and at least 16 GiB system RAM plus 8 GiB VRAM, the defaults (`reranker_max_concurrency=4`, `embedding_max_concurrency=4`, `ner_max_concurrency=4`, `RERANKER_BATCH_SIZE` per the model card) usually work without tuning.
 
+## Querying the in-flight gauges
+
+Memex exposes two Prometheus gauges so you can see what's actually wedging:
+
+- `memex_extraction_inflight{stage}` — labels `scan` / `refine` / `summarize` / `block_summarize`.
+- `memex_sync_offload_inflight{stage}` — labels `embed` / `rerank` / `ner`.
+
+Both are labelled per-stage. **Always query with `sum by (stage)`, never `sum by ()`** — the global sum across stages is not a useful production signal because the **`refine` stage double-counts the `scan` calls it makes**. A refine task wraps `_instrument('refine')` around an inner `_process_single_chunk` that itself increments `scan`; a single LLM call that runs as part of refine increments BOTH gauges concurrently. The intent is correct (the refine task IS in flight, AND the scan substep IS in flight) — but a global sum will report `2 × refine_concurrency` at peak rather than `refine_concurrency`.
+
+### Useful queries
+
+```promql
+# Per-stage in-flight (correct view of what's running):
+sum by (stage) (memex_extraction_inflight)
+sum by (stage) (memex_sync_offload_inflight)
+
+# Saturation per cap (compare in-flight to its semaphore capacity):
+sum by (stage) (memex_extraction_inflight{stage="refine"})
+  / on() group_left() <refine_max_concurrency_value>
+
+# Watchdog companion: stages with inflight > 0 for a long time
+# (drives the same trigger semantics as `wedge_watchdog_seconds`):
+sum by (stage) (memex_extraction_inflight) > 0
+  and on(stage) avg by (stage) (changes(memex_extraction_inflight[5m])) == 0
+```
+
+### What NOT to query
+
+```promql
+# Misleading — refine and its child scan are double-counted.
+sum(memex_extraction_inflight)
+
+# Same problem; mixing the two metric families just makes the chart
+# harder to read because they have disjoint stage label sets.
+sum(memex_extraction_inflight) + sum(memex_sync_offload_inflight)
+```
+
+### Why the double-count is correct semantics
+
+The intent: when a refine task is in progress *and* it's currently doing its scan substep, both `refine` and `scan` are in flight. Operators tuning `refine_max_concurrency` expect the `refine` gauge to reflect the cap; operators tuning `scan_max_concurrency` expect the `scan` gauge to reflect THAT cap. Disjoint scoping (e.g., suppressing the inner scan increment) would make either view incomplete. The price is that you must aggregate per-stage, not globally.
+
+The same nuance applies to PR1 + PR1.5 sites: a `_summarize_single_node` runs entirely under `_instrument('summarize')` (no nested stages), so summarize/block_summarize/embed/rerank/ner do NOT double-count. **Only `refine` shadows `scan`**; this section flags that fact so it stays in operator memory.
+
 ## Cross-references
 
 - The concurrency-cap fields (`reranker_max_concurrency`, `embedding_max_concurrency`, `ner_max_concurrency`) are documented in [Configuration Reference](../reference/configuration.md). Their `description=` text in `packages/common/src/memex_common/config.py` links back to this page so operators reading the YAML see the warning at config-time.
