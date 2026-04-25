@@ -2,20 +2,13 @@
 
 Tracks ``_last_progress_at`` **per stage** (refine/scan/summarize/embed/...).
 Fires once when ANY stage has ``gauge > 0`` AND that stage has not recorded
-progress in ``wedge_watchdog_seconds``. Per-stage tracking is the F3 fix for
-the asymmetric-stall failure mode: a global timestamp would silently swallow
-a stuck refine stage as long as scan kept ticking — even though the operator
-needs to know refine has wedged.
+progress in ``wedge_watchdog_seconds``. Per-stage tracking catches the
+asymmetric-stall mode: a global timestamp would refresh on every scan tick
+and never fire even when refine is stuck.
 
-Reads gauges via the prometheus_client registry's public ``collect()`` API —
-no private state, no parallel counters (RFC-001 §A7). Runs on a real OS
-thread, not asyncio (RFC-001 §A4) so it fires even when the event loop is
-wedged.
-
-The module exposes a singleton :data:`_watchdog` that the gated
-``_instrument`` context manager calls :meth:`_Watchdog.record_progress` on
-every time a stage decrement happens. Server startup wires the singleton via
-:func:`configure_watchdog` based on ``ExtractionConfig.wedge_watchdog_seconds``.
+Reads gauges via the prometheus_client registry's public ``collect()`` API.
+Runs on a real OS thread, not asyncio, so it fires even when the event loop
+is wedged.
 """
 
 from __future__ import annotations
@@ -38,19 +31,13 @@ _INFLIGHT_METRIC_NAMES = frozenset(('memex_extraction_inflight', 'memex_sync_off
 
 
 class _Watchdog:
-    """OS-thread wedge watchdog (RFC-001 §"Step 2.3").
+    """OS-thread wedge watchdog.
 
     Fires once when ANY stage has ``inflight > 0`` AND that stage has not
-    recorded progress in ``stale_threshold_s``. Per-stage tracking (F3) is
-    what catches the asymmetric-stall failure: scan keeps ticking but refine
-    is wedged. A global timestamp would refresh on every scan decrement and
-    never fire — per-stage timestamps refresh independently so a stuck refine
-    surfaces.
-
-    Stages without any prior ``record_progress`` call default to "first
-    observation at construction time" (recorded once in ``__init__``); a
-    stage that has never had a tick yet but whose gauge is ``> 0`` is
-    treated as immediately wedged once the threshold elapses past startup.
+    recorded progress in ``stale_threshold_s``. Stages with no prior
+    ``record_progress`` call fall back to construction time, so a stage whose
+    gauge is ``> 0`` but has never ticked is treated as wedged once the
+    threshold elapses past startup.
     """
 
     def __init__(
@@ -66,10 +53,9 @@ class _Watchdog:
         self._clock = clock
         self._check_interval_s = check_interval_s
         self._registry = registry
-        # Per-stage progress timestamps (F3). Default for an unseen stage is
-        # the watchdog construction time — i.e. "no progress yet recorded for
-        # this stage". A stage with gauge > 0 and no progress tick will fire
-        # once stale_threshold_s elapses past construction.
+        # Default for an unseen stage is construction time, so a stage whose
+        # gauge is >0 but has never ticked will fire once the threshold
+        # elapses past startup.
         self._construction_time = clock()
         self._last_progress_at: dict[str, float] = {}
         self._fired = False
@@ -108,9 +94,8 @@ class _Watchdog:
     def _read_inflight_per_stage(self) -> dict[str, float]:
         """Return ``{stage: value}`` across both metric families.
 
-        Uses ``registry.collect()`` (public protocol per RFC-001 §A7) rather
-        than ``Gauge._value.get()``. Per-stage values are what F3's trigger
-        check needs — a global sum hides the asymmetric-stall case.
+        Uses the public ``registry.collect()`` rather than ``Gauge._value.get()``.
+        A global sum would hide asymmetric stalls, so we keep per-stage values.
         """
         per_stage: dict[str, float] = {}
         for metric in self._registry.collect():
@@ -124,15 +109,10 @@ class _Watchdog:
     def check_once(self) -> bool:
         """Run a single trigger check; return True if the dump fired this call.
 
-        Per-stage trigger semantics (F3): for each stage with gauge > 0, look
-        up its last_progress_at; if the gap from now exceeds the threshold,
-        fire. A stage that has never had a progress tick falls back to the
-        watchdog construction time — so a brand-new wedged stage surfaces
-        once the threshold elapses past startup.
-
-        Exposed for deterministic testing — drives one iteration without going
-        through the thread loop, so tests can inject a fake clock and assert
-        the trigger semantics without wall-clock waits.
+        For each stage with gauge > 0, compare ``now - last_progress_at`` to
+        the threshold; fire if it exceeds. Stages that have never ticked fall
+        back to construction time. Exposed for deterministic testing without
+        going through the thread loop.
         """
         if self._fired:
             return False
@@ -158,21 +138,10 @@ class _Watchdog:
             logger.error('Wedge watchdog failed to write traceback dump: %s', exc, exc_info=True)
 
     def _run(self) -> None:
-        # Sleep on the stop event so shutdown doesn't have to wait a full
-        # check_interval. wait() returns True when set, False on timeout —
-        # either way we fall out of the loop or do another check.
-        #
-        # F13 (Phase 3): catch `Exception` (not just `(RuntimeError, OSError)`)
-        # so the daemon thread survives any unexpected error from
-        # `self.check_once()` — e.g. a prometheus_client registry-shape
-        # change that raises something outside the prior narrow tuple, or
-        # a bug in `_read_inflight_per_stage`. Pre-F13 the thread would
-        # silently exit and the operator would have no in-process watchdog
-        # at all, with no log trail. Post-F13 the loop logs via
-        # `logger.exception` (preserving the bug for debugging) and
-        # continues to the next interval — the watchdog stays alive across
-        # a single bad iteration. `BaseException` is intentionally NOT
-        # caught (KeyboardInterrupt, SystemExit must still terminate).
+        # Catch broad Exception so the daemon thread survives any unexpected
+        # error (e.g. registry-shape change in prometheus_client). BaseException
+        # is intentionally not caught — KeyboardInterrupt/SystemExit must
+        # still terminate.
         while not self._stop.wait(self._check_interval_s):
             try:
                 self.check_once()
@@ -180,10 +149,9 @@ class _Watchdog:
                 logger.exception('Wedge watchdog check failed; loop continues')
 
 
-# Module-level singleton. None until configure_watchdog() is called from
-# server startup. The _instrument context manager checks `_watchdog is not
-# None` before calling record_progress so non-server usages (CLI, tests
-# without server fixtures) don't pay the watchdog cost.
+# None until configure_watchdog() is called from server startup; non-server
+# callers (CLI, tests) leave it None and the no-op record_progress() helper
+# below short-circuits.
 _watchdog: _Watchdog | None = None
 
 
@@ -255,11 +223,6 @@ def configure_from_settings(
 
 
 def record_progress(stage: str) -> None:
-    """Module-level helper — used by ``_instrument`` to avoid passing the
-    handle through every gated section. No-ops when the watchdog is disabled.
-
-    Per F3, the stage label is forwarded so the watchdog can track per-stage
-    staleness instead of a global timestamp that would mask asymmetric stalls.
-    """
+    """No-ops when the watchdog is disabled."""
     if _watchdog is not None:
         _watchdog.record_progress(stage)

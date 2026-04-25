@@ -1,15 +1,13 @@
 """Module-level semaphores gating sync-offload model calls.
 
-One semaphore per *model class* (reranker / embedding / NER), shared across all
-asyncio.to_thread call sites that hit the same model. Sharing the cap is
-deliberate: one model has one capacity budget; gating each site separately
-would over-count effective parallelism (cap=2 per site -> 4 in flight against
-a single model, exhausting its memory budget). See RFC-001 §"Step 1.5.2"
-(AC-010 rev 2) and AC-009.
+One semaphore per *model class* (reranker / embedding / NER), shared across
+all ``asyncio.to_thread`` call sites that hit the same model. Sharing the
+cap is deliberate: one model has one capacity budget; gating each site
+separately would over-count effective parallelism and exhaust memory.
 
 Initialised once at server startup via ``configure_offload_semaphores(cfg)``,
-which is called from ``server/__init__.py`` *before* the warmup block so
-warmup acquires through the production gate (W1 — see RFC-001 §"Step 1.5.4").
+called from ``server/__init__.py`` *before* the model warmup block so
+warmup acquires through the production gate.
 
 Note: the underlying thread keeps running after ``asyncio.wait_for`` fires;
 the cap is what prevents thread accumulation, not the timeout.
@@ -21,13 +19,8 @@ import asyncio
 
 from memex_common.config import ServerConfig
 
-# Gates memory/retrieval/document_search.py:243 + memory/retrieval/engine.py:1086
 _RERANKER_SEMAPHORE: asyncio.Semaphore | None = None
-
-# Gates api.py:1287 + memory/retrieval/document_search.py:130 + memory/retrieval/engine.py:208
 _EMBEDDING_SEMAPHORE: asyncio.Semaphore | None = None
-
-# Gates memory/retrieval/engine.py:322
 _NER_SEMAPHORE: asyncio.Semaphore | None = None
 
 _CFG: ServerConfig | None = None
@@ -37,19 +30,13 @@ def configure_offload_semaphores(cfg: ServerConfig) -> None:
     """Initialise the three module-level semaphores from ServerConfig.
 
     Must be called before any gated to_thread site fires. In production this is
-    invoked at server startup (``server/__init__.py``) ahead of the model
-    warmup block, so warmup itself acquires through the production gate.
+    invoked at server startup ahead of the model warmup block.
 
-    Tests may call this with a small-cap config to drive concurrency assertions
-    without monkeypatching globals; per-test reconfiguration is supported.
-
-    Observability asymmetry (F18 — Phase 3 review): semaphores are constructed
-    ONCE here from ``cfg.<x>_max_concurrency`` and never recomputed; timeouts
-    are read live from ``_CFG.<x>_call_timeout`` at every gated call site.
-    Mutating ``_CFG.reranker_call_timeout`` in place therefore updates the
-    timeout the next call observes but does NOT update the cap (the existing
-    Semaphore is preserved). To change a cap at runtime, callers must call
-    ``configure_offload_semaphores(new_cfg)`` again.
+    Asymmetry to know about: semaphores are built once from the cap fields and
+    never recomputed; per-call timeouts are read live from ``_CFG`` on every
+    call. Mutating ``_CFG.reranker_call_timeout`` in place updates the next
+    call's timeout but NOT the cap — call ``configure_offload_semaphores``
+    again to change a cap at runtime.
     """
     global _RERANKER_SEMAPHORE, _EMBEDDING_SEMAPHORE, _NER_SEMAPHORE, _CFG
     _RERANKER_SEMAPHORE = asyncio.Semaphore(cfg.reranker_max_concurrency)
@@ -72,7 +59,7 @@ def get_reranker_semaphore() -> asyncio.Semaphore:
     """Return the shared reranker semaphore. Raises if not configured."""
     if _RERANKER_SEMAPHORE is None:
         _require_configured()
-    assert _RERANKER_SEMAPHORE is not None  # narrowed by _require_configured
+    assert _RERANKER_SEMAPHORE is not None
     return _RERANKER_SEMAPHORE
 
 

@@ -848,9 +848,9 @@ async def extract_facts_from_text(
     semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[list[RawFact], list[tuple[str, int]]]:
     """Backward-compatible: chunks text internally, then extracts."""
-    # We prefer stable chunking to ensure consistency with incremental updates.
-    # Note: stable_chunk_text ignores chunk_overlap, which is acceptable.
-    # exempt: pure CPU sync chunker, no model load (AC-009 four-bucket audit)
+    # Stable chunking keeps incremental updates consistent. stable_chunk_text
+    # ignores chunk_overlap; that's accepted.
+    # exempt: pure CPU sync chunker, no model load.
     stable_blocks = await asyncio.to_thread(stable_chunk_text, text, block_size=chunk_max_chars)
     chunks = [b.text for b in stable_blocks]
 
@@ -1422,9 +1422,8 @@ class AsyncMarkdownPageIndex(dspy.Module):
         self, block: PageIndexBlock, section_summaries_text: str
     ) -> None:
         try:
-            # Gate via the shared summary semaphore — block summaries call the
-            # same provider as leaf summaries with the same RAM profile, so
-            # AC-003 has them share a single capacity budget by default.
+            # Block summaries share the summary semaphore with leaf summaries —
+            # same provider, same RAM profile, one capacity budget.
             async with _instrument('block_summarize'):
                 pred = await run_dspy_operation(
                     lm=self.lm,

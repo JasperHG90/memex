@@ -403,7 +403,7 @@ class ExtractionEngine:
         block_size = (
             ts.chunk_size_tokens * CHARS_PER_TOKEN if isinstance(ts, SimpleTextSplitting) else 4000
         )
-        # exempt: pure CPU sync chunker (incremental), no model load (AC-009 four-bucket audit)
+        # exempt: pure CPU sync chunker (incremental), no model load.
         new_blocks = await asyncio.to_thread(
             stable_chunk_text, combined_text, block_size=block_size
         )

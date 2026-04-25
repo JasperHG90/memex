@@ -126,18 +126,15 @@ async def lifespan(app: FastAPI):
     )
     ner_model = await get_ner_model()
 
-    # Initialise sync-offload semaphores BEFORE the warmup block so warmup
-    # acquires through the production gate (RFC-001 §"Step 1.5.4" Option W1).
-    # The invariant "every gated to_thread goes through its semaphore" then
-    # holds at startup as well as request time — one mental model, one CI test.
+    # Initialise sync-offload semaphores before warmup so warmup acquires
+    # through the production gate — the invariant "every gated to_thread goes
+    # through its semaphore" then holds at startup as well as request time.
     configure_offload_semaphores(config.server)
 
-    # Warm ONNX model arenas with a dummy inference call so GPU memory is
-    # pre-allocated before real requests arrive. Prevents cold-start OOM on
-    # memory-constrained devices (e.g. Jetson with shared CPU/GPU memory).
-    # Warmup goes through the production semaphores (W1) — no wait_for here
-    # because warmup is a sequential single-shot operation; the cap alone is
-    # the relevant invariant.
+    # Warm ONNX model arenas with a dummy inference so GPU memory is
+    # pre-allocated before real requests arrive — prevents cold-start OOM on
+    # memory-constrained devices. Warmup acquires through the production
+    # semaphore; no wait_for because warmup is sequential single-shot.
     logger.info('Warming ONNX model arenas...')
     _warmup_text = ['memex warmup probe']
     async with get_embedding_semaphore(), _instrument('embed'):
@@ -206,10 +203,10 @@ async def lifespan(app: FastAPI):
     app.state.api = api
     app.state.audit_service = AuditService(metastore)
 
-    # Opt-in wedge watchdog (RFC-001 §"Step 2.4"). When wedge_watchdog_seconds
-    # is set, an OS-thread watchdog dumps all-thread tracebacks via
-    # faulthandler if no extraction stage decrements within the threshold
-    # while a stage gauge is > 0. None (default) skips startup entirely.
+    # Opt-in wedge watchdog. When wedge_watchdog_seconds is set, an OS-thread
+    # watchdog dumps all-thread tracebacks via faulthandler if no extraction
+    # stage decrements within the threshold while a stage gauge is > 0. None
+    # (default) skips startup entirely.
     wedge_threshold = config.server.memory.extraction.wedge_watchdog_seconds
     watchdog = configure_from_settings(
         wedge_watchdog_seconds=wedge_threshold,

@@ -32,11 +32,11 @@ Memex also exposes three concurrency caps that pair with the batch-size levers:
 
 | Cap | Limits | Where it lives |
 |---|---|---|
-| `reranker_max_concurrency` | Concurrent in-flight reranker calls. Sister to `reranker_batch_size`. | `server.reranker_max_concurrency` (default 4). |
-| `embedding_max_concurrency` | Concurrent in-flight embedding calls. | `server.embedding_max_concurrency` (default 4). |
-| `ner_max_concurrency` | Concurrent in-flight NER calls. | `server.ner_max_concurrency` (default 4). |
+| `reranker_max_concurrency` | Concurrent in-flight reranker calls. Sister to `reranker_batch_size`. | `server.reranker_max_concurrency` (default 16). |
+| `embedding_max_concurrency` | Concurrent in-flight embedding calls. | `server.embedding_max_concurrency` (default 16). |
+| `ner_max_concurrency` | Concurrent in-flight NER calls. | `server.ner_max_concurrency` (default 16). |
 
-The concurrency caps prevent the worker from accumulating threads against a model whose batch is already saturating the GPU memory budget. **Tune them together with the matching batch size**: a host that needs `RERANKER_BATCH_SIZE=8` typically wants `reranker_max_concurrency` of 2-4, not the default 4.
+The defaults are sized for capable hosts (workstations, x86 servers, HTTP-based LiteLLM models) where the bottleneck is provider rate-limit, not local memory. **On memory-constrained hosts, tune them down together with the matching batch size**: a Jetson that needs `RERANKER_BATCH_SIZE=8` typically wants `reranker_max_concurrency=2`, not the default 16.
 
 ### Why each lever matters
 
@@ -96,7 +96,7 @@ Recommended starting point for an unvalidated device:
 5. **Monitor** the `memex_sync_offload_inflight{stage="rerank"}` Prometheus gauge and reranker call duration under realistic load.
 6. **Lower batch size first** if you see cuDNN allocation failures; only then raise the cap.
 
-For x86 hosts with a discrete GPU and at least 16 GiB system RAM plus 8 GiB VRAM, the defaults (`reranker_max_concurrency=4`, `embedding_max_concurrency=4`, `ner_max_concurrency=4`, `RERANKER_BATCH_SIZE` per the model card) usually work without tuning.
+For x86 hosts with a discrete GPU and at least 16 GiB system RAM plus 8 GiB VRAM, the defaults (`reranker_max_concurrency=16`, `embedding_max_concurrency=16`, `ner_max_concurrency=16`, `RERANKER_BATCH_SIZE` per the model card) usually work without tuning. On HTTP-based LiteLLM rerankers/embedders (no local GPU competition), there is no schema upper bound — raise the caps as high as the provider's rate limit allows.
 
 ## Querying the in-flight gauges
 

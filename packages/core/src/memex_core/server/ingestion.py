@@ -63,9 +63,8 @@ logger = logging.getLogger('memex.core.server.ingestion')
 router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_write)])
 
 
-# OpenAPI fragment for the 409 path. Reused by all five `/ingestions/*` BG
-# routes so the AC-021 contract is documented uniformly (body type +
-# `Location` header). Mutating one place keeps the routes in sync.
+# OpenAPI fragment for the 409 path. Reused by every `/ingestions/*` BG
+# route so the body type + `Location` header are documented uniformly.
 _OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
     409: {
         'model': BatchJobStatus,
@@ -87,28 +86,19 @@ _OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
 
 
 def _overlap_to_409(e: OverlapError, request: Request | None = None) -> JSONResponse:
-    """Translate an `OverlapError` into the AC-021 409 response.
+    """Translate an ``OverlapError`` into a 409 + ``Location`` response.
 
-    Used by every ingestion route whose background path can route through
-    `JobManager` (`create_job` directly, or `create_single_job` if a future
-    plumbing change ever propagates the same condition). Centralised so all
-    five `/ingestions/*` BG paths return the same body shape and `Location`
-    header — without this helper a future plumbing change risks reintroducing
-    the F1 500-leak (an uncaught `OverlapError` falling through to FastAPI's
-    default handler).
+    Centralised so every ingestion BG path returns the same body shape and
+    header — and so an uncaught ``OverlapError`` can't fall through to
+    FastAPI's default handler as a 500.
 
-    F19: also emits an `ingestion.overlap_rejected` audit event so operators
-    have a queryable trail of submissions that were rejected as duplicates.
-    `audit_event` is fire-and-forget (no `await`) so the 409 response is not
-    blocked on audit-log I/O; if `audit_service` is not configured (e.g. the
-    server was started without auth wiring), the helper no-ops cleanly.
+    Also emits an ``ingestion.overlap_rejected`` audit event so operators
+    have a queryable trail of duplicate-rejected submissions. The emit is
+    fire-and-forget; if ``audit_service`` is not configured, it no-ops.
 
-    ``request`` is ``Optional`` so unit-test code that calls a route function
-    directly (bypassing FastAPI's DI — e.g. ``test_multiformat_ingestion``'s
-    ``await ingest_note(request=dto, api=mock, ...)``) does not have to mock
-    a Starlette ``Request``. Production traffic always supplies one through
-    DI; when it is ``None`` we skip audit emission cleanly. The 409 body
-    itself is unchanged regardless.
+    ``request`` is optional so unit tests can call routes directly without
+    mocking a Starlette ``Request``. Production traffic always supplies one
+    via DI.
     """
     if request is not None:
         audit_event(
@@ -227,9 +217,6 @@ async def ingest_note(
     except HTTPException:
         raise
     except OverlapError as e:
-        # The background path calls `create_job`, which raises OverlapError when
-        # the incoming note's idempotency key collides with an in-flight job in
-        # the same vault. Translate to 409 + Location for AC-021 uniformity.
         return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
@@ -281,10 +268,8 @@ async def ingest_url(
     except HTTPException:
         raise
     except OverlapError as e:
-        # Defensive: `create_single_job` doesn't currently raise OverlapError,
-        # but a future plumbing change that routes through `create_job` would.
-        # Catching here keeps the AC-021 contract uniform across all five
-        # `/ingestions/*` BG paths and avoids reintroducing the F1 500 leak.
+        # Defensive: create_single_job doesn't currently raise OverlapError,
+        # but a future plumbing change that routes through create_job would.
         return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
@@ -459,9 +444,7 @@ async def ingest_upload(
     except HTTPException:
         raise
     except OverlapError as e:
-        # Defensive: matches the AC-021 contract uniformly across BG paths so
-        # a future change that routes file-upload through `create_job` cannot
-        # reintroduce the F1 500 leak.
+        # Defensive — file-upload doesn't currently route through create_job.
         return _overlap_to_409(e, http_request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
@@ -551,9 +534,7 @@ async def ingest_webhook(
             content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
         )
     except OverlapError as e:
-        # Defensive: matches the AC-021 contract uniformly across BG paths so
-        # a future change that routes webhook ingestion through `create_job`
-        # cannot reintroduce the F1 500 leak.
+        # Defensive — webhook ingestion doesn't currently route through create_job.
         return _overlap_to_409(e, request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')

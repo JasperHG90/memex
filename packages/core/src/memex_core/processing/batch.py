@@ -26,9 +26,9 @@ class OverlapError(Exception):
     in the same vault. The HTTP layer translates this to a 409 with a ``Location``
     header pointing at the existing job.
 
-    ``overlapping_keys`` is a forward-compatible field carrying the subset of keys
-    that overlapped. It is currently always ``[]`` (subset computation is deferred
-    per RFC-002 §A4); future code may populate it without changing this signature.
+    ``overlapping_keys`` is a forward-compatible field carrying the subset of
+    keys that overlapped. Currently always ``[]`` (subset computation is
+    deferred); future code may populate it without changing this signature.
     """
 
     def __init__(
@@ -37,13 +37,8 @@ class OverlapError(Exception):
         status: str,
         overlapping_keys: list[str] | None = None,
     ) -> None:
-        # Coerce to a real UUID so callers (including the HTTP layer building
-        # the `Location` header) can rely on `existing_id` being a `UUID`
-        # instance regardless of whether the overlap-detection path returned
-        # a UUID (asyncpg + UUID column) or a stringified one (driver fallback,
-        # raw asyncpg row, future serialization layer). The `UUID(str(x))`
-        # idiom accepts both UUID and str without sacrificing the type
-        # contract documented on the field.
+        # Coerce so callers can rely on a real UUID regardless of whether the
+        # overlap-detection path returned UUID or str.
         self.existing_id = UUID(str(existing_id))
         self.status = status
         self.overlapping_keys = overlapping_keys if overlapping_keys is not None else []
@@ -94,14 +89,14 @@ class JobManager:
         the task lifecycle.  Otherwise an ``asyncio.Task`` is created directly.
 
         Idempotency keys are derived from the incoming DTOs via
-        ``NoteInput.calculate_idempotency_key_from_dto`` and stored on the row's
-        ``input_note_keys`` column. Before insert we acquire a per-vault
-        ``pg_advisory_xact_lock`` and query for any ``PENDING`` or ``PROCESSING``
-        job in the same vault whose ``input_note_keys`` overlaps the incoming
-        batch — if found, ``OverlapError`` is raised so the caller can return
+        ``NoteInput.calculate_idempotency_key_from_dto`` and stored on
+        ``input_note_keys``. Before insert we acquire a per-vault
+        ``pg_advisory_xact_lock`` and query for any ``PENDING`` or
+        ``PROCESSING`` job in the same vault whose ``input_note_keys``
+        overlaps — if found, ``OverlapError`` is raised so the caller returns
         409 + ``Location`` instead of starting a duplicate. The advisory lock
-        is auto-released at COMMIT/ROLLBACK and is keyed per-vault so unrelated
-        vaults' submissions proceed in parallel. (RFC-002 §"Step 2-3".)
+        is auto-released at COMMIT/ROLLBACK and is keyed per-vault so
+        unrelated vaults' submissions proceed in parallel.
 
         Args:
             notes: List of NoteDTOs to ingest.
@@ -114,20 +109,15 @@ class JobManager:
 
         Raises:
             ValueError: When ``notes`` is an empty list. The dedup invariant
-                requires at least one key — an empty `unnest(CAST(:keys AS
-                text[]))` evaluates to FALSE on `EXISTS`, which would let two
-                concurrent empty-batch submissions both INSERT and silently
-                bypass dedup. Reject explicitly at the storage boundary.
+                requires at least one key — an empty unnest on the EXISTS
+                subquery evaluates to FALSE, which would let two concurrent
+                empty-batch submissions both INSERT and bypass dedup.
             OverlapError: When an in-flight job in the same vault has any
                 idempotency key in common with this batch.
         """
-        # F9: reject empty `notes` lists at the storage boundary so the dedup
-        # invariant ("at least one key required") is enforced engine-side, not
-        # only by Pydantic `min_length=1` validation at the HTTP layer. Without
-        # this guard, two concurrent `create_job(notes=[])` calls both pass the
-        # overlap check and both INSERT — the bypass mode adversarial review
-        # flagged at AC-020 (rev). HTTP-layer callers always synthesize a
-        # non-empty list, so this guard does not affect happy-path traffic.
+        # Empty notes lists are rejected at the storage boundary so the dedup
+        # invariant ("at least one key per batch") is enforced engine-side
+        # rather than relying on the HTTP layer's Pydantic min_length.
         if not notes:
             raise ValueError(
                 'create_job requires at least one note; got an empty list. '
@@ -144,53 +134,34 @@ class JobManager:
             vault_id or self.api.config.server.default_active_vault
         )
 
-        # Compute idempotency keys at the storage boundary. Sorted+deduped so the
-        # stored array has no duplicates and the @> probes are stable across input
-        # orderings. (RFC-002 §"Idempotency-key derivation: where".)
+        # Sorted+deduped so the stored array is canonical and the @> probes
+        # are stable across input orderings.
         input_keys = sorted({NoteInput.calculate_idempotency_key_from_dto(n) for n in notes})
 
         async with self.api.metastore.session() as session:
-            # AC-020 (rev) TOCTOU protection: serialize per-vault create_job
-            # transactions using a Postgres advisory transaction lock. The lock
-            # is released automatically at COMMIT/ROLLBACK; no explicit unlock
-            # needed. Per-vault scope (hashtext over the UUID's text repr) so
-            # unrelated vaults' submissions don't serialize against each other.
-            # Without this lock, two concurrent calls can both pass the overlap
-            # check before either INSERTs — both succeed, defeating the AC.
+            # Per-vault advisory transaction lock — serializes create_job
+            # within a vault so two concurrent calls can't both pass the
+            # overlap check before either INSERTs. Released at COMMIT/ROLLBACK.
+            # `hashtext` returns int4; collision risk is negligible at Memex's
+            # expected vault count, but `hashtextextended` (int8) is available
+            # if it ever grows past ~65k vaults.
             #
-            # `hashtext` returns int4 (32-bit). At Memex's expected vault count
-            # the birthday-bound collision probability is negligible; if the
-            # deployment ever grows past ~65k vaults we can swap to
-            # `hashtextextended` (PG ≥ 11, returns int8) — already feasible
-            # because migration 021 guards PG ≥ 11.
-            #
-            # F22: the cast is `cast(:vault_id AS text)` rather than the more
-            # conventional `:vault_id::text` because asyncpg's parser can't
-            # disambiguate `::` (Postgres cast) from its own colon-prefixed
-            # bind-parameter syntax when both appear in the same statement —
-            # under asyncpg the `::text` form raises `syntax error at or near
-            # ":"`. The SQL-standard `cast(... AS text)` is semantically
-            # identical, parses cleanly, and keeps `pg_stat_statements` query
-            # text readable.
+            # SQL uses `cast(:vault_id AS text)` rather than `:vault_id::text`
+            # because asyncpg's parser can't disambiguate `::` from its own
+            # colon-prefixed bind syntax in the same statement.
             await session.execute(
                 sa.text('SELECT pg_advisory_xact_lock(hashtext(cast(:vault_id AS text)))'),
                 {'vault_id': str(target_vault_id)},
             )
 
-            # Overlap query: find any PENDING/PROCESSING job in the same vault
-            # whose input_note_keys jsonb-array contains any of the incoming
-            # keys. Inner subquery iterates :keys via unnest and probes
-            # `input_note_keys @> jsonb_build_array(k)` — the `@>` operator is
-            # supported by the `jsonb_path_ops` GIN index on this column
-            # (migration 021), so the per-key probe is index-aided.
+            # Overlap query: find any in-flight job in this vault whose
+            # input_note_keys contains any of the incoming keys. The @>
+            # probe is index-aided by the jsonb_path_ops GIN index on this
+            # column (migration 021).
             #
-            # The `:keys` bindparam is explicitly pinned to ARRAY(String)
-            # (Postgres `text[]`) instead of relying on asyncpg's implicit type
-            # inference from the Python list value. Without the pin, an empty
-            # list (`[]`) or a future driver release that tightens inference
-            # could fail at runtime with a cryptic asyncpg type error. The
-            # `CAST(:keys AS text[])` in the SQL is kept as belt-and-suspenders
-            # so the cast is visible in pg_stat_statements query strings.
+            # The :keys bindparam is pinned to ARRAY(String) so empty lists
+            # and tighter future driver inference don't error at runtime;
+            # the in-SQL CAST is kept so pg_stat_statements shows the type.
             overlap_stmt = sa.text(
                 """
                 SELECT id, status
@@ -211,7 +182,6 @@ class JobManager:
             row = result.first()
             if row is not None:
                 existing_id, status_str = row
-                # subset computation deferred — see RFC-002 §A4.
                 raise OverlapError(
                     existing_id=existing_id,
                     status=status_str,

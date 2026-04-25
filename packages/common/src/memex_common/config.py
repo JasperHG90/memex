@@ -516,29 +516,26 @@ class PageIndexTextSplitting(BaseModel):
         default=None,
         description='Model for PageIndex LLM calls. If None, uses server default.',
     )
-    # F23 (Phase 3 review): three separate per-stage caps rather than a single
-    # umbrella because scan/refine/summarize have materially different RAM and
-    # latency profiles — sharing one cap couples three independent operational
-    # tradeoffs. An umbrella ``extraction_max_concurrency`` that propagates to
-    # all three when set is a follow-up (RFC-001 Resolved Decision §3 *rev*,
-    # tracked as task #31) — operator ergonomics polish, not load-bearing for
-    # the wedge regression class.
+    # Three per-stage caps rather than one umbrella: scan / refine / summarize
+    # have materially different RAM and latency profiles, so sharing a cap
+    # couples three independent operational tradeoffs.
     scan_max_concurrency: int = Field(
-        default=5,
+        default=20,
         ge=1,
         description='Max concurrent LLM scan calls during page_index extraction. '
-        'Reduce on memory-constrained hosts (e.g. set to 1 on a Jetson Orin Nano) '
+        'Default tuned for capable hosts and remote LLM endpoints. Reduce on '
+        'memory-constrained hosts (e.g. set to 1-2 on a Jetson Orin Nano 8 GiB) '
         'to prevent GPU/RAM exhaustion. Separate from ExtractionConfig.max_concurrency, '
         'which governs fact extraction.',
     )
     refine_max_concurrency: int = Field(
-        default=5,
+        default=20,
         ge=1,
         description='Max concurrent _refine_tree_recursively LLM calls. '
         'Mirrors scan_max_concurrency. Reduce on memory-constrained hosts.',
     )
     summarize_max_concurrency: int = Field(
-        default=5,
+        default=20,
         ge=1,
         description='Max concurrent leaf, parent, and block summary LLM calls. '
         'Shared across the three summary fan-outs '
@@ -1156,41 +1153,42 @@ class ServerConfig(BaseModel):
     )
 
     reranker_max_concurrency: int = Field(
-        default=4,
+        default=16,
         ge=1,
-        le=4,
         description=(
             'Max concurrent reranker score calls. Shared across both reranker '
             'asyncio.to_thread sites (memory/retrieval/document_search.py:243 + '
             'memory/retrieval/engine.py:1086) — one reranker model = one '
-            'capacity budget. Reduce on memory-constrained hosts (e.g. set to '
-            '2 on a Jetson Orin Nano 8 GiB to coexist with reranker_batch_size; '
-            'see docs/how-to/memory-budget.md). Sister lever to '
-            'reranker_batch_size — both must be tuned together to avoid the '
-            'cuDNN allocation failure that neighboured the wedge in issue #50.'
+            'capacity budget. Default tuned for capable hosts and HTTP-based '
+            '(LiteLLM) rerankers. Reduce on memory-constrained hosts (e.g. set '
+            'to 2 on a Jetson Orin Nano 8 GiB to coexist with '
+            'reranker_batch_size; see docs/how-to/memory-budget.md). Sister '
+            'lever to reranker_batch_size — both must be tuned together to '
+            'avoid the cuDNN allocation failure that neighboured the wedge in '
+            'issue #50.'
         ),
     )
     embedding_max_concurrency: int = Field(
-        default=4,
+        default=16,
         ge=1,
-        le=4,
         description=(
             'Max concurrent embedding model calls. Shared across all three '
             'embedding asyncio.to_thread sites (api.py:1287 + '
             'memory/retrieval/document_search.py:130 + '
             'memory/retrieval/engine.py:208) — one embedding model = one '
-            'capacity budget. Reduce on memory-constrained hosts; see '
+            'capacity budget. Default tuned for capable hosts and HTTP-based '
+            '(LiteLLM) embedders. Reduce on memory-constrained hosts; see '
             'docs/how-to/memory-budget.md.'
         ),
     )
     ner_max_concurrency: int = Field(
-        default=4,
+        default=16,
         ge=1,
-        le=4,
         description=(
             'Max concurrent NER model calls (memory/retrieval/engine.py:322). '
-            'Reduce on memory-constrained hosts (e.g. set to 2 on a Jetson '
-            'Orin Nano 8 GiB); see docs/how-to/memory-budget.md.'
+            'Default tuned for capable hosts. Reduce on memory-constrained '
+            'hosts (e.g. set to 2 on a Jetson Orin Nano 8 GiB); see '
+            'docs/how-to/memory-budget.md.'
         ),
     )
     reranker_call_timeout: int = Field(

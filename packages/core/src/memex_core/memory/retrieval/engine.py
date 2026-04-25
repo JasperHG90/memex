@@ -1103,10 +1103,9 @@ class RetrievalEngine:
                     )
                 )
 
-            # Shared reranker cap across BOTH reranker sites (this site +
-            # document_search.py:243) — one reranker model, one capacity
-            # budget. AC-010 rev 2: gating each site separately would
-            # over-count effective parallelism. Thread keeps running on timeout.
+            # Shared reranker cap across both reranker sites — one model,
+            # one capacity budget. wait_for cancels the coroutine but the
+            # underlying thread keeps running.
             async with get_reranker_semaphore(), _instrument('rerank'):
                 scores = await asyncio.wait_for(
                     asyncio.to_thread(self.reranker.score, query, formatted_texts),

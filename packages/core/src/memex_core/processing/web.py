@@ -29,8 +29,7 @@ class WebContentProcessor:
         Returns:
             ExtractedContent containing the text and metadata.
         """
-        # Run synchronous code in a thread
-        # exempt: request-bounded sync URL fetch, no model load (AC-009 four-bucket audit)
+        # exempt: request-bounded sync URL fetch, no model load.
         data = await asyncio.to_thread(WebContentProcessor._sync_process, url)
 
         # Parse document date from trafilatura metadata

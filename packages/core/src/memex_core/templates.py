@@ -57,7 +57,7 @@ class MemexTemplateFromFile(BaseModel):
     async def frontmatter(self) -> frontmatter.Post:
         """Load the frontmatter metadata from the template file."""
         content = await self.content
-        # exempt: pure CPU frontmatter parse, request-bounded, no model load (AC-009 four-bucket audit)
+        # exempt: pure CPU frontmatter parse, no model load.
         return await asyncio.to_thread(frontmatter.loads, content.decode('utf-8'))
 
     @a.cached_property

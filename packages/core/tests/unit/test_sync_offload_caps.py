@@ -36,11 +36,11 @@ from memex_core.memory.retrieval import _offload
 
 
 class TestServerConfigSchema:
-    def test_default_concurrency_caps_are_4(self) -> None:
+    def test_default_concurrency_caps_are_capable_host_sized(self) -> None:
         cfg = ServerConfig()
-        assert cfg.reranker_max_concurrency == 4
-        assert cfg.embedding_max_concurrency == 4
-        assert cfg.ner_max_concurrency == 4
+        assert cfg.reranker_max_concurrency == 16
+        assert cfg.embedding_max_concurrency == 16
+        assert cfg.ner_max_concurrency == 16
 
     def test_default_call_timeouts_are_30(self) -> None:
         cfg = ServerConfig()
@@ -86,35 +86,18 @@ class TestServerConfigSchema:
             'ner_max_concurrency',
         ],
     )
-    def test_concurrency_caps_enforce_le_4(self, field: str) -> None:
-        with pytest.raises(ValidationError):
-            ServerConfig.model_validate({field: 5})
-
-    @pytest.mark.parametrize(
-        'field',
-        [
-            'reranker_max_concurrency',
-            'embedding_max_concurrency',
-            'ner_max_concurrency',
-        ],
-    )
-    def test_offload_caps_match_ac_012_ceiling(self, field: str) -> None:
-        """AC-012 (F4 regression guard): the schema ceiling on the three
-        offload concurrency caps is `le=4`, NOT `le=64`. The cap is a
-        memory-safety rail — `le=4` matches the upper-bound the requirements
-        doc commits to, the docs page recommends, and the worst-case combined
-        peak (cap × per-call peak memory) the Jetson example tolerates.
-        Without this regression test the schema can silently drift back to
-        a permissive ceiling that lets operators configure values the
-        memory-budget recipe doesn't validate.
+    def test_concurrency_caps_have_no_upper_bound(self, field: str) -> None:
+        """Sync-offload caps must not declare an `le=` constraint: defaults
+        target capable hosts, and operators on different hardware (large
+        workstations, HTTP-based LiteLLM models) need to configure higher
+        values. Tuning down for memory-constrained hosts is documented in
+        docs/how-to/memory-budget.md; tuning up needs no schema permission.
         """
         info = ServerConfig.model_fields[field]
-        # Field metadata holds the validators; we want the `le` constraint.
         le_values = [m.le for m in info.metadata if hasattr(m, 'le') and m.le is not None]
-        assert le_values, f'ServerConfig.{field} must declare an le= constraint per AC-012'
-        assert le_values[0] == 4, (
-            f'ServerConfig.{field}.le == {le_values[0]}; AC-012 requires le=4. '
-            f'See F4 in the Phase 3 adversarial review.'
+        assert not le_values, (
+            f'ServerConfig.{field} declares le={le_values[0]}; sync-offload '
+            f'caps must remain unbounded above so capable hosts can override.'
         )
 
     @pytest.mark.parametrize(

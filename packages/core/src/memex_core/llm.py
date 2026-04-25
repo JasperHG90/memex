@@ -29,26 +29,10 @@ except ImportError:
 
 T = TypeVar('T')
 
-# Module-level circuit breaker. Shared across every production caller of
-# ``run_dspy_operation`` — ``memory/extraction/engine.py``,
-# ``memory/reflect/reflection.py``, etc. The shared-state design is
-# intentional: one circuit breaker per process tracks aggregate LLM
-# failures, so one provider outage trips the breaker for every site.
-#
-# ``run_dspy_operation`` resolves ``_circuit_breaker`` *at call time* (not
-# by capturing a closure), so a call to ``configure_circuit_breaker(...)``
-# at app startup is observed by every subsequent LLM call. Importers that
-# bind ``_circuit_breaker`` into a local name at import time
-# (``from memex_core.llm import _circuit_breaker``) would see a stale
-# reference; use ``get_circuit_breaker()`` instead.
-#
-# Tests reassign the module-level reference via the ``_reset_circuit_breaker``
-# autouse fixture (see ``test_run_dspy_operation_timeout.py``,
-# ``test_tracing_operation.py``) so each test starts with a fresh
-# breaker. After test teardown, the next test's autouse fixture
-# reconfigures; production processes never see the test instances.
-# F20 (Phase 3 review) expanded this comment to document the
-# late-binding contract + test-isolation pattern explicitly.
+# Process-wide circuit breaker resolved at call time, so
+# ``configure_circuit_breaker(...)`` at app startup is observed by every
+# subsequent LLM call. Importers that bind this name at import time would see
+# a stale reference; use ``get_circuit_breaker()`` instead.
 _circuit_breaker = CircuitBreaker()
 
 # Circuit breaker state encoding for Prometheus gauge
@@ -106,12 +90,9 @@ async def run_dspy_operation(
     lm_ = lm.copy()
 
     async def _execute():
-        # F10: catch the upstream-provider timeout family inside _execute so the
-        # outer handler can tell "provider socket deadline fired" (httpx/LiteLLM
-        # at the network layer — POC-001 path) from "asyncio.wait_for fired
-        # around _execute" (Python-side stall, e.g. circuit breaker, scheduling
-        # starvation). The inner branch logs the actionable provider error;
-        # the outer branch logs the asyncio-level deadline that elapsed.
+        # The provider-timeout family is caught inside _execute so the outer
+        # handler can distinguish "provider socket deadline" (httpx/LiteLLM)
+        # from "asyncio.wait_for fired around _execute" (Python-side stall).
         if _tracer is not None and _oi_using_attributes is not None:
             with _tracer.start_as_current_span(operation_name, kind=_SpanKind.INTERNAL):
                 with _oi_using_attributes(metadata={'memex.stage': operation_name}):
@@ -119,14 +100,14 @@ async def run_dspy_operation(
                         if hasattr(predictor, 'acall'):
                             return await predictor.acall(**input_kwargs)
                         else:
-                            # dead path: DSPy 3.1+ always exposes acall (AC-009 four-bucket audit)
+                            # dead path: DSPy 3.1+ always exposes acall.
                             return await asyncio.to_thread(predictor, **input_kwargs)
         else:
             with dspy.context(lm=lm_):
                 if hasattr(predictor, 'acall'):
                     return await predictor.acall(**input_kwargs)
                 else:
-                    # dead path: DSPy 3.1+ always exposes acall (AC-009 four-bucket audit)
+                    # dead path: DSPy 3.1+ always exposes acall.
                     return await asyncio.to_thread(predictor, **input_kwargs)
 
     try:
@@ -150,21 +131,15 @@ async def run_dspy_operation(
         return result
 
     except litellm.exceptions.Timeout as e:
-        # Inner: upstream LLM provider socket deadline fired (httpx/LiteLLM).
-        # POC-001 confirmed this is what bubbles up when dspy.LM(timeout=N)
-        # plumbs through to the underlying httpx client. Distinct log line +
-        # metric label ('socket_timeout') so operators can tell "provider
-        # unhealthy" from "asyncio scheduling stall" — both used to share the
-        # status='timeout' bucket pre-F10.
+        # Upstream LLM provider socket deadline (httpx/LiteLLM). Distinct
+        # 'socket_timeout' label lets dashboards tell "provider unhealthy"
+        # from "asyncio scheduling stall" — both used to share the
+        # status='timeout' bucket. The legacy 'timeout' bucket is kept for
+        # back-compat with existing alerts.
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
-        # F10: distinct label for the provider-side socket-timeout branch.
         LLM_CALLS_TOTAL.labels(status='socket_timeout').inc()
-        # Back-compat: also emit the legacy 'timeout' bucket so existing
-        # dashboards/alerts keep firing on a sum across both new labels.
-        # Per PO recommendation in #41 (Phase 3 review), retain for at least
-        # one release; revisit removal as a follow-up.
         LLM_CALLS_TOTAL.labels(status='timeout').inc()
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
@@ -180,18 +155,13 @@ async def run_dspy_operation(
         ) from e
 
     except TimeoutError:
-        # Outer: asyncio.wait_for(timeout=...) fired before _execute returned.
-        # Means the provider didn't surface a socket timeout in time — the
-        # Python-side deadline tripped first (e.g. coroutine scheduling stall,
-        # an event-loop stuck in a CPU-bound predictor body, or a provider
-        # that swallows its own timeout). Distinct label ('deadline_exceeded')
-        # plus the back-compat 'timeout' bucket; see inner branch for rationale.
+        # asyncio.wait_for fired before the provider surfaced a socket
+        # timeout — Python-side stall (CPU-bound predictor body, scheduling
+        # starvation, provider swallowing its own deadline).
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
-        # F10: distinct label for the asyncio.wait_for-deadline branch.
         LLM_CALLS_TOTAL.labels(status='deadline_exceeded').inc()
-        # Back-compat: legacy 'timeout' bucket — see inner branch comment.
         LLM_CALLS_TOTAL.labels(status='timeout').inc()
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))

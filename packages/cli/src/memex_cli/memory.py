@@ -73,8 +73,9 @@ async def generate_answer(query: str, memory: list[MemoryUnitDTO], model_name: s
     import dspy
 
     ResponseModel = _get_response_model()
-    # timeout= is required by the AC-006 grep guard in
-    # packages/core/tests/unit/test_dspy_lm_timeout_guard.py — see issue #50.
+    # timeout= is required so httpx has a real socket deadline (see #50). The
+    # CI grep guard at test_dspy_lm_timeout_guard.py asserts every dspy.LM(...)
+    # construction passes one.
     lm = dspy.LM(model=model_name, timeout=120)
     predictor = dspy.Predict(ResponseModel)
 
