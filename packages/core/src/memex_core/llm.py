@@ -140,18 +140,25 @@ async def run_dspy_operation(
     except litellm.exceptions.Timeout as e:
         # Inner: upstream LLM provider socket deadline fired (httpx/LiteLLM).
         # POC-001 confirmed this is what bubbles up when dspy.LM(timeout=N)
-        # plumbs through to the underlying httpx client. Distinct log line so
-        # operators can tell "provider unhealthy" from "asyncio scheduling
-        # stall" — both surface as a timeout but the remediation differs.
+        # plumbs through to the underlying httpx client. Distinct log line +
+        # metric label ('socket_timeout') so operators can tell "provider
+        # unhealthy" from "asyncio scheduling stall" — both used to share the
+        # status='timeout' bucket pre-F10.
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
+        # F10: distinct label for the provider-side socket-timeout branch.
+        LLM_CALLS_TOTAL.labels(status='socket_timeout').inc()
+        # Back-compat: also emit the legacy 'timeout' bucket so existing
+        # dashboards/alerts keep firing on a sum across both new labels.
+        # Per PO recommendation in #41 (Phase 3 review), retain for at least
+        # one release; revisit removal as a follow-up.
         LLM_CALLS_TOTAL.labels(status='timeout').inc()
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
         logger.error(
-            'Upstream LLM provider timeout after %.3fs (operation=%s): %s',
+            'LLM call socket timeout after %.3fs (httpx/LiteLLM-level, operation=%s): %s',
             elapsed,
             operation_name,
             e,
@@ -165,17 +172,20 @@ async def run_dspy_operation(
         # Means the provider didn't surface a socket timeout in time — the
         # Python-side deadline tripped first (e.g. coroutine scheduling stall,
         # an event-loop stuck in a CPU-bound predictor body, or a provider
-        # that swallows its own timeout). Different remediation than F10's
-        # provider-timeout branch above.
+        # that swallows its own timeout). Distinct label ('deadline_exceeded')
+        # plus the back-compat 'timeout' bucket; see inner branch for rationale.
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
+        # F10: distinct label for the asyncio.wait_for-deadline branch.
+        LLM_CALLS_TOTAL.labels(status='deadline_exceeded').inc()
+        # Back-compat: legacy 'timeout' bucket — see inner branch comment.
         LLM_CALLS_TOTAL.labels(status='timeout').inc()
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
         logger.error(
-            'DSPy operation timed out (asyncio.wait_for) after %ds: %s',
+            'LLM call deadline exceeded after %ds (asyncio.wait_for, operation=%s)',
             timeout,
             operation_name,
         )

@@ -20,7 +20,11 @@ failure modes apart:
 These tests assert both branches:
 - raise distinct messages (surfaced via ``RuntimeError`` ``str(e)``)
 - emit distinct log lines (asserted via ``caplog``)
-- both still update the circuit breaker + Prometheus counters
+- emit distinct Prometheus metric labels (``socket_timeout`` vs
+  ``deadline_exceeded``), with the legacy ``timeout`` label retained as
+  a back-compat third bucket so existing dashboards / alerts that filter
+  on ``status='timeout'`` keep firing on the sum across both new labels.
+- both still update the circuit breaker
 """
 
 from __future__ import annotations
@@ -36,6 +40,12 @@ import pytest
 from memex_core import llm as llm_mod
 from memex_core.circuit_breaker import CircuitBreaker
 from memex_core.llm import run_dspy_operation
+from memex_core.metrics import LLM_CALLS_TOTAL
+
+
+def _counter_value(label: str) -> float:
+    """Return the current value of LLM_CALLS_TOTAL{status=label}, or 0.0."""
+    return LLM_CALLS_TOTAL.labels(status=label)._value.get()
 
 
 @pytest.fixture(autouse=True)
@@ -67,13 +77,19 @@ class _HungPredictor:
 
 
 @pytest.mark.asyncio
-async def test_provider_timeout_logs_upstream_branch_and_raises_provider_message(
+async def test_provider_timeout_logs_socket_branch_and_increments_socket_label(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Inner branch: ``litellm.exceptions.Timeout`` → 'Upstream LLM provider' log
-    + RuntimeError mentioning 'upstream provider'."""
+    """Inner branch: ``litellm.exceptions.Timeout`` →
+    'LLM call socket timeout' log + ``status='socket_timeout'`` counter +
+    legacy ``status='timeout'`` counter (back-compat) +
+    RuntimeError mentioning 'upstream provider'."""
     lm_stub = MagicMock()
     lm_stub.copy = MagicMock(return_value=lm_stub)
+
+    socket_before = _counter_value('socket_timeout')
+    deadline_before = _counter_value('deadline_exceeded')
+    legacy_before = _counter_value('timeout')
 
     caplog.set_level(logging.ERROR, logger='memex.core.llm')
 
@@ -82,35 +98,49 @@ async def test_provider_timeout_logs_upstream_branch_and_raises_provider_message
             lm=lm_stub,
             predictor=_ProviderTimeoutPredictor(),
             input_kwargs={},
-            timeout=5,  # generous — the predictor raises immediately, not via wait_for
+            timeout=5,  # generous — predictor raises immediately, not via wait_for
             operation_name='test.provider_timeout',
         )
 
-    upstream_records = [
-        r for r in caplog.records if 'Upstream LLM provider timeout' in r.getMessage()
-    ]
-    waitfor_records = [r for r in caplog.records if 'asyncio.wait_for' in r.getMessage()]
-    assert upstream_records, (
-        f'expected "Upstream LLM provider timeout" log line; got messages: '
+    socket_records = [r for r in caplog.records if 'socket timeout' in r.getMessage()]
+    deadline_records = [r for r in caplog.records if 'deadline exceeded' in r.getMessage()]
+    assert socket_records, (
+        f'expected "socket timeout" log line; got messages: '
         f'{[r.getMessage() for r in caplog.records]}'
     )
-    assert not waitfor_records, (
-        f'expected NO "asyncio.wait_for" log line; got: {[r.getMessage() for r in waitfor_records]}'
+    assert not deadline_records, (
+        f'expected NO "deadline exceeded" log line; got: '
+        f'{[r.getMessage() for r in deadline_records]}'
     )
 
-    # Cause chain: RuntimeError -> litellm.exceptions.Timeout (from e).
-    runtime_records = [r for r in caplog.records if r.levelno == logging.ERROR]
-    assert runtime_records, 'expected at least one ERROR log record'
+    # Metric label assertions (F10 AC):
+    assert _counter_value('socket_timeout') == socket_before + 1, (
+        f'expected socket_timeout counter +1; before={socket_before}, '
+        f'after={_counter_value("socket_timeout")}'
+    )
+    assert _counter_value('deadline_exceeded') == deadline_before, (
+        'deadline_exceeded counter must NOT increment on the provider branch'
+    )
+    # Back-compat: legacy 'timeout' label still increments alongside the new one.
+    assert _counter_value('timeout') == legacy_before + 1, (
+        'legacy timeout counter must increment for back-compat dashboards'
+    )
 
 
 @pytest.mark.asyncio
-async def test_waitfor_timeout_logs_asyncio_branch_and_raises_waitfor_message(
+async def test_waitfor_timeout_logs_deadline_branch_and_increments_deadline_label(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Outer branch: ``asyncio.wait_for`` → 'asyncio.wait_for' log + RuntimeError
-    mentioning 'asyncio.wait_for'."""
+    """Outer branch: ``asyncio.wait_for`` →
+    'LLM call deadline exceeded' log + ``status='deadline_exceeded'`` counter +
+    legacy ``status='timeout'`` counter (back-compat) +
+    RuntimeError mentioning 'asyncio.wait_for'."""
     lm_stub = MagicMock()
     lm_stub.copy = MagicMock(return_value=lm_stub)
+
+    socket_before = _counter_value('socket_timeout')
+    deadline_before = _counter_value('deadline_exceeded')
+    legacy_before = _counter_value('timeout')
 
     caplog.set_level(logging.ERROR, logger='memex.core.llm')
 
@@ -123,17 +153,27 @@ async def test_waitfor_timeout_logs_asyncio_branch_and_raises_waitfor_message(
             operation_name='test.waitfor_timeout',
         )
 
-    waitfor_records = [r for r in caplog.records if 'asyncio.wait_for' in r.getMessage()]
-    upstream_records = [
-        r for r in caplog.records if 'Upstream LLM provider timeout' in r.getMessage()
-    ]
-    assert waitfor_records, (
-        f'expected "asyncio.wait_for" log line; got messages: '
+    deadline_records = [r for r in caplog.records if 'deadline exceeded' in r.getMessage()]
+    socket_records = [r for r in caplog.records if 'socket timeout' in r.getMessage()]
+    assert deadline_records, (
+        f'expected "deadline exceeded" log line; got messages: '
         f'{[r.getMessage() for r in caplog.records]}'
     )
-    assert not upstream_records, (
-        f'expected NO "Upstream LLM provider timeout" log line; got: '
-        f'{[r.getMessage() for r in upstream_records]}'
+    assert not socket_records, (
+        f'expected NO "socket timeout" log line; got: {[r.getMessage() for r in socket_records]}'
+    )
+
+    # Metric label assertions (F10 AC):
+    assert _counter_value('deadline_exceeded') == deadline_before + 1, (
+        f'expected deadline_exceeded counter +1; before={deadline_before}, '
+        f'after={_counter_value("deadline_exceeded")}'
+    )
+    assert _counter_value('socket_timeout') == socket_before, (
+        'socket_timeout counter must NOT increment on the wait_for branch'
+    )
+    # Back-compat: legacy 'timeout' label still increments alongside the new one.
+    assert _counter_value('timeout') == legacy_before + 1, (
+        'legacy timeout counter must increment for back-compat dashboards'
     )
 
 
