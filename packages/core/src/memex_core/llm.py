@@ -4,6 +4,7 @@ import time
 from typing import Any, TypeVar
 
 import dspy
+import litellm.exceptions
 
 from memex_core.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from memex_core.metrics import (
@@ -88,6 +89,12 @@ async def run_dspy_operation(
     lm_ = lm.copy()
 
     async def _execute():
+        # F10: catch the upstream-provider timeout family inside _execute so the
+        # outer handler can tell "provider socket deadline fired" (httpx/LiteLLM
+        # at the network layer — POC-001 path) from "asyncio.wait_for fired
+        # around _execute" (Python-side stall, e.g. circuit breaker, scheduling
+        # starvation). The inner branch logs the actionable provider error;
+        # the outer branch logs the asyncio-level deadline that elapsed.
         if _tracer is not None and _oi_using_attributes is not None:
             with _tracer.start_as_current_span(operation_name, kind=_SpanKind.INTERNAL):
                 with _oi_using_attributes(metadata={'memex.stage': operation_name}):
@@ -125,7 +132,12 @@ async def run_dspy_operation(
 
         return result
 
-    except TimeoutError:
+    except litellm.exceptions.Timeout as e:
+        # Inner: upstream LLM provider socket deadline fired (httpx/LiteLLM).
+        # POC-001 confirmed this is what bubbles up when dspy.LM(timeout=N)
+        # plumbs through to the underlying httpx client. Distinct log line so
+        # operators can tell "provider unhealthy" from "asyncio scheduling
+        # stall" — both surface as a timeout but the remediation differs.
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start
@@ -133,8 +145,38 @@ async def run_dspy_operation(
         LLM_CALL_DURATION_SECONDS.observe(elapsed)
         CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
 
-        logger.error('DSPy operation timed out after %ds: %s', timeout, operation_name)
-        raise RuntimeError(f'LLM call timed out after {timeout}s ({operation_name})') from None
+        logger.error(
+            'Upstream LLM provider timeout after %.3fs (operation=%s): %s',
+            elapsed,
+            operation_name,
+            e,
+        )
+        raise RuntimeError(
+            f'LLM call timed out (upstream provider) after {elapsed:.3f}s ({operation_name})'
+        ) from e
+
+    except TimeoutError:
+        # Outer: asyncio.wait_for(timeout=...) fired before _execute returned.
+        # Means the provider didn't surface a socket timeout in time — the
+        # Python-side deadline tripped first (e.g. coroutine scheduling stall,
+        # an event-loop stuck in a CPU-bound predictor body, or a provider
+        # that swallows its own timeout). Different remediation than F10's
+        # provider-timeout branch above.
+        await _circuit_breaker.record_failure()
+
+        elapsed = time.monotonic() - start
+        LLM_CALLS_TOTAL.labels(status='timeout').inc()
+        LLM_CALL_DURATION_SECONDS.observe(elapsed)
+        CIRCUIT_BREAKER_STATE.set(_STATE_VALUES.get(str(_circuit_breaker.state), 0))
+
+        logger.error(
+            'DSPy operation timed out (asyncio.wait_for) after %ds: %s',
+            timeout,
+            operation_name,
+        )
+        raise RuntimeError(
+            f'LLM call timed out (asyncio.wait_for) after {timeout}s ({operation_name})'
+        ) from None
 
     except (ValueError, RuntimeError, OSError, KeyError) as e:
         await _circuit_breaker.record_failure()
