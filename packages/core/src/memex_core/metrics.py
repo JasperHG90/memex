@@ -68,3 +68,19 @@ CIRCUIT_BREAKER_REJECTIONS_TOTAL = Counter(
     'memex_circuit_breaker_rejections_total',
     'Total number of calls rejected by the circuit breaker',
 )
+
+# ---------------------------------------------------------------------------
+# Extraction-pipeline in-flight gauges (wedge diagnostics)
+# ---------------------------------------------------------------------------
+
+EXTRACTION_INFLIGHT = Gauge(
+    'memex_extraction_inflight',
+    'Number of extraction LLM calls currently in flight, by stage.',
+    ['stage'],  # scan | refine | summarize | block_summarize
+)
+
+SYNC_OFFLOAD_INFLIGHT = Gauge(
+    'memex_sync_offload_inflight',
+    'Number of synchronous-offload model calls currently in flight, by stage.',
+    ['stage'],  # rerank | embed | ner
+)
