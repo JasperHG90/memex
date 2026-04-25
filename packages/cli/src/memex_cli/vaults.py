@@ -335,6 +335,11 @@ async def vault_summary(
             inv_table.add_row(
                 'Recent (7d / 30d)', f'{recent.get("7d", 0)} / {recent.get("30d", 0)}'
             )
+        last_activity_at = inv.get('last_activity_at')
+        if last_activity_at:
+            days_since = inv.get('days_since_last_note')
+            suffix = f' ({days_since} days ago)' if days_since is not None else ''
+            inv_table.add_row('Last Activity', f'{last_activity_at}{suffix}')
         by_template = inv.get('by_template', {})
         if by_template:
             inv_table.add_row(

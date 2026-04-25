@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import pytest
 
+from conftest import _mock_inventory_session  # type: ignore[attr-defined]
+
 from memex_common.config import VaultSummaryConfig
 from memex_core.memory.sql_models import VaultSummary
 from memex_core.services.vault_summary import VaultSummaryService
@@ -91,18 +93,12 @@ class TestVersionTrackingNoInfiniteLoop:
         ctx1.__aexit__ = AsyncMock(return_value=False)
 
         # Phase 2: compute_inventory session
-        inv_session = AsyncMock()
-        inv_results = [MagicMock() for _ in range(6)]
-        inv_results[0].scalar.return_value = 21  # total_notes
-        inv_results[1].scalar.return_value = 5  # total_entities
-        inv_results[2].one_or_none.return_value = None  # date_range
-        inv_results[3].all.return_value = []  # doc_metadata
-        inv_results[4].scalar.return_value = 2  # recent_7d
-        inv_results[5].scalar.return_value = 10  # recent_30d
-        inv_session.execute = AsyncMock(side_effect=inv_results)
-        inv_ctx = AsyncMock()
-        inv_ctx.__aenter__ = AsyncMock(return_value=inv_session)
-        inv_ctx.__aexit__ = AsyncMock(return_value=False)
+        inv_ctx, _ = _mock_inventory_session(
+            total_notes=21,
+            total_entities=5,
+            recent_7d=2,
+            recent_30d=10,
+        )
 
         # Phase 2b: compute_key_entities session
         ke_session = AsyncMock()
@@ -220,19 +216,7 @@ class TestComputeInventory:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
-        results[0].scalar.return_value = 0  # total_notes
-        results[1].scalar.return_value = 0  # total_entities
-        results[2].one_or_none.return_value = (None, None)  # date_range
-        results[3].all.return_value = []  # doc_metadata
-        results[4].scalar.return_value = 0  # recent_7d
-        results[5].scalar.return_value = 0  # recent_30d
-        session.execute = AsyncMock(side_effect=results)
-
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_inventory_session(date_range=(None, None))
         svc.metastore.session = lambda: ctx
 
         inv = await svc._compute_inventory(vault_id)
@@ -251,39 +235,42 @@ class TestComputeInventory:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
-        results[0].scalar.return_value = 3
-
-        results[1].scalar.return_value = 2
-
         date_row = MagicMock()
         date_row.__getitem__ = lambda self, idx: [
             datetime(2024, 1, 15, tzinfo=timezone.utc),
             datetime(2026, 4, 6, tzinfo=timezone.utc),
         ][idx]
-        results[2].one_or_none.return_value = date_row
 
-        # doc_metadata rows
-        results[3].all.return_value = [
-            (
-                {
-                    'template': 'article',
-                    'source_uri': 'https://arxiv.org/paper1',
-                    'tags': ['ai', 'ml'],
-                },
-            ),
-            ({'template': 'article', 'source_uri': 'https://arxiv.org/paper2', 'tags': ['ai']},),
-            ({'template': 'bookmark', 'source_uri': 'https://github.com/repo', 'tags': ['code']},),
-        ]
-
-        results[4].scalar.return_value = 1
-        results[5].scalar.return_value = 3
-        session.execute = AsyncMock(side_effect=results)
-
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_inventory_session(
+            total_notes=3,
+            total_entities=2,
+            date_range=date_row,
+            doc_metadata=[
+                (
+                    {
+                        'template': 'article',
+                        'source_uri': 'https://arxiv.org/paper1',
+                        'tags': ['ai', 'ml'],
+                    },
+                ),
+                (
+                    {
+                        'template': 'article',
+                        'source_uri': 'https://arxiv.org/paper2',
+                        'tags': ['ai'],
+                    },
+                ),
+                (
+                    {
+                        'template': 'bookmark',
+                        'source_uri': 'https://github.com/repo',
+                        'tags': ['code'],
+                    },
+                ),
+            ],
+            recent_7d=1,
+            recent_30d=3,
+        )
         svc.metastore.session = lambda: ctx
 
         inv = await svc._compute_inventory(vault_id)
@@ -299,26 +286,15 @@ class TestComputeInventory:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
-        results[0].scalar.return_value = 2
-        results[1].scalar.return_value = 0
-        results[2].one_or_none.return_value = (None, None)
-
-        # Mixed: one valid, one None, one non-dict
-        results[3].all.return_value = [
-            ({'template': 'article', 'tags': ['ai']},),
-            (None,),
-            ('not-a-dict',),
-        ]
-
-        results[4].scalar.return_value = 0
-        results[5].scalar.return_value = 0
-        session.execute = AsyncMock(side_effect=results)
-
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_inventory_session(
+            total_notes=2,
+            date_range=(None, None),
+            doc_metadata=[
+                ({'template': 'article', 'tags': ['ai']},),
+                (None,),
+                ('not-a-dict',),
+            ],
+        )
         svc.metastore.session = lambda: ctx
 
         inv = await svc._compute_inventory(vault_id)
@@ -332,23 +308,11 @@ class TestComputeInventory:
         svc = _make_service()
         vault_id = uuid4()
 
-        session = AsyncMock()
-        results = [MagicMock() for _ in range(6)]
-        results[0].scalar.return_value = 1
-        results[1].scalar.return_value = 0
-        results[2].one_or_none.return_value = (None, None)
-
-        results[3].all.return_value = [
-            ({'source_uri': 'not://a[valid/url', 'tags': []},),
-        ]
-
-        results[4].scalar.return_value = 0
-        results[5].scalar.return_value = 0
-        session.execute = AsyncMock(side_effect=results)
-
-        ctx = AsyncMock()
-        ctx.__aenter__ = AsyncMock(return_value=session)
-        ctx.__aexit__ = AsyncMock(return_value=False)
+        ctx, _ = _mock_inventory_session(
+            total_notes=1,
+            date_range=(None, None),
+            doc_metadata=[({'source_uri': 'not://a[valid/url', 'tags': []},)],
+        )
         svc.metastore.session = lambda: ctx
 
         # Should not raise

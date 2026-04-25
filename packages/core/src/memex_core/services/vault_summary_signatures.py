@@ -73,9 +73,10 @@ class VaultSummaryUpdateSignature(dspy.Signature):
     thematic synthesis (2-4 sentences, max 200 tokens) capturing what the vault
     is about and what cross-cutting patterns connect the themes.
 
-    Use publish_date fields to determine trend: growing (3+ new in 30d),
-    stable (1-2), dormant (none in 30d). Adjust note_count by adding new
-    notes that fit each theme to the existing count.
+    Use publish_date fields relative to current_time to determine trend:
+    growing (3+ new in the 30 days before current_time), stable (1-2),
+    dormant (none in 30 days). Adjust note_count by adding new notes that
+    fit each theme to the existing count.
     """
 
     current_narrative: str = dspy.InputField(
@@ -84,6 +85,10 @@ class VaultSummaryUpdateSignature(dspy.Signature):
     current_themes: list[LLMTheme] = dspy.InputField(desc='Current themes.')
     new_notes: list[NoteMetadata] = dspy.InputField(desc='Newly added notes with rich metadata.')
     vault_stats: VaultStats = dspy.InputField(desc='Vault statistics for context.')
+    current_time: str = dspy.InputField(
+        desc='Current wall-clock time in ISO 8601 UTC. Anchor the "last 30 days" '
+        'window for trend classification to this timestamp.'
+    )
 
     updated_narrative: str = dspy.OutputField(
         desc='Updated narrative. Short thematic synthesis (2-4 sentences), max 200 tokens. '
@@ -101,15 +106,20 @@ class VaultSummaryFullSignature(dspy.Signature):
     narrative. The narrative (2-4 sentences, max 200 tokens) should capture the
     overall scope of the vault and the patterns connecting its themes.
 
-    Use publish_date fields to determine each theme's trend: growing (3+ notes
-    added in last 30 days), stable (1-2), dormant (none in 30 days).
-    Pick 2-3 representative note titles per theme from the input.
+    Use publish_date fields relative to current_time to determine each theme's
+    trend: growing (3+ notes added in the 30 days before current_time),
+    stable (1-2), dormant (none in 30 days). Pick 2-3 representative note
+    titles per theme from the input.
     """
 
     notes: list[NoteMetadata] = dspy.InputField(desc='All note metadata in the vault.')
     vault_note_count: int = dspy.InputField(desc='Total number of notes in the vault.')
     max_narrative_tokens: int = dspy.InputField(
         desc='Maximum token count for the narrative output.'
+    )
+    current_time: str = dspy.InputField(
+        desc='Current wall-clock time in ISO 8601 UTC. Anchor the "last 30 days" '
+        'window for trend classification to this timestamp.'
     )
 
     narrative: str = dspy.OutputField(
@@ -124,11 +134,17 @@ class VaultTopicExtractSignature(dspy.Signature):
 
     Given a batch of note metadata, identify the key themes covered.
     This is the first pass in hierarchical summarization for large vaults.
+    Use publish_date fields relative to current_time when classifying each
+    theme's trend (growing / stable / dormant over the last 30 days).
     """
 
     notes: list[NoteMetadata] = dspy.InputField(desc='Note metadata in this batch.')
     batch_index: int = dspy.InputField(desc='The index of this batch (0-based).')
     total_batches: int = dspy.InputField(desc='Total number of batches being processed.')
+    current_time: str = dspy.InputField(
+        desc='Current wall-clock time in ISO 8601 UTC. Anchor the "last 30 days" '
+        'window for trend classification to this timestamp.'
+    )
 
     themes: list[LLMTheme] = dspy.OutputField(desc='Extracted themes from this batch.')
     batch_summary: str = dspy.OutputField(
@@ -144,13 +160,18 @@ class VaultTopicMergeSignature(dspy.Signature):
 
     Deduplicate themes that refer to the same concept under different names.
     Sum note_count when merging duplicate themes. Keep between 5-15 final themes.
-    Narrative must be under 200 tokens.
+    Narrative must be under 200 tokens. Use current_time to anchor each
+    merged theme's trend classification to the 30 days before that timestamp.
     """
 
     batch_results: list[BatchResult] = dspy.InputField(
         desc='Results from each batch: themes and batch summaries.'
     )
     vault_note_count: int = dspy.InputField(desc='Total number of notes in the vault.')
+    current_time: str = dspy.InputField(
+        desc='Current wall-clock time in ISO 8601 UTC. Anchor the "last 30 days" '
+        'window for trend classification to this timestamp.'
+    )
 
     narrative: str = dspy.OutputField(
         desc='Thematic synthesis from all batches, max 200 tokens. '

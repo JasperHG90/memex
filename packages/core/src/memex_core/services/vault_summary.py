@@ -27,6 +27,7 @@ from uuid import UUID
 
 import dspy
 from sqlalchemy import update as sa_update
+from sqlalchemy.orm import make_transient
 from sqlmodel import col, func, select
 
 from memex_common.config import VaultSummaryConfig
@@ -59,6 +60,38 @@ _SYSTEM_TAGS = frozenset({'obsidian', 'cli', 'quick-note', 'note-with-assets', '
 def _themes_to_dicts(themes: list[LLMTheme | dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert LLMTheme objects to dicts for JSONB persistence."""
     return [t.model_dump() if isinstance(t, LLMTheme) else t for t in themes]
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    """Serialize a datetime as ISO 8601, tagging naive values as UTC.
+
+    Postgres ``TIMESTAMP WITH TIME ZONE`` columns return aware datetimes via
+    asyncpg (already UTC), so for the production path this is effectively
+    "ensure aware, then format". Naive values can still leak in from older
+    rows or non-tz-aware storage backends, in which case we *assume* UTC
+    rather than convert from it. This function does NOT convert other
+    timezones to UTC — an aware ``-05:00`` value is preserved as-is.
+    Renaming-shy callers can read this as "to ISO, defaulting to UTC".
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+def _days_ago(value: datetime | None, now: datetime) -> int | None:
+    """Whole days between ``value`` and ``now``, never negative.
+
+    Returns ``None`` if ``value`` is ``None``. Naive ``value`` is treated as
+    UTC, mirroring ``_to_utc_iso``. Clamping at 0 prevents future-dated
+    timestamps (clock skew, bad data) from producing negative counts.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return max((now - value).days, 0)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -113,11 +146,119 @@ class VaultSummaryService:
         self.config = config
 
     async def get_summary(self, vault_id: UUID) -> VaultSummary | None:
-        """Fetch the current vault summary, or None if none exists."""
+        """Fetch the current vault summary, or None if none exists.
+
+        Applies a freshness overlay on read: time-sensitive inventory fields
+        (``recent_activity``, ``last_activity_at``, ``days_since_last_note``,
+        ``date_range.latest``) are recomputed against wall-clock ``now``, and
+        every theme's ``trend`` is forced to ``'dormant'`` when the vault has
+        had no notes within ``config.dormant_threshold_days``. The persisted
+        row is not modified.
+        """
         async with self.metastore.session() as session:
             stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
             result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            summary = result.scalar_one_or_none()
+
+        if summary is None:
+            return None
+        return await self._apply_freshness_overlay(summary)
+
+    async def _apply_freshness_overlay(self, summary: VaultSummary) -> VaultSummary:
+        """Overlay fresh time-sensitive fields onto a detached summary.
+
+        The summary object is detached after ``get_summary``'s session exits;
+        ``make_transient`` makes that intent explicit so any future caller that
+        accidentally re-attaches the object via ``session.add``/``merge`` won't
+        leak the overlay-only mutations into the database. Only time-varying
+        fields are touched; template/domain/tag aggregates keep their
+        persisted values.
+
+        Consistency: the row fetch in ``get_summary`` and the fresh-fields
+        query here run in separate transactions. A concurrent write between
+        the two can make the overlaid fields mildly inconsistent with the
+        persisted row (e.g. a note that appears in ``recent_activity`` but
+        not yet in the persisted ``total_notes``). Acceptable for the
+        display-only read path; writers (``update_summary``,
+        ``regenerate_summary``) use ``_compute_inventory`` and persist a
+        single coherent snapshot.
+        """
+        make_transient(summary)
+        fresh = await self._compute_fresh_fields(summary.vault_id)
+
+        inventory = dict(summary.inventory) if summary.inventory else {}
+        inventory['recent_activity'] = fresh['recent_activity']
+        inventory['last_activity_at'] = fresh['last_activity_at']
+        inventory['days_since_last_note'] = fresh['days_since_last_note']
+
+        existing_date_range = dict(inventory.get('date_range') or {})
+        if fresh.get('date_range_latest'):
+            existing_date_range['latest'] = fresh['date_range_latest']
+        if existing_date_range:
+            inventory['date_range'] = existing_date_range
+
+        summary.inventory = inventory
+
+        days_since = fresh['days_since_last_note']
+        threshold = self.config.dormant_threshold_days
+        if days_since is not None and days_since > threshold and summary.themes:
+            demoted: list[dict[str, Any]] = []
+            for theme in summary.themes:
+                theme_copy = dict(theme)
+                theme_copy['trend'] = 'dormant'
+                demoted.append(theme_copy)
+            summary.themes = demoted
+
+        return summary
+
+    async def _compute_fresh_fields(
+        self,
+        vault_id: UUID,
+        _now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Compute only the time-sensitive overlay fields. 3 SQL queries.
+
+        Used by the read path (``get_summary``) to avoid the full
+        ``_compute_inventory`` cost on every call. Returns a dict with
+        ``recent_activity`` (7d/30d counts), ``last_activity_at`` (ISO
+        string or None), ``days_since_last_note`` (int or None), and
+        ``date_range_latest`` (ISO string or None).
+
+        ``_now`` is injected for deterministic testing; defaults to wall-clock.
+        """
+        now = _now if _now is not None else datetime.now(timezone.utc)
+        async with self.metastore.session() as session:
+            recent_row = (
+                await session.execute(
+                    select(
+                        func.count().filter(col(Note.created_at) >= now - timedelta(days=7)),
+                        func.count().filter(col(Note.created_at) >= now - timedelta(days=30)),
+                    )
+                    .select_from(Note)
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                )
+            ).one_or_none()
+
+            max_row = (
+                await session.execute(
+                    select(func.max(Note.created_at), func.max(Note.publish_date))
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                )
+            ).one_or_none()
+
+        recent_7d = (recent_row[0] if recent_row else 0) or 0
+        recent_30d = (recent_row[1] if recent_row else 0) or 0
+        last_activity_raw = max_row[0] if max_row else None
+        publish_latest_raw = max_row[1] if max_row else None
+
+        return {
+            'recent_activity': {'7d': recent_7d, '30d': recent_30d},
+            'last_activity_at': _to_utc_iso(last_activity_raw),
+            'days_since_last_note': _days_ago(last_activity_raw, now),
+            'date_range_latest': _to_utc_iso(publish_latest_raw),
+        }
 
     async def delete_summary(self, vault_id: UUID) -> bool:
         """Delete the vault summary. Returns True if a summary was deleted."""
@@ -252,6 +393,8 @@ class VaultSummaryService:
         running_narrative = current_narrative
         running_themes = [LLMTheme(**t) if isinstance(t, dict) else t for t in current_themes]
 
+        current_time = datetime.now(timezone.utc).isoformat()
+
         for batch in batches:
             notes = [NoteMetadata(**n) for n in batch]
             predictor = dspy.Predict(VaultSummaryUpdateSignature)
@@ -267,6 +410,7 @@ class VaultSummaryService:
                         new_since_last=len(batch),
                         max_narrative_tokens=self.config.max_narrative_tokens,
                     ),
+                    'current_time': current_time,
                 },
                 operation_name='vault_summary_update',
             )
@@ -354,13 +498,14 @@ class VaultSummaryService:
         # LLM-synthesized fields
         total_payload_tokens = _estimate_tokens(json.dumps(notes_data, default=str))
         max_tokens = self.config.max_batch_tokens
+        current_time = datetime.now(timezone.utc).isoformat()
 
         if total_payload_tokens <= max_tokens:
-            narrative, themes = await self._tier1_single_call(notes_data, note_count)
+            narrative, themes = await self._tier1_single_call(notes_data, note_count, current_time)
         elif total_payload_tokens <= max_tokens * 10:
-            narrative, themes = await self._tier2_two_pass(notes_data, note_count)
+            narrative, themes = await self._tier2_two_pass(notes_data, note_count, current_time)
         else:
-            narrative, themes = await self._tier3_hierarchical(notes_data, note_count)
+            narrative, themes = await self._tier3_hierarchical(notes_data, note_count, current_time)
 
         # Persist
         async with self.metastore.session() as session:
@@ -398,10 +543,17 @@ class VaultSummaryService:
     # Computed fields (no LLM)
     # ------------------------------------------------------------------ #
 
-    async def _compute_inventory(self, vault_id: UUID) -> dict[str, Any]:
-        """Compute content inventory from DB aggregates. No LLM calls."""
+    async def _compute_inventory(
+        self,
+        vault_id: UUID,
+        _now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Compute content inventory from DB aggregates. No LLM calls.
+
+        ``_now`` is injected for deterministic testing; defaults to wall-clock.
+        """
         async with self.metastore.session() as session:
-            now = datetime.now(timezone.utc)
+            now = _now if _now is not None else datetime.now(timezone.utc)
 
             # Total active notes
             total_stmt = (
@@ -429,8 +581,8 @@ class VaultSummaryService:
             date_range: dict[str, str | None] = {'earliest': None, 'latest': None}
             if date_row and date_row[0]:
                 date_range = {
-                    'earliest': date_row[0].isoformat() if date_row[0] else None,
-                    'latest': date_row[1].isoformat() if date_row[1] else None,
+                    'earliest': _to_utc_iso(date_row[0]),
+                    'latest': _to_utc_iso(date_row[1]),
                 }
 
             # Template distribution, source domains, tags — from doc_metadata JSONB
@@ -487,6 +639,14 @@ class VaultSummaryService:
                 )
             ).scalar() or 0
 
+            last_activity_row = (
+                await session.execute(
+                    select(func.max(Note.created_at))
+                    .where(col(Note.vault_id) == vault_id)
+                    .where(col(Note.status) == 'active')
+                )
+            ).scalar()
+
         return {
             'total_notes': total_notes,
             'total_entities': total_entities,
@@ -495,6 +655,8 @@ class VaultSummaryService:
             'by_source_domain': dict(domain_counts.most_common(10)),
             'top_tags': dict(tag_counts.most_common(15)),
             'recent_activity': {'7d': recent_7d, '30d': recent_30d},
+            'last_activity_at': _to_utc_iso(last_activity_row),
+            'days_since_last_note': _days_ago(last_activity_row, now),
         }
 
     async def _compute_key_entities(self, vault_id: UUID, limit: int = 10) -> list[dict[str, Any]]:
@@ -641,6 +803,7 @@ class VaultSummaryService:
         self,
         notes_data: list[dict[str, Any]],
         note_count: int,
+        current_time: str,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Tier 1: single LLM call for small payloads."""
         notes = [NoteMetadata(**n) for n in notes_data]
@@ -652,6 +815,7 @@ class VaultSummaryService:
                 'notes': notes,
                 'vault_note_count': note_count,
                 'max_narrative_tokens': self.config.max_narrative_tokens,
+                'current_time': current_time,
             },
             operation_name='vault_summary_full',
         )
@@ -661,18 +825,20 @@ class VaultSummaryService:
         self,
         notes_data: list[dict[str, Any]],
         note_count: int,
+        current_time: str,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Tier 2: theme extraction per token-batch + synthesis."""
         batches = _split_into_token_batches(
             notes_data, self.config.max_batch_tokens, self.config.batch_size
         )
-        batch_results = await self._extract_themes_from_batches(batches)
-        return await self._merge_batch_results(batch_results, note_count)
+        batch_results = await self._extract_themes_from_batches(batches, current_time)
+        return await self._merge_batch_results(batch_results, note_count, current_time)
 
     async def _tier3_hierarchical(
         self,
         notes_data: list[dict[str, Any]],
         note_count: int,
+        current_time: str,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Tier 3: theme extraction + recursive merge for very large vaults.
 
@@ -684,7 +850,9 @@ class VaultSummaryService:
         batches = _split_into_token_batches(
             notes_data, self.config.max_batch_tokens, self.config.batch_size
         )
-        batch_results: list[BatchResult] = await self._extract_themes_from_batches(batches)
+        batch_results: list[BatchResult] = await self._extract_themes_from_batches(
+            batches, current_time
+        )
 
         merge_group_size = self.config.batch_size
         while len(batch_results) > merge_group_size:
@@ -695,7 +863,9 @@ class VaultSummaryService:
             merged: list[BatchResult] = []
             for group in merge_groups:
                 try:
-                    narrative, themes = await self._merge_batch_results(group, note_count)
+                    narrative, themes = await self._merge_batch_results(
+                        group, note_count, current_time
+                    )
                     merged.append(
                         BatchResult(
                             batch_index=len(merged),
@@ -712,11 +882,12 @@ class VaultSummaryService:
                 return '', []
             batch_results = merged
 
-        return await self._merge_batch_results(batch_results, note_count)
+        return await self._merge_batch_results(batch_results, note_count, current_time)
 
     async def _extract_themes_from_batches(
         self,
         batches: list[list[dict[str, Any]]],
+        current_time: str,
     ) -> list[BatchResult]:
         """Extract themes from each batch via LLM calls."""
         total_batches = len(batches)
@@ -733,6 +904,7 @@ class VaultSummaryService:
                         'notes': notes,
                         'batch_index': i,
                         'total_batches': total_batches,
+                        'current_time': current_time,
                     },
                     operation_name='vault_summary_theme_extract',
                 )
@@ -759,6 +931,7 @@ class VaultSummaryService:
         self,
         batch_results: list[BatchResult],
         note_count: int,
+        current_time: str,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Merge batch theme results into a final narrative and theme list."""
         predictor = dspy.Predict(VaultTopicMergeSignature)
@@ -768,6 +941,7 @@ class VaultSummaryService:
             input_kwargs={
                 'batch_results': batch_results,
                 'vault_note_count': note_count,
+                'current_time': current_time,
             },
             operation_name='vault_summary_theme_merge',
         )

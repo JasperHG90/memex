@@ -998,7 +998,11 @@ class VaultSummaryDTO(BaseModel):
     )
     inventory: dict[str, Any] = Field(
         description='Computed content stats: total_notes, total_entities, date_range, '
-        'by_template, by_source_domain, top_tags, recent_activity.'
+        'by_template, by_source_domain, top_tags, recent_activity, '
+        'last_activity_at (ISO 8601 UTC string or null), '
+        'days_since_last_note (int or null). The time-sensitive fields '
+        '(recent_activity, last_activity_at, days_since_last_note, '
+        'date_range.latest) are recomputed against wall-clock now on every read.'
     )
     key_entities: list[dict[str, Any]] = Field(
         description='Top entities by mention count: [{name, type, mention_count}].'
