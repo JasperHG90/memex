@@ -49,12 +49,47 @@ def _configure_offload_semaphores_default():
     with default ServerConfig caps. Tests that need specific caps (e.g.
     test_reranker_respects_concurrency_cap with cap=2) call
     configure_offload_semaphores(cfg) explicitly to override.
+
+    F11 (Phase 3 adversarial fix): the previous version of this fixture only
+    set state on entry and left whatever the previous test reconfigured in
+    place between teardown and the next setup. Tests that mutate
+    `_offload._CFG` (e.g. cap=2 stress tests) could leak state to a
+    subsequent test that read `_offload._CFG` before the autouse next ran —
+    rare in practice (pytest runs tests serially within a process), but
+    real if pytest-xdist or any test-runtime code observed the globals
+    between tests.
+
+    Resolution: null the four globals BEFORE re-configuring at setup, and
+    null them AFTER yielding so a leaked reference from inside the test
+    cannot influence the next test's configuration. Concretely the reset
+    sequence is:
+        setup:   _CFG=None, semaphores=None  ->  configure_offload_semaphores(default)
+        yield
+        teardown: _CFG=None, semaphores=None  (next test's autouse reconfigures)
     """
     from memex_common.config import ServerConfig
-    from memex_core.memory.retrieval._offload import configure_offload_semaphores
+    from memex_core.memory.retrieval import _offload
 
-    configure_offload_semaphores(ServerConfig())
-    yield
+    # Pre-yield reset: clear any leaked state from a prior test, then
+    # establish fresh defaults so tests start from a known configuration.
+    _offload._CFG = None
+    _offload._RERANKER_SEMAPHORE = None
+    _offload._EMBEDDING_SEMAPHORE = None
+    _offload._NER_SEMAPHORE = None
+    _offload.configure_offload_semaphores(ServerConfig())
+    try:
+        yield
+    finally:
+        # Post-yield reset: defensive — should the next test's autouse run
+        # before the previous test releases a captured semaphore reference,
+        # the captured reference is still the OLD object and the new test
+        # gets a fresh one. Without this, a test that patched _CFG fields
+        # after configure (e.g. mutating reranker_call_timeout in place)
+        # would leak the patched cfg into the next test.
+        _offload._CFG = None
+        _offload._RERANKER_SEMAPHORE = None
+        _offload._EMBEDDING_SEMAPHORE = None
+        _offload._NER_SEMAPHORE = None
 
 
 @pytest.fixture

@@ -100,7 +100,7 @@ def test_watchdog_silent_while_progressing(tmp_path, fake_clock, isolated_regist
     # Five intervals, each progressing within the threshold. Watchdog must stay silent.
     for _ in range(5):
         fake_clock.tick(8.0)
-        wd.record_progress()
+        wd.record_progress('scan')
         assert wd.check_once() is False
 
     assert wd.fired is False
@@ -122,6 +122,78 @@ def test_watchdog_silent_when_no_in_flight(tmp_path, fake_clock, isolated_regist
     assert wd.check_once() is False
     assert wd.fired is False
     assert not os.path.exists(dump_path)
+
+
+def test_watchdog_fires_on_asymmetric_stall(
+    tmp_path, fake_clock, isolated_registry, gauges
+) -> None:
+    """F3 regression: scan keeps ticking but refine is wedged → fire on refine.
+
+    Before F3, the watchdog kept a single global ``_last_progress_at``. Every
+    scan ``record_progress`` refreshed it, and a stuck refine task with its
+    gauge > 0 was masked indefinitely.
+
+    Post-F3, ``_last_progress_at`` is per-stage. We hold a refine in-flight
+    counter without recording any refine progress, drive rapid scan progress
+    ticks, and assert the watchdog fires on the wedged refine stage.
+    """
+    dump_path = str(tmp_path / 'dump.txt')
+    # refine has one task in flight (gauge > 0) — but we never tick it.
+    gauges['extraction'].labels(stage='refine').inc()
+    # scan has no in-flight load — but we'll tick its progress rapidly to
+    # confirm the global timestamp does NOT mask the refine wedge.
+    wd = _Watchdog(
+        stale_threshold_s=10.0,
+        dump_path=dump_path,
+        clock=fake_clock,
+        registry=isolated_registry,
+    )
+
+    # Five rapid scan progress ticks within the threshold. Pre-F3 these would
+    # have suppressed the fire because they refreshed a global timestamp.
+    for _ in range(5):
+        fake_clock.tick(8.0)  # 8s < 10s threshold for scan if it had inflight
+        wd.record_progress('scan')
+
+    # Total elapsed time: 5 * 8 = 40 s, well past the 10 s threshold.
+    # Refine has gauge > 0 and never got a progress tick. The watchdog must
+    # observe the asymmetric stall and fire.
+    fired = wd.check_once()
+
+    assert fired is True, (
+        'Watchdog did not fire on a wedged refine stage even though scan was '
+        'progressing. Per-stage tracking (F3) must surface the asymmetric stall.'
+    )
+    assert wd.fired is True
+    assert os.path.exists(dump_path)
+
+
+def test_watchdog_per_stage_tracking_isolates_stages(
+    tmp_path, fake_clock, isolated_registry, gauges
+) -> None:
+    """F3 verification: progress on stage A does not refresh stage B's timestamp.
+
+    Direct probe of the data structure: after `record_progress('scan')`, only
+    the 'scan' key in `_last_progress_at` advances. 'refine' falls back to
+    the construction time on read.
+    """
+    wd = _Watchdog(
+        stale_threshold_s=10.0,
+        dump_path=str(tmp_path / 'dump.txt'),
+        clock=fake_clock,
+        registry=isolated_registry,
+    )
+    assert wd._last_progress_at == {}  # nothing recorded yet
+
+    fake_clock.tick(5.0)
+    wd.record_progress('scan')
+    assert wd._last_progress_at == {'scan': 5.0}
+    assert 'refine' not in wd._last_progress_at  # refine timestamp untouched
+
+    fake_clock.tick(5.0)
+    wd.record_progress('refine')
+    assert wd._last_progress_at['scan'] == 5.0  # scan unchanged
+    assert wd._last_progress_at['refine'] == 10.0
 
 
 def test_watchdog_fires_only_once(tmp_path, fake_clock, isolated_registry, gauges) -> None:
@@ -213,7 +285,7 @@ def test_record_progress_is_thread_safe(tmp_path, isolated_registry, gauges) -> 
 
     def hammer() -> None:
         for _ in range(100):
-            wd.record_progress()
+            wd.record_progress('scan')
 
     threads = [threading.Thread(target=hammer) for _ in range(4)]
     for t in threads:
@@ -266,27 +338,27 @@ def test_configure_watchdog_replaces_existing(tmp_path) -> None:
 
 
 def test_module_record_progress_no_op_when_disabled() -> None:
-    """`record_progress()` with no configured watchdog is silent."""
+    """`record_progress(stage)` with no configured watchdog is silent."""
     wedge_watchdog.shutdown_watchdog()  # ensure clean state
     # Must not raise even though no watchdog is configured.
-    wedge_watchdog.record_progress()
+    wedge_watchdog.record_progress('scan')
     assert wedge_watchdog._watchdog is None
 
 
 def test_module_record_progress_calls_through_when_enabled(tmp_path) -> None:
-    """Module-level record_progress reaches the singleton."""
+    """Module-level record_progress reaches the singleton with the stage label."""
     handle = configure_watchdog(
         stale_threshold_s=60.0,
         dump_path=str(tmp_path / 'dump.txt'),
         check_interval_s=0.05,
     )
     assert handle is not None
-    before = handle._last_progress_at
+    assert 'scan' not in handle._last_progress_at  # not yet recorded
     # Sleep an order of magnitude under the threshold so the timestamp must move.
     time.sleep(0.001)
-    wedge_watchdog.record_progress()
-    after = handle._last_progress_at
-    assert after > before
+    wedge_watchdog.record_progress('scan')
+    assert 'scan' in handle._last_progress_at
+    assert handle._last_progress_at['scan'] > handle._construction_time
 
 
 def test_extraction_config_wedge_watchdog_seconds_round_trip() -> None:

@@ -1,7 +1,11 @@
 """Wedge watchdog: OS-thread monitor that dumps tracebacks on extraction stalls.
 
-Fires once when no in-flight extraction stage has decremented in
-``wedge_watchdog_seconds`` while at least one stage gauge is ``> 0``.
+Tracks ``_last_progress_at`` **per stage** (refine/scan/summarize/embed/...).
+Fires once when ANY stage has ``gauge > 0`` AND that stage has not recorded
+progress in ``wedge_watchdog_seconds``. Per-stage tracking is the F3 fix for
+the asymmetric-stall failure mode: a global timestamp would silently swallow
+a stuck refine stage as long as scan kept ticking — even though the operator
+needs to know refine has wedged.
 
 Reads gauges via the prometheus_client registry's public ``collect()`` API —
 no private state, no parallel counters (RFC-001 §A7). Runs on a real OS
@@ -36,11 +40,17 @@ _INFLIGHT_METRIC_NAMES = frozenset(('memex_extraction_inflight', 'memex_sync_off
 class _Watchdog:
     """OS-thread wedge watchdog (RFC-001 §"Step 2.3").
 
-    Fires once when ``inflight > 0`` AND ``now - last_progress_at >= threshold``.
-    Both signals must align before the dump fires — the AC-016 wording is
-    "no in-flight stage has decremented in ``wedge_watchdog_seconds``", so
-    event-driven progress (via :meth:`record_progress`) plus a public-API
-    inflight read are the two halves of the trigger.
+    Fires once when ANY stage has ``inflight > 0`` AND that stage has not
+    recorded progress in ``stale_threshold_s``. Per-stage tracking (F3) is
+    what catches the asymmetric-stall failure: scan keeps ticking but refine
+    is wedged. A global timestamp would refresh on every scan decrement and
+    never fire — per-stage timestamps refresh independently so a stuck refine
+    surfaces.
+
+    Stages without any prior ``record_progress`` call default to "first
+    observation at construction time" (recorded once in ``__init__``); a
+    stage that has never had a tick yet but whose gauge is ``> 0`` is
+    treated as immediately wedged once the threshold elapses past startup.
     """
 
     def __init__(
@@ -56,7 +66,12 @@ class _Watchdog:
         self._clock = clock
         self._check_interval_s = check_interval_s
         self._registry = registry
-        self._last_progress_at = clock()
+        # Per-stage progress timestamps (F3). Default for an unseen stage is
+        # the watchdog construction time — i.e. "no progress yet recorded for
+        # this stage". A stage with gauge > 0 and no progress tick will fire
+        # once stale_threshold_s elapses past construction.
+        self._construction_time = clock()
+        self._last_progress_at: dict[str, float] = {}
         self._fired = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -66,15 +81,16 @@ class _Watchdog:
             name='memex-wedge-watchdog',
         )
 
-    def record_progress(self) -> None:
-        """Record forward progress — called by :func:`_instrument` on stage exit.
+    def record_progress(self, stage: str) -> None:
+        """Record forward progress for ``stage`` — called by :func:`_instrument`
+        on stage exit.
 
-        Thread-safe; the lock makes the timestamp update atomic relative to the
-        watchdog thread's read.
+        Thread-safe; the lock makes the per-stage timestamp update atomic
+        relative to the watchdog thread's read.
         """
         now = self._clock()
         with self._lock:
-            self._last_progress_at = now
+            self._last_progress_at[stage] = now
 
     def start(self) -> None:
         self._thread.start()
@@ -89,22 +105,30 @@ class _Watchdog:
     def fired(self) -> bool:
         return self._fired
 
-    def _read_inflight(self) -> float:
-        """Sum the values of all stage gauges across both metric families.
+    def _read_inflight_per_stage(self) -> dict[str, float]:
+        """Return ``{stage: value}`` across both metric families.
 
         Uses ``registry.collect()`` (public protocol per RFC-001 §A7) rather
-        than ``Gauge._value.get()``. Cost is sub-microsecond at our metric
-        count (~10).
+        than ``Gauge._value.get()``. Per-stage values are what F3's trigger
+        check needs — a global sum hides the asymmetric-stall case.
         """
-        total = 0.0
+        per_stage: dict[str, float] = {}
         for metric in self._registry.collect():
             if metric.name in _INFLIGHT_METRIC_NAMES:
                 for sample in metric.samples:
-                    total += sample.value
-        return total
+                    stage = sample.labels.get('stage')
+                    if stage is not None:
+                        per_stage[stage] = per_stage.get(stage, 0.0) + sample.value
+        return per_stage
 
     def check_once(self) -> bool:
         """Run a single trigger check; return True if the dump fired this call.
+
+        Per-stage trigger semantics (F3): for each stage with gauge > 0, look
+        up its last_progress_at; if the gap from now exceeds the threshold,
+        fire. A stage that has never had a progress tick falls back to the
+        watchdog construction time — so a brand-new wedged stage surfaces
+        once the threshold elapses past startup.
 
         Exposed for deterministic testing — drives one iteration without going
         through the thread loop, so tests can inject a fake clock and assert
@@ -112,13 +136,18 @@ class _Watchdog:
         """
         if self._fired:
             return False
+        now = self._clock()
+        per_stage_inflight = self._read_inflight_per_stage()
         with self._lock:
-            idle = self._clock() - self._last_progress_at
-        inflight = self._read_inflight()
-        if inflight > 0 and idle >= self._stale_threshold_s:
-            self._dump()
-            self._fired = True
-            return True
+            for stage, inflight in per_stage_inflight.items():
+                if inflight <= 0:
+                    continue
+                last = self._last_progress_at.get(stage, self._construction_time)
+                idle = now - last
+                if idle >= self._stale_threshold_s:
+                    self._dump()
+                    self._fired = True
+                    return True
         return False
 
     def _dump(self) -> None:
@@ -213,9 +242,12 @@ def configure_from_settings(
     )
 
 
-def record_progress() -> None:
+def record_progress(stage: str) -> None:
     """Module-level helper — used by ``_instrument`` to avoid passing the
     handle through every gated section. No-ops when the watchdog is disabled.
+
+    Per F3, the stage label is forwarded so the watchdog can track per-stage
+    staleness instead of a global timestamp that would mask asymmetric stalls.
     """
     if _watchdog is not None:
-        _watchdog.record_progress()
+        _watchdog.record_progress(stage)

@@ -96,7 +96,10 @@ async def _instrument(stage: str) -> AsyncIterator[None]:
         yield
     finally:
         gauge.labels(stage=stage).dec()
-        _record_watchdog_progress()
+        # Per F3, forward the stage label so the watchdog tracks staleness
+        # per-stage rather than against a global timestamp (a global one
+        # would mask asymmetric stalls — e.g. scan ticking while refine wedges).
+        _record_watchdog_progress(stage)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         logger.info(
             'stage_complete',
