@@ -61,6 +61,50 @@ logger = logging.getLogger('memex.core.server.ingestion')
 router = APIRouter(prefix='/api/v1', dependencies=[Depends(require_write)])
 
 
+# OpenAPI fragment for the 409 path. Reused by all five `/ingestions/*` BG
+# routes so the AC-021 contract is documented uniformly (body type +
+# `Location` header). Mutating one place keeps the routes in sync.
+_OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
+    409: {
+        'model': BatchJobStatus,
+        'description': (
+            'Overlapping submission — the incoming notes share idempotency '
+            'keys with an in-flight (PENDING or PROCESSING) job in the same '
+            'vault. The response body identifies the existing job and the '
+            '`Location` header points at its status endpoint so the caller '
+            'can poll instead of starting a duplicate.'
+        ),
+        'headers': {
+            'Location': {
+                'description': "Path to the existing job's status endpoint.",
+                'schema': {'type': 'string'},
+            },
+        },
+    },
+}
+
+
+def _overlap_to_409(e: OverlapError) -> JSONResponse:
+    """Translate an `OverlapError` into the AC-021 409 response.
+
+    Used by every ingestion route whose background path can route through
+    `JobManager` (`create_job` directly, or `create_single_job` if a future
+    plumbing change ever propagates the same condition). Centralised so all
+    five `/ingestions/*` BG paths return the same body shape and `Location`
+    header — without this helper a future plumbing change risks reintroducing
+    the F1 500-leak (an uncaught `OverlapError` falling through to FastAPI's
+    default handler).
+    """
+    return JSONResponse(
+        status_code=409,
+        content=BatchJobStatus(
+            job_id=e.existing_id,
+            status=e.status,
+        ).model_dump(mode='json'),
+        headers={'Location': f'/api/v1/ingestions/{e.existing_id}'},
+    )
+
+
 def _decode_base64_dict(
     data: Mapping[str, str | bytes] | None,
     field_name: str = 'content',
@@ -87,7 +131,11 @@ def _decode_base64_dict(
 @router.post(
     '/ingestions',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_note(
     request: Annotated[NoteCreateDTO, Body()],
@@ -152,6 +200,11 @@ async def ingest_note(
 
     except HTTPException:
         raise
+    except OverlapError as e:
+        # The background path calls `create_job`, which raises OverlapError when
+        # the incoming note's idempotency key collides with an in-flight job in
+        # the same vault. Translate to 409 + Location for AC-021 uniformity.
+        return _overlap_to_409(e)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'NoteInput ingestion failed')
 
@@ -159,7 +212,11 @@ async def ingest_note(
 @router.post(
     '/ingestions/url',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_url(
     request: Annotated[IngestURLRequest, Body()],
@@ -196,6 +253,12 @@ async def ingest_url(
         return IngestResponse(**result)
     except HTTPException:
         raise
+    except OverlapError as e:
+        # Defensive: `create_single_job` doesn't currently raise OverlapError,
+        # but a future plumbing change that routes through `create_job` would.
+        # Catching here keeps the AC-021 contract uniform across all five
+        # `/ingestions/*` BG paths and avoids reintroducing the F1 500 leak.
+        return _overlap_to_409(e)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'URL ingestion failed')
 
@@ -222,7 +285,11 @@ async def ingest_file(
 @router.post(
     '/ingestions/upload',
     response_model=None,
-    responses={200: {'model': IngestResponse}, 202: {'model': BatchJobStatus}},
+    responses={
+        200: {'model': IngestResponse},
+        202: {'model': BatchJobStatus},
+        **_OVERLAP_409_RESPONSE,
+    },
 )
 async def ingest_upload(
     api: Annotated[MemexAPI, Depends(get_api)],
@@ -363,6 +430,11 @@ async def ingest_upload(
 
     except HTTPException:
         raise
+    except OverlapError as e:
+        # Defensive: matches the AC-021 contract uniformly across BG paths so
+        # a future change that routes file-upload through `create_job` cannot
+        # reintroduce the F1 500 leak.
+        return _overlap_to_409(e)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'File upload failed')
 
@@ -383,6 +455,7 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
     '/ingestions/webhook',
     status_code=202,
     response_model=BatchJobStatus,
+    responses=_OVERLAP_409_RESPONSE,
 )
 async def ingest_webhook(
     request: Request,
@@ -449,6 +522,11 @@ async def ingest_webhook(
             status_code=202,
             content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
         )
+    except OverlapError as e:
+        # Defensive: matches the AC-021 contract uniformly across BG paths so
+        # a future change that routes webhook ingestion through `create_job`
+        # cannot reintroduce the F1 500 leak.
+        return _overlap_to_409(e)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Webhook ingestion failed')
 
@@ -457,24 +535,7 @@ async def ingest_webhook(
     '/ingestions/batch',
     response_model=BatchJobStatus,
     status_code=202,
-    responses={
-        409: {
-            'model': BatchJobStatus,
-            'description': (
-                'Overlapping batch — the incoming notes share idempotency keys with '
-                'an in-flight (PENDING or PROCESSING) job in the same vault. The '
-                'response body identifies the existing job and the `Location` header '
-                'points at its status endpoint so the caller can poll instead of '
-                'starting a duplicate.'
-            ),
-            'headers': {
-                'Location': {
-                    'description': "Path to the existing job's status endpoint.",
-                    'schema': {'type': 'string'},
-                },
-            },
-        },
-    },
+    responses=_OVERLAP_409_RESPONSE,
 )
 async def ingest_batch(
     request: Annotated[BatchIngestRequest, Body()],
@@ -496,14 +557,7 @@ async def ingest_batch(
         )
         return BatchJobStatus(job_id=job_id, status='pending')
     except OverlapError as e:
-        return JSONResponse(
-            status_code=409,
-            content=BatchJobStatus(
-                job_id=e.existing_id,
-                status=e.status,
-            ).model_dump(mode='json'),
-            headers={'Location': f'/api/v1/ingestions/{e.existing_id}'},
-        )
+        return _overlap_to_409(e)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 

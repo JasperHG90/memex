@@ -250,3 +250,74 @@ async def test_int_openapi_declares_409_for_batch_endpoint(api, init_global_vaul
     assert 'Location' in r409.get('headers', {}), (
         f'409 must declare a Location header; got headers={r409.get("headers")!r}'
     )
+
+
+@pytest.mark.asyncio
+async def test_int_single_note_bg_overlap_returns_409(api, metastore, init_global_vault):
+    """F1 regression: the `/ingestions?background=true` route routes through
+    `JobManager.create_job` (with a single-element notes list). Without the
+    `except OverlapError` block at the route level, an overlap on the second
+    submission falls through to FastAPI's default exception handler and
+    surfaces as a 500 — exactly the leak the rework closes.
+
+    Asserts: first submit → 202; second submit with the same content → 409,
+    with the same `Location` header + `BatchJobStatus`-shaped body the batch
+    endpoint emits. AC-021 contract uniformity across BG paths.
+    """
+    from memex_core.server import app
+
+    await api.initialize()
+    app.state.api = api
+
+    payload = {
+        'name': 'single-note-overlap',
+        'description': 'F1 regression test',
+        'content': base64.b64encode(b'single-note-overlap-content').decode('ascii'),
+    }
+
+    with _patch_run_job_to_noop(api):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
+            first = await ac.post('/api/v1/ingestions?background=true', json=payload)
+            assert first.status_code == 202, first.text
+            first_body = first.json()
+            first_job_id = first_body['job_id']
+
+            second = await ac.post('/api/v1/ingestions?background=true', json=payload)
+
+    # Without the F1 fix this would be 500 (uncaught OverlapError → default handler).
+    assert second.status_code == 409, (
+        f'F1 regression: single-note BG path must translate OverlapError to 409, '
+        f'got status={second.status_code} body={second.text!r}'
+    )
+    assert second.headers['location'] == f'/api/v1/ingestions/{first_job_id}'
+
+    parsed = BatchJobStatus.model_validate(second.json())
+    assert str(parsed.job_id) == first_job_id
+
+
+@pytest.mark.asyncio
+async def test_int_openapi_declares_409_for_single_note_bg_routes(api, init_global_vault):
+    """F1: every `/ingestions/*` route whose BG path can route through
+    `JobManager` must declare the 409 response in its OpenAPI spec — not
+    only the batch endpoint. Catches a missed `responses=` kwarg on any
+    of the four single-note routes."""
+    from memex_core.server import app
+
+    await api.initialize()
+    app.state.api = api
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
+        resp = await ac.get('/openapi.json')
+    spec = resp.json()
+
+    expected_409_paths = [
+        '/api/v1/ingestions',
+        '/api/v1/ingestions/url',
+        '/api/v1/ingestions/upload',
+        '/api/v1/ingestions/webhook',
+        '/api/v1/ingestions/batch',
+    ]
+    missing = [p for p in expected_409_paths if '409' not in spec['paths'][p]['post']['responses']]
+    assert not missing, (
+        f'AC-021 contract uniformity: 409 OpenAPI declaration missing from {missing}.'
+    )
