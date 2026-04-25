@@ -1125,6 +1125,71 @@ class ServerConfig(BaseModel):
         '0 = all at once (no batching). Lower values reduce peak GPU memory.',
     )
 
+    reranker_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=64,
+        description=(
+            'Max concurrent reranker score calls. Shared across both reranker '
+            'asyncio.to_thread sites (memory/retrieval/document_search.py:243 + '
+            'memory/retrieval/engine.py:1086) — one reranker model = one '
+            'capacity budget. Reduce on memory-constrained hosts (e.g. set to '
+            '2 on a Jetson Orin Nano 8 GiB to coexist with reranker_batch_size; '
+            'see docs/how-to/memory-budget.md). Sister lever to '
+            'reranker_batch_size — both must be tuned together to avoid the '
+            'cuDNN allocation failure that neighboured the wedge in issue #50.'
+        ),
+    )
+    embedding_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=64,
+        description=(
+            'Max concurrent embedding model calls. Shared across all three '
+            'embedding asyncio.to_thread sites (api.py:1287 + '
+            'memory/retrieval/document_search.py:130 + '
+            'memory/retrieval/engine.py:208) — one embedding model = one '
+            'capacity budget. Reduce on memory-constrained hosts; see '
+            'docs/how-to/memory-budget.md.'
+        ),
+    )
+    ner_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=64,
+        description=(
+            'Max concurrent NER model calls (memory/retrieval/engine.py:322). '
+            'Reduce on memory-constrained hosts (e.g. set to 2 on a Jetson '
+            'Orin Nano 8 GiB); see docs/how-to/memory-budget.md.'
+        ),
+    )
+    reranker_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for reranker model calls before the '
+            'awaiting coroutine raises TimeoutError. Note: the underlying '
+            'thread keeps running on timeout — the cap (reranker_max_concurrency) '
+            'is what prevents thread accumulation.'
+        ),
+    )
+    embedding_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for embedding model calls. Same '
+            'thread-keeps-running caveat as reranker_call_timeout.'
+        ),
+    )
+    ner_call_timeout: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            'Per-call timeout (seconds) for NER model calls. Same '
+            'thread-keeps-running caveat as reranker_call_timeout.'
+        ),
+    )
+
     logging: LoggingConfig = Field(
         default_factory=LoggingConfig,
         description='Configuration for logging.',
