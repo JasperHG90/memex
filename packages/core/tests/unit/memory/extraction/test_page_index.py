@@ -1138,6 +1138,60 @@ class TestSemaphoreGating:
             )
 
     @pytest.mark.asyncio
+    async def test_refine_recursive_tree_does_not_deadlock_at_cap_one(self) -> None:
+        """Regression: refine_max_concurrency=1 must NOT deadlock when the tree
+        has depth > cap. Earlier wedge proposals wrapped the *recursive call*
+        inside the semaphore — that deadlocks because every parent holds a
+        slot waiting on its children. Our fix releases the sem before the
+        recursive call (extraction/core.py: _process_single_node_refinement).
+
+        Drive a depth-3 tree with cap=1. Test must complete (not hang) — the
+        pytest-timeout plugin would surface a hang as a failure.
+        """
+        indexer = AsyncMarkdownPageIndex(lm=MagicMock(), refine_max_concurrency=1)
+
+        # Build a 3-deep nested tree — refine_tree_recursively will recurse
+        # twice. Parent → child → grandchild, each branch with content needing
+        # refinement.
+        grandchild = TOCNode(
+            original_header_id=2,
+            title='GC',
+            level=3,
+            reasoning='test',
+            content='x' * 6000,
+            start_index=12000,
+            end_index=18000,
+        )
+        child = TOCNode(
+            original_header_id=1,
+            title='C',
+            level=2,
+            reasoning='test',
+            content='x' * 6000,
+            start_index=6000,
+            end_index=12000,
+            children=[grandchild],
+        )
+        parent = TOCNode(
+            original_header_id=0,
+            title='P',
+            level=1,
+            reasoning='test',
+            content='x' * 6000,
+            start_index=0,
+            end_index=6000,
+            children=[child],
+        )
+
+        with patch.object(
+            indexer, '_process_single_chunk', new_callable=AsyncMock, return_value=[]
+        ):
+            await indexer._refine_tree_recursively([parent], full_text='x' * 30000, max_len=5000)
+
+        # Sanity: the semaphore is back to full capacity afterwards.
+        assert indexer._refine_semaphore._value == 1
+
+    @pytest.mark.asyncio
     async def test_summarize_with_cap_two_allows_overlap(self) -> None:
         """Sanity: cap=2 lets at most 2 leaf-summary windows overlap (proves the
         semaphore is the *binding* constraint, not just incidental sequencing)."""

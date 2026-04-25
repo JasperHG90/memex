@@ -44,9 +44,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from memex_core import llm as llm_mod
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.extraction.core import AsyncMarkdownPageIndex
 from memex_core.memory.extraction.models import TOCNode
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breaker() -> None:
+    """Ensure a fresh circuit breaker for each test.
+
+    The hung-LM test records a real timeout failure on the module-level
+    circuit breaker (``memex_core.llm._circuit_breaker``). With its default
+    ``failure_threshold=5`` and a 60s reset timeout, a few accumulated
+    failures across the wider test suite can trip the breaker open and
+    cause unrelated tests (e.g. ``test_metadata_flow``) to see
+    ``CircuitBreakerOpen`` instead of the mocked happy path. Match the
+    pattern used by ``test_tracing_operation.py:25`` and
+    ``test_tracing_parent_spans.py:26``.
+    """
+    from memex_core.circuit_breaker import CircuitBreaker
+
+    llm_mod._circuit_breaker = CircuitBreaker()
+
 
 # RFC-001 §"Step 1.6" bound: timeout × (num_retries + 1) × 1.5.
 # Option (b) — isolate plumbing: num_retries=0, so bound = timeout × 1.5.
