@@ -304,3 +304,51 @@ def test_extraction_config_wedge_watchdog_seconds_round_trip() -> None:
     # Validation: ge=1 means 0 must reject.
     with pytest.raises(ValueError):
         ExtractionConfig(wedge_watchdog_seconds=0)
+
+
+def test_configure_from_settings_disabled_when_none(tmp_path) -> None:
+    """Server lifespan helper: None threshold returns None and starts no thread."""
+    from memex_core.wedge_watchdog import configure_from_settings
+
+    log_file = tmp_path / 'logs' / 'memex.log'
+    handle = configure_from_settings(
+        wedge_watchdog_seconds=None,
+        log_file_path=str(log_file),
+    )
+    assert handle is None
+    # Parent dir is NOT created when watchdog is disabled — no IO side effect.
+    assert not log_file.parent.exists()
+
+
+def test_configure_from_settings_starts_watchdog_when_enabled(tmp_path) -> None:
+    """Server lifespan helper: threshold value starts the watchdog and creates the log dir."""
+    from memex_core.wedge_watchdog import configure_from_settings
+
+    log_file = tmp_path / 'logs' / 'memex.log'
+    handle = configure_from_settings(
+        wedge_watchdog_seconds=30,
+        log_file_path=str(log_file),
+    )
+    assert handle is not None
+    assert handle.is_alive()
+    # Helper ensures the log directory exists so the dump can be written.
+    assert log_file.parent.exists()
+    # Dump path siblings the log file (not the log itself).
+    assert handle._dump_path == str(log_file.with_name('memex-wedge-dump.txt'))
+    # Threshold round-trips as float.
+    assert handle._stale_threshold_s == 30.0
+
+
+def test_configure_from_settings_handles_missing_log_dir(tmp_path) -> None:
+    """Helper creates the log directory if it doesn't exist (mkdir parents=True)."""
+    from memex_core.wedge_watchdog import configure_from_settings
+
+    deep_path = tmp_path / 'a' / 'b' / 'c' / 'memex.log'
+    assert not deep_path.parent.exists()
+
+    handle = configure_from_settings(
+        wedge_watchdog_seconds=10,
+        log_file_path=str(deep_path),
+    )
+    assert handle is not None
+    assert deep_path.parent.is_dir()

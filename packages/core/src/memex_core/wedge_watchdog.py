@@ -189,6 +189,30 @@ def shutdown_watchdog() -> None:
         _watchdog = None
 
 
+def configure_from_settings(
+    wedge_watchdog_seconds: int | None,
+    log_file_path: str,
+) -> '_Watchdog | None':
+    """Configure the watchdog from server settings — used by lifespan wiring.
+
+    Computes the dump path from the configured log file (siblings the log
+    rather than introducing a new config field) and ensures the parent
+    directory exists. Returns None when ``wedge_watchdog_seconds`` is None
+    (the opt-in default is "off"), matching ``configure_watchdog``'s contract.
+    """
+    if wedge_watchdog_seconds is None:
+        return None
+    import pathlib
+
+    log_path = pathlib.Path(log_file_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    dump_path = str(log_path.with_name('memex-wedge-dump.txt'))
+    return configure_watchdog(
+        stale_threshold_s=float(wedge_watchdog_seconds),
+        dump_path=dump_path,
+    )
+
+
 def record_progress() -> None:
     """Module-level helper — used by ``_instrument`` to avoid passing the
     handle through every gated section. No-ops when the watchdog is disabled.
