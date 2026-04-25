@@ -246,3 +246,39 @@ def test_instrument_module_resolves_gauges_from_metrics() -> None:
 def _maybe_unused(_: Any) -> None:
     """Silence unused-import linters on the optional `Any`/`logging` imports
     when we promote — they're useful in the final landing-place edits."""
+
+
+@pytest.mark.asyncio
+async def test_instrument_does_not_leak_gauge_when_read_gauge_value_raises() -> None:
+    """F12 regression: if `_read_gauge_value` raises a non-trivial exception
+    (e.g. a `prometheus_client` internal-state issue), the gauge increment
+    must NOT escape un-decremented.
+
+    Pre-F12 the snapshot read ran ABOVE the try block — a raise would
+    surface BEFORE `try` was entered, the increment was orphaned, and
+    `finally` never executed.
+
+    Post-F12 the snapshot read lives inside `try:` so ANY exception out of
+    `_read_gauge_value` still triggers `finally` and the matching
+    `.dec()`. The exception bubbles to the caller — `_instrument` is
+    transparent to errors — but the gauge invariant holds.
+    """
+    before = _read_gauge('memex_extraction_inflight', 'scan')
+
+    # Force `_read_gauge_value` to raise a non-RuntimeError/OSError type
+    # that the OLD narrow-catch implementation would have let escape.
+    with patch(
+        'memex_core.instrument._read_gauge_value',
+        side_effect=KeyError('simulated prometheus_client corruption'),
+    ):
+        # The KeyError must propagate to the caller (transparent error
+        # handling), but the gauge must still balance.
+        with pytest.raises(KeyError, match='simulated prometheus_client'):
+            async with _instrument('scan'):
+                pytest.fail('body should not run after snapshot raise')
+
+    after = _read_gauge('memex_extraction_inflight', 'scan')
+    assert after == before, (
+        'Gauge leaked: _read_gauge_value raised KeyError but the increment '
+        'was not decremented. F12 regression — see instrument.py:try/finally.'
+    )

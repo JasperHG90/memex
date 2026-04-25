@@ -88,11 +88,19 @@ async def _instrument(stage: str) -> AsyncIterator[None]:
     gauge = _resolve_gauge(stage)
     started = time.monotonic()
     gauge.labels(stage=stage).inc()
-    # Snapshot the gauge value *after* our increment so the log line
-    # records the in-flight count this task observed at start. We sample
-    # via the public collect() API rather than `_value.get()` (private).
-    tasks_in_flight_max = _read_gauge_value(gauge, stage)
+    # F12 (Phase 3): the gauge-value snapshot lives inside the try block so
+    # ANY exception escaping `_read_gauge_value` runs the finally clause and
+    # decrements the gauge. Pre-F12, the snapshot ran above the try and a
+    # leak from `_read_gauge_value` (e.g. a prometheus_client internal-state
+    # corruption raising KeyError, outside the narrow except) would orphan
+    # the .inc() above forever. _read_gauge_value also catches `Exception`
+    # internally as defence in depth, so two independent guarantees protect
+    # the increment/decrement balance. Pre-initialise tasks_in_flight_max=0
+    # so the stage_complete log line in `finally` can still emit even if
+    # the snapshot read raised before assigning a real value.
+    tasks_in_flight_max = 0
     try:
+        tasks_in_flight_max = _read_gauge_value(gauge, stage)
         yield
     finally:
         gauge.labels(stage=stage).dec()
@@ -117,6 +125,16 @@ def _read_gauge_value(gauge: Gauge, stage: str) -> int:
     Public protocol read — RFC-001 §A7. Falls back to 0 on any unexpected
     failure (the gauge family must always exist in the global registry; a
     failure here means an upstream bug, not a user-facing error).
+
+    F12 (Phase 3): catches `Exception`, not just `(RuntimeError, OSError)`.
+    Earlier versions used the narrow tuple, but a `prometheus_client`
+    internal-state corruption (or a future registry-protocol change) could
+    raise something outside that tuple. Letting it escape would orphan
+    the `gauge.labels(stage).inc()` call in `_instrument` because the
+    exception would surface BEFORE the `try/finally` block was entered,
+    leaving the increment with no matching decrement. Logging via
+    `logger.exception` preserves the underlying bug for debugging while
+    keeping the wrapper's "increment + decrement balance" invariant.
     """
     try:
         # Gauge.labels(...) returns a child; the child has a `_value.get()`
@@ -127,6 +145,6 @@ def _read_gauge_value(gauge: Gauge, stage: str) -> int:
             for sample in metric.samples:
                 if sample.labels.get('stage') == stage:
                     return int(sample.value)
-    except (RuntimeError, OSError):
+    except Exception:
         logger.exception('Failed to read gauge value for stage %r', stage)
     return 0
