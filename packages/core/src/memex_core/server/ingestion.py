@@ -86,7 +86,7 @@ _OVERLAP_409_RESPONSE: dict[int | str, dict[str, object]] = {
 }
 
 
-def _overlap_to_409(e: OverlapError, request: Request) -> JSONResponse:
+def _overlap_to_409(e: OverlapError, request: Request | None = None) -> JSONResponse:
     """Translate an `OverlapError` into the AC-021 409 response.
 
     Used by every ingestion route whose background path can route through
@@ -102,16 +102,24 @@ def _overlap_to_409(e: OverlapError, request: Request) -> JSONResponse:
     `audit_event` is fire-and-forget (no `await`) so the 409 response is not
     blocked on audit-log I/O; if `audit_service` is not configured (e.g. the
     server was started without auth wiring), the helper no-ops cleanly.
+
+    ``request`` is ``Optional`` so unit-test code that calls a route function
+    directly (bypassing FastAPI's DI — e.g. ``test_multiformat_ingestion``'s
+    ``await ingest_note(request=dto, api=mock, ...)``) does not have to mock
+    a Starlette ``Request``. Production traffic always supplies one through
+    DI; when it is ``None`` we skip audit emission cleanly. The 409 body
+    itself is unchanged regardless.
     """
-    audit_event(
-        _get_audit_service(request),
-        action='ingestion.overlap_rejected',
-        resource_type='batch_job',
-        resource_id=str(e.existing_id),
-        existing_status=e.status,
-        overlapping_keys_count=len(e.overlapping_keys),
-        path=request.url.path,
-    )
+    if request is not None:
+        audit_event(
+            _get_audit_service(request),
+            action='ingestion.overlap_rejected',
+            resource_type='batch_job',
+            resource_id=str(e.existing_id),
+            existing_status=e.status,
+            overlapping_keys_count=len(e.overlapping_keys),
+            path=request.url.path,
+        )
     return JSONResponse(
         status_code=409,
         content=BatchJobStatus(
