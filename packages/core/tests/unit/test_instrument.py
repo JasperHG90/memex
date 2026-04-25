@@ -146,15 +146,32 @@ async def test_instrument_calls_watchdog_record_progress_on_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_instrument_emits_stage_complete_log_line(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """AC-018 schema: one record per fan-out task with required fields."""
-    with caplog.at_level(logging.INFO, logger='memex.core.instrument'):
+async def test_instrument_emits_stage_complete_log_line() -> None:
+    """AC-018 schema: one record per fan-out task with required fields.
+
+    Captures via a dedicated handler on the `memex.core.instrument` logger
+    so `configure_logging`'s `propagate=False` on the `memex` parent
+    logger doesn't sever the path (pytest caplog uses the root handler).
+    """
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    instrument_logger = logging.getLogger('memex.core.instrument')
+    handler = _Capture(level=logging.INFO)
+    prior_level = instrument_logger.level
+    instrument_logger.addHandler(handler)
+    instrument_logger.setLevel(logging.INFO)
+    try:
         async with _instrument('summarize'):
             await asyncio.sleep(0.001)  # ensure non-zero duration_ms
+    finally:
+        instrument_logger.removeHandler(handler)
+        instrument_logger.setLevel(prior_level)
 
-    records = [r for r in caplog.records if r.message == 'stage_complete']
+    records = [r for r in captured if r.getMessage() == 'stage_complete']
     assert len(records) == 1, f'Expected exactly one stage_complete record, got {len(records)}'
 
     rec = records[0]
