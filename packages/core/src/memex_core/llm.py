@@ -139,6 +139,15 @@ async def run_dspy_operation(
         # from "asyncio scheduling stall" — both used to share the
         # status='timeout' bucket. The legacy 'timeout' bucket is kept for
         # back-compat with existing alerts.
+        # Self-check the catch-ordering assumption: this branch is reached
+        # *before* the TimeoutError branch only because litellm.exceptions.
+        # Timeout is NOT a TimeoutError subclass on the supported litellm
+        # range. If a future release changes that, the TimeoutError branch
+        # below becomes dead code and this assert fires loudly.
+        assert not isinstance(e, TimeoutError), (
+            'litellm.exceptions.Timeout is now a TimeoutError subclass; '
+            'catch ordering in run_dspy_operation must be revisited.'
+        )
         await _circuit_breaker.record_failure()
 
         elapsed = time.monotonic() - start

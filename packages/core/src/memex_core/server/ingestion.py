@@ -568,7 +568,13 @@ async def ingest_batch(
         return BatchJobStatus(job_id=job_id, status='pending')
     except OverlapError as e:
         return _overlap_to_409(e, http_request)
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+    except ValueError as e:
+        # create_job rejects empty `notes` lists at the storage boundary
+        # with ValueError. The Pydantic schema also enforces min_length=1,
+        # so this is defence-in-depth for internal callers; surface as 422
+        # rather than hiding behind the broad MemexError catch as a 500.
+        raise HTTPException(status_code=422, detail=str(e))
+    except (MemexError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Batch ingestion job creation failed')
 
 
