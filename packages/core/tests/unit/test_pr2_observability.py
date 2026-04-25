@@ -77,6 +77,60 @@ async def test_extraction_inflight_summarize_gauge_during_real_call(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_extraction_inflight_refine_gauge_during_real_call(monkeypatch) -> None:
+    """F6 / AC-014: the `refine` gauge ticks during a real
+    `_process_single_node_refinement` call.
+
+    The refine wrapper (`_instrument('refine')`) sits inside
+    `async with self._refine_semaphore` and unconditionally wraps the
+    body — even if the node doesn't hit the deep-dive branch
+    (`node_len > max_len and not node.children`), the gauge increments
+    and decrements once per refine task.
+
+    F6 (Phase 3): the prior coverage skipped this stage. With #9's
+    refine-recursion split, an instrumentation regression that dropped
+    `_instrument('refine')` would silently degrade observability — only
+    a per-stage production-call test catches it. We patch
+    `_process_single_chunk` and `_build_logical_tree` to confirm the
+    side-effecting body runs while the gauge is +1.
+    """
+
+    indexer = AsyncMarkdownPageIndex(lm=MagicMock(), refine_max_concurrency=2)
+    # Construct a node that will trip the deep-dive branch: node_len > max_len
+    # AND no children. start/end_index span 6000 chars; max_len=5000 below.
+    node = TOCNode(
+        original_header_id=0,
+        title='RefineTest',
+        level=2,
+        reasoning='test',
+        content='x' * 6000,
+        start_index=0,
+        end_index=6000,
+    )
+
+    observed: list[float] = []
+
+    async def _fake_chunk(*_args: Any, **_kwargs: Any) -> list:
+        # Read the refine gauge inside the chunk-scan call (which itself
+        # runs inside `_instrument('refine')`). Should be ≥ 1.
+        observed.append(_read_gauge('memex_extraction_inflight', 'refine'))
+        return []
+
+    monkeypatch.setattr(indexer, '_process_single_chunk', _fake_chunk)
+
+    before = _read_gauge('memex_extraction_inflight', 'refine')
+    await indexer._process_single_node_refinement(node, full_text='x' * 6000, max_len=5000)
+    after = _read_gauge('memex_extraction_inflight', 'refine')
+
+    assert observed == [before + 1], (
+        f'Expected refine gauge to read {before + 1} during the call '
+        f'(one in flight), got {observed}. If empty, _instrument(refine) is '
+        f'not wrapping the production refine site (#21 regression).'
+    )
+    assert after == before, 'Refine gauge must return to baseline after the task exits.'
+
+
+@pytest.mark.asyncio
 async def test_extraction_inflight_block_summarize_gauge_during_real_call(monkeypatch) -> None:
     """AC-014: same shape for `block_summarize` — confirms the third
     extraction stage label is wired."""
