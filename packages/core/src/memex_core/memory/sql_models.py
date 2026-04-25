@@ -1034,7 +1034,7 @@ class BatchJob(SQLModel, table=True):  # type: ignore
     )
 
     input_note_keys: list[str] = Field(
-        default=[],
+        default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb")),
         description=(
             'Sorted, deduped list of NoteInput.calculate_idempotency_key_from_dto '

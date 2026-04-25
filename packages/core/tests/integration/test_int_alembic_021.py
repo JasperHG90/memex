@@ -77,6 +77,9 @@ async def fresh_db_url(postgres_container: PostgresContainer) -> AsyncGenerator[
 
     admin_engine = create_async_engine(admin_url, poolclass=NullPool, isolation_level='AUTOCOMMIT')
     async with admin_engine.connect() as conn:
+        # f-string is required because Postgres DDL cannot bind identifiers as
+        # parameters. Safe here because db_name is `'mig021_' + secrets.token_hex(6)`
+        # — a fixed prefix plus pure-hex chars, no caller-controlled input.
         await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
     await admin_engine.dispose()
 

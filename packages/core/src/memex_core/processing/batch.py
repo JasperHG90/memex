@@ -143,8 +143,9 @@ class JobManager:
             # within a vault so two concurrent calls can't both pass the
             # overlap check before either INSERTs. Released at COMMIT/ROLLBACK.
             # `hashtext` returns int4; collision risk is negligible at Memex's
-            # expected vault count, but `hashtextextended` (int8) is available
-            # if it ever grows past ~65k vaults.
+            # expected vault count.
+            # TODO: switch to `hashtextextended` (int8 range) if the vault
+            # count ever approaches ~65k.
             #
             # SQL uses `cast(:vault_id AS text)` rather than `:vault_id::text`
             # because asyncpg's parser can't disambiguate `::` from its own

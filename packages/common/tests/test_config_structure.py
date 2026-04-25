@@ -98,12 +98,14 @@ def test_token_fields_on_page_index_text_splitting():
     assert ts.min_node_tokens == 0
 
 
-def test_concurrency_fields_default_to_five_on_page_index_text_splitting():
-    """AC-005: refine_max_concurrency + summarize_max_concurrency default to 5."""
+def test_concurrency_fields_default_to_capable_host_sized_on_page_index_text_splitting():
+    """Defaults target capable hosts (workstations / fast remote LLMs).
+    Memory-constrained hosts tune down — see docs/how-to/memory-budget.md.
+    """
     ts = PageIndexTextSplitting()
-    assert ts.scan_max_concurrency == 5
-    assert ts.refine_max_concurrency == 5
-    assert ts.summarize_max_concurrency == 5
+    assert ts.scan_max_concurrency == 20
+    assert ts.refine_max_concurrency == 20
+    assert ts.summarize_max_concurrency == 20
 
 
 def test_concurrency_fields_round_trip_on_page_index_text_splitting():

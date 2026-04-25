@@ -113,6 +113,11 @@ class _Watchdog:
         the threshold; fire if it exceeds. Stages that have never ticked fall
         back to construction time. Exposed for deterministic testing without
         going through the thread loop.
+
+        Note: ``_read_inflight_per_stage`` runs outside the lock, so a stage
+        can decrement to zero between the read and the lock acquire below —
+        producing a stale inflight value. Acceptable: a one-shot watchdog
+        firing on a just-finished stage is a tolerable false positive.
         """
         if self._fired:
             return False
