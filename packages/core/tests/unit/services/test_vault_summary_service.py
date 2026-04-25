@@ -404,6 +404,30 @@ class TestFreshnessOverlay:
         assert inv['date_range']['earliest'].endswith('+00:00')
         assert inv['date_range']['latest'].endswith('+00:00')
 
+    def test_date_range_uses_publish_date_in_both_paths(self):
+        """Pin write-path and read-path to the same column for ``date_range``.
+
+        ``_compute_inventory`` (writer) computes ``date_range.{earliest,latest}``
+        from ``Note.publish_date``. ``_compute_fresh_fields`` (reader, used by
+        ``_apply_freshness_overlay``) overlays ``date_range.latest`` from the
+        same column. If a future change drifts one path to ``Note.created_at``,
+        the overlay would silently change the field's meaning across the API.
+        This test inspects the source of both methods to lock the invariant.
+        """
+        import inspect
+
+        from memex_core.services import vault_summary as vs
+
+        inv_src = inspect.getsource(vs.VaultSummaryService._compute_inventory)
+        fresh_src = inspect.getsource(vs.VaultSummaryService._compute_fresh_fields)
+
+        assert 'func.max(Note.publish_date)' in inv_src, (
+            '_compute_inventory must aggregate max(publish_date) for date_range.latest'
+        )
+        assert 'func.max(Note.publish_date)' in fresh_src, (
+            '_compute_fresh_fields must aggregate max(publish_date) for date_range_latest'
+        )
+
 
 class TestDeleteSummary:
     @pytest.mark.asyncio
