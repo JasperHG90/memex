@@ -53,6 +53,7 @@ from memex_core.memory.retrieval._offload import (
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
 from memex_core.storage.metastore import get_metastore
+from memex_core.wedge_watchdog import configure_from_settings, shutdown_watchdog
 from memex_core.memory.models import (
     get_embedding_model,
     get_reranking_model,
@@ -204,6 +205,22 @@ async def lifespan(app: FastAPI):
     app.state.api = api
     app.state.audit_service = AuditService(metastore)
 
+    # Opt-in wedge watchdog (RFC-001 §"Step 2.4"). When wedge_watchdog_seconds
+    # is set, an OS-thread watchdog dumps all-thread tracebacks via
+    # faulthandler if no extraction stage decrements within the threshold
+    # while a stage gauge is > 0. None (default) skips startup entirely.
+    wedge_threshold = config.server.memory.extraction.wedge_watchdog_seconds
+    watchdog = configure_from_settings(
+        wedge_watchdog_seconds=wedge_threshold,
+        log_file_path=config.server.logging.log_file,
+    )
+    if watchdog is not None:
+        logger.info(
+            'Wedge watchdog enabled. threshold=%ss dump_path=%s',
+            wedge_threshold,
+            watchdog._dump_path,
+        )
+
     # Start Scheduler Background Task
     scheduler_task = asyncio.create_task(run_scheduler_with_leader_election(config, api))
 
@@ -215,6 +232,8 @@ async def lifespan(app: FastAPI):
         await scheduler_task
     except asyncio.CancelledError:
         pass
+
+    shutdown_watchdog()
 
     await metastore.close()
 
