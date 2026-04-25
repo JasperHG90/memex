@@ -516,6 +516,13 @@ class PageIndexTextSplitting(BaseModel):
         default=None,
         description='Model for PageIndex LLM calls. If None, uses server default.',
     )
+    # F23 (Phase 3 review): three separate per-stage caps rather than a single
+    # umbrella because scan/refine/summarize have materially different RAM and
+    # latency profiles — sharing one cap couples three independent operational
+    # tradeoffs. An umbrella ``extraction_max_concurrency`` that propagates to
+    # all three when set is a follow-up (RFC-001 Resolved Decision §3 *rev*,
+    # tracked as task #31) — operator ergonomics polish, not load-bearing for
+    # the wedge regression class.
     scan_max_concurrency: int = Field(
         default=5,
         ge=1,

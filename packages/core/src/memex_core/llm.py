@@ -29,9 +29,14 @@ except ImportError:
 
 T = TypeVar('T')
 
-# Module-level circuit breaker instance shared across all LLM calls.
-# Initialised with default config; call configure_circuit_breaker() to
-# override from the application's CircuitBreakerConfig.
+# Module-level circuit breaker. ``run_dspy_operation`` resolves
+# ``_circuit_breaker`` *at call time* (not by capturing a closure), so a
+# call to ``configure_circuit_breaker(...)`` at app startup is observed
+# by every subsequent LLM call. Importers that bind ``_circuit_breaker``
+# into a local name at import time (``from memex_core.llm import
+# _circuit_breaker``) would see a stale reference; use
+# ``get_circuit_breaker()`` instead. F20 (Phase 3 review) tightened
+# this comment to make the late-binding contract explicit.
 _circuit_breaker = CircuitBreaker()
 
 # Circuit breaker state encoding for Prometheus gauge

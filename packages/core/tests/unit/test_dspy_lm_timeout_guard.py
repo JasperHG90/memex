@@ -96,6 +96,9 @@ def test_all_dspy_lm_constructions_pass_timeout() -> None:
             if 'test_dspy_lm_timeout' in block.split('\n', 1)[0]:
                 continue
             found_any_site = True
+            # F21: a `timeout=` token in a comment within the 8-line window
+            # would be a false-negative (treats commented text as code).
+            # Long-term fix: AST-based scanning. See the module docstring.
             if 'timeout=' not in block:
                 first_line = block.split('\n', 1)[0]
                 missing.append(first_line)
