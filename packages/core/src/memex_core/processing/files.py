@@ -42,7 +42,9 @@ class FileContentProcessor:
             raise FileNotFoundError(f'File not found: {path}')
 
         if path.suffix.lower() == '.pdf':
+            # exempt: request-bounded sync PDF extract, no model load (AC-009 four-bucket audit)
             return await asyncio.to_thread(self._sync_extract_pdf, path)
+        # exempt: request-bounded sync markitdown extract, no model load (AC-009 four-bucket audit)
         return await asyncio.to_thread(self._sync_extract_markitdown, path)
 
     def _sync_extract_pdf(self, path: Path) -> ExtractedContent:

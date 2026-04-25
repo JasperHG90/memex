@@ -43,6 +43,13 @@ def mock_lifespan_dependencies():
         config_mock.server.tracing.enabled = False
         config_mock.server.meta_store = MagicMock()
         config_mock.server.file_store = MagicMock()
+        # Numeric values for configure_offload_semaphores in lifespan
+        config_mock.server.reranker_max_concurrency = 4
+        config_mock.server.embedding_max_concurrency = 4
+        config_mock.server.ner_max_concurrency = 4
+        config_mock.server.reranker_call_timeout = 30
+        config_mock.server.embedding_call_timeout = 30
+        config_mock.server.ner_call_timeout = 30
         mock_conf.return_value = config_mock
 
         yield

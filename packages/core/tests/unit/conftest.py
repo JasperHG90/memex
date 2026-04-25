@@ -40,6 +40,23 @@ def setup_unit_test_env():
         os.remove(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _configure_offload_semaphores_default():
+    """Initialise sync-offload semaphores so gated to_thread sites are callable.
+
+    In production this happens at server startup (server/__init__.py) before
+    warmup. Unit tests don't run startup, so an autouse fixture pre-configures
+    with default ServerConfig caps. Tests that need specific caps (e.g.
+    test_reranker_respects_concurrency_cap with cap=2) call
+    configure_offload_semaphores(cfg) explicitly to override.
+    """
+    from memex_common.config import ServerConfig
+    from memex_core.memory.retrieval._offload import configure_offload_semaphores
+
+    configure_offload_semaphores(ServerConfig())
+    yield
+
+
 @pytest.fixture
 def mock_session():
     """Shared AsyncMock for metastore sessions."""

@@ -14,6 +14,7 @@ nav = [
     "how-to/setup-claude-code.md",
     "how-to/configure-memex.md",
     "how-to/server-configuration-templates.md",
+    "how-to/memory-budget.md",
     "how-to/organize-with-vaults.md",
     "how-to/using-mcp.md",
     "how-to/batch-ingestion.md",

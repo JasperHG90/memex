@@ -95,12 +95,14 @@ async def run_dspy_operation(
                         if hasattr(predictor, 'acall'):
                             return await predictor.acall(**input_kwargs)
                         else:
+                            # dead path: DSPy 3.1+ always exposes acall (AC-009 four-bucket audit)
                             return await asyncio.to_thread(predictor, **input_kwargs)
         else:
             with dspy.context(lm=lm_):
                 if hasattr(predictor, 'acall'):
                     return await predictor.acall(**input_kwargs)
                 else:
+                    # dead path: DSPy 3.1+ always exposes acall (AC-009 four-bucket audit)
                     return await asyncio.to_thread(predictor, **input_kwargs)
 
     try:

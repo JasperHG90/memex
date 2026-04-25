@@ -849,6 +849,7 @@ async def extract_facts_from_text(
     """Backward-compatible: chunks text internally, then extracts."""
     # We prefer stable chunking to ensure consistency with incremental updates.
     # Note: stable_chunk_text ignores chunk_overlap, which is acceptable.
+    # exempt: pure CPU sync chunker, no model load (AC-009 four-bucket audit)
     stable_blocks = await asyncio.to_thread(stable_chunk_text, text, block_size=chunk_max_chars)
     chunks = [b.text for b in stable_blocks]
 

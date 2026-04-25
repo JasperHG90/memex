@@ -52,6 +52,13 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_config.server.host = '127.0.0.1'
     mock_config.server.cache_dir = '/tmp/memex-test-cache'
     mock_config.server.tracing.enabled = False
+    # Numeric values for configure_offload_semaphores in lifespan
+    mock_config.server.reranker_max_concurrency = 4
+    mock_config.server.embedding_max_concurrency = 4
+    mock_config.server.ner_max_concurrency = 4
+    mock_config.server.reranker_call_timeout = 30
+    mock_config.server.embedding_call_timeout = 30
+    mock_config.server.ner_call_timeout = 30
 
     # Configure mock_metastore to support lifespan initialization
     mock_metastore.connect = AsyncMock()
@@ -109,6 +116,13 @@ def _make_server_test_client(api, mock_metastore, mock_filestore):
     mock_config.server.host = '127.0.0.1'
     mock_config.server.cache_dir = '/tmp/memex-test-cache'
     mock_config.server.tracing.enabled = False
+    # Numeric values for configure_offload_semaphores in lifespan
+    mock_config.server.reranker_max_concurrency = 4
+    mock_config.server.embedding_max_concurrency = 4
+    mock_config.server.ner_max_concurrency = 4
+    mock_config.server.reranker_call_timeout = 30
+    mock_config.server.embedding_call_timeout = 30
+    mock_config.server.ner_call_timeout = 30
 
     mock_metastore.connect = AsyncMock()
     mock_metastore.close = AsyncMock()

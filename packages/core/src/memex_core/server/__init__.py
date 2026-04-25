@@ -44,6 +44,12 @@ from memex_core.server.survey import router as survey_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
+from memex_core.memory.retrieval._offload import (
+    configure_offload_semaphores,
+    get_embedding_semaphore,
+    get_ner_semaphore,
+    get_reranker_semaphore,
+)
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
 from memex_core.storage.metastore import get_metastore
@@ -118,15 +124,27 @@ async def lifespan(app: FastAPI):
     )
     ner_model = await get_ner_model()
 
+    # Initialise sync-offload semaphores BEFORE the warmup block so warmup
+    # acquires through the production gate (RFC-001 §"Step 1.5.4" Option W1).
+    # The invariant "every gated to_thread goes through its semaphore" then
+    # holds at startup as well as request time — one mental model, one CI test.
+    configure_offload_semaphores(config.server)
+
     # Warm ONNX model arenas with a dummy inference call so GPU memory is
     # pre-allocated before real requests arrive. Prevents cold-start OOM on
     # memory-constrained devices (e.g. Jetson with shared CPU/GPU memory).
+    # Warmup goes through the production semaphores (W1) — no wait_for here
+    # because warmup is a sequential single-shot operation; the cap alone is
+    # the relevant invariant.
     logger.info('Warming ONNX model arenas...')
     _warmup_text = ['memex warmup probe']
-    await asyncio.to_thread(embedding_model.encode, _warmup_text)
+    async with get_embedding_semaphore():
+        await asyncio.to_thread(embedding_model.encode, _warmup_text)
     if reranking_model is not None:
-        await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
-    await asyncio.to_thread(ner_model.predict, _warmup_text[0])
+        async with get_reranker_semaphore():
+            await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
+    async with get_ner_semaphore():
+        await asyncio.to_thread(ner_model.predict, _warmup_text[0])
     logger.info('ONNX model arenas warmed.')
 
     # Validate embedding dimensions match the database schema.
@@ -135,7 +153,10 @@ async def lifespan(app: FastAPI):
     from memex_core.memory.sql_models import EMBEDDING_DIMENSION
 
     if isinstance(config.server.embedding_model, LitellmEmbeddingBackend):
-        probe = await asyncio.to_thread(embedding_model.encode, ['memex embedding dimension probe'])
+        async with get_embedding_semaphore():
+            probe = await asyncio.to_thread(
+                embedding_model.encode, ['memex embedding dimension probe']
+            )
         actual_dim = probe.shape[-1] if hasattr(probe, 'shape') else len(probe[0])
         if actual_dim != EMBEDDING_DIMENSION:
             raise RuntimeError(
