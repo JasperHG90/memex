@@ -30,6 +30,7 @@ from memex_core.memory.retrieval.strategies import (
     MentalModelStrategy,
     get_graph_strategy,
 )
+from memex_core.instrument import _instrument
 from memex_core.memory.retrieval.expansion import QueryExpander
 from memex_core.memory.retrieval._offload import (
     get_embedding_call_timeout,
@@ -216,7 +217,7 @@ class RetrievalEngine:
             # Shared embedding cap across api.py + document_search.py +
             # retrieval/engine.py — one model, one capacity budget. Thread
             # keeps running on timeout; cap prevents thread accumulation.
-            async with get_embedding_semaphore():
+            async with get_embedding_semaphore(), _instrument('embed'):
                 encoded = await asyncio.wait_for(
                     asyncio.to_thread(self.embedder.encode, miss_texts),
                     timeout=get_embedding_call_timeout(),
@@ -336,7 +337,7 @@ class RetrievalEngine:
             try:
                 # NER cap: one model, one capacity budget. Thread keeps running
                 # on timeout; cap prevents thread accumulation.
-                async with get_ner_semaphore():
+                async with get_ner_semaphore(), _instrument('ner'):
                     filters['_ner_entities'] = await asyncio.wait_for(
                         asyncio.to_thread(self.ner_model.predict, request.query),
                         timeout=get_ner_call_timeout(),
@@ -1106,7 +1107,7 @@ class RetrievalEngine:
             # document_search.py:243) — one reranker model, one capacity
             # budget. AC-010 rev 2: gating each site separately would
             # over-count effective parallelism. Thread keeps running on timeout.
-            async with get_reranker_semaphore():
+            async with get_reranker_semaphore(), _instrument('rerank'):
                 scores = await asyncio.wait_for(
                     asyncio.to_thread(self.reranker.score, query, formatted_texts),
                     timeout=get_reranker_call_timeout(),

@@ -48,6 +48,7 @@ from memex_core.memory.extraction.utils import (
 )
 from memex_core.memory.extraction.exceptions import ExtractionError, OutputTooLongException
 from memex_core.llm import run_dspy_operation
+from memex_core.instrument import _instrument
 
 BLOCK_HARD_LIMIT = 50_000  # chars — safety cap for pathological input
 
@@ -1130,12 +1131,13 @@ class AsyncMarkdownPageIndex(dspy.Module):
         # scan_max_concurrency on memory-constrained hosts.
         async with self._scan_semaphore:
             try:
-                pred = await run_dspy_operation(
-                    lm=self.lm,
-                    predictor=self.scanner,
-                    input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
-                    operation_name='extraction.header_scan',
-                )
+                async with _instrument('scan'):
+                    pred = await run_dspy_operation(
+                        lm=self.lm,
+                        predictor=self.scanner,
+                        input_kwargs={'chunk_text': chunk, 'previous_context': prev_context},
+                        operation_name='extraction.header_scan',
+                    )
 
                 for h in pred.detected_headers:
                     try:
@@ -1273,7 +1275,7 @@ class AsyncMarkdownPageIndex(dspy.Module):
         # block — holding the semaphore through recursion would deadlock when
         # tree depth exceeds refine_max_concurrency (every parent would hold a
         # slot waiting on its children).
-        async with self._refine_semaphore:
+        async with self._refine_semaphore, _instrument('refine'):
             node_len = (node.end_index or 0) - (node.start_index or 0)
 
             if node_len > max_len and not node.children:
@@ -1351,13 +1353,14 @@ class AsyncMarkdownPageIndex(dspy.Module):
             safe_content = node.content if node.content else ''
             # Gate via run_dspy_operation's semaphore= kwarg so peer leaf
             # summary tasks fan out at most summarize_max_concurrency at a time.
-            pred = await run_dspy_operation(
-                lm=self.lm,
-                predictor=self.summarizer,
-                input_kwargs={'title': node.title, 'content': safe_content},
-                semaphore=self._summary_semaphore,
-                operation_name='extraction.summarize',
-            )
+            async with _instrument('summarize'):
+                pred = await run_dspy_operation(
+                    lm=self.lm,
+                    predictor=self.summarizer,
+                    input_kwargs={'title': node.title, 'content': safe_content},
+                    semaphore=self._summary_semaphore,
+                    operation_name='extraction.summarize',
+                )
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Summary failed for '{node.title}': {e}")
@@ -1373,17 +1376,18 @@ class AsyncMarkdownPageIndex(dspy.Module):
                 )
 
             # Gate via the shared summary semaphore.
-            pred = await run_dspy_operation(
-                lm=self.lm,
-                predictor=self.parent_summarizer,
-                input_kwargs={
-                    'title': node.title,
-                    'content': safe_content,
-                    'children_titles': children_titles,
-                },
-                semaphore=self._summary_semaphore,
-                operation_name='extraction.summarize_parent',
-            )
+            async with _instrument('summarize'):
+                pred = await run_dspy_operation(
+                    lm=self.lm,
+                    predictor=self.parent_summarizer,
+                    input_kwargs={
+                        'title': node.title,
+                        'content': safe_content,
+                        'children_titles': children_titles,
+                    },
+                    semaphore=self._summary_semaphore,
+                    operation_name='extraction.summarize_parent',
+                )
             node.summary = pred.summary
         except (ValueError, RuntimeError, OSError, KeyError) as e:
             self._logger.warning(f"Parent summary failed for '{node.title}': {e}")
@@ -1421,13 +1425,14 @@ class AsyncMarkdownPageIndex(dspy.Module):
             # Gate via the shared summary semaphore — block summaries call the
             # same provider as leaf summaries with the same RAM profile, so
             # AC-003 has them share a single capacity budget by default.
-            pred = await run_dspy_operation(
-                lm=self.lm,
-                predictor=self.block_summarizer,
-                input_kwargs={'section_summaries': section_summaries_text},
-                semaphore=self._summary_semaphore,
-                operation_name='extraction.summarize_block',
-            )
+            async with _instrument('block_summarize'):
+                pred = await run_dspy_operation(
+                    lm=self.lm,
+                    predictor=self.block_summarizer,
+                    input_kwargs={'section_summaries': section_summaries_text},
+                    semaphore=self._summary_semaphore,
+                    operation_name='extraction.summarize_block',
+                )
             summary = pred.block_summary
             summary.key_points = [kp.rstrip('.;:, ') for kp in summary.key_points]
             block.summary = summary

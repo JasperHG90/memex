@@ -38,6 +38,7 @@ from memex_core.templates import MemexTemplateFromFile
 from memex_core.memory.engine import MemoryEngine, _build_contradiction_engine
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.retrieval.engine import RetrievalEngine
+from memex_core.instrument import _instrument
 from memex_core.memory.retrieval._offload import (
     get_embedding_semaphore,
     get_embedding_call_timeout,
@@ -1291,7 +1292,7 @@ class MemexAPI:
         # Shared embedding cap: same model, one capacity budget across api.py +
         # document_search.py + retrieval/engine.py. The thread keeps running on
         # timeout — the cap is what prevents thread accumulation (see _offload.py).
-        async with get_embedding_semaphore():
+        async with get_embedding_semaphore(), _instrument('embed'):
             result = await asyncio.wait_for(
                 asyncio.to_thread(self.embedding_model.encode, [text]),
                 timeout=get_embedding_call_timeout(),

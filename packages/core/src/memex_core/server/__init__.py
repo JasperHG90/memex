@@ -53,6 +53,7 @@ from memex_core.memory.retrieval._offload import (
 from memex_core.scheduler import run_scheduler_with_leader_election
 from memex_core.storage.filestore import get_filestore
 from memex_core.storage.metastore import get_metastore
+from memex_core.instrument import _instrument
 from memex_core.wedge_watchdog import configure_from_settings, shutdown_watchdog
 from memex_core.memory.models import (
     get_embedding_model,
@@ -139,12 +140,12 @@ async def lifespan(app: FastAPI):
     # the relevant invariant.
     logger.info('Warming ONNX model arenas...')
     _warmup_text = ['memex warmup probe']
-    async with get_embedding_semaphore():
+    async with get_embedding_semaphore(), _instrument('embed'):
         await asyncio.to_thread(embedding_model.encode, _warmup_text)
     if reranking_model is not None:
-        async with get_reranker_semaphore():
+        async with get_reranker_semaphore(), _instrument('rerank'):
             await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
-    async with get_ner_semaphore():
+    async with get_ner_semaphore(), _instrument('ner'):
         await asyncio.to_thread(ner_model.predict, _warmup_text[0])
     logger.info('ONNX model arenas warmed.')
 
@@ -154,7 +155,7 @@ async def lifespan(app: FastAPI):
     from memex_core.memory.sql_models import EMBEDDING_DIMENSION
 
     if isinstance(config.server.embedding_model, LitellmEmbeddingBackend):
-        async with get_embedding_semaphore():
+        async with get_embedding_semaphore(), _instrument('embed'):
             probe = await asyncio.to_thread(
                 embedding_model.encode, ['memex embedding dimension probe']
             )

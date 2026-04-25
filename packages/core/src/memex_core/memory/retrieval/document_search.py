@@ -20,6 +20,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
+from memex_core.instrument import _instrument
 from memex_core.memory.retrieval._offload import (
     get_embedding_call_timeout,
     get_embedding_semaphore,
@@ -135,7 +136,7 @@ class NoteSearchEngine:
         # 2. Embed all queries
         # Shared embedding cap across api.py + document_search.py + retrieval/engine.py
         # — one model, one capacity budget. Thread keeps running on timeout.
-        async with get_embedding_semaphore():
+        async with get_embedding_semaphore(), _instrument('embed'):
             all_embeddings = await asyncio.wait_for(
                 asyncio.to_thread(self.embedder.encode, queries),
                 timeout=get_embedding_call_timeout(),
@@ -256,7 +257,7 @@ class NoteSearchEngine:
             # retrieval/engine.py:1086) — one reranker model, one capacity
             # budget. AC-010 rev 2: gating each site separately would
             # over-count effective parallelism. Thread keeps running on timeout.
-            async with get_reranker_semaphore():
+            async with get_reranker_semaphore(), _instrument('rerank'):
                 scores = await asyncio.wait_for(
                     asyncio.to_thread(self.reranker.score, query, texts),
                     timeout=get_reranker_call_timeout(),
