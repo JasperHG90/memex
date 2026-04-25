@@ -5,6 +5,8 @@ from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
+import sqlalchemy as sa
+
 from memex_core.context import background_session
 from memex_core.memory.sql_models import BatchJob, BatchJobStatus
 
@@ -82,6 +84,16 @@ class JobManager:
         provided, the job is scheduled through it so that the ASGI server manages
         the task lifecycle.  Otherwise an ``asyncio.Task`` is created directly.
 
+        Idempotency keys are derived from the incoming DTOs via
+        ``NoteInput.calculate_idempotency_key_from_dto`` and stored on the row's
+        ``input_note_keys`` column. Before insert we acquire a per-vault
+        ``pg_advisory_xact_lock`` and query for any ``PENDING`` or ``PROCESSING``
+        job in the same vault whose ``input_note_keys`` overlaps the incoming
+        batch — if found, ``OverlapError`` is raised so the caller can return
+        409 + ``Location`` instead of starting a duplicate. The advisory lock
+        is auto-released at COMMIT/ROLLBACK and is keyed per-vault so unrelated
+        vaults' submissions proceed in parallel. (RFC-002 §"Step 2-3".)
+
         Args:
             notes: List of NoteDTOs to ingest.
             vault_id: Optional target vault identifier.
@@ -90,21 +102,86 @@ class JobManager:
 
         Returns:
             UUID: The created Job ID.
+
+        Raises:
+            OverlapError: When an in-flight job in the same vault has any
+                idempotency key in common with this batch.
         """
+        # Local import: NoteInput pulls in the rest of api.py, which imports
+        # back into this module; defer to runtime to avoid the cycle.
+        from memex_core.api import NoteInput
+
         job_id = uuid4()
         target_vault_id = await self.api.resolve_vault_identifier(
             vault_id or self.api.config.server.default_active_vault
         )
 
+        # Compute idempotency keys at the storage boundary. Sorted+deduped so the
+        # stored array has no duplicates and the @> probes are stable across input
+        # orderings. (RFC-002 §"Idempotency-key derivation: where".)
+        input_keys = sorted({NoteInput.calculate_idempotency_key_from_dto(n) for n in notes})
+
         async with self.api.metastore.session() as session:
+            # AC-020 (rev) TOCTOU protection: serialize per-vault create_job
+            # transactions using a Postgres advisory transaction lock. The lock
+            # is released automatically at COMMIT/ROLLBACK; no explicit unlock
+            # needed. Per-vault scope (hashtext over the UUID's text repr) so
+            # unrelated vaults' submissions don't serialize against each other.
+            # Without this lock, two concurrent calls can both pass the overlap
+            # check before either INSERTs — both succeed, defeating the AC.
+            #
+            # `hashtext` returns int4 (32-bit). At Memex's expected vault count
+            # the birthday-bound collision probability is negligible; if the
+            # deployment ever grows past ~65k vaults we can swap to
+            # `hashtextextended` (PG ≥ 11, returns int8) — already feasible
+            # because migration 021 guards PG ≥ 11.
+            await session.execute(
+                sa.text('SELECT pg_advisory_xact_lock(hashtext(:vault_id::text))'),
+                {'vault_id': str(target_vault_id)},
+            )
+
+            # Overlap query: find any PENDING/PROCESSING job in the same vault
+            # whose input_note_keys jsonb-array contains any of the incoming
+            # keys. Inner subquery iterates :keys via unnest and probes
+            # `input_note_keys @> jsonb_build_array(k)` — the `@>` operator is
+            # supported by the `jsonb_path_ops` GIN index on this column
+            # (migration 021), so the per-key probe is index-aided.
+            overlap_stmt = sa.text(
+                """
+                SELECT id, status
+                FROM batch_jobs
+                WHERE vault_id = :vault_id
+                  AND status IN ('pending', 'processing')
+                  AND EXISTS (
+                      SELECT 1 FROM unnest(CAST(:keys AS text[])) AS k
+                      WHERE input_note_keys @> jsonb_build_array(k)
+                  )
+                LIMIT 1
+                """
+            )
+            result = await session.execute(
+                overlap_stmt,
+                {'vault_id': target_vault_id, 'keys': input_keys},
+            )
+            row = result.first()
+            if row is not None:
+                existing_id, status_str = row
+                # subset computation deferred — see RFC-002 §A4.
+                raise OverlapError(
+                    existing_id=existing_id,
+                    status=status_str,
+                    overlapping_keys=[],
+                )
+
             job = BatchJob(
                 id=job_id,
                 vault_id=target_vault_id,
                 status=BatchJobStatus.PENDING,
                 notes_count=len(notes),
+                input_note_keys=input_keys,
             )
             session.add(job)
-            await session.commit()
+            await session.commit()  # releases pg_advisory_xact_lock
 
         if background_tasks is not None:
             background_tasks.add_task(self._run_job, job_id, notes, target_vault_id, batch_size)
