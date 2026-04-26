@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.sql_models import MentalModel, Observation
+from memex_core.memory.sql_models import MemoryUnit, MentalModel, Observation, UnitEntity
+
+if TYPE_CHECKING:
+    from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
 logger = logging.getLogger('memex.core.services.mental_model_cleanup')
 
@@ -77,3 +81,54 @@ async def prune_stale_evidence(
                 flag_modified(model, 'observations')
 
     return affected_entity_ids
+
+
+async def cascade_chunk_unit_staling(
+    session: AsyncSession,
+    note_id: UUID,
+    vault_id: UUID,
+    stale_chunk_ids: list[UUID],
+    queue_service: 'ReflectionQueueService | None' = None,
+) -> list[UUID]:
+    """Cascade memory-unit staling triggered by chunks being marked stale.
+
+    Storage-level ``mark_memory_units_stale`` flips the units' status, but
+    the entity graph is left holding evidence pointers to memory units that
+    no longer back active text. Without this cascade, mental models keep
+    referencing facts that have been silently retired, and the entities are
+    never re-reflected so their summaries don't shrink.
+
+    This helper:
+    1. Finds memory units linked to the supplied chunk_ids (regardless of
+       their current status — they may have just been staled by the caller).
+    2. Collects the entities those units mentioned.
+    3. Prunes evidence for those units from the entities' mental models.
+    4. Queues affected entities for re-reflection so the summaries catch up.
+
+    Returns the unit IDs whose evidence was considered for pruning.
+    """
+    if not stale_chunk_ids:
+        return []
+
+    units_stmt = select(MemoryUnit).where(
+        col(MemoryUnit.note_id) == note_id,
+        col(MemoryUnit.chunk_id).in_(stale_chunk_ids),
+    )
+    units = (await session.exec(units_stmt)).all()
+    if not units:
+        return []
+    unit_ids: list[UUID] = [u.id for u in units]
+
+    entity_stmt = select(UnitEntity.entity_id).where(col(UnitEntity.unit_id).in_(unit_ids))
+    entity_ids: set[UUID] = set((await session.exec(entity_stmt)).all())
+    if not entity_ids:
+        return unit_ids
+
+    await session.flush()
+
+    affected_entity_ids = await prune_stale_evidence(session, entity_ids, unit_ids, vault_id)
+
+    if affected_entity_ids and queue_service is not None:
+        await queue_service.handle_deletion_event(session, affected_entity_ids, vault_id)
+
+    return unit_ids

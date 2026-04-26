@@ -19,6 +19,8 @@ from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     FindNoteResult,
     MemoryLinkDTO,
+    NoteAppendRequest,
+    NoteAppendResponse,
     NoteDTO,
     NoteListItemDTO,
     NoteSearchRequest,
@@ -29,6 +31,7 @@ from memex_common.schemas import (
 from memex_core.api import MemexAPI
 from memex_core.server.auth import (
     AuthContext,
+    Permission,
     check_vault_access,
     get_auth_context,
     require_delete,
@@ -347,6 +350,89 @@ async def rename_note(
         return {'status': 'success', 'note_id': str(note_id), 'new_title': request.new_title}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to rename note')
+
+
+_APPEND_RESPONSES: dict[int | str, dict[str, object]] = {
+    404: {'description': 'Parent note not found, or vault mismatch on note_key resolution.'},
+    409: {
+        'description': (
+            'Either the parent note is not appendable (status archived/superseded), '
+            'or the same `append_id` was used previously with a different '
+            '(note_id, delta, joiner) tuple.'
+        ),
+    },
+    503: {
+        'description': (
+            'Append lock could not be acquired in time, or the endpoint is '
+            'administratively disabled. Retry after the `Retry-After` header.'
+        ),
+        'headers': {
+            'Retry-After': {
+                'description': 'Seconds to wait before retrying.',
+                'schema': {'type': 'integer'},
+            },
+        },
+    },
+}
+
+
+@router.post(
+    '/notes/append',
+    response_model=NoteAppendResponse,
+    responses=_APPEND_RESPONSES,
+    dependencies=[Depends(require_write)],
+)
+async def append_to_note(
+    request: Annotated[NoteAppendRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> NoteAppendResponse:
+    """Atomically append a content delta to an existing note.
+
+    Identify the parent by `note_key + vault_id` (preferred — agents normally
+    own the key, not a UUID) or by `note_id`. The server reads the parent's
+    `original_text`, concatenates `delta` using `joiner`, and re-runs
+    incremental extraction with the same `note_id` so only the new chunks
+    invoke the LLM.
+
+    `append_id` is a caller-supplied UUID. Retrying with the same `append_id`
+    returns `status='replayed'` with the cached outcome from the audit table —
+    safe to retry on network errors. Reusing an `append_id` with a different
+    parent, delta, or joiner returns 409.
+    """
+    try:
+        # Resolve the parent's vault BEFORE forwarding so we can enforce the
+        # auth context's vault restrictions. Both note_key+vault_id and
+        # note_id-only callers end up with a concrete vault_id here.
+        _parent_id, parent_vault_id = await api.notes.resolve_note_id(
+            note_id=request.note_id,
+            note_key=request.note_key,
+            vault_id=request.vault_id,
+        )
+        await check_vault_access(auth, [parent_vault_id], api, permission=Permission.WRITE)
+
+        result = await api.append_to_note(
+            note_id=request.note_id,
+            note_key=request.note_key,
+            vault_id=request.vault_id,
+            delta=request.delta,
+            append_id=request.append_id,
+            joiner=request.joiner,
+            user_notes=request.user_notes,
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to append to note')
+
+    return NoteAppendResponse(
+        status=result['status'],
+        note_id=result['note_id'],
+        append_id=result['append_id'],
+        content_hash=result.get('content_hash') or '',
+        delta_bytes=result['delta_bytes'],
+        new_unit_ids=[
+            UUID(str(u)) if not isinstance(u, UUID) else u for u in result.get('new_unit_ids') or []
+        ],
+    )
 
 
 @router.delete('/notes/{note_id}', dependencies=[Depends(require_delete)])

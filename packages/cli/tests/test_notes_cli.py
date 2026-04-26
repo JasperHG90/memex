@@ -4,7 +4,14 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from memex_cli.notes import app as note_app
-from memex_common.schemas import IngestResponse, NoteCreateDTO, NoteDTO, NodeDTO
+from memex_common.schemas import (
+    IngestResponse,
+    NoteAppendRequest,
+    NoteAppendResponse,
+    NoteCreateDTO,
+    NoteDTO,
+    NodeDTO,
+)
 
 
 def test_note_list(runner, mock_api, mock_config, monkeypatch):
@@ -464,3 +471,187 @@ def test_get_asset_multi_partial_error(runner, mock_api, mock_config, monkeypatc
     assert (tmp_path / 'good.png').read_bytes() == b'GOOD'
     assert not (tmp_path / 'bad.csv').exists()
     assert 'Error' in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# `memex note append` command
+# ---------------------------------------------------------------------------
+
+
+def _append_response(note_id, append_id, *, status='success', new_units=0):
+    return NoteAppendResponse(
+        status=status,
+        note_id=note_id,
+        append_id=append_id,
+        content_hash='abcdef',
+        delta_bytes=10,
+        new_unit_ids=[uuid4() for _ in range(new_units)],
+    )
+
+
+def test_note_append_with_delta_flag(runner, mock_api, mock_config, monkeypatch):
+    """`memex note append <id> --delta X` builds a NoteAppendRequest and calls the API."""
+    note_id = uuid4()
+    append_id = uuid4()
+    mock_api.append_to_note.return_value = _append_response(note_id, append_id, new_units=2)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        ['append', str(note_id), '--delta', 'continued thought', '--append-id', str(append_id)],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0, result.stdout
+    mock_api.append_to_note.assert_called_once()
+    request = mock_api.append_to_note.call_args.args[0]
+    assert isinstance(request, NoteAppendRequest)
+    assert request.note_id == note_id
+    assert request.delta == 'continued thought'
+    assert request.append_id == append_id
+    assert request.joiner == 'paragraph'
+
+
+def test_note_append_from_delta_file(runner, mock_api, mock_config, monkeypatch, tmp_path):
+    """--delta-file is read and passed as the delta."""
+    note_id = uuid4()
+    append_id = uuid4()
+    delta_path = tmp_path / 'snippet.md'
+    delta_path.write_text('payload from file')
+
+    mock_api.append_to_note.return_value = _append_response(note_id, append_id)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        [
+            'append',
+            str(note_id),
+            '--delta-file',
+            str(delta_path),
+            '--append-id',
+            str(append_id),
+        ],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0, result.stdout
+    request = mock_api.append_to_note.call_args.args[0]
+    assert request.delta == 'payload from file'
+
+
+def test_note_append_by_key_with_vault(runner, mock_api, mock_config, monkeypatch):
+    """`--key` + `--vault` resolves to (note_key, vault_id) on the request."""
+    append_id = uuid4()
+    mock_api.append_to_note.return_value = _append_response(uuid4(), append_id)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        [
+            'append',
+            '--key',
+            'session-2026-04-26',
+            '--vault',
+            'global',
+            '--delta',
+            'progress note',
+            '--append-id',
+            str(append_id),
+        ],
+        obj=mock_config,
+    )
+    assert result.exit_code == 0, result.stdout
+    request = mock_api.append_to_note.call_args.args[0]
+    assert request.note_key == 'session-2026-04-26'
+    assert request.vault_id == 'global'
+    assert request.note_id is None
+
+
+def test_note_append_auto_generates_append_id(runner, mock_api, mock_config, monkeypatch):
+    """Two calls without --append-id produce different append_ids."""
+    note_id = uuid4()
+    mock_api.append_to_note.return_value = _append_response(note_id, uuid4())
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result1 = runner.invoke(note_app, ['append', str(note_id), '--delta', 'one'], obj=mock_config)
+    result2 = runner.invoke(note_app, ['append', str(note_id), '--delta', 'two'], obj=mock_config)
+    assert result1.exit_code == 0 and result2.exit_code == 0
+
+    calls = mock_api.append_to_note.call_args_list
+    assert len(calls) == 2
+    id1 = calls[0].args[0].append_id
+    id2 = calls[1].args[0].append_id
+    assert id1 != id2
+
+
+def test_note_append_quiet_prints_unit_count(runner, mock_api, mock_config, monkeypatch):
+    """--quiet outputs only the new-unit count."""
+    note_id = uuid4()
+    mock_api.append_to_note.return_value = _append_response(note_id, uuid4(), new_units=3)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app, ['append', str(note_id), '--delta', 'x', '--quiet'], obj=mock_config
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == '3'
+
+
+def test_note_append_requires_some_identifier(runner, mock_api, mock_config, monkeypatch):
+    """No note_id and no --key → error."""
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+    result = runner.invoke(note_app, ['append', '--delta', 'x'], obj=mock_config)
+    assert result.exit_code != 0
+    mock_api.append_to_note.assert_not_called()
+
+
+def test_note_append_key_without_vault_errors(runner, mock_api, mock_config, monkeypatch):
+    """`--key` requires `--vault`."""
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+    result = runner.invoke(note_app, ['append', '--key', 'k', '--delta', 'x'], obj=mock_config)
+    assert result.exit_code != 0
+    mock_api.append_to_note.assert_not_called()
+
+
+def test_note_append_rejects_both_delta_and_file(
+    runner, mock_api, mock_config, monkeypatch, tmp_path
+):
+    """--delta and --delta-file are mutually exclusive."""
+    note_id = uuid4()
+    delta_path = tmp_path / 'd.md'
+    delta_path.write_text('body')
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        ['append', str(note_id), '--delta', 'inline', '--delta-file', str(delta_path)],
+        obj=mock_config,
+    )
+    assert result.exit_code != 0
+    mock_api.append_to_note.assert_not_called()
+
+
+def test_note_append_rejects_both_note_id_and_key(runner, mock_api, mock_config, monkeypatch):
+    """Positional note_id + --key together → loud error, no API call.
+
+    Without this check the schema would silently let note_id win, which is
+    hostile when the user actually meant the --key.
+    """
+    note_id = uuid4()
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        note_app,
+        [
+            'append',
+            str(note_id),
+            '--key',
+            'session-key',
+            '--vault',
+            'global',
+            '--delta',
+            'x',
+        ],
+        obj=mock_config,
+    )
+    assert result.exit_code != 0
+    mock_api.append_to_note.assert_not_called()

@@ -84,3 +84,28 @@ SYNC_OFFLOAD_INFLIGHT = Gauge(
     'Number of synchronous-offload model calls currently in flight, by stage.',
     ['stage'],  # rerank | embed | ner
 )
+
+# ---------------------------------------------------------------------------
+# Note-append metrics (issue #56)
+# ---------------------------------------------------------------------------
+
+NOTE_APPEND_TOTAL = Counter(
+    'memex_note_append_total',
+    'Total calls to the atomic note-append endpoint, by outcome.',
+    ['outcome'],  # success | replayed | conflict | not_found | not_appendable | disabled | error
+)
+
+NOTE_APPEND_DURATION_SECONDS = Histogram(
+    'memex_note_append_duration_seconds',
+    'Wall-clock duration of POST /api/v1/notes/append.',
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+# Tracks ingestions whose note_key resolves to an existing non-empty note. Lets
+# us see how many callers should migrate to memex_append_note before deprecating
+# the retain-as-overwrite path. NOT an error counter; informational only.
+NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL = Counter(
+    'memex_retain_with_existing_note_key_total',
+    'Ingestions that re-used an existing non-empty note (candidate for memex_append_note).',
+    ['surface'],  # ingest_api | mcp_add_note | hermes_retain
+)

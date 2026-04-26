@@ -511,6 +511,7 @@ class MemexAPI:
             memory=self.memory,
             file_processor=self._file_processor,
             vaults=self._vaults,
+            notes=self._notes,
         )
 
         # Wire audit service into all domain services that emit events
@@ -528,6 +529,13 @@ class MemexAPI:
             self._lineage,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
+
+    @property
+    def notes(self) -> NoteService:
+        """The shared NoteService instance — exposed for routes that need to
+        resolve note identifiers prior to invoking a higher-level facade
+        (e.g. for vault-access auth checks)."""
+        return self._notes
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -692,6 +700,34 @@ class MemexAPI:
             notes, vault_id=vault_id, batch_size=batch_size
         ):
             yield result
+
+    async def append_to_note(
+        self,
+        *,
+        note_id: UUID | None = None,
+        note_key: str | None = None,
+        vault_id: UUID | str | None = None,
+        delta: str,
+        append_id: UUID,
+        joiner: str = 'paragraph',
+        user_notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically append a content delta to an existing note. Delegates to IngestionService.
+
+        Identify the note by note_key+vault_id (preferred) or note_id. The
+        server reads the parent's body, concatenates delta, and re-runs
+        incremental extraction with the same note_id so only the new chunks
+        invoke the LLM. Idempotent on append_id.
+        """
+        return await self._ingestion.append_to_note(
+            note_id=note_id,
+            note_key=note_key,
+            vault_id=vault_id,
+            delta=delta,
+            append_id=append_id,
+            joiner=joiner,
+            user_notes=user_notes,
+        )
 
     async def get_resource(self, path: str) -> bytes:
         """Direct access to stored assets. Delegates to NoteService."""

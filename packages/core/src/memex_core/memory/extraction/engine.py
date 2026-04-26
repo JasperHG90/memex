@@ -632,6 +632,19 @@ class ExtractionEngine:
         ]
         await storage.mark_blocks_stale(session, removed_block_ids)
         await storage.mark_memory_units_stale(session, removed_block_ids)
+        # Cascade: the memory units backed by removed chunks are now orphaned.
+        # Without this, mental models keep referencing memory_ids that no
+        # longer back active text and the affected entities never re-reflect.
+        if removed_block_ids:
+            from memex_core.services.mental_model_cleanup import cascade_chunk_unit_staling
+
+            await cascade_chunk_unit_staling(
+                session,
+                UUID(note_id),
+                vault_id,
+                removed_block_ids,
+                self.queue_service,
+            )
 
         # Update document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
@@ -765,6 +778,20 @@ class ExtractionEngine:
         # Only stale facts for blocks whose facts were NOT migrated
         unmigrated_ids = [bid for bid in removed_block_ids if bid not in chunk_migration]
         await storage.mark_memory_units_stale(session, unmigrated_ids)
+        # Cascade: prune mental-model evidence for the orphaned units and
+        # queue affected entities for re-reflection. We pass unmigrated_ids
+        # (not the full removed set) because migrated chunks reused the
+        # facts on a new chunk, so their evidence is still live.
+        if unmigrated_ids:
+            from memex_core.services.mental_model_cleanup import cascade_chunk_unit_staling
+
+            await cascade_chunk_unit_staling(
+                session,
+                UUID(note_id),
+                vault_id,
+                unmigrated_ids,
+                self.queue_service,
+            )
 
         # 7. Mark truly-removed nodes stale
         new_all_node_hashes: set[str] = set()

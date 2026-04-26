@@ -28,6 +28,7 @@ from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp.models import (
     McpAddAssetsResult,
     McpAddNoteResult,
+    McpAppendNoteResult,
     McpAsset,
     McpDeleteAssetsResult,
     McpCitation,
@@ -65,6 +66,7 @@ from memex_common.schemas import (
     BatchJobStatus,
     LineageDirection,
     LineageResponse,
+    NoteAppendRequest,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
@@ -926,7 +928,9 @@ async def memex_active_vault(ctx: Context) -> str:
         'Add a new note or document to Memex. Ingest content into a vault. Confirm '
         'vault with user first, or pass vault_id. For structured captures (ADRs, '
         'retros, technical briefs, RFCs), call memex_list_templates first and pass '
-        'the chosen slug as `template` for provenance and downstream filtering.'
+        'the chosen slug as `template` for provenance and downstream filtering. '
+        'For appending content to an existing note (one you previously created '
+        'with this key), prefer memex_append_note to avoid resending the full body.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -1091,6 +1095,140 @@ async def memex_add_note(
     except Exception as e:
         logger.error(f'Add note failed: {e}', exc_info=True)
         raise ToolError(f'Add note failed: {e}')
+
+
+@mcp.tool(
+    name='memex_append_note',
+    description=(
+        'Atomically append new content to an existing note. Send only the delta '
+        '— the server reads the existing body and concatenates server-side. Use '
+        'this in preference to memex_add_note / memex_retain when adding to a '
+        'known existing note (e.g. a session log, an ongoing reflection). '
+        'Identify the note by the note_key you set when creating it (preferred); '
+        'note_id is also accepted if you already have one from a search.'
+    ),
+    tags={'write'},
+    annotations={'readOnlyHint': False},
+    timeout=120.0,
+)
+async def memex_append_note(
+    ctx: Context,
+    delta: Annotated[
+        str,
+        Field(
+            description=(
+                'New content to append. Just the new snippet — do NOT include the '
+                'existing body. Must not begin with `---` (would be ambiguous '
+                'with frontmatter).'
+            ),
+            min_length=1,
+            max_length=200_000,
+        ),
+    ],
+    note_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Stable user-facing key the note was created with (preferred). '
+                'Either note_key + vault_id or note_id is required.'
+            ),
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Vault scope. Required when identifying by note_key.',
+        ),
+    ] = None,
+    note_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Direct note UUID. Use only if you already have one from a search; '
+                'note_key is the preferred identifier.'
+            ),
+        ),
+    ] = None,
+    append_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Caller-supplied UUID idempotency token. Reusing the same value with '
+                'the same delta+parent is a safe replay; auto-generated if omitted.'
+            ),
+        ),
+    ] = None,
+    joiner: Annotated[
+        str,
+        Field(
+            default='paragraph',
+            description=(
+                "Separator between parent body and delta. 'paragraph' (default), "
+                "'newline', or 'none'."
+            ),
+        ),
+    ] = 'paragraph',
+    user_notes: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional commentary stored on the note metadata. NOT injected '
+                'into the body itself.'
+            ),
+        ),
+    ] = None,
+) -> McpAppendNoteResult:
+    """Atomically append delta content to an existing note.
+
+    The server takes a per-parent advisory lock + row lock, reads the parent's
+    body, concatenates ``parent + sep + delta``, and re-runs incremental
+    extraction. Because the same note_id is reused, only the new content's
+    chunks invoke the LLM.
+
+    Idempotent retries (same ``append_id``) return ``status='replayed'`` with
+    the cached outcome. Reusing an ``append_id`` with a different parent or a
+    different delta returns a 409-equivalent error.
+    """
+    try:
+        api = get_api(ctx)
+        if not note_key and not note_id:
+            raise ToolError('One of note_key (with vault_id) or note_id is required.')
+        if note_key and not vault_id:
+            raise ToolError('vault_id is required when identifying by note_key.')
+
+        from uuid import uuid4 as _uuid4
+
+        resolved_append_id = UUID(append_id) if append_id else _uuid4()
+        resolved_note_id: UUID | None = UUID(note_id) if note_id else None
+
+        request = NoteAppendRequest(
+            note_id=resolved_note_id,
+            note_key=note_key,
+            vault_id=vault_id,
+            delta=delta,
+            append_id=resolved_append_id,
+            joiner=joiner,
+            user_notes=user_notes,
+        )
+        response = await api.append_to_note(request)
+
+        return McpAppendNoteResult(
+            note_id=response.note_id,
+            append_id=response.append_id,
+            status=response.status,
+            delta_bytes=response.delta_bytes,
+            new_unit_count=len(response.new_unit_ids),
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Append note failed: {e}', exc_info=True)
+        raise ToolError(f'Append note failed: {e}')
 
 
 def compute_staleness(

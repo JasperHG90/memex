@@ -220,10 +220,14 @@ async def test_input_note_keys_gin_index_with_jsonb_path_ops(fresh_db_url: str) 
 
 @pytest.mark.asyncio
 async def test_021_migration_round_trip(fresh_db_url: str) -> None:
-    """AC-019 round-trip: `alembic upgrade head` then `alembic downgrade -1`
-    leaves the column and index removed."""
+    """AC-019 round-trip: ``alembic upgrade head`` then downgrade past 021
+    leaves the column and index removed.
+
+    Targets the explicit prior revision rather than ``-1`` so additional
+    migrations layered on top of 021 don't change the meaning of this test.
+    """
     await _alembic_upgrade(fresh_db_url)
-    await _alembic_downgrade(fresh_db_url, '-1')
+    await _alembic_downgrade(fresh_db_url, '020_temporal_cooccurrences')
 
     engine = create_async_engine(fresh_db_url, poolclass=NullPool)
     try:

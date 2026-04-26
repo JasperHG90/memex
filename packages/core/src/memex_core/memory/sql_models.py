@@ -1431,3 +1431,59 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
     )
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
+
+
+class NoteAppend(SQLModel, table=True):  # type: ignore
+    """Audit row for an atomic delta append to an existing note.
+
+    One row per successful call to the append endpoint, keyed on the
+    caller-supplied append_id so retries can replay the cached outcome
+    without mutating the body twice.
+    """
+
+    __tablename__ = 'note_appends'
+
+    append_id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True),
+        description='Caller-supplied idempotency token; primary key.',
+    )
+    note_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The note this append targeted.',
+    )
+    delta_sha256: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='SHA-256 of the delta bytes; replay-equality check.',
+    )
+    delta_bytes: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Length of the delta in bytes (UTF-8 encoded).',
+    )
+    joiner: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Separator placed between parent body and delta.',
+    )
+    resulting_content_hash: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='content_hash of the note after the append committed.',
+    )
+    new_unit_ids: list[UUID] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(SA_UUID()),
+            nullable=False,
+            server_default=sql_text('ARRAY[]::uuid[]'),
+        ),
+        description='Memory units newly extracted from the delta on this append.',
+    )
+    applied_at: datetime = created_at_field()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['note_id'],
+            ['notes.id'],
+            name='note_appends_note_fkey',
+            ondelete='CASCADE',
+        ),
+        Index('idx_note_appends_note_id_applied_at', 'note_id', 'applied_at'),
+    )
