@@ -11,9 +11,11 @@ from memex_core.storage.filestore import (
 )
 
 
-# Inputs that all resolve to the storage root: empty / whitespace / slash /
-# dot-equivalent (URL-decoded ``%2E``/``%2E%2E``). All are rejected by the
-# empty-path guards on every public entry point.
+# Inputs that ``posixpath.normpath`` collapses to no real path component:
+# empty / whitespace / slash, bare ``.``/``..`` (and URL-decoded
+# ``%2E``/``%2E%2E`` variants), and mixed-segment shapes that cancel back
+# to root (``foo/..``). All are rejected by the empty-path guards on every
+# public entry point.
 ROOT_EQUIVALENT_KEYS = [
     '',
     '/',
@@ -29,6 +31,11 @@ ROOT_EQUIVALENT_KEYS = [
     '/../',
     './..',
     '../..',
+    'foo/..',
+    'a/b/../..',
+    'foo/../bar/..',
+    './foo/..',
+    '/foo/..',
 ]
 from memex_core.config import LocalFileStoreConfig
 from memex_common.config import S3FileStoreConfig, GCSFileStoreConfig
@@ -679,14 +686,21 @@ def test_is_root_key_rejects_root_equivalent(key: str) -> None:
         '/foo',
         '..foo',
         '.foo',
+        # ``foo/.`` and ``./foo`` normalise to ``foo`` — a real path.
         'foo/.',
-        'foo/..',
         './foo',
+        # ``../foo`` escapes root but still names a real component, so
+        # it's not "no path"; ``validate_path_safe`` raises on it.
         '../foo',
+        'a/./b',
     ],
 )
 def test_is_root_key_accepts_real_paths(key: str) -> None:
-    """Real paths — including ones containing ``.``/``..`` segments — are not root."""
+    """Inputs that normalise to a real path component are not root-equivalent.
+
+    ``foo/..`` is *not* in this list — it cancels to ``.`` and is covered
+    by ``test_is_root_key_rejects_root_equivalent`` instead.
+    """
     assert is_root_key(key) is False
 
 
