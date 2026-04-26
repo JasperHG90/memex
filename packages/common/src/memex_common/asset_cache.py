@@ -9,6 +9,7 @@ the LRU bound is exceeded.
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import os
 import shutil
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from cachetools import LRUCache
+
+logger = logging.getLogger(__name__)
 
 
 class _EvictingLRUCache(LRUCache):
@@ -71,14 +74,17 @@ class SessionAssetCache:
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
 
-    @staticmethod
-    def _unlink_evicted(_key: str, value: Path) -> None:
+    def _unlink_evicted(self, key: str, value: Path) -> None:
         try:
             os.unlink(value)
         except FileNotFoundError:
             pass
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug('Failed to unlink evicted cache file %s: %s', value, exc)
+        # Drop the per-key lock in the same critical section as the eviction so
+        # the locks dict stays bounded by the LRU. Keys registered via
+        # ``register()`` have no lock entry; ``pop(..., None)`` is a no-op.
+        self._locks.pop(key, None)
 
     def _local_path_for(self, path: str) -> Path:
         digest = sha256(path.encode('utf-8')).hexdigest()[:16]
@@ -122,6 +128,23 @@ class SessionAssetCache:
             self._cache[path] = local
             mime, _ = mimetypes.guess_type(str(local))
             return local, mime, local.stat().st_size
+
+    def register(self, local_path: Path) -> Path:
+        """Insert an externally-created file into the LRU.
+
+        Used by callers that produce derived files in the session tempdir
+        (for example, resized image siblings) so those files participate in
+        LRU eviction and session cleanup. ``local_path`` must already live
+        under ``self.tempdir``; otherwise ``ValueError`` is raised.
+        """
+        resolved = local_path.resolve()
+        tempdir_resolved = self.tempdir.resolve()
+        if not resolved.is_relative_to(tempdir_resolved):
+            raise ValueError(
+                f'register() refused: {local_path} is not inside session tempdir {self.tempdir}'
+            )
+        self._cache[str(local_path)] = local_path
+        return local_path
 
     def cleanup(self) -> None:
         """Remove the session tempdir and all cached files. Idempotent."""

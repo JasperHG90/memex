@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from memex_common.asset_cache import SessionAssetCache
 
 
@@ -143,3 +145,112 @@ async def test_eviction_then_refetch_recreates_file(tmp_path: Path) -> None:
 
     assert again.exists()
     assert len(fetcher.calls) == 3
+
+
+async def test_lock_dict_bounded_by_lru_size(tmp_path: Path) -> None:
+    """Per-path locks must be evicted alongside their cache entries.
+
+    Without this, a long-running session that fetches many distinct paths
+    would grow ``_locks`` unboundedly even though the LRU caps the file
+    count. The eviction hook drops the matching lock in the same critical
+    section as the file unlink.
+    """
+    cache = _make_cache(tmp_path, maxsize=2)
+    fetcher = _CountingFetcher()
+
+    for path in ('one.png', 'two.png', 'three.png', 'four.png', 'five.png'):
+        await cache.get_or_fetch(path, fetcher)
+
+    assert len(cache._locks) <= 2
+    # The lock dict must track the same set of keys the LRU still holds.
+    assert set(cache._locks).issubset(set(cache._cache))
+
+
+async def test_register_inserts_into_lru(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path)
+    sibling = cache.tempdir / 'resized.png'
+    sibling.write_bytes(b'\x89PNG\r\n\x1a\n')
+
+    returned = cache.register(sibling)
+
+    assert returned == sibling
+    assert str(sibling) in cache._cache
+
+
+async def test_register_evicts_when_over_maxsize(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path, maxsize=2)
+    paths: list[Path] = []
+    for name in ('a.png', 'b.png', 'c.png'):
+        target = cache.tempdir / name
+        target.write_bytes(b'\x89PNG\r\n\x1a\n')
+        cache.register(target)
+        paths.append(target)
+
+    # First registration must have been evicted (LRU policy) and unlinked.
+    assert not paths[0].exists()
+    assert paths[1].exists()
+    assert paths[2].exists()
+
+
+async def test_register_rejects_path_outside_tempdir(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path)
+    outside = tmp_path / 'outside.png'
+    outside.write_bytes(b'\x89PNG\r\n\x1a\n')
+
+    with pytest.raises(ValueError, match='not inside session tempdir'):
+        cache.register(outside)
+
+
+async def test_eviction_then_read_raises_clean_filenotfound(tmp_path: Path) -> None:
+    """Documents the contract for callers reading file:// URIs after subsequent fetches.
+
+    Once an asset is evicted under LRU pressure, its on-disk file is unlinked.
+    Callers holding the previously-returned ``Path`` must handle ``FileNotFoundError``
+    gracefully — the cache makes no promise that the file remains readable
+    after later cache activity.
+    """
+    cache = _make_cache(tmp_path, maxsize=1)
+    fetcher = _CountingFetcher()
+
+    first, _, _ = await cache.get_or_fetch('a.png', fetcher)
+    assert first.exists()
+
+    # Fetching b.png evicts a.png; the underlying file must be gone.
+    await cache.get_or_fetch('b.png', fetcher)
+    assert not first.exists()
+
+    with pytest.raises(FileNotFoundError):
+        first.read_bytes()
+
+
+async def test_eviction_oserror_logged_not_raised(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``OSError`` during eviction unlink must be logged but never raised.
+
+    Permission-denied or transient FS errors on cleanup must not crash the
+    eviction path — the LRU's invariants depend on ``popitem()`` returning.
+    """
+    import logging as stdlib_logging
+    import os as stdlib_os
+
+    cache = _make_cache(tmp_path, maxsize=1)
+    fetcher = _CountingFetcher()
+    await cache.get_or_fetch('a.png', fetcher)
+
+    real_unlink = stdlib_os.unlink
+
+    def flaky_unlink(path: str | Path) -> None:
+        if Path(path).name.endswith('a.png') or 'a.png' in str(path):
+            raise OSError('simulated permission denied')
+        real_unlink(path)
+
+    monkeypatch.setattr('memex_common.asset_cache.os.unlink', flaky_unlink)
+
+    with caplog.at_level(stdlib_logging.DEBUG, logger='memex_common.asset_cache'):
+        # Evicting a.png must not raise even though unlink fails.
+        await cache.get_or_fetch('b.png', fetcher)
+
+    assert any('Failed to unlink evicted cache file' in record.message for record in caplog.records)
