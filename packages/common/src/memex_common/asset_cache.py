@@ -55,6 +55,7 @@ class _EvictingLRUCache(LRUCache):
 
 
 MAX_RESOURCE_BYTES: int = 50 * 1024 * 1024
+MAX_GET_RESOURCES_PATHS: int = 50
 
 
 class SessionAssetCache:

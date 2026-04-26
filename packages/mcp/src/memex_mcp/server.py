@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Final
+from typing import Annotated, Any
 from uuid import UUID
 import mimetypes
 
@@ -17,7 +17,7 @@ from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.exceptions import ToolError
 
-from memex_common.asset_cache import MAX_RESOURCE_BYTES
+from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
 from memex_common.asset_resize import validate_and_resize
 from fastmcp.utilities.logging import configure_logging
 import json
@@ -74,8 +74,6 @@ from memex_common.schemas import (
 
 
 _SESSION_DEDUP_TTL = 1800  # 30 minutes
-
-_MAX_GET_RESOURCES_PATHS: Final[int] = 50
 
 # Link types always inlined in search results (all others available via
 # memex_get_memory_links on demand).
@@ -586,8 +584,8 @@ async def memex_get_resources(
     ] = None,
 ) -> list[str]:
     """Retrieve file resources. Returns a list of file:// URIs or error strings."""
-    if len(paths) > _MAX_GET_RESOURCES_PATHS:
-        raise ToolError(f'Too many paths requested ({len(paths)} > {_MAX_GET_RESOURCES_PATHS})')
+    if len(paths) > MAX_GET_RESOURCES_PATHS:
+        raise ToolError(f'Too many paths requested ({len(paths)} > {MAX_GET_RESOURCES_PATHS})')
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)

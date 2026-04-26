@@ -155,6 +155,7 @@ class MemexMemoryProvider(MemoryProvider):
         from memex_common.client import RemoteMemexAPI
 
         self._api = RemoteMemexAPI(self._client)
+        assert self._asset_cache is None, 'initialize() called twice; prior asset cache leaked'
         self._asset_cache = SessionAssetCache()
 
         try:

@@ -21,8 +21,7 @@ import pytest
 from PIL import Image
 from fastmcp.exceptions import ToolError
 
-from memex_common.asset_cache import MAX_RESOURCE_BYTES
-from memex_mcp.server import _MAX_GET_RESOURCES_PATHS
+from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
 from helpers import parse_tool_result
 
 
@@ -133,10 +132,10 @@ async def test_resize_rejects_decompression_bomb(asset_cache, mcp_client):
 
 @pytest.mark.asyncio
 async def test_get_resources_rejects_too_many_paths(asset_cache, mcp_client):
-    """Parity with Hermes: a paths list above ``_MAX_GET_RESOURCES_PATHS``
+    """Parity with Hermes: a paths list above ``MAX_GET_RESOURCES_PATHS``
     is rejected up front so a misbehaving caller cannot fan out unbounded
     fetches."""
-    paths = [f'images/asset-{i}.png' for i in range(_MAX_GET_RESOURCES_PATHS + 1)]
+    paths = [f'images/asset-{i}.png' for i in range(MAX_GET_RESOURCES_PATHS + 1)]
     with pytest.raises(ToolError, match='Too many paths'):
         await mcp_client.call_tool(
             'memex_get_resources',

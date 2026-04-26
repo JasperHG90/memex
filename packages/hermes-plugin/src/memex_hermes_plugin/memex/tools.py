@@ -34,7 +34,11 @@ from typing import Any, Protocol, cast
 from uuid import UUID
 
 
-from memex_common.asset_cache import MAX_RESOURCE_BYTES, SessionAssetCache
+from memex_common.asset_cache import (
+    MAX_GET_RESOURCES_PATHS,
+    MAX_RESOURCE_BYTES,
+    SessionAssetCache,
+)
 from memex_common.asset_resize import validate_and_resize
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
@@ -1248,7 +1252,6 @@ def _is_unsafe_asset_filename(filename: Any) -> bool:
 # Bulk-input caps on list-type tool arguments. These mirror the ``maxItems``
 # values declared in the tool schemas; the handlers also enforce them
 # defensively because some clients ignore schema-level limits.
-_MAX_GET_RESOURCES_PATHS = 50
 _MAX_ADD_ASSETS_ITEMS = 20
 
 # Canonical KV key namespaces per RFC-012. Hermes is the ``key`` holder here;
@@ -2577,8 +2580,8 @@ def handle_get_resources(
     if not isinstance(paths, list):
         return tool_error("'paths' must be an array of strings")
 
-    if len(paths) > _MAX_GET_RESOURCES_PATHS:
-        return tool_error(f'Too many paths: {len(paths)} (max {_MAX_GET_RESOURCES_PATHS}).')
+    if len(paths) > MAX_GET_RESOURCES_PATHS:
+        return tool_error(f'Too many paths: {len(paths)} (max {MAX_GET_RESOURCES_PATHS}).')
 
     results: list[dict[str, Any]] = []
     for path in paths:
@@ -2906,18 +2909,6 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
 }
 
 
-_ACCEPTS_ASSET_CACHE: dict[str, bool] = {}
-
-
-def _accepts_asset_cache(handler: _StdHandler | _AssetCacheHandler) -> bool:
-    key = getattr(handler, '__qualname__', repr(handler))
-    cached = _ACCEPTS_ASSET_CACHE.get(key)
-    if cached is None:
-        cached = 'asset_cache' in inspect.signature(handler).parameters
-        _ACCEPTS_ASSET_CACHE[key] = cached
-    return cached
-
-
 def dispatch(
     tool_name: str,
     args: dict[str, Any],
@@ -2931,7 +2922,7 @@ def dispatch(
     if handler is None:
         return tool_error(f'Unknown tool: {tool_name}')
     try:
-        if _accepts_asset_cache(handler):
+        if 'asset_cache' in inspect.signature(handler).parameters:
             return cast(_AssetCacheHandler, handler)(
                 api, config, vault_id, args, asset_cache=asset_cache
             )

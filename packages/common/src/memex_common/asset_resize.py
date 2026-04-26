@@ -21,13 +21,10 @@ if TYPE_CHECKING:
 _ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'})
 
 # Decompression-bomb cap, checked from the lazy ``Image.open`` header
-# before pixel decode. Pillow's stock ``MAX_IMAGE_PIXELS`` only warns and
-# its hard-error path is at 2× that; we want a deterministic refusal.
+# before pixel decode. Mutating ``Image.MAX_IMAGE_PIXELS`` would be
+# process-global and step on other Pillow consumers; this explicit
+# header-based guard fires deterministically before any decode.
 _MAX_DECODED_PIXELS: int = 32 * 1024 * 1024  # 32 megapixels
-
-# Align Pillow's own threshold so its DecompressionBombError fires at the
-# same point as our explicit pre-check.
-Image.MAX_IMAGE_PIXELS = _MAX_DECODED_PIXELS
 
 _SUFFIX_TO_FORMAT: dict[str, str] = {
     '.png': 'PNG',
