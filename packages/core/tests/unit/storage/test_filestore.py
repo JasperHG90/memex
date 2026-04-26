@@ -628,6 +628,17 @@ async def test_move_file_rejects_root_dest(store: LocalAsyncFileStore, bad_key: 
     assert await store.exists('src.txt') is True
 
 
+@pytest.mark.parametrize('bad_pattern', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_glob_root_pattern_returns_empty(
+    store: LocalAsyncFileStore, bad_pattern: str
+) -> None:
+    # glob('') would otherwise list everything under the storage root, leaking
+    # an enumeration of the bucket prefix. Existence-style queries return [].
+    await store.save('a.txt', b'a')
+    assert await store.glob(bad_pattern) == []
+
+
 @pytest.mark.asyncio
 async def test_delete_root_key_does_not_delete_files(store: LocalAsyncFileStore) -> None:
     # Regression for the HIGH finding: an accidental delete('/', recursive=True)

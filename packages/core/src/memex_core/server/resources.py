@@ -12,7 +12,7 @@ from memex_common.schemas import LineageDirection, LineageResponse
 from memex_core.api import MemexAPI
 from memex_core.server.auth import require_read
 from memex_core.server.common import _handle_error, get_api
-from memex_core.storage.filestore import _is_root_key
+from memex_core.storage.filestore import is_root_key
 
 logger = logging.getLogger('memex.core.server.resources')
 
@@ -26,7 +26,7 @@ async def get_resource(path: str, api: Annotated[MemexAPI, Depends(get_api)]):
 
     from fastapi.responses import Response
 
-    if _is_root_key(path):
+    if is_root_key(path):
         raise HTTPException(status_code=404, detail='Resource path is empty')
 
     try:

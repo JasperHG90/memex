@@ -108,4 +108,4 @@ def test_resource_empty_path_returns_404(client: TestClient, path: str):
     """An empty/root path must 404 cleanly, not 500 from boto on an empty Key."""
     resp = client.get(f'/api/v1/resources/{path}')
     assert resp.status_code == 404
-    assert 'empty' in resp.json()['detail'].lower()
+    assert resp.json()['detail'] == 'Resource path is empty'
