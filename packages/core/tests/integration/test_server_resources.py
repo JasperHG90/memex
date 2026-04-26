@@ -65,15 +65,25 @@ def test_resource_empty_path_returns_404(client: TestClient, path: str) -> None:
         '/%2E',
         '/%2E%2E',
         '%2E%2F%2E',
+        # Mixed dot-segment shapes that ``posixpath.normpath`` cancels back
+        # to root. Without the normpath-based guard, ``foo/..`` slipped
+        # past ``is_root_key``: ``validate_path_safe`` returned the bare
+        # storage root and ``_cat_file(root)`` raised ``IsADirectoryError``
+        # → 500. Slashes are percent-encoded (``%2F``) so httpx doesn't
+        # collapse the path client-side before it reaches the server —
+        # FastAPI decodes ``%2F`` back inside the ``{path:path}`` capture.
+        'foo%2F..',
+        'a%2Fb%2F..%2F..',
+        'foo%2F..%2Fbar%2F..',
+        'foo%2F%2E%2E',
     ],
 )
 def test_resource_dot_path_returns_404(client: TestClient, path: str) -> None:
-    """``.``/``..`` and their URL-encoded variants must 404, not 500.
+    """``.``/``..`` and any normpath-collapsing variants must 404, not 500.
 
-    Without the extended ``is_root_key`` guard, FastAPI URL-decodes ``%2E``
-    to ``.``; ``validate_path_safe`` then collapses that to the storage
-    root and ``_cat_file(root)`` raises ``IsADirectoryError`` which the
-    ``OSError`` branch of ``_handle_error`` previously mapped to 500.
+    Covers the URL-decoded ``%2E``/``%2E%2E`` reproducer and the mixed
+    dot-segment shapes (``foo/..`` etc.) that ``posixpath.normpath``
+    cancels back to the storage root.
     """
     resp = client.get(f'/api/v1/resources/{path}')
     assert resp.status_code == 404
