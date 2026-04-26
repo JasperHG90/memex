@@ -162,6 +162,18 @@ def test_routing_guide_documents_batch_fetch():
     assert 'memex_get_memory_units' in _ROUTING_GUIDE
 
 
+def test_routing_guide_documents_templates():
+    """Templates bullet must surface the list → get → retain(template=) flow.
+
+    Without this, agents skip templates even for content that maps cleanly onto
+    a built-in (ADR, RFC, retro, technical brief).
+    """
+    assert '**Templates for structured captures**' in _ROUTING_GUIDE
+    assert 'memex_list_templates' in _ROUTING_GUIDE
+    assert 'memex_get_template' in _ROUTING_GUIDE
+    assert 'template=slug' in _ROUTING_GUIDE
+
+
 def test_routing_guide_bullets_render_in_formatted_block():
     """Guide must flow through format_briefing_block end-to-end."""
     block = format_briefing_block(
@@ -177,6 +189,7 @@ def test_routing_guide_bullets_render_in_formatted_block():
         '**Batch fetch**',
         '**Lineage / relationships**',
         '**KV store**',
+        '**Templates for structured captures**',
         'memex_find_note',
     ):
         assert marker in block

@@ -277,6 +277,17 @@ IF user wants to annotate a note or update their commentary:
   - `memex_update_user_notes(note_id, user_notes)` — update user annotations on a note
   - `memex_search_user_notes(query)` — search only user annotations (source_context='user_notes')
 
+IF capturing structured content (architecture decision, RFC, retro, technical brief, learning):
+  → TEMPLATES (capture flow)
+  1. `memex_list_templates()` — see what's available with descriptions
+  2. `memex_get_template(slug)` — fetch the markdown scaffold
+  3. Write your note body following the template structure
+  4. `memex_add_note(..., template=slug)` — pass the slug so the note is tagged
+     and filterable later (`memex_list_notes(template=slug)`, vault summaries).
+  Built-ins: `general_note`, `technical_brief`, `architectural_decision_record`,
+  `request_for_comments`, `agent_reflection`, `quick_note`. Prefer a template over
+  free-form when the content has clear sections.
+
 RULES:
 - Only use IDs from tool output. Never fabricate IDs.
 - Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
@@ -743,8 +754,12 @@ def _get_template_registry(ctx: Context) -> TemplateRegistry:
 
 @mcp.tool(
     name='memex_get_template',
-    description='Get a markdown template for memex_add_note. Use memex_list_templates to see available templates.',
-    tags={'write'},
+    description=(
+        'Fetch a markdown scaffold to follow when writing a structured note. '
+        'Call this BEFORE memex_add_note for ADRs, retros, technical briefs, RFCs, '
+        'or any note with clear sections. Use memex_list_templates to discover slugs.'
+    ),
+    tags={'write', 'templates'},
     annotations={'readOnlyHint': True},
 )
 def memex_get_template(
@@ -769,8 +784,12 @@ def memex_get_template(
 
 @mcp.tool(
     name='memex_list_templates',
-    description='List all available note templates with metadata (slug, name, description, source).',
-    tags={'write'},
+    description=(
+        'List note templates (built-in + user-registered). Call this when about to '
+        'capture structured content — pick a slug, fetch the body with '
+        'memex_get_template, then pass `template=slug` to memex_add_note.'
+    ),
+    tags={'write', 'templates'},
     annotations={'readOnlyHint': True},
 )
 def memex_list_templates(ctx: Context) -> str:
@@ -778,11 +797,18 @@ def memex_list_templates(ctx: Context) -> str:
     try:
         registry = _get_template_registry(ctx)
         templates = registry.list_templates()
+        if not templates:
+            return 'No templates available.'
         lines = []
         for t in templates:
             source_tag = f'[{t.source}]'
             lines.append(f'- **{t.slug}** {source_tag} — {t.display_name}: {t.description}')
-        return '\n'.join(lines) if lines else 'No templates available.'
+        lines.append('')
+        lines.append(
+            'Next: `memex_get_template(slug)` to fetch the body, then write your '
+            'content following the structure and call `memex_add_note(..., template=slug)`.'
+        )
+        return '\n'.join(lines)
     except Exception as e:
         logger.error(f'List templates failed: {e}', exc_info=True)
         raise ToolError(f'Failed to list templates: {e}')
@@ -791,10 +817,11 @@ def memex_list_templates(ctx: Context) -> str:
 @mcp.tool(
     name='memex_register_template',
     description=(
-        'Register a new note template. Creates a template from inline content. '
-        'To delete a template, use the CLI: memex note template delete <slug>'
+        'Register a custom note template from inline markdown. Use when a recurring '
+        'capture pattern (sprint retro, incident postmortem, etc.) does not match a '
+        'built-in. To delete a template, use the CLI: memex note template delete <slug>'
     ),
-    tags={'write'},
+    tags={'write', 'templates'},
     annotations={'readOnlyHint': False},
 )
 def memex_register_template(
@@ -863,7 +890,12 @@ async def memex_active_vault(ctx: Context) -> str:
 
 @mcp.tool(
     name='memex_add_note',
-    description='Add a new note or document to Memex. Ingest content into a vault. Confirm vault with user first, or pass vault_id.',
+    description=(
+        'Add a new note or document to Memex. Ingest content into a vault. Confirm '
+        'vault with user first, or pass vault_id. For structured captures (ADRs, '
+        'retros, technical briefs, RFCs), call memex_list_templates first and pass '
+        'the chosen slug as `template` for provenance and downstream filtering.'
+    ),
     tags={'write'},
     annotations={'readOnlyHint': False},
     timeout=120.0,
