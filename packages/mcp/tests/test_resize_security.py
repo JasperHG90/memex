@@ -1,0 +1,171 @@
+"""Security/hardening tests for ``memex_get_resources`` and ``memex_resize_image``.
+
+Each test in this module proves a specific Phase 3 adversarial finding:
+
+- Finding 1  : per-asset 50 MiB size cap on get_resources.
+- Finding 2  : ``resolve(strict=True)`` + clean ToolError on missing path.
+- Finding 6  : positive-dimension validation.
+- Finding 7  : decompression-bomb protection.
+- Finding 10 : post-resize TOCTOU re-check.
+- Finding 11 : ``format`` parameter renamed to ``output_format``.
+- Finding 4  : resized destination registered into the LRU cache.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from PIL import Image
+from fastmcp.exceptions import ToolError
+
+from memex_mcp.server import _MAX_RESOURCE_BYTES
+from helpers import parse_tool_result
+
+
+def _write_png(path: Path, size: tuple[int, int] = (64, 64)) -> Path:
+    Image.new('RGB', size, color=(0, 128, 255)).save(path, format='PNG')
+    return path
+
+
+# Finding 1 ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_resources_oversize_rejected_after_download(mock_api, asset_cache, mcp_client):
+    """A response exceeding ``_MAX_RESOURCE_BYTES`` is reported as an error
+    string (the wrapper turns ToolError into an entry in the result list)."""
+    big_blob = b'\x00' * (_MAX_RESOURCE_BYTES + 1)
+    mock_api.get_resource = AsyncMock(return_value=big_blob)
+
+    result = await mcp_client.call_tool(
+        'memex_get_resources',
+        {'paths': ['images/huge.bin'], 'vault_id': 'test-vault'},
+    )
+    items = parse_tool_result(result)
+    assert isinstance(items, list)
+    assert len(items) == 1
+    msg = items[0]
+    assert msg.startswith('Error fetching ')
+    assert 'Resource exceeds max size' in msg
+    assert str(_MAX_RESOURCE_BYTES) in msg
+
+
+# Finding 2 ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resize_rejects_nonexistent_path(asset_cache, mcp_client):
+    """``resolve(strict=True)`` should surface a clean ``ToolError`` instead
+    of leaking ``FileNotFoundError`` from underneath."""
+    missing = asset_cache.tempdir / 'does-not-exist.png'
+    with pytest.raises(ToolError, match='does not exist'):
+        await mcp_client.call_tool(
+            'memex_resize_image',
+            {'local_path': str(missing)},
+        )
+
+
+# Finding 6 ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'mw, mh',
+    [(0, 64), (64, 0), (-1, 64), (64, -1)],
+)
+async def test_resize_rejects_negative_dimensions(asset_cache, mcp_client, mw, mh):
+    """Zero and negative dimensions must be rejected before Pillow is invoked."""
+    src = _write_png(asset_cache.tempdir / 'tiny.png', size=(32, 32))
+    with pytest.raises(ToolError, match='positive'):
+        await mcp_client.call_tool(
+            'memex_resize_image',
+            {'local_path': str(src), 'max_width': mw, 'max_height': mh},
+        )
+
+
+# Finding 7 ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resize_rejects_decompression_bomb(asset_cache, mcp_client):
+    """Image whose pixel count exceeds ``Image.MAX_IMAGE_PIXELS`` raises a
+    ``DecompressionBombWarning`` that we promote to ``ToolError``."""
+    src = _write_png(asset_cache.tempdir / 'bomb.png', size=(50, 50))  # 2500 px
+
+    # Temporarily lower the cap so a 2500-pixel image trips the warning.
+    with patch('memex_mcp.server._MAX_IMAGE_PIXELS', 100):
+        with pytest.raises(ToolError, match='too large to safely decode'):
+            await mcp_client.call_tool(
+                'memex_resize_image',
+                {'local_path': str(src), 'max_width': 16, 'max_height': 16},
+            )
+
+
+# Finding 10 -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resize_post_check_rejects_dest_outside_cache(asset_cache, mcp_client, tmp_path):
+    """If ``resize_image`` (or a symlink swap during it) returns a path
+    outside the session cache, the post-resize confinement check rejects it
+    and unlinks the offending file."""
+    src = _write_png(asset_cache.tempdir / 'src.png', size=(64, 64))
+
+    # Drop a real PNG outside the cache that the patched resize_image will
+    # claim to have produced.
+    rogue = tmp_path / 'rogue.png'
+    _write_png(rogue, size=(16, 16))
+    assert rogue.exists()
+
+    def _fake_resize(*_args, **_kwargs):
+        return rogue, rogue.stat().st_size
+
+    with patch('memex_mcp.server.resize_image', side_effect=_fake_resize):
+        with pytest.raises(ToolError, match='escaped session cache'):
+            await mcp_client.call_tool(
+                'memex_resize_image',
+                {'local_path': str(src), 'max_width': 32, 'max_height': 32},
+            )
+
+    # The post-check must unlink the bogus destination so it doesn't linger.
+    assert not rogue.exists()
+
+
+# Finding 4 ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resize_registers_dest_in_cache(asset_cache, mcp_client):
+    """A successful resize must register the destination in the LRU so it
+    participates in eviction and session cleanup."""
+    src = _write_png(asset_cache.tempdir / 'ok.png', size=(256, 256))
+    result = await mcp_client.call_tool(
+        'memex_resize_image',
+        {'local_path': str(src), 'max_width': 64, 'max_height': 64},
+    )
+    dest_str = result.content[0].text
+    assert dest_str in asset_cache, f'{dest_str!r} not registered in {asset_cache!r}'
+
+
+# Finding 11 -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resize_accepts_output_format_kwarg(asset_cache, mcp_client):
+    """The renamed parameter is the public name; calling with
+    ``output_format`` must succeed end-to-end."""
+    src = _write_png(asset_cache.tempdir / 'src.png', size=(128, 128))
+    result = await mcp_client.call_tool(
+        'memex_resize_image',
+        {
+            'local_path': str(src),
+            'max_width': 32,
+            'max_height': 32,
+            'output_format': 'JPEG',
+        },
+    )
+    dest = Path(result.content[0].text)
+    assert dest.exists()
+    assert dest.suffix == '.jpg'
