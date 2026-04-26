@@ -1,12 +1,15 @@
 "FastMCP Memex server implementation"
 
+import contextlib
 import os
 import pathlib as plb
 import asyncio
 import base64
 import time
+import warnings
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, Final
 from uuid import UUID
 import mimetypes
 
@@ -16,6 +19,7 @@ import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.exceptions import ToolError
+from PIL import Image
 
 from memex_common.asset_resize import resize_image
 from fastmcp.utilities.logging import configure_logging
@@ -73,6 +77,17 @@ from memex_common.schemas import (
 
 
 _SESSION_DEDUP_TTL = 1800  # 30 minutes
+
+# Per-asset ceiling for memex_get_resources (parity with Hermes AC-011).
+_MAX_RESOURCE_BYTES: Final[int] = 50 * 1024 * 1024
+
+# Decompression-bomb cap for memex_resize_image. Pillow's default
+# ``MAX_IMAGE_PIXELS`` (~89 MP) only emits a warning; promote the warning to
+# an error so a pathological image fails on ``Image.open`` before we allocate
+# the full pixel buffer. We keep the cap module-local rather than mutating
+# global Pillow state from inside the tool body.
+_MAX_IMAGE_PIXELS: Final[int] = 178956970
+warnings.simplefilter('error', Image.DecompressionBombWarning)
 
 # Link types always inlined in search results (all others available via
 # memex_get_memory_links on demand).
@@ -542,7 +557,14 @@ async def _fetch_single_resource(ctx: Context, path: str) -> str:
     """
     cache = get_asset_cache(ctx)
     api = get_api(ctx)
-    local_path, _, _ = await cache.get_or_fetch(path, api.get_resource)
+    local_path, _, size = await cache.get_or_fetch(path, api.get_resource)
+    if size > _MAX_RESOURCE_BYTES:
+        # Unlink so the cap can't be bypassed by re-reading the cache file
+        # directly; the LRU entry is left in place but ``get_or_fetch``
+        # re-fetches when the backing file is missing, re-applying the cap.
+        with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(local_path)
+        raise ToolError(f'Resource exceeds max size ({size} > {_MAX_RESOURCE_BYTES} bytes)')
     return f'file://{local_path}'
 
 
@@ -607,29 +629,70 @@ async def memex_resize_image(
     ],
     max_width: Annotated[int, Field(description='Maximum output width in pixels.')] = 1280,
     max_height: Annotated[int, Field(description='Maximum output height in pixels.')] = 1280,
-    format: Annotated[
+    output_format: Annotated[
         str | None,
         Field(description='Output format override (PNG/JPEG/WEBP/GIF). Defaults to source.'),
     ] = None,
 ) -> str:
     """Resize an image inside the session asset cache. Returns the new path."""
+    if max_width <= 0 or max_height <= 0:
+        raise ToolError('max_width and max_height must be positive')
+
     cache = get_asset_cache(ctx)
-    resolved_input = plb.Path(local_path).resolve()
-    cache_root = cache.tempdir.resolve()
+    cache_root = cache.tempdir.resolve(strict=True)
+
+    # ``resolve(strict=True)`` closes a TOCTOU window where a symlink could be
+    # swapped between resolution and the confinement check; raises FileNotFoundError
+    # if the path is missing.
+    try:
+        resolved_input = Path(local_path).resolve(strict=True)
+    except FileNotFoundError:
+        raise ToolError(f'local_path does not exist: {local_path}')
+    except OSError as exc:
+        raise ToolError(f'cannot access local_path: {exc}')
 
     if not resolved_input.is_relative_to(cache_root):
         raise ToolError('local_path must point inside the session asset cache')
 
+    # Pillow only warns past ``MAX_IMAGE_PIXELS``; the module-level
+    # ``warnings.simplefilter('error', DecompressionBombWarning)`` makes the
+    # warning raise so we catch it via ValueError below.
+    prev_max = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
     try:
-        dest_path, _ = resize_image(
-            resolved_input,
-            max_width=max_width,
-            max_height=max_height,
-            format=format,
-        )
-    except ValueError as exc:
-        raise ToolError(str(exc))
+        try:
+            dest_path, _ = resize_image(
+                resolved_input,
+                max_width=max_width,
+                max_height=max_height,
+                output_format=output_format,
+            )
+        except Image.DecompressionBombError as exc:
+            raise ToolError('Image is too large to safely decode') from exc
+        except Image.DecompressionBombWarning as exc:
+            raise ToolError('Image is too large to safely decode') from exc
+        except ValueError as exc:
+            raise ToolError(str(exc))
+    finally:
+        Image.MAX_IMAGE_PIXELS = prev_max
 
+    # Defense-in-depth: re-resolve the destination and re-check confinement
+    # in case a symlink was swapped during resize (TOCTOU). Also register
+    # the resized sibling with the LRU so it participates in eviction and
+    # session cleanup.
+    try:
+        resolved_dest = dest_path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(dest_path)
+        raise ToolError('Resize destination escaped session cache')
+
+    if not resolved_dest.is_relative_to(cache_root):
+        with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(dest_path)
+        raise ToolError('Resize destination escaped session cache')
+
+    cache.register(dest_path)
     return str(dest_path)
 
 
