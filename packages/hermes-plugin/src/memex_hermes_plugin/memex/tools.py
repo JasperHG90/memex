@@ -25,13 +25,17 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import json
 import logging
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from memex_common.asset_cache import SessionAssetCache
+from memex_common.asset_resize import resize_image
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -942,11 +946,14 @@ LIST_ASSETS_SCHEMA: dict[str, Any] = {
 GET_RESOURCES_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_resources',
     'description': (
-        'Retrieve one or more file attachments by path. Returns base64-encoded '
-        'bytes (diverges from MCP which returns native Image/Audio/File). '
-        'Per-path failure isolation: failures produce {path, error} entries '
-        'interleaved with successful {path, filename, mime_type, content_b64, '
-        'size_bytes} entries. Get paths from memex_list_assets.'
+        'Retrieve one or more file attachments by path. The bytes are written '
+        'to a per-session tempdir on the local filesystem; the tool returns '
+        '{path, local_path, filename, mime_type, size_bytes} per asset. The '
+        'tool result NEVER contains the bytes inline — read each `local_path` '
+        'directly from disk. Per-path failure isolation: failures produce '
+        '{path, error} entries interleaved with successful entries. Repeat '
+        'fetches of the same path within a session are served from a local '
+        'LRU cache. Get paths from memex_list_assets.'
     ),
     'parameters': {
         'type': 'object',
@@ -959,6 +966,50 @@ GET_RESOURCES_SCHEMA: dict[str, Any] = {
             },
         },
         'required': ['paths'],
+    },
+}
+
+RESIZE_IMAGE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_resize_image',
+    'description': (
+        'Resize an image previously fetched into the session asset cache by '
+        'memex_get_resources. The `local_path` MUST point inside the session '
+        'tempdir — paths outside it are rejected to prevent reading or '
+        'writing arbitrary filesystem locations. Allowed input formats are '
+        'PNG, JPEG, WEBP, and GIF; SVG, PDF, audio, and other types are '
+        'rejected. The resized copy is written as a sibling of the source '
+        'inside the same tempdir; the tool returns {local_path, size_bytes} '
+        'pointing at the new file.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'local_path': {
+                'type': 'string',
+                'description': (
+                    'Absolute path inside the session asset cache tempdir, '
+                    'e.g. a `local_path` returned by memex_get_resources.'
+                ),
+            },
+            'max_width': {
+                'type': 'integer',
+                'description': 'Maximum width in pixels (default 1280).',
+                'default': 1280,
+            },
+            'max_height': {
+                'type': 'integer',
+                'description': 'Maximum height in pixels (default 1280).',
+                'default': 1280,
+            },
+            'format': {
+                'type': 'string',
+                'description': (
+                    "Optional output format override; one of 'PNG', 'JPEG', "
+                    "'WEBP', 'GIF'. Defaults to the input format."
+                ),
+            },
+        },
+        'required': ['local_path'],
     },
 }
 
@@ -1125,6 +1176,7 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     # --- Assets (Stream 5) ---
     LIST_ASSETS_SCHEMA,
     GET_RESOURCES_SCHEMA,
+    RESIZE_IMAGE_SCHEMA,
     ADD_ASSETS_SCHEMA,
     # --- KV store (Stream 5) ---
     KV_WRITE_SCHEMA,
@@ -2479,9 +2531,24 @@ def handle_list_assets(
 
 
 def handle_get_resources(
-    api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+    *,
+    asset_cache: SessionAssetCache | None = None,
 ) -> str:
-    """Fetch assets by path; return base64-encoded bytes with per-path failure isolation."""
+    """Fetch assets by path; hand off bytes via disk paths in a session tempdir.
+
+    The tool result NEVER contains the bytes inline — agents read each
+    ``local_path`` directly. This sidesteps the Hermes harness'
+    ``tool_output.max_bytes`` ceiling that would otherwise truncate base64
+    payloads. Repeat fetches of the same path within a session are served
+    from a per-process LRU cache.
+    """
+    if asset_cache is None:
+        return tool_error('Asset cache is not initialized.')
+
     try:
         paths = _require(args, 'paths')
     except ValueError as e:
@@ -2496,31 +2563,105 @@ def handle_get_resources(
     results: list[dict[str, Any]] = []
     for path in paths:
         try:
-            content_bytes = run_sync(api.get_resource(path), timeout=30.0)
-            if len(content_bytes) > _MAX_RESOURCE_BYTES:
+            local_path, mime_type, size_bytes = run_sync(
+                asset_cache.get_or_fetch(path, api.get_resource),
+                timeout=30.0,
+            )
+            if size_bytes > _MAX_RESOURCE_BYTES:
+                # AC-011: oversize entries are ``error``-only — unlink the
+                # bytes so the cap can't be bypassed by reading from disk
+                # and so the tempdir doesn't accumulate rejected payloads.
+                # The LRU entry is left in place; ``get_or_fetch`` checks
+                # ``cached.exists()`` and re-runs ``fetch`` when the file is
+                # missing, so the cap is re-evaluated on retry.
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    os.unlink(local_path)
                 results.append(
                     {
                         'path': path,
                         'error': (
                             f'Resource exceeds max size '
-                            f'({len(content_bytes)} > {_MAX_RESOURCE_BYTES} bytes)'
+                            f'({size_bytes} > {_MAX_RESOURCE_BYTES} bytes)'
                         ),
                     }
                 )
                 continue
-            mime_type, _ = mimetypes.guess_type(path)
             results.append(
                 {
                     'path': path,
+                    'local_path': str(local_path),
                     'filename': Path(path).name,
                     'mime_type': mime_type,
-                    'content_b64': base64.b64encode(content_bytes).decode('ascii'),
-                    'size_bytes': len(content_bytes),
+                    'size_bytes': size_bytes,
                 }
             )
         except Exception as exc:
             results.append({'path': path, 'error': str(exc)})
     return json.dumps({'results': results})
+
+
+def handle_resize_image(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+    *,
+    asset_cache: SessionAssetCache | None = None,
+) -> str:
+    """Resize an image previously fetched into the session asset cache.
+
+    Path-confinement: ``local_path`` MUST resolve to a file inside the
+    session tempdir. Anything that resolves outside (including via ``..``
+    traversal) is rejected with ``tool_error`` before Pillow runs.
+    """
+    if asset_cache is None:
+        return tool_error('Asset cache is not initialized.')
+
+    try:
+        local_path_arg = _require(args, 'local_path')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    if not isinstance(local_path_arg, str):
+        return tool_error("'local_path' must be a string")
+
+    max_width = args.get('max_width', 1280)
+    max_height = args.get('max_height', 1280)
+    if not isinstance(max_width, int) or not isinstance(max_height, int):
+        return tool_error("'max_width' and 'max_height' must be integers")
+    if max_width <= 0 or max_height <= 0:
+        return tool_error("'max_width' and 'max_height' must be positive")
+
+    output_format = args.get('format')
+    if output_format is not None and not isinstance(output_format, str):
+        return tool_error("'format' must be a string when provided")
+
+    try:
+        cache_root = asset_cache.tempdir.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        return tool_error(f'Asset cache tempdir is unavailable: {exc}')
+
+    try:
+        resolved_input = Path(local_path_arg).resolve(strict=True)
+    except FileNotFoundError:
+        return tool_error(f'local_path does not exist: {local_path_arg!r}')
+    except OSError as exc:
+        return tool_error(f'Could not resolve local_path: {exc}')
+
+    if not resolved_input.is_relative_to(cache_root):
+        return tool_error('local_path must point inside the session asset cache')
+
+    try:
+        dest_path, dest_size = resize_image(
+            resolved_input,
+            max_width=max_width,
+            max_height=max_height,
+            format=output_format,
+        )
+    except ValueError as exc:
+        return tool_error(str(exc))
+
+    return json.dumps({'local_path': str(dest_path), 'size_bytes': dest_size})
 
 
 def handle_add_assets(
@@ -2737,6 +2878,7 @@ HANDLERS = {
     # --- Assets (Stream 5) ---
     'memex_list_assets': handle_list_assets,
     'memex_get_resources': handle_get_resources,
+    'memex_resize_image': handle_resize_image,
     'memex_add_assets': handle_add_assets,
     # --- KV store (Stream 5) ---
     'memex_kv_write': handle_kv_write,
@@ -2746,6 +2888,17 @@ HANDLERS = {
 }
 
 
+# Tool names whose handlers accept the ``asset_cache`` keyword. Disk-handoff
+# tools need access to the per-session cache; the remaining handlers do not
+# and ignore the kwarg.
+_ASSET_CACHE_TOOLS: frozenset[str] = frozenset(
+    {
+        'memex_get_resources',
+        'memex_resize_image',
+    }
+)
+
+
 def dispatch(
     tool_name: str,
     args: dict[str, Any],
@@ -2753,11 +2906,14 @@ def dispatch(
     api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
+    asset_cache: SessionAssetCache | None = None,
 ) -> str:
-    handler = HANDLERS.get(tool_name)
+    handler: Any = HANDLERS.get(tool_name)
     if handler is None:
         return tool_error(f'Unknown tool: {tool_name}')
     try:
+        if tool_name in _ASSET_CACHE_TOOLS:
+            return handler(api, config, vault_id, args, asset_cache=asset_cache)
         return handler(api, config, vault_id, args)
     except VaultResolutionError as exc:
         return tool_error(f'Unknown vault: {exc.name!r}')
@@ -2804,6 +2960,7 @@ __all__ = [
     'ADD_ASSETS_SCHEMA',
     'GET_RESOURCES_SCHEMA',
     'LIST_ASSETS_SCHEMA',
+    'RESIZE_IMAGE_SCHEMA',
     # --- KV store (Stream 5) ---
     'KV_GET_SCHEMA',
     'KV_LIST_SCHEMA',
