@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from PIL import Image
 
 from memex_common.asset_cache import SessionAssetCache
 from memex_common.asset_resize import resize_image
@@ -2653,6 +2652,10 @@ def handle_resize_image(
     if not resolved_input.is_relative_to(cache_root):
         return tool_error('local_path must point inside the session asset cache')
 
+    # Decompression-bomb protection lives inside ``resize_image`` itself:
+    # it checks ``img.size`` after ``Image.open`` (header-only) and before
+    # any pixel decoding, raising ``ValueError('Image is too large to
+    # safely decode')`` past the ``_MAX_DECODED_PIXELS`` budget.
     try:
         dest_path, dest_size = resize_image(
             resolved_input,
@@ -2660,12 +2663,6 @@ def handle_resize_image(
             max_height=max_height,
             output_format=output_format,
         )
-    except Image.DecompressionBombError:
-        # Pillow flags images past ``Image.MAX_IMAGE_PIXELS`` (default 89 MP)
-        # before any pixels are decoded. Catch here so a pathological
-        # 100k x 100k PNG cannot exhaust memory through ``resize_image``'s
-        # internal ``Image.open`` call.
-        return tool_error('Image is too large to safely decode')
     except ValueError as exc:
         return tool_error(str(exc))
 

@@ -283,14 +283,16 @@ def test_resize_accepts_output_format_kwarg(config, vault_id, asset_cache):
 
 
 def test_resize_rejects_decompression_bomb(monkeypatch, config, vault_id, asset_cache):
-    """Finding 7: monkey-patch ``Image.MAX_IMAGE_PIXELS`` to a tiny value and
-    feed in an image larger than the cap. The tool must surface a
-    ``tool_error`` (Pillow raises ``DecompressionBombError`` once the cap is
-    crossed; the handler maps that to a ``ValueError`` from the helper)."""
-    # 200x200 = 40k pixels, well above the cap below.
+    """An image whose pixel count exceeds the shared ``_MAX_DECODED_PIXELS``
+    budget must be rejected before any pixels are decoded. The helper raises
+    ``ValueError`` and the handler maps that to a ``tool_error``."""
+    # 200x200 = 40k pixels, well above the patched cap below.
     src = _write_png(asset_cache.tempdir / 'huge.png', size=(200, 200))
 
-    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', 100)
+    monkeypatch.setattr(
+        'memex_common.asset_resize._MAX_DECODED_PIXELS',
+        1000,
+    )
 
     out = dispatch(
         'memex_resize_image',
@@ -303,4 +305,4 @@ def test_resize_rejects_decompression_bomb(monkeypatch, config, vault_id, asset_
     data = json.loads(out)
     assert 'error' in data
     err = data['error'].lower()
-    assert 'too large' in err or 'decompression' in err or 'safely decode' in err
+    assert 'too large to safely decode' in err

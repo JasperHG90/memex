@@ -14,6 +14,15 @@ from PIL import Image, UnidentifiedImageError
 
 _ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'})
 
+# Decompression-bomb cap. Pillow's stock ``MAX_IMAGE_PIXELS`` (~89 MP) only
+# emits a warning, and its hard-error path is at 2× that. We enforce a
+# stricter, deterministic 32 MP budget by checking ``img.size`` after
+# ``Image.open`` (which reads only the header) and before ``thumbnail()``
+# triggers the actual decode. No process-global Pillow state is mutated, so
+# concurrent callers don't race and unrelated Pillow users elsewhere in the
+# process are unaffected.
+_MAX_DECODED_PIXELS: int = 32 * 1024 * 1024  # 32 megapixels
+
 _SUFFIX_TO_FORMAT: dict[str, str] = {
     '.png': 'PNG',
     '.jpg': 'JPEG',
@@ -60,6 +69,14 @@ def resize_image(
                 raise ValueError(
                     f'Unsupported image format {detected!r}; {_allowed_formats_message()}'
                 )
+
+            # ``Image.open`` is lazy — only the header is read, so ``img.size``
+            # is reliable before any pixels are decoded. Reject oversize
+            # inputs here so a pathological 100k×100k PNG can't exhaust
+            # memory inside ``thumbnail()``.
+            width, height = img.size
+            if width * height > _MAX_DECODED_PIXELS:
+                raise ValueError('Image is too large to safely decode')
 
             resolved_format = (output_format or detected).upper()
             if resolved_format == 'JPG':

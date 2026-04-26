@@ -20,7 +20,7 @@ import pytest
 from PIL import Image
 from fastmcp.exceptions import ToolError
 
-from memex_mcp.server import _MAX_RESOURCE_BYTES
+from memex_mcp.server import _MAX_GET_RESOURCES_PATHS, _MAX_RESOURCE_BYTES
 from helpers import parse_tool_result
 
 
@@ -90,17 +90,31 @@ async def test_resize_rejects_negative_dimensions(asset_cache, mcp_client, mw, m
 
 @pytest.mark.asyncio
 async def test_resize_rejects_decompression_bomb(asset_cache, mcp_client):
-    """Image whose pixel count exceeds ``Image.MAX_IMAGE_PIXELS`` raises a
-    ``DecompressionBombWarning`` that we promote to ``ToolError``."""
-    src = _write_png(asset_cache.tempdir / 'bomb.png', size=(50, 50))  # 2500 px
+    """An image whose pixel count exceeds the shared ``_MAX_DECODED_PIXELS``
+    budget must be rejected by ``resize_image`` before any pixels are
+    decoded — surfacing as a clean ``ToolError`` to the caller."""
+    # 200x200 = 40k pixels, well above the patched cap below.
+    src = _write_png(asset_cache.tempdir / 'bomb.png', size=(200, 200))
 
-    # Temporarily lower the cap so a 2500-pixel image trips the warning.
-    with patch('memex_mcp.server._MAX_IMAGE_PIXELS', 100):
+    with patch('memex_common.asset_resize._MAX_DECODED_PIXELS', 1000):
         with pytest.raises(ToolError, match='too large to safely decode'):
             await mcp_client.call_tool(
                 'memex_resize_image',
                 {'local_path': str(src), 'max_width': 16, 'max_height': 16},
             )
+
+
+@pytest.mark.asyncio
+async def test_get_resources_rejects_too_many_paths(asset_cache, mcp_client):
+    """Parity with Hermes: a paths list above ``_MAX_GET_RESOURCES_PATHS``
+    is rejected up front so a misbehaving caller cannot fan out unbounded
+    fetches."""
+    paths = [f'images/asset-{i}.png' for i in range(_MAX_GET_RESOURCES_PATHS + 1)]
+    with pytest.raises(ToolError, match='Too many paths'):
+        await mcp_client.call_tool(
+            'memex_get_resources',
+            {'paths': paths, 'vault_id': 'test-vault'},
+        )
 
 
 # Finding 10 -----------------------------------------------------------------

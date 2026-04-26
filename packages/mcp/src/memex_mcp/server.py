@@ -6,7 +6,6 @@ import pathlib as plb
 import asyncio
 import base64
 import time
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Final
@@ -19,7 +18,6 @@ import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.exceptions import ToolError
-from PIL import Image
 
 from memex_common.asset_resize import resize_image
 from fastmcp.utilities.logging import configure_logging
@@ -81,13 +79,10 @@ _SESSION_DEDUP_TTL = 1800  # 30 minutes
 # Per-asset ceiling for memex_get_resources (parity with Hermes AC-011).
 _MAX_RESOURCE_BYTES: Final[int] = 50 * 1024 * 1024
 
-# Decompression-bomb cap for memex_resize_image. Pillow's default
-# ``MAX_IMAGE_PIXELS`` (~89 MP) only emits a warning; promote the warning to
-# an error so a pathological image fails on ``Image.open`` before we allocate
-# the full pixel buffer. We keep the cap module-local rather than mutating
-# global Pillow state from inside the tool body.
-_MAX_IMAGE_PIXELS: Final[int] = 178956970
-warnings.simplefilter('error', Image.DecompressionBombWarning)
+# Hard cap on the number of paths a single memex_get_resources call can
+# request (parity with Hermes). Stops a misbehaving caller from fanning
+# out an unbounded sequence of fetches.
+_MAX_GET_RESOURCES_PATHS: Final[int] = 50
 
 # Link types always inlined in search results (all others available via
 # memex_get_memory_links on demand).
@@ -591,6 +586,8 @@ async def memex_get_resources(
     ] = None,
 ) -> list[str]:
     """Retrieve file resources. Returns a list of file:// URIs or error strings."""
+    if len(paths) > _MAX_GET_RESOURCES_PATHS:
+        raise ToolError(f'Too many paths requested ({len(paths)} > {_MAX_GET_RESOURCES_PATHS})')
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)
@@ -639,7 +636,10 @@ async def memex_resize_image(
         raise ToolError('max_width and max_height must be positive')
 
     cache = get_asset_cache(ctx)
-    cache_root = cache.tempdir.resolve(strict=True)
+    try:
+        cache_root = cache.tempdir.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise ToolError(f'Asset cache tempdir is unavailable: {exc}')
 
     # ``resolve(strict=True)`` closes a TOCTOU window where a symlink could be
     # swapped between resolution and the confinement check; raises FileNotFoundError
@@ -654,27 +654,18 @@ async def memex_resize_image(
     if not resolved_input.is_relative_to(cache_root):
         raise ToolError('local_path must point inside the session asset cache')
 
-    # Pillow only warns past ``MAX_IMAGE_PIXELS``; the module-level
-    # ``warnings.simplefilter('error', DecompressionBombWarning)`` makes the
-    # warning raise so we catch it via ValueError below.
-    prev_max = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+    # Decompression-bomb protection lives inside ``resize_image`` itself: it
+    # checks ``img.size`` before any pixel decoding. ValueError covers both
+    # the bomb path and format-allowlist rejections.
     try:
-        try:
-            dest_path, _ = resize_image(
-                resolved_input,
-                max_width=max_width,
-                max_height=max_height,
-                output_format=output_format,
-            )
-        except Image.DecompressionBombError as exc:
-            raise ToolError('Image is too large to safely decode') from exc
-        except Image.DecompressionBombWarning as exc:
-            raise ToolError('Image is too large to safely decode') from exc
-        except ValueError as exc:
-            raise ToolError(str(exc))
-    finally:
-        Image.MAX_IMAGE_PIXELS = prev_max
+        dest_path, _ = resize_image(
+            resolved_input,
+            max_width=max_width,
+            max_height=max_height,
+            output_format=output_format,
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc))
 
     # Defense-in-depth: re-resolve the destination and re-check confinement
     # in case a symlink was swapped during resize (TOCTOU). Also register
@@ -692,7 +683,10 @@ async def memex_resize_image(
             os.unlink(dest_path)
         raise ToolError('Resize destination escaped session cache')
 
-    cache.register(dest_path)
+    try:
+        cache.register(dest_path)
+    except ValueError as exc:
+        raise ToolError(str(exc))
     return str(dest_path)
 
 
