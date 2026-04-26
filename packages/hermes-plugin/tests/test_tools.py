@@ -308,6 +308,76 @@ def test_retain_missing_required_params(config, vault_id):
     assert 'error' in json.loads(out)
 
 
+def test_retain_schema_advertises_template_param():
+    """RETAIN_SCHEMA exposes an optional `template` property so agents can pick one.
+
+    The schema is what the model sees; if `template` isn't here, the agent
+    can't pass it even if our handler would accept it.
+    """
+    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_retain')
+    assert 'template' in retain['parameters']['properties'], (
+        'memex_retain must expose a `template` property for ADR/RFC/retro provenance'
+    )
+    assert 'template' not in retain['parameters'].get('required', [])
+
+
+def test_retain_uses_provided_template(config, vault_id):
+    """Agent-supplied template slug round-trips into the NoteCreateDTO."""
+    api = Mock()
+    api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
+    out = dispatch(
+        'memex_retain',
+        {
+            'name': 'ADR: postgres advisory locks',
+            'description': 'leader election strategy',
+            'content': '# ADR\n\n## Context\n...',
+            'template': 'architectural_decision_record',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    assert json.loads(out)['status'] == 'success'
+    dto = api.ingest.call_args.args[0]
+    assert dto.template == 'architectural_decision_record'
+
+
+def test_retain_falls_back_to_hermes_user_note_template(config, vault_id):
+    """Omitting template preserves the prior default tag."""
+    from memex_hermes_plugin.memex.templates import HERMES_USER_NOTE_TEMPLATE
+
+    api = Mock()
+    api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
+    dispatch(
+        'memex_retain',
+        {
+            'name': 'plain note',
+            'description': 'free-form capture',
+            'content': '# Plain\n\n## Body\n...',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    dto = api.ingest.call_args.args[0]
+    assert dto.template == HERMES_USER_NOTE_TEMPLATE
+
+
+def test_list_templates_output_includes_action_hint(config, vault_id):
+    """handle_list_templates returns a `next` field pointing to the follow-up flow.
+
+    JSON output, so the hint lives as a structured key rather than appended text.
+    """
+    api = Mock()
+    out = dispatch('memex_list_templates', {}, api=api, config=config, vault_id=vault_id)
+    data = json.loads(out)
+    assert 'next' in data, 'list_templates must surface a follow-up hint to the agent'
+    nxt = data['next']
+    assert 'memex_get_template' in nxt
+    assert 'memex_retain' in nxt
+    assert 'template=slug' in nxt
+
+
 def test_list_entities(config, vault_id):
     api = Mock()
     api.search_entities = AsyncMock(return_value=[_fake_entity('Rust')])
@@ -3247,4 +3317,91 @@ def test_retain_content_is_structured_markdown_via_gemini():
     ]
     assert not offenders, 'inline `**Label:** value` anti-pattern leaked into body:\n' + '\n'.join(
         offenders
+    )
+
+
+@pytest.mark.llm
+@pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
+@pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
+def test_hermes_routes_structured_capture_to_templates_via_gemini():
+    """Real LLM round-trip: the briefing routing guide + RETAIN_SCHEMA template
+    affordance must steer the model to the templates flow when capturing
+    structured content (e.g. an agent reflection / postmortem).
+
+    Pairs with the MCP-side test in
+    packages/mcp/tests/test_tool_templates.py — both surfaces have to actually
+    move the agent toward templates, not just satisfy static schema checks.
+    """
+    import litellm
+
+    from memex_hermes_plugin.memex.briefing import _ROUTING_GUIDE
+    from memex_hermes_plugin.memex.tools import (
+        GET_TEMPLATE_SCHEMA,
+        LIST_TEMPLATES_SCHEMA,
+        RETAIN_SCHEMA,
+    )
+
+    tool_defs = [
+        {
+            'type': 'function',
+            'function': {
+                'name': s['name'],
+                'description': s['description'],
+                'parameters': s['parameters'],
+            },
+        }
+        for s in (LIST_TEMPLATES_SCHEMA, GET_TEMPLATE_SCHEMA, RETAIN_SCHEMA)
+    ]
+
+    resp = litellm.completion(
+        model='gemini/gemini-3-flash-preview',
+        messages=[
+            {'role': 'system', 'content': _ROUTING_GUIDE},
+            {
+                'role': 'user',
+                'content': (
+                    "Today's daily reflect cron ran but the assistant could not "
+                    'retrieve its conclusions later — the reflection output got '
+                    'buried in a raw session log instead of being indexed as a '
+                    'standalone summary. Capture this as a structured agent '
+                    'reflection / postmortem so future me can find the lesson '
+                    'when searching for "conclusions".'
+                ),
+            },
+        ],
+        tools=tool_defs,
+        temperature=0,
+        timeout=30,
+        api_key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'),
+    )
+
+    tool_calls = resp.choices[0].message.tool_calls or []
+    assert tool_calls, f'model did not call any tool: {resp.choices[0].message!r}'
+
+    first = tool_calls[0]
+    name = first.function.name
+    args = json.loads(first.function.arguments or '{}')
+
+    # Same three behaviors as the MCP-side test prove the routing worked.
+    if name == 'memex_list_templates':
+        return
+    if name == 'memex_get_template':
+        slug = args.get('slug') or args.get('type')
+        assert slug == 'agent_reflection', (
+            f'agent fetched template {slug!r}; expected agent_reflection'
+        )
+        return
+    if name == 'memex_retain':
+        template = args.get('template')
+        assert template == 'agent_reflection', (
+            f'agent called memex_retain without (or with wrong) template '
+            f'(template={template!r}). The routing fix must steer structured '
+            f'captures to a template. Tool call args: {args!r}'
+        )
+        return
+
+    pytest.fail(
+        f'agent called unexpected tool {name!r}; expected one of '
+        f'memex_list_templates / memex_get_template / memex_retain. '
+        f'All tool calls: {[(tc.function.name, tc.function.arguments) for tc in tool_calls]!r}'
     )

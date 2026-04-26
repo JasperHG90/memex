@@ -6,7 +6,16 @@ from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
 from memex_mcp.server import mcp
 
 
-EXPECTED_TAGS = {'search', 'read', 'write', 'browse', 'entities', 'assets', 'storage'}
+EXPECTED_TAGS = {
+    'search',
+    'read',
+    'write',
+    'browse',
+    'entities',
+    'assets',
+    'storage',
+    'templates',
+}
 
 # Natural-language queries mapped to expected tool(s) — used for BM25 recall testing.
 BM25_TEST_CASES: list[tuple[str, list[str]]] = [

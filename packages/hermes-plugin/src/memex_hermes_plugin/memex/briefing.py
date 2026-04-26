@@ -123,7 +123,11 @@ Match the tool to the query type:
   / `memex_kv_list()`. Keys MUST start with a namespace: `global:`, `user:`,
   `project:<id>:`, or `app:<id>:`. Deletion is CLI-only (use `memex kv delete`).
 - **Capturing work** → `memex_retain`. Pass the session note key below for
-  incremental progress captures; omit it for a standalone note."""
+  incremental progress captures; omit it for a standalone note.
+- **Templates for structured captures** → `memex_list_templates` to see slugs,
+  `memex_get_template(slug)` for the markdown scaffold, then `memex_retain(...,
+  template=slug)` so the note is tagged for filtering. Prefer a template for
+  ADRs, retros, technical briefs, RFCs, or any note with clear sections."""
 
 
 def format_briefing_block(
