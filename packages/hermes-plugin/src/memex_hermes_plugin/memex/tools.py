@@ -297,7 +297,9 @@ RETAIN_SCHEMA: dict[str, Any] = {
         'Ingest a note into Memex. If note_key is provided and matches an existing '
         'note, the content is upserted (enables incremental session capture). Pass '
         'the session note key from the system prompt to append meaningful progress '
-        'to the running session note.'
+        'to the running session note. For structured captures (ADRs, retros, '
+        'technical briefs, RFCs), call memex_list_templates first and pass the '
+        'chosen slug as `template` for provenance and downstream filtering.'
     ),
     'parameters': {
         'type': 'object',
@@ -344,6 +346,15 @@ RETAIN_SCHEMA: dict[str, Any] = {
                 'description': (
                     'Stable key for upsert. Use the session note key to append to the '
                     'running session note. Omit for a fresh note.'
+                ),
+            },
+            'template': {
+                'type': 'string',
+                'description': (
+                    'Template slug used to create this note (provenance/filtering '
+                    'only — does not scaffold the body). Use memex_list_templates '
+                    'to discover slugs. Recommended for ADRs, retros, technical '
+                    'briefs, RFCs. Omit to use the default hermes-user-note tag.'
                 ),
             },
         },
@@ -866,8 +877,9 @@ RENAME_NOTE_SCHEMA: dict[str, Any] = {
 GET_TEMPLATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_template',
     'description': (
-        'Get a markdown template for memex_retain. Use memex_list_templates '
-        'to discover available template slugs.'
+        'Fetch a markdown scaffold to follow when writing a structured note. '
+        'Call this BEFORE memex_retain for ADRs, retros, technical briefs, RFCs, '
+        'or any note with clear sections. Use memex_list_templates to discover slugs.'
     ),
     'parameters': {
         'type': 'object',
@@ -884,8 +896,9 @@ GET_TEMPLATE_SCHEMA: dict[str, Any] = {
 LIST_TEMPLATES_SCHEMA: dict[str, Any] = {
     'name': 'memex_list_templates',
     'description': (
-        'List all available note templates with metadata (slug, display name, '
-        'description, source layer).'
+        'List note templates (built-in + user-registered). Call this when about to '
+        'capture structured content — pick a slug, fetch the body with '
+        'memex_get_template, then pass `template=slug` to memex_retain.'
     ),
     'parameters': {
         'type': 'object',
@@ -896,8 +909,9 @@ LIST_TEMPLATES_SCHEMA: dict[str, Any] = {
 REGISTER_TEMPLATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_register_template',
     'description': (
-        'Register a new note template from inline markdown content. Stored in '
-        'the global scope by default.'
+        'Register a custom note template from inline markdown. Use when a recurring '
+        'capture pattern (sprint retro, incident postmortem, etc.) does not match a '
+        'built-in. Stored in the global scope by default.'
     ),
     'parameters': {
         'type': 'object',
@@ -1490,6 +1504,7 @@ def handle_retain(
 
     tags = args.get('tags') or []
     note_key = args.get('note_key') or None
+    template = args.get('template') or HERMES_USER_NOTE_TEMPLATE
 
     from memex_common.schemas import NoteCreateDTO
 
@@ -1501,7 +1516,7 @@ def handle_retain(
         note_key=note_key,
         vault_id=str(vault_id) if vault_id else None,
         author='hermes',
-        template=HERMES_USER_NOTE_TEMPLATE,
+        template=template,
     )
 
     try:
@@ -2454,7 +2469,16 @@ def handle_list_templates(
         }
         for t in templates or []
     ]
-    return json.dumps({'count': len(results), 'results': results})
+    return json.dumps(
+        {
+            'count': len(results),
+            'results': results,
+            'next': (
+                'memex_get_template(slug) → write content following the structure → '
+                'memex_retain(..., template=slug) so the note is tagged for filtering.'
+            ),
+        }
+    )
 
 
 def handle_register_template(

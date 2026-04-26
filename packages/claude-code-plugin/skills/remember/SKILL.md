@@ -25,9 +25,15 @@ You have been invoked via the `/remember` slash command.
    - **tags**: Always include `"claude-code"` and `"manual-capture"`. Add 1-3 additional
      topic tags derived from the content.
 
-3. **Save the memory.**
+3. **Consider a template (for structured content).**
+   If the memory is an architectural decision, technical brief, retro, or RFC,
+   call `memex_list_templates` then `memex_get_template(slug)`, follow the
+   structure when writing `markdown_content`, and pass `template: "<slug>"` to
+   `memex_add_note`. Skip for short, unstructured captures.
+
+4. **Save the memory.**
    Call the `memex_add_note` MCP tool with the values above and set `background: true`
    so ingestion does not block the conversation.
 
-4. **Confirm to the user.**
+5. **Confirm to the user.**
    After calling the tool, briefly confirm what was saved and mention the title.
