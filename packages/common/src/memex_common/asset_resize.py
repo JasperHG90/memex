@@ -25,6 +25,10 @@ _ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'
 # its hard-error path is at 2× that; we want a deterministic refusal.
 _MAX_DECODED_PIXELS: int = 32 * 1024 * 1024  # 32 megapixels
 
+# Align Pillow's own threshold so its DecompressionBombError fires at the
+# same point as our explicit pre-check.
+Image.MAX_IMAGE_PIXELS = _MAX_DECODED_PIXELS
+
 _SUFFIX_TO_FORMAT: dict[str, str] = {
     '.png': 'PNG',
     '.jpg': 'JPEG',

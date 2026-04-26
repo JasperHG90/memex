@@ -154,13 +154,15 @@ async def test_resize_post_check_rejects_dest_outside_cache(asset_cache, mcp_cli
     and unlinks the offending file."""
     src = _write_png(asset_cache.tempdir / 'src.png', size=(64, 64))
 
-    # Drop a real PNG outside the cache that the patched resize_image will
-    # claim to have produced.
     rogue = tmp_path / 'rogue.png'
     _write_png(rogue, size=(16, 16))
     assert rogue.exists()
+    assert not rogue.is_relative_to(asset_cache.tempdir)
+
+    captured: list[Path] = []
 
     def _fake_resize(*_args, **_kwargs):
+        captured.append(rogue)
         return rogue, rogue.stat().st_size
 
     with patch('memex_common.asset_resize.resize_image', side_effect=_fake_resize):
@@ -170,7 +172,11 @@ async def test_resize_post_check_rejects_dest_outside_cache(asset_cache, mcp_cli
                 {'local_path': str(src), 'max_width': 32, 'max_height': 32},
             )
 
+    # The rogue path returned by the patched resize_image is the one that
+    # validate_and_resize must unlink — verify that explicitly.
+    assert captured == [rogue]
     assert not rogue.exists()
+    assert rogue not in asset_cache
 
 
 # Finding 4 ------------------------------------------------------------------

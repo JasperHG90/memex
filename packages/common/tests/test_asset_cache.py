@@ -60,17 +60,36 @@ async def test_lru_eviction_unlinks_file(tmp_path: Path) -> None:
     assert not first.exists()
 
 
-async def test_cleanup_removes_tempdir(tmp_path: Path) -> None:
+async def test_cleanup_unlinks_files_in_caller_tempdir(tmp_path: Path) -> None:
+    """A caller-supplied tempdir is preserved by ``cleanup()``; only the
+    files this cache wrote get unlinked. This protects callers who share a
+    tempdir with other components from having that directory yanked out."""
     cache = _make_cache(tmp_path)
     fetcher = _CountingFetcher()
-    await cache.get_or_fetch('foo.png', fetcher)
+    local, _, _ = await cache.get_or_fetch('foo.png', fetcher)
     tempdir = cache.tempdir
+    assert tempdir.exists()
+    assert local.exists()
+
+    cache.cleanup()
+
+    assert tempdir.exists()
+    assert not local.exists()
+    # Idempotent — no error on second call.
+    cache.cleanup()
+
+
+async def test_cleanup_removes_auto_created_tempdir() -> None:
+    """When no tempdir is provided, cleanup() rmtrees the auto-created one."""
+    cache = SessionAssetCache()
+    tempdir = cache.tempdir
+    fetcher = _CountingFetcher()
+    await cache.get_or_fetch('foo.png', fetcher)
     assert tempdir.exists()
 
     cache.cleanup()
 
     assert not tempdir.exists()
-    # Idempotent — no error on second call.
     cache.cleanup()
 
 
@@ -128,10 +147,13 @@ async def test_repr_and_membership(tmp_path: Path) -> None:
 async def test_context_manager_calls_cleanup(tmp_path: Path) -> None:
     target = tmp_path / 'ctx'
     with SessionAssetCache(tempdir=target) as cache:
-        await cache.get_or_fetch('foo.png', _CountingFetcher())
+        local, _, _ = await cache.get_or_fetch('foo.png', _CountingFetcher())
         assert cache.tempdir.exists()
+        assert local.exists()
 
-    assert not target.exists()
+    # Caller-supplied tempdir is preserved; the file inside is unlinked.
+    assert target.exists()
+    assert not local.exists()
 
 
 async def test_eviction_then_refetch_recreates_file(tmp_path: Path) -> None:
@@ -287,3 +309,47 @@ async def test_invalidate_then_refetch_calls_fetch_again(tmp_path: Path) -> None
     await cache.get_or_fetch('foo.png', fetcher)
 
     assert len(fetcher.calls) == 2
+
+
+async def test_fast_path_survives_concurrent_unlink(tmp_path: Path) -> None:
+    """If the backing file is unlinked between cache lookup and stat, the
+    fast path falls through to the locked path and refetches — no
+    ``FileNotFoundError`` propagates to the caller.
+
+    This simulates the race where one coroutine evicts an entry while
+    another is mid-fast-path on the same key.
+    """
+    cache = _make_cache(tmp_path)
+    fetcher = _CountingFetcher()
+
+    local, _, _ = await cache.get_or_fetch('foo.png', fetcher)
+    assert local.exists()
+
+    # Unlink the file out from under the cache without touching the LRU
+    # entry — the next lookup hits the fast path with a stale entry.
+    local.unlink()
+    assert not local.exists()
+    assert 'foo.png' in cache  # entry still tracked
+
+    refetched, _, _ = await cache.get_or_fetch('foo.png', fetcher)
+    assert refetched.exists()
+    assert len(fetcher.calls) == 2
+
+
+async def test_fetch_failure_drops_orphan_lock(tmp_path: Path) -> None:
+    """A failing ``fetch()`` must not leak its per-path lock.
+
+    Without explicit cleanup, every transient error on a distinct path
+    would grow ``_locks`` unboundedly even though no cache entry is ever
+    stored for it.
+    """
+    cache = _make_cache(tmp_path)
+
+    async def boom(_path: str) -> bytes:
+        raise RuntimeError('upstream broke')
+
+    with pytest.raises(RuntimeError, match='upstream broke'):
+        await cache.get_or_fetch('boom.png', boom)
+
+    assert 'boom.png' not in cache._locks
+    assert 'boom.png' not in cache

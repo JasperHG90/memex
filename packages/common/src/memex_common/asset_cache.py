@@ -80,9 +80,11 @@ class SessionAssetCache:
     ) -> None:
         if tempdir is None:
             self.tempdir = Path(tempfile.mkdtemp(prefix='memex-assets-'))
+            self._owns_tempdir = True
         else:
             tempdir.mkdir(parents=True, exist_ok=True)
             self.tempdir = tempdir
+            self._owns_tempdir = False
         self._cache: _EvictingLRUCache = _EvictingLRUCache(
             maxsize=maxsize,
             on_evict=self._unlink_evicted,
@@ -121,21 +123,37 @@ class SessionAssetCache:
         cached: Path | None
         with self._mutation_lock:
             cached = self._cache.get(path)
-        if cached is not None and await asyncio.to_thread(cached.exists):
-            mime, _ = mimetypes.guess_type(str(cached))
-            size = await asyncio.to_thread(_stat_size, cached)
-            return cached, mime, size
+        if cached is not None:
+            # Lockless fast path; eviction between checks falls through to refetch.
+            try:
+                if await asyncio.to_thread(cached.exists):
+                    mime, _ = mimetypes.guess_type(str(cached))
+                    size = await asyncio.to_thread(_stat_size, cached)
+                    return cached, mime, size
+            except FileNotFoundError:
+                pass
 
         lock = self._lock_for(path)
         async with lock:
             with self._mutation_lock:
                 cached = self._cache.get(path)
-            if cached is not None and await asyncio.to_thread(cached.exists):
-                mime, _ = mimetypes.guess_type(str(cached))
-                size = await asyncio.to_thread(_stat_size, cached)
-                return cached, mime, size
+            if cached is not None:
+                try:
+                    if await asyncio.to_thread(cached.exists):
+                        mime, _ = mimetypes.guess_type(str(cached))
+                        size = await asyncio.to_thread(_stat_size, cached)
+                        return cached, mime, size
+                except FileNotFoundError:
+                    pass
 
-            data = await fetch(path)
+            try:
+                data = await fetch(path)
+            except Exception:
+                # Drop the orphan lock if no entry was ever stored.
+                with self._mutation_lock:
+                    if path not in self._cache:
+                        self._locks.pop(path, None)
+                raise
             local = self._local_path_for(path)
             await asyncio.to_thread(local.write_bytes, data)
             with self._mutation_lock:
@@ -171,11 +189,24 @@ class SessionAssetCache:
         return local_path
 
     def cleanup(self) -> None:
-        """Remove the session tempdir and all cached files. Idempotent."""
+        """Drop all cache state and unlink backing files. Idempotent.
+
+        If the tempdir was auto-created (no ``tempdir=`` argument), it is
+        removed wholesale. A caller-supplied tempdir is preserved — only the
+        files this cache wrote into it are unlinked.
+        """
         with self._mutation_lock:
+            entries = list(self._cache.values())
+            # ``LRUCache.clear()`` is dict.clear() — bypasses popitem(), so
+            # file unlinks are done explicitly here.
             self._cache.clear()
             self._locks.clear()
-        shutil.rmtree(self.tempdir, ignore_errors=True)
+        if self._owns_tempdir:
+            shutil.rmtree(self.tempdir, ignore_errors=True)
+        else:
+            for local in entries:
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    os.unlink(local)
 
     def __len__(self) -> int:
         with self._mutation_lock:

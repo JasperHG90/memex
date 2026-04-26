@@ -2906,11 +2906,11 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
 }
 
 
-_ACCEPTS_ASSET_CACHE: dict[int, bool] = {}
+_ACCEPTS_ASSET_CACHE: dict[str, bool] = {}
 
 
 def _accepts_asset_cache(handler: _StdHandler | _AssetCacheHandler) -> bool:
-    key = id(handler)
+    key = getattr(handler, '__qualname__', repr(handler))
     cached = _ACCEPTS_ASSET_CACHE.get(key)
     if cached is None:
         cached = 'asset_cache' in inspect.signature(handler).parameters
