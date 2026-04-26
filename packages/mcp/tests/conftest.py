@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastmcp import Client
 from memex_mcp.server import mcp
 from memex_mcp.models import AppContext
+from memex_common.asset_cache import SessionAssetCache
 from memex_common.config import MemexConfig
 
 
@@ -48,6 +50,33 @@ def mock_api():
 
 
 @pytest.fixture
+def asset_cache(tmp_path: Path):
+    """Real SessionAssetCache rooted in tmp_path, patched in for MCP tools."""
+    cache = SessionAssetCache(tempdir=tmp_path / 'asset-cache')
+    with patch('memex_mcp.server.get_asset_cache', return_value=cache):
+        yield cache
+    cache.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def _autouse_asset_cache(request):
+    """Auto-provide a stub SessionAssetCache for tests that don't request it.
+
+    Tools that fetch resources patch ``get_asset_cache`` and expect a real
+    cache. Tests that don't touch the cache get an isolated tempdir under
+    the pytest tmp factory.
+    """
+    if 'asset_cache' in request.fixturenames:
+        yield
+        return
+    tmp_path_factory = request.getfixturevalue('tmp_path_factory')
+    cache = SessionAssetCache(tempdir=tmp_path_factory.mktemp('mcp-cache'))
+    with patch('memex_mcp.server.get_asset_cache', return_value=cache):
+        yield
+    cache.cleanup()
+
+
+@pytest.fixture
 def mock_config():
     """Mock MemexConfig for tools that use get_config (e.g. vault defaults)."""
     config = MagicMock()
@@ -71,7 +100,12 @@ async def _mock_lifespan(_server):
     """No-op lifespan that skips the HTTP health check."""
     ctx = AppContext(config=MemexConfig())
     ctx._api = AsyncMock()
-    yield ctx
+    ctx._asset_cache = SessionAssetCache()
+    try:
+        yield ctx
+    finally:
+        if ctx._asset_cache is not None:
+            ctx._asset_cache.cleanup()
 
 
 @pytest.fixture(autouse=True)

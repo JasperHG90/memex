@@ -1132,7 +1132,7 @@ class TestUUIDFormats:
 
 
 # Need AsyncMock / MagicMock for vault resolution + resource tests
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1141,56 +1141,38 @@ from unittest.mock import AsyncMock, MagicMock
 
 
 class TestSVGResourceHandling:
-    """SVGs should be returned as File objects, not Image objects."""
+    """All asset fetches now return file:// URIs to a session-cached copy."""
 
     @pytest.mark.asyncio
-    async def test_svg_local_path_not_returned_as_file_uri(self, mock_api, mcp_client):
-        """SVG with local path should NOT get file:// URI (that's for raster images only)."""
-        mock_api.get_resource_path = MagicMock(return_value='/data/images/diagram.svg')
-        mock_api.get_resource.return_value = b'<svg>...</svg>'
+    async def test_svg_returned_as_file_uri(self, mock_api, asset_cache, mcp_client):
+        """SVGs flow through the session cache and come back as file:// URIs."""
+        mock_api.get_resource = AsyncMock(return_value=b'<svg>...</svg>')
 
         result = await mcp_client.call_tool(
             'memex_get_resources', {'paths': ['images/diagram.svg'], 'vault_id': 'test-vault'}
         )
 
-        # Should fall through to get_resource and return as File, not file:// URI
-        contents = result.content
-        assert len(contents) >= 1
-        # Should NOT be a plain text file:// URI
-        text_contents = [c for c in contents if hasattr(c, 'text')]
-        for tc in text_contents:
-            assert 'file://' not in tc.text or 'Error' in tc.text
+        items = parse_tool_result(result)
+        assert isinstance(items, list)
+        assert len(items) == 1
+        assert items[0].startswith('file://')
 
     @pytest.mark.asyncio
-    async def test_svg_remote_returned_as_file_not_image(self, mock_api, mcp_client):
-        """SVG without local path should be returned as File (EmbeddedResource), not Image."""
-        mock_api.get_resource_path = MagicMock(return_value=None)
-        mock_api.get_resource.return_value = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
-
-        result = await mcp_client.call_tool(
-            'memex_get_resources', {'paths': ['assets/chart.svg'], 'vault_id': 'test-vault'}
-        )
-
-        contents = result.content
-        assert len(contents) >= 1
-        # Should be an EmbeddedResource (File), not an Image
-        resource_contents = [c for c in contents if c.type == 'resource']
-        image_contents = [c for c in contents if c.type == 'image']
-        assert len(resource_contents) == 1, 'SVG should be returned as EmbeddedResource'
-        assert len(image_contents) == 0, 'SVG should NOT be returned as Image'
-
-    @pytest.mark.asyncio
-    async def test_png_still_returned_as_image_uri(self, mock_api, mcp_client):
-        """Raster images (PNG) should still get file:// URI treatment."""
-        mock_api.get_resource_path = MagicMock(return_value='/data/images/photo.png')
+    async def test_png_returned_as_file_uri(self, mock_api, asset_cache, mcp_client):
+        """Raster images also become file:// URIs to a cached copy under the session tempdir."""
+        mock_api.get_resource = AsyncMock(return_value=b'\x89PNG\r\n\x1a\n')
 
         result = await mcp_client.call_tool(
             'memex_get_resources', {'paths': ['images/photo.png'], 'vault_id': 'test-vault'}
         )
 
-        texts = [c.text for c in result.content if hasattr(c, 'text')]
-        combined = ' '.join(texts)
-        assert 'file:///data/images/photo.png' in combined
+        from pathlib import Path
+
+        items = parse_tool_result(result)
+        assert isinstance(items, list) and len(items) == 1
+        assert items[0].startswith('file://')
+        local = Path(items[0].removeprefix('file://')).resolve()
+        assert local.is_relative_to(asset_cache.tempdir.resolve())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
