@@ -15,14 +15,16 @@ import httpx
 import structlog
 from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
-from fastmcp.utilities.types import Image, Audio, File
 from fastmcp.exceptions import ToolError
+
+from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
+from memex_common.asset_resize import validate_and_resize
 from fastmcp.utilities.logging import configure_logging
 import json
 
 from pydantic import BeforeValidator, Field
 
-from memex_mcp.lifespan import lifespan, get_api, get_config
+from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp.models import (
     McpAddAssetsResult,
     McpAddNoteResult,
@@ -544,39 +546,27 @@ async def memex_rename_note(
         raise ToolError(f'Rename note failed: {e}')
 
 
-async def _fetch_single_resource(api: Any, path: str) -> Image | Audio | File | str:
-    """Fetch a single resource by path. Raises on failure."""
-    mime_type, _ = mimetypes.guess_type(path)
-    # SVGs are XML text — Claude's vision API can't process them as images
-    is_raster_image = (
-        mime_type is not None and mime_type.startswith('image/') and mime_type != 'image/svg+xml'
-    )
+async def _fetch_single_resource(ctx: Context, path: str) -> str:
+    """Fetch a single resource and return a ``file://`` URI to a session-cached copy.
 
-    # For local stores, return file:// URI to avoid base64 overhead
-    local_path = api.get_resource_path(path) if hasattr(api, 'get_resource_path') else None
-    if local_path and is_raster_image:
-        return f'file://{local_path}'
-
-    content_bytes = await api.get_resource(path)
-
-    if mime_type:
-        if is_raster_image:
-            return Image(data=content_bytes, format=mime_type.split('/')[-1])
-        elif mime_type.startswith('audio/'):
-            return Audio(data=content_bytes, format=mime_type.split('/')[-1])
-
-    path_obj = plb.Path(path)
-    filename = path_obj.name
-    ext = path_obj.suffix.lstrip('.') if path_obj.suffix else None
-
-    return File(data=content_bytes, name=filename, format=ext)
+    Bytes are written into the session ``SessionAssetCache`` so the agent can
+    ``Read`` the asset directly off disk instead of getting it inlined as base64.
+    """
+    cache = get_asset_cache(ctx)
+    api = get_api(ctx)
+    local_path, _, size = await cache.get_or_fetch(path, api.get_resource)
+    if size > MAX_RESOURCE_BYTES:
+        cache.invalidate(path)
+        raise ToolError(f'Resource exceeds max size ({size} > {MAX_RESOURCE_BYTES} bytes)')
+    return f'file://{local_path}'
 
 
 @mcp.tool(
     name='memex_get_resources',
     description=(
         'Retrieve 1+ file attachments (images, audio, documents) by path. '
-        'View or download assets attached to notes. '
+        'Returns local file paths the agent must `Read` directly. '
+        'Use `memex_resize_image` if the asset is too large to forward. '
         'Get paths from memex_list_assets. Accepts a single path or a list.'
     ),
     tags={'assets'},
@@ -592,17 +582,19 @@ async def memex_get_resources(
         str | None,
         Field(description='Vault UUID or name. Omit to use config defaults.'),
     ] = None,
-) -> list[Image | Audio | File | str]:
-    """Retrieve file resources. Returns a list of Image, Audio, File, or error strings."""
+) -> list[str]:
+    """Retrieve file resources. Returns a list of file:// URIs or error strings."""
+    if len(paths) > MAX_GET_RESOURCES_PATHS:
+        raise ToolError(f'Too many paths requested ({len(paths)} > {MAX_GET_RESOURCES_PATHS})')
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)
         await _resolve_vault_id(api, vault_id)
 
-        results: list[Image | Audio | File | str] = []
+        results: list[str] = []
         for path in paths:
             try:
-                results.append(await _fetch_single_resource(api, path))
+                results.append(await _fetch_single_resource(ctx, path))
             except Exception as exc:
                 results.append(f'Error fetching {path}: {exc}')
 
@@ -611,6 +603,46 @@ async def memex_get_resources(
     except Exception as e:
         logger.error(f'Get resource failed: {e}', exc_info=True)
         raise ToolError(f'Failed to retrieve resources: {e}')
+
+
+@mcp.tool(
+    name='memex_resize_image',
+    description=(
+        'Resize an image previously fetched via `memex_get_resources` so it can '
+        'be forwarded inline. The input MUST be a path under the session asset '
+        'cache; arbitrary filesystem paths are rejected. Returns the resized '
+        'file path. Allowed input formats: PNG, JPEG, WEBP, GIF.'
+    ),
+    tags={'assets'},
+    annotations={'readOnlyHint': False},
+)
+async def memex_resize_image(
+    ctx: Context,
+    local_path: Annotated[
+        str,
+        Field(description='Path returned by memex_get_resources (under session cache).'),
+    ],
+    max_width: Annotated[int, Field(description='Maximum output width in pixels.')] = 1280,
+    max_height: Annotated[int, Field(description='Maximum output height in pixels.')] = 1280,
+    output_format: Annotated[
+        str | None,
+        Field(description='Output format override (PNG/JPEG/WEBP/GIF). Defaults to source.'),
+    ] = None,
+) -> dict[str, Any]:
+    """Resize an image inside the session asset cache."""
+    cache = get_asset_cache(ctx)
+    try:
+        dest_path, size = await asyncio.to_thread(
+            validate_and_resize,
+            cache,
+            local_path,
+            max_width=max_width,
+            max_height=max_height,
+            output_format=output_format,
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc))
+    return {'local_path': str(dest_path), 'size_bytes': size}
 
 
 @mcp.tool(

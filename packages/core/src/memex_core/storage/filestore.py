@@ -26,11 +26,19 @@ T = TypeVar('T', bound=FileStoreConfig)
 def is_root_key(key: str) -> bool:
     """Return True if *key* would resolve to the storage root.
 
-    Empty / whitespace-only / all-slash keys are rewritten to the root by
-    :func:`validate_path_safe` (the empty-key form is intentional — see
-    :meth:`BaseAsyncFileStore.check_connection`). Public read and write
-    entry points must reject such keys so callers don't end up issuing
-    operations against the bucket prefix itself.
+    Any input that ``posixpath.normpath`` collapses to ``.`` or ``..`` is
+    treated as root-equivalent — that includes empty / whitespace /
+    all-slash keys, bare ``.``/``..`` tokens (and their URL-decoded
+    ``%2E``/``%2E%2E`` variants, since FastAPI decodes the path before it
+    reaches the route), and any mixed-segment shape that cancels to root
+    (``foo/..``, ``a/b/../..``, ``foo/../bar/..``, …).
+
+    Without this guard those inputs reach :func:`validate_path_safe` and
+    return the storage root unchanged: ``_cat_file(root)`` then raises
+    ``IsADirectoryError`` (local) / ``KeyError`` (S3), which the FastAPI
+    error handler maps to 500. Forcing them down the "root key" branch
+    lets each public entry point pick the right outcome (404, refuse,
+    empty list) and produce a clean response.
 
     Convention for callers using this guard:
       * Read methods (``load``) raise ``FileNotFoundError`` so the HTTP
@@ -42,7 +50,20 @@ def is_root_key(key: str) -> bool:
         a falsy value (``False`` / ``[]``) — empty input legitimately maps
         to "no such resource".
     """
-    return not key or not key.strip().strip('/')
+    if not key or not key.strip():
+        return True
+    stripped = key.strip().lstrip('/')
+    if not stripped:
+        return True
+    normalized = posixpath.normpath(stripped)
+    if normalized == '.':
+        return True
+    # ``posixpath.normpath`` cancels matching ``foo/..`` pairs but leaves
+    # leading ``..`` segments untouched (they would escape the root). An
+    # input whose normalised form is only ``..`` segments still has no
+    # proper file component, so refuse it here rather than let it hit
+    # ``validate_path_safe`` and raise a ``ValueError`` (mapped to 500).
+    return all(p == '..' for p in normalized.split('/'))
 
 
 def validate_path_safe(base_path: str, requested_path: str, *, local: bool = False) -> str:

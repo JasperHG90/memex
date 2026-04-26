@@ -11,6 +11,7 @@ import ast
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
+from memex_common.asset_cache import SessionAssetCache
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_common.schemas import TOCNodeDTO
@@ -30,6 +31,7 @@ class AppContext(BaseModel):
 
     config: MemexConfig = Field(..., description='The Memex configuration settings.')
     _api: RemoteMemexAPI = PrivateAttr()
+    _asset_cache: SessionAssetCache | None = PrivateAttr(default=None)
 
     model_config = {'arbitrary_types_allowed': True}
 

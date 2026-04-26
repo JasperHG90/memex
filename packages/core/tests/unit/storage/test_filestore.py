@@ -7,7 +7,36 @@ from memex_core.storage.filestore import (
     S3AsyncFileStore,
     GCSAsyncFileStore,
     get_filestore,
+    is_root_key,
 )
+
+
+# Inputs that ``posixpath.normpath`` collapses to no real path component:
+# empty / whitespace / slash, bare ``.``/``..`` (and URL-decoded
+# ``%2E``/``%2E%2E`` variants), and mixed-segment shapes that cancel back
+# to root (``foo/..``). All are rejected by the empty-path guards on every
+# public entry point.
+ROOT_EQUIVALENT_KEYS = [
+    '',
+    '/',
+    '///',
+    '   ',
+    '.',
+    '..',
+    './',
+    '../',
+    '/.',
+    '/..',
+    '/./',
+    '/../',
+    './..',
+    '../..',
+    'foo/..',
+    'a/b/../..',
+    'foo/../bar/..',
+    './foo/..',
+    '/foo/..',
+]
 from memex_core.config import LocalFileStoreConfig
 from memex_common.config import S3FileStoreConfig, GCSFileStoreConfig
 
@@ -567,20 +596,20 @@ class TestGetFilestore:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_load_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
     with pytest.raises(FileNotFoundError, match='Resource key is empty'):
         await store.load(bad_key)
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_exists_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
     assert await store.exists(bad_key) is False
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_is_dir_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
     assert await store.is_dir(bad_key) is False
@@ -593,7 +622,7 @@ async def test_check_connection_still_works_after_guard(store: LocalAsyncFileSto
     assert await store.check_connection() is True
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_save_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
     # save with a root key would write at the bucket prefix on S3 / fail with
@@ -602,7 +631,7 @@ async def test_save_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -
         await store.save(bad_key, b'data')
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_delete_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
     # delete(root_key, recursive=True) on S3 would target the bucket prefix —
@@ -611,14 +640,14 @@ async def test_delete_rejects_root_key(store: LocalAsyncFileStore, bad_key: str)
         await store.delete(bad_key, recursive=True)
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_move_file_rejects_root_src(store: LocalAsyncFileStore, bad_key: str) -> None:
     with pytest.raises(ValueError, match='Refusing to move'):
         await store.move_file(bad_key, 'dst.txt')
 
 
-@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_key', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_move_file_rejects_root_dest(store: LocalAsyncFileStore, bad_key: str) -> None:
     await store.save('src.txt', b'data')
@@ -628,7 +657,7 @@ async def test_move_file_rejects_root_dest(store: LocalAsyncFileStore, bad_key: 
     assert await store.exists('src.txt') is True
 
 
-@pytest.mark.parametrize('bad_pattern', ['', '/', '///', '   '])
+@pytest.mark.parametrize('bad_pattern', ROOT_EQUIVALENT_KEYS)
 @pytest.mark.asyncio
 async def test_glob_root_pattern_returns_empty(
     store: LocalAsyncFileStore, bad_pattern: str
@@ -637,6 +666,42 @@ async def test_glob_root_pattern_returns_empty(
     # an enumeration of the bucket prefix. Existence-style queries return [].
     await store.save('a.txt', b'a')
     assert await store.glob(bad_pattern) == []
+
+
+@pytest.mark.parametrize('key', ROOT_EQUIVALENT_KEYS)
+def test_is_root_key_rejects_root_equivalent(key: str) -> None:
+    """All empty / whitespace / slash / dot-equivalent inputs are root-equivalent.
+
+    Covers the URL-decoded ``%2E`` / ``%2E%2E`` reproducer that previously
+    bypassed the guard and returned 500 from the resources route.
+    """
+    assert is_root_key(key) is True
+
+
+@pytest.mark.parametrize(
+    'key',
+    [
+        'foo',
+        'foo/bar',
+        '/foo',
+        '..foo',
+        '.foo',
+        # ``foo/.`` and ``./foo`` normalise to ``foo`` — a real path.
+        'foo/.',
+        './foo',
+        # ``../foo`` escapes root but still names a real component, so
+        # it's not "no path"; ``validate_path_safe`` raises on it.
+        '../foo',
+        'a/./b',
+    ],
+)
+def test_is_root_key_accepts_real_paths(key: str) -> None:
+    """Inputs that normalise to a real path component are not root-equivalent.
+
+    ``foo/..`` is *not* in this list — it cancels to ``.`` and is covered
+    by ``test_is_root_key_rejects_root_equivalent`` instead.
+    """
+    assert is_root_key(key) is False
 
 
 @pytest.mark.asyncio
