@@ -89,6 +89,33 @@ def test_resize_with_explicit_format(tmp_path: Path) -> None:
 
     dest, _ = resize_image(src, max_width=200, max_height=200, format='JPEG')
 
+    # Suffix must reflect the actual bytes — a JPEG override on a .png
+    # source must not leave the dest with a .png extension.
+    assert dest.suffix.lower() in {'.jpg', '.jpeg'}
+    with Image.open(dest) as out:
+        assert out.format == 'JPEG'
+
+
+def test_resize_explicit_format_webp(tmp_path: Path) -> None:
+    src = tmp_path / 'photo.png'
+    _write_png(src, size=(800, 800))
+
+    dest, _ = resize_image(src, max_width=200, max_height=200, format='WEBP')
+
+    assert dest.suffix.lower() == '.webp'
+    with Image.open(dest) as out:
+        assert out.format == 'WEBP'
+
+
+def test_resize_explicit_format_jpg_alias(tmp_path: Path) -> None:
+    src = tmp_path / 'photo.png'
+    _write_png(src, size=(800, 800))
+
+    # ``'JPG'`` is a common-but-non-canonical alias and must canonicalize
+    # to ``.jpg`` on disk and ``JPEG`` in the bytes.
+    dest, _ = resize_image(src, max_width=200, max_height=200, format='JPG')
+
+    assert dest.suffix.lower() in {'.jpg', '.jpeg'}
     with Image.open(dest) as out:
         assert out.format == 'JPEG'
 

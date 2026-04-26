@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
-_ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'JPG', 'WEBP', 'GIF'})
+_ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'})
 
 _SUFFIX_TO_FORMAT: dict[str, str] = {
     '.png': 'PNG',
@@ -20,6 +20,13 @@ _SUFFIX_TO_FORMAT: dict[str, str] = {
     '.jpeg': 'JPEG',
     '.webp': 'WEBP',
     '.gif': 'GIF',
+}
+
+_FORMAT_TO_SUFFIX: dict[str, str] = {
+    'PNG': '.png',
+    'JPEG': '.jpg',
+    'WEBP': '.webp',
+    'GIF': '.gif',
 }
 
 
@@ -57,9 +64,16 @@ def resize_image(
             output_format = (format or detected).upper()
             if output_format == 'JPG':
                 output_format = 'JPEG'
+            if output_format not in _FORMAT_TO_SUFFIX:
+                raise ValueError(
+                    f'Unsupported output format {output_format!r}; {_allowed_formats_message()}'
+                )
 
             img.thumbnail((max_width, max_height))
-            dest_path = local_path.with_stem(f'{local_path.stem}-{max_width}x{max_height}')
+            dest_suffix = _FORMAT_TO_SUFFIX[output_format]
+            dest_path = local_path.with_name(
+                f'{local_path.stem}-{max_width}x{max_height}{dest_suffix}'
+            )
 
             save_img: Image.Image = img
             if output_format == 'JPEG' and img.mode not in ('RGB', 'L'):
