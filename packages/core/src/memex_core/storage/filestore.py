@@ -32,6 +32,16 @@ def is_root_key(key: str) -> bool:
     entry points must reject such keys so callers don't end up issuing
     operations against the bucket prefix itself.
 
+    Also rejects current-/parent-directory tokens (``.``, ``..``, ``./``,
+    ``../``, ``/.``, ``/..``) because FastAPI URL-decodes ``%2E`` /
+    ``%2E%2E`` and these inputs likewise resolve to the storage root via
+    :func:`validate_path_safe` (``.`` collapses to root) or to a path
+    traversal (``..`` raises ``ValueError`` from
+    :func:`validate_path_safe`). Treating them as root-equivalent here
+    forces callers down their own "empty / not-found" branch so HTTP
+    handlers can return a clean 404 instead of a 500 from the eventual
+    ``IsADirectoryError`` / ``KeyError`` / ``ValueError``.
+
     Convention for callers using this guard:
       * Read methods (``load``) raise ``FileNotFoundError`` so the HTTP
         layer maps to 404.
@@ -42,7 +52,10 @@ def is_root_key(key: str) -> bool:
         a falsy value (``False`` / ``[]``) — empty input legitimately maps
         to "no such resource".
     """
-    return not key or not key.strip().strip('/')
+    if not key or not key.strip().strip('/'):
+        return True
+    parts = [p for p in key.strip().split('/') if p]
+    return all(p in ('.', '..') for p in parts)
 
 
 def validate_path_safe(base_path: str, requested_path: str, *, local: bool = False) -> str:
