@@ -1,6 +1,6 @@
 import datetime as dt
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4, UUID
 
 from fastmcp import Client
@@ -54,7 +54,6 @@ async def test_integration_search_assets_resource(mock_api):
     )
 
     # 3. Setup Resource Data (for Get Resource)
-    mock_api.get_resource_path = MagicMock(return_value='/data/assets/arch.png')
     mock_api.get_resource.return_value = b'fake_image_bytes'
 
     async with Client(mcp) as client:
@@ -73,13 +72,16 @@ async def test_integration_search_assets_resource(mock_api):
         assert any(a['filename'] == 'arch.png' for a in assets_data)
         assert any(a['path'] == 'assets/arch.png' for a in assets_data)
 
-        # Step 3: Get Resource (batch)
-        await client.call_tool(
+        # Step 3: Get Resource (batch) — disk-handoff fetches via api.get_resource
+        get_result = await client.call_tool(
             'memex_get_resources', {'paths': ['assets/arch.png'], 'vault_id': 'test-vault'}
         )
 
-        # Verify it returns file:// URI for local images
-        mock_api.get_resource_path.assert_called_once_with('assets/arch.png')
+        # New disk-handoff: agent gets a file:// URI to a session-cached copy
+        mock_api.get_resource.assert_awaited_once_with('assets/arch.png')
+        items = parse_tool_result(get_result)
+        assert isinstance(items, list)
+        assert any(s.startswith('file://') for s in items)
 
 
 @pytest.mark.asyncio

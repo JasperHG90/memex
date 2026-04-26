@@ -8,6 +8,7 @@ import httpx
 from fastmcp import Context, FastMCP
 from mcp.shared.context import RequestContext
 
+from memex_common.asset_cache import SessionAssetCache
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
 from memex_mcp.models import AppContext
@@ -32,8 +33,11 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     client = httpx.AsyncClient(base_url=base_url, timeout=120.0, headers=headers)
     api = RemoteMemexAPI(client)
 
+    cache = SessionAssetCache()
+
     app_context = AppContext(config=config)
     app_context._api = api
+    app_context._asset_cache = cache
 
     try:
         vault = await api.get_active_vault()
@@ -44,6 +48,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     try:
         yield app_context
     finally:
+        cache.cleanup()
         await client.aclose()
 
 
@@ -53,6 +58,14 @@ def get_api(ctx: Context) -> RemoteMemexAPI:
     """
     app_context: AppContext = cast(RequestContext, ctx.request_context).lifespan_context
     return cast(RemoteMemexAPI, app_context._api)
+
+
+def get_asset_cache(ctx: Context) -> SessionAssetCache:
+    """
+    Get the SessionAssetCache instance from the context.
+    """
+    app_context: AppContext = cast(RequestContext, ctx.request_context).lifespan_context
+    return cast(SessionAssetCache, app_context._asset_cache)
 
 
 def get_config(ctx: Context) -> MemexConfig:
