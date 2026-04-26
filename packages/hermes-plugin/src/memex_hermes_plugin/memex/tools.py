@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import inspect
 import json
 import logging
 import mimetypes
@@ -33,7 +34,7 @@ from typing import Any, Protocol, cast
 from uuid import UUID
 
 
-from memex_common.asset_cache import SessionAssetCache
+from memex_common.asset_cache import MAX_RESOURCE_BYTES, SessionAssetCache
 from memex_common.asset_resize import validate_and_resize
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
@@ -1249,10 +1250,6 @@ def _is_unsafe_asset_filename(filename: Any) -> bool:
 # defensively because some clients ignore schema-level limits.
 _MAX_GET_RESOURCES_PATHS = 50
 _MAX_ADD_ASSETS_ITEMS = 20
-
-# Per-asset byte cap for ``handle_get_resources``. A single oversized asset
-# would otherwise OOM the host when base64-encoded (base64 inflates by ~33%).
-_MAX_RESOURCE_BYTES = 50 * 1024 * 1024  # 50 MiB
 
 # Canonical KV key namespaces per RFC-012. Hermes is the ``key`` holder here;
 # ``_scope_from_key`` above derives these from stored entries.
@@ -2590,14 +2587,13 @@ def handle_get_resources(
                 asset_cache.get_or_fetch(path, api.get_resource),
                 timeout=30.0,
             )
-            if size_bytes > _MAX_RESOURCE_BYTES:
+            if size_bytes > MAX_RESOURCE_BYTES:
                 asset_cache.invalidate(path)
                 results.append(
                     {
                         'path': path,
                         'error': (
-                            f'Resource exceeds max size '
-                            f'({size_bytes} > {_MAX_RESOURCE_BYTES} bytes)'
+                            f'Resource exceeds max size ({size_bytes} > {MAX_RESOURCE_BYTES} bytes)'
                         ),
                     }
                 )
@@ -2698,10 +2694,10 @@ def handle_add_assets(
         b64 = a.get('content_b64')
         if not isinstance(b64, str):
             return tool_error(f'Asset {fn!r} has non-string content_b64')
-        if (len(b64) * 3) // 4 > _MAX_RESOURCE_BYTES:
+        if (len(b64) * 3) // 4 > MAX_RESOURCE_BYTES:
             return tool_error(
                 f'Asset {fn!r} exceeds max size '
-                f'(~{(len(b64) * 3) // 4} > {_MAX_RESOURCE_BYTES} bytes)'
+                f'(~{(len(b64) * 3) // 4} > {MAX_RESOURCE_BYTES} bytes)'
             )
 
     filenames = [a['filename'] for a in assets]
@@ -2714,10 +2710,10 @@ def handle_add_assets(
             decoded = base64.b64decode(a['content_b64'], validate=True)
             # Post-decode check kept as defense-in-depth: the pre-check is
             # an upper-bound estimate, so the exact bytes are still verified.
-            if len(decoded) > _MAX_RESOURCE_BYTES:
+            if len(decoded) > MAX_RESOURCE_BYTES:
                 return tool_error(
                     f'Asset {a["filename"]!r} exceeds max size '
-                    f'({len(decoded)} > {_MAX_RESOURCE_BYTES} bytes)'
+                    f'({len(decoded)} > {MAX_RESOURCE_BYTES} bytes)'
                 )
             files[a['filename']] = decoded
     except (binascii.Error, ValueError, TypeError, KeyError) as e:
@@ -2910,15 +2906,16 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
 }
 
 
-# Tool names whose handlers accept the ``asset_cache`` keyword. Disk-handoff
-# tools need access to the per-session cache; the remaining handlers do not
-# and ignore the kwarg.
-_ASSET_CACHE_TOOLS: frozenset[str] = frozenset(
-    {
-        'memex_get_resources',
-        'memex_resize_image',
-    }
-)
+_ACCEPTS_ASSET_CACHE: dict[int, bool] = {}
+
+
+def _accepts_asset_cache(handler: _StdHandler | _AssetCacheHandler) -> bool:
+    key = id(handler)
+    cached = _ACCEPTS_ASSET_CACHE.get(key)
+    if cached is None:
+        cached = 'asset_cache' in inspect.signature(handler).parameters
+        _ACCEPTS_ASSET_CACHE[key] = cached
+    return cached
 
 
 def dispatch(
@@ -2934,7 +2931,7 @@ def dispatch(
     if handler is None:
         return tool_error(f'Unknown tool: {tool_name}')
     try:
-        if tool_name in _ASSET_CACHE_TOOLS:
+        if _accepts_asset_cache(handler):
             return cast(_AssetCacheHandler, handler)(
                 api, config, vault_id, args, asset_cache=asset_cache
             )

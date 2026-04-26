@@ -2853,9 +2853,9 @@ def test_add_assets_rejects_oversized_asset(config, vault_id, monkeypatch):
     allocate ~50 MiB. The error surfaces which filename tripped the cap so
     the caller can identify the culprit in a multi-asset request.
     """
-    from memex_hermes_plugin.memex import tools as tools_mod
 
-    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+    monkeypatch.setattr('memex_common.asset_cache.MAX_RESOURCE_BYTES', 4)
+    monkeypatch.setattr('memex_hermes_plugin.memex.tools.MAX_RESOURCE_BYTES', 4)
 
     api = Mock()
     api.add_note_assets = AsyncMock()
@@ -2891,7 +2891,8 @@ def test_add_assets_rejects_oversized_b64_before_decode(config, vault_id, monkey
     """
     from memex_hermes_plugin.memex import tools as tools_mod
 
-    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+    monkeypatch.setattr('memex_common.asset_cache.MAX_RESOURCE_BYTES', 4)
+    monkeypatch.setattr('memex_hermes_plugin.memex.tools.MAX_RESOURCE_BYTES', 4)
 
     decoded_calls: list[str] = []
 

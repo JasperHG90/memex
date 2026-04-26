@@ -115,9 +115,9 @@ def test_get_resources_oversize_rejected_after_download(config, vault_id, asset_
     """AC-011: an asset whose bytes exceed ``_MAX_RESOURCE_BYTES`` after the
     fetch lands as an ``error`` entry AND the file is removed from disk —
     the oversize bytes must not leak into the tempdir."""
-    from memex_hermes_plugin.memex import tools as tools_mod
 
-    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
+    monkeypatch.setattr('memex_common.asset_cache.MAX_RESOURCE_BYTES', 4)
+    monkeypatch.setattr('memex_hermes_plugin.memex.tools.MAX_RESOURCE_BYTES', 4)
 
     api = Mock()
     api.get_resource = AsyncMock(return_value=b'TOOBIG!')

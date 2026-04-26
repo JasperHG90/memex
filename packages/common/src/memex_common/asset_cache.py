@@ -54,6 +54,9 @@ class _EvictingLRUCache(LRUCache):
         return key, value
 
 
+MAX_RESOURCE_BYTES: int = 50 * 1024 * 1024
+
+
 class SessionAssetCache:
     """Per-session on-disk cache for fetched assets.
 
@@ -64,10 +67,10 @@ class SessionAssetCache:
     accepts either form.
 
     Concurrent ``get_or_fetch`` calls for the same path coalesce into a
-    single fetch. Mutations to the underlying cache are serialised with
-    a ``threading.Lock`` so the Hermes plugin can call ``register`` /
-    ``invalidate`` from its synchronous dispatch thread while the MCP
-    event loop is also running.
+    single fetch. A single ``threading.Lock`` serialises every mutation
+    of ``_cache`` and ``_locks`` so the Hermes plugin can call
+    ``register`` / ``invalidate`` from its synchronous dispatch thread
+    while the MCP event loop is also running.
     """
 
     def __init__(
@@ -85,7 +88,6 @@ class SessionAssetCache:
             on_evict=self._unlink_evicted,
         )
         self._locks: dict[str, asyncio.Lock] = {}
-        self._global_lock = asyncio.Lock()
         self._mutation_lock = threading.Lock()
 
     def _unlink_evicted(self, key: str, value: Path) -> None:
@@ -102,8 +104,8 @@ class SessionAssetCache:
         safe_name = Path(path).name or 'asset'
         return self.tempdir / f'{digest}-{safe_name}'
 
-    async def _lock_for(self, path: str) -> asyncio.Lock:
-        async with self._global_lock:
+    def _lock_for(self, path: str) -> asyncio.Lock:
+        with self._mutation_lock:
             lock = self._locks.get(path)
             if lock is None:
                 lock = asyncio.Lock()
@@ -124,7 +126,7 @@ class SessionAssetCache:
             size = await asyncio.to_thread(_stat_size, cached)
             return cached, mime, size
 
-        lock = await self._lock_for(path)
+        lock = self._lock_for(path)
         async with lock:
             with self._mutation_lock:
                 cached = self._cache.get(path)
@@ -170,10 +172,10 @@ class SessionAssetCache:
 
     def cleanup(self) -> None:
         """Remove the session tempdir and all cached files. Idempotent."""
-        shutil.rmtree(self.tempdir, ignore_errors=True)
         with self._mutation_lock:
             self._cache.clear()
             self._locks.clear()
+        shutil.rmtree(self.tempdir, ignore_errors=True)
 
     def __len__(self) -> int:
         with self._mutation_lock:

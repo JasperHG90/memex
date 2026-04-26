@@ -21,7 +21,8 @@ import pytest
 from PIL import Image
 from fastmcp.exceptions import ToolError
 
-from memex_mcp.server import _MAX_GET_RESOURCES_PATHS, _MAX_RESOURCE_BYTES
+from memex_common.asset_cache import MAX_RESOURCE_BYTES
+from memex_mcp.server import _MAX_GET_RESOURCES_PATHS
 from helpers import parse_tool_result
 
 
@@ -39,9 +40,9 @@ def _write_png(path: Path, size: tuple[int, int] = (64, 64)) -> Path:
 
 @pytest.mark.asyncio
 async def test_get_resources_oversize_rejected_after_download(mock_api, asset_cache, mcp_client):
-    """A response exceeding ``_MAX_RESOURCE_BYTES`` is reported as an error
+    """A response exceeding ``MAX_RESOURCE_BYTES`` is reported as an error
     string (the wrapper turns ToolError into an entry in the result list)."""
-    big_blob = b'\x00' * (_MAX_RESOURCE_BYTES + 1)
+    big_blob = b'\x00' * (MAX_RESOURCE_BYTES + 1)
     mock_api.get_resource = AsyncMock(return_value=big_blob)
 
     result = await mcp_client.call_tool(
@@ -54,7 +55,7 @@ async def test_get_resources_oversize_rejected_after_download(mock_api, asset_ca
     msg = items[0]
     assert msg.startswith('Error fetching ')
     assert 'Resource exceeds max size' in msg
-    assert str(_MAX_RESOURCE_BYTES) in msg
+    assert str(MAX_RESOURCE_BYTES) in msg
 
 
 @pytest.mark.asyncio
@@ -62,7 +63,7 @@ async def test_oversize_path_invalidated_so_retry_refetches(mock_api, asset_cach
     """A rejected oversize asset must be evicted from the cache; a second
     call for the same path must re-invoke the underlying fetch rather than
     serve a stale tracked-but-missing entry."""
-    big_blob = b'\x00' * (_MAX_RESOURCE_BYTES + 1)
+    big_blob = b'\x00' * (MAX_RESOURCE_BYTES + 1)
     mock_api.get_resource = AsyncMock(return_value=big_blob)
 
     await mcp_client.call_tool(

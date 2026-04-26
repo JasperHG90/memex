@@ -17,6 +17,7 @@ from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.exceptions import ToolError
 
+from memex_common.asset_cache import MAX_RESOURCE_BYTES
 from memex_common.asset_resize import validate_and_resize
 from fastmcp.utilities.logging import configure_logging
 import json
@@ -74,7 +75,6 @@ from memex_common.schemas import (
 
 _SESSION_DEDUP_TTL = 1800  # 30 minutes
 
-_MAX_RESOURCE_BYTES: Final[int] = 50 * 1024 * 1024
 _MAX_GET_RESOURCES_PATHS: Final[int] = 50
 
 # Link types always inlined in search results (all others available via
@@ -557,9 +557,9 @@ async def _fetch_single_resource(ctx: Context, path: str) -> str:
     cache = get_asset_cache(ctx)
     api = get_api(ctx)
     local_path, _, size = await cache.get_or_fetch(path, api.get_resource)
-    if size > _MAX_RESOURCE_BYTES:
+    if size > MAX_RESOURCE_BYTES:
         cache.invalidate(path)
-        raise ToolError(f'Resource exceeds max size ({size} > {_MAX_RESOURCE_BYTES} bytes)')
+        raise ToolError(f'Resource exceeds max size ({size} > {MAX_RESOURCE_BYTES} bytes)')
     return f'file://{local_path}'
 
 
