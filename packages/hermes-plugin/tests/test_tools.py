@@ -117,7 +117,8 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
-    """All 34 tools (7 pre-existing + 27 new) must be registered exactly (AC-086)."""
+    """All 35 tools (7 pre-existing + 27 from prior streams + memex_resize_image)
+    must be registered exactly (AC-086 + AC-008)."""
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
         'memex_recall',
@@ -157,6 +158,7 @@ def test_all_schemas_have_required_fields():
     stream_5_assets_kv = {
         'memex_list_assets',
         'memex_get_resources',
+        'memex_resize_image',
         'memex_add_assets',
         'memex_kv_write',
         'memex_kv_get',
@@ -2614,51 +2616,12 @@ def test_list_assets_rejects_invalid_uuid(config, vault_id):
     api.get_note.assert_not_awaited()
 
 
-# -- Handler tests: get_resources (#23) --
-
-
-def test_get_resources_base64_round_trip(config, vault_id):
-    """AC-046: bytes round-trip base64; size_bytes is pre-encode length; mime from path."""
-    api = Mock()
-    raw = b'PNG_FAKE'
-    api.get_resource = AsyncMock(return_value=raw)
-    out = dispatch(
-        'memex_get_resources',
-        {'paths': ['abc/diagram.png']},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    result = data['results'][0]
-    assert _b64.b64decode(result['content_b64']) == raw
-    assert result['size_bytes'] == len(raw)
-    assert result['mime_type'] == 'image/png'
-    assert result['filename'] == 'diagram.png'
-    assert result['path'] == 'abc/diagram.png'
-    assert 'error' not in result
-
-
-def test_get_resources_partial_failure_reports_per_path(config, vault_id):
-    """AC-047: per-path partial failure isolation; error entries have no content_b64."""
-    api = Mock()
-    api.get_resource = AsyncMock(
-        side_effect=[b'ok1', FileNotFoundError('missing'), b'ok3'],
-    )
-    out = dispatch(
-        'memex_get_resources',
-        {'paths': ['p1', 'p2', 'p3']},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    results = json.loads(out)['results']
-    assert len(results) == 3
-    assert _b64.b64decode(results[0]['content_b64']) == b'ok1'
-    assert results[1]['path'] == 'p2'
-    assert 'error' in results[1]
-    assert 'content_b64' not in results[1]
-    assert _b64.b64decode(results[2]['content_b64']) == b'ok3'
+# -- Handler tests: get_resources --
+# The disk-handoff variant of these tests lives in
+# ``tests/test_handle_get_resources.py``; that suite covers the new
+# response shape (``local_path`` instead of ``content_b64``) and the
+# ``SessionAssetCache`` lifecycle. The legacy base64 round-trip tests were
+# retired with the inline-bytes path in issue #59.
 
 
 # -- Handler tests: add_assets (#24) --
@@ -2911,50 +2874,9 @@ def test_add_assets_rejects_non_string_b64(config, vault_id):
     api.add_note_assets.assert_not_awaited()
 
 
-def test_get_resources_rejects_too_many_paths(config, vault_id):
-    """Enforcing the 50-path cap prevents clients from bypassing the schema limit."""
-    api = Mock()
-    api.get_resource = AsyncMock()
-    out = dispatch(
-        'memex_get_resources',
-        {'paths': [f'p{i}.png' for i in range(51)]},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'too many' in data['error'].lower()
-    api.get_resource.assert_not_awaited()
-
-
-def test_get_resources_rejects_oversized_asset(config, vault_id, monkeypatch):
-    """Oversized assets produce a per-path error entry instead of being base64-encoded.
-
-    Uses monkeypatch to shrink the cap so we don't have to allocate ~50 MiB.
-    One good asset and one oversized asset are fetched together to assert the
-    existing per-path failure isolation still holds.
-    """
-    from memex_hermes_plugin.memex import tools as tools_mod
-
-    monkeypatch.setattr(tools_mod, '_MAX_RESOURCE_BYTES', 4, raising=True)
-
-    api = Mock()
-    api.get_resource = AsyncMock(side_effect=[b'ok', b'TOOBIG!'])
-    out = dispatch(
-        'memex_get_resources',
-        {'paths': ['small.png', 'big.png']},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    results = json.loads(out)['results']
-    assert len(results) == 2
-    assert 'content_b64' in results[0]
-    assert results[0]['path'] == 'small.png'
-    assert 'error' in results[1]
-    assert 'exceeds max size' in results[1]['error']
-    assert 'content_b64' not in results[1]
+# Note: The disk-handoff equivalents of the legacy "too many paths" and
+# "oversize per-path" tests live in ``tests/test_handle_get_resources.py``;
+# they need a ``SessionAssetCache`` fixture that's not part of this module.
 
 
 # -- Handler tests: kv_write (#25) --

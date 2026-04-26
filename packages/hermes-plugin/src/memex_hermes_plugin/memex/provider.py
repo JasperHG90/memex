@@ -23,6 +23,7 @@ from uuid import UUID
 
 import httpx
 from agent.memory_provider import MemoryProvider  # type: ignore[import-not-found]
+from memex_common.asset_cache import SessionAssetCache
 
 from .async_bridge import run_sync, shutdown_loop
 from .briefing import BriefingCache, format_briefing_block
@@ -61,11 +62,16 @@ class MemexMemoryProvider(MemoryProvider):
         self._platform: str = ''
         self._briefing = BriefingCache()
         self._prefetch = PrefetchCache()
+        self._asset_cache: SessionAssetCache | None = None
         self._turn_buffer: list[dict[str, str]] = []
         self._turn_count = 0
         self._shutdown_registered = False
         self._state_lock = threading.Lock()
         self._atexit_lock = threading.Lock()
+
+    @property
+    def asset_cache(self) -> SessionAssetCache | None:
+        return self._asset_cache
 
     # -- Identity ------------------------------------------------------------
 
@@ -149,6 +155,7 @@ class MemexMemoryProvider(MemoryProvider):
         from memex_common.client import RemoteMemexAPI
 
         self._api = RemoteMemexAPI(self._client)
+        self._asset_cache = SessionAssetCache()
 
         try:
             self._vault_name = resolve_vault(
@@ -254,6 +261,7 @@ class MemexMemoryProvider(MemoryProvider):
             api=self._api,
             config=self._config,
             vault_id=self._vault_id,
+            asset_cache=self._asset_cache,
         )
 
     # -- Prefetch ------------------------------------------------------------
@@ -360,6 +368,13 @@ class MemexMemoryProvider(MemoryProvider):
         if client is not None:
             try:
                 run_sync(client.aclose(), timeout=5.0)
+            except Exception:
+                pass
+        cache = self._asset_cache
+        self._asset_cache = None
+        if cache is not None:
+            try:
+                cache.cleanup()
             except Exception:
                 pass
         shutdown_loop(thread_join_timeout=5.0)

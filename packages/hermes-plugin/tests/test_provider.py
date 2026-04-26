@@ -75,7 +75,7 @@ def test_get_tool_schemas_respects_memory_mode(tmp_path: Path, monkeypatch: pyte
 
 
 def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
-    """Hybrid mode exposes exactly the 34 Memex tools (AC-086)."""
+    """Hybrid mode exposes exactly the 35 Memex tools (AC-086 + AC-008)."""
     provider, *_ = provider_with_stubbed_api
     schemas = provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
@@ -114,6 +114,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         # Stream 5 (assets/KV)
         'memex_list_assets',
         'memex_get_resources',
+        'memex_resize_image',
         'memex_add_assets',
         'memex_kv_write',
         'memex_kv_get',
@@ -133,8 +134,9 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
 class TestGetToolSchemasBeforeInitialize:
     def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
-        pre-init. After Stream 6 we register exactly 34 tools (7 baseline
-        + 27 new), and the assertion is strict equality.
+        pre-init. After Stream 6 + asset disk-handoff we register exactly 35
+        tools (7 baseline + 27 from prior streams + memex_resize_image), and
+        the assertion is strict equality.
         """
         p = MemexMemoryProvider()
         # NOTE: no initialize() call.
@@ -175,6 +177,7 @@ class TestGetToolSchemasBeforeInitialize:
             # Stream 5 (assets/KV)
             'memex_list_assets',
             'memex_get_resources',
+            'memex_resize_image',
             'memex_add_assets',
             'memex_kv_write',
             'memex_kv_get',
@@ -194,9 +197,10 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 34-tool set (7 Stream 1 baseline + 27 new).
+        # Pre-init: full 35-tool set (7 Stream 1 baseline + 27 from prior
+        # streams + memex_resize_image).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 34
+        assert len(p.get_tool_schemas()) == 35
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))
