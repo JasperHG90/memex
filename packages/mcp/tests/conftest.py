@@ -100,12 +100,7 @@ async def _mock_lifespan(_server):
     """No-op lifespan that skips the HTTP health check."""
     ctx = AppContext(config=MemexConfig())
     ctx._api = AsyncMock()
-    ctx._asset_cache = SessionAssetCache()
-    try:
-        yield ctx
-    finally:
-        if ctx._asset_cache is not None:
-            ctx._asset_cache.cleanup()
+    yield ctx
 
 
 @pytest.fixture(autouse=True)

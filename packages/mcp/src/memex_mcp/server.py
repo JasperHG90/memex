@@ -76,12 +76,7 @@ from memex_common.schemas import (
 
 _SESSION_DEDUP_TTL = 1800  # 30 minutes
 
-# Per-asset ceiling for memex_get_resources (parity with Hermes AC-011).
 _MAX_RESOURCE_BYTES: Final[int] = 50 * 1024 * 1024
-
-# Hard cap on the number of paths a single memex_get_resources call can
-# request (parity with Hermes). Stops a misbehaving caller from fanning
-# out an unbounded sequence of fetches.
 _MAX_GET_RESOURCES_PATHS: Final[int] = 50
 
 # Link types always inlined in search results (all others available via
@@ -565,11 +560,7 @@ async def _fetch_single_resource(ctx: Context, path: str) -> str:
     api = get_api(ctx)
     local_path, _, size = await cache.get_or_fetch(path, api.get_resource)
     if size > _MAX_RESOURCE_BYTES:
-        # Unlink so the cap can't be bypassed by re-reading the cache file
-        # directly; the LRU entry is left in place but ``get_or_fetch``
-        # re-fetches when the backing file is missing, re-applying the cap.
-        with contextlib.suppress(FileNotFoundError, OSError):
-            os.unlink(local_path)
+        cache.invalidate(path)
         raise ToolError(f'Resource exceeds max size ({size} > {_MAX_RESOURCE_BYTES} bytes)')
     return f'file://{local_path}'
 
@@ -652,9 +643,6 @@ async def memex_resize_image(
     except (FileNotFoundError, OSError) as exc:
         raise ToolError(f'Asset cache tempdir is unavailable: {exc}')
 
-    # ``resolve(strict=True)`` closes a TOCTOU window where a symlink could be
-    # swapped between resolution and the confinement check; raises FileNotFoundError
-    # if the path is missing.
     try:
         resolved_input = Path(local_path).resolve(strict=True)
     except FileNotFoundError:
@@ -665,11 +653,9 @@ async def memex_resize_image(
     if not resolved_input.is_relative_to(cache_root):
         raise ToolError('local_path must point inside the session asset cache')
 
-    # Decompression-bomb protection lives inside ``resize_image`` itself: it
-    # checks ``img.size`` before any pixel decoding. ValueError covers both
-    # the bomb path and format-allowlist rejections.
     try:
-        dest_path, _ = resize_image(
+        dest_path, _ = await asyncio.to_thread(
+            resize_image,
             resolved_input,
             max_width=max_width,
             max_height=max_height,
@@ -678,10 +664,8 @@ async def memex_resize_image(
     except ValueError as exc:
         raise ToolError(str(exc))
 
-    # Defense-in-depth: re-resolve the destination and re-check confinement
-    # in case a symlink was swapped during resize (TOCTOU). Also register
-    # the resized sibling with the LRU so it participates in eviction and
-    # session cleanup.
+    # Re-check confinement post-resize to close the TOCTOU window between
+    # the input resolve and Pillow's internal reopen.
     try:
         resolved_dest = dest_path.resolve(strict=True)
     except (FileNotFoundError, OSError):

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import contextlib
 import json
 import logging
 import mimetypes
@@ -2593,14 +2592,7 @@ def handle_get_resources(
                 timeout=30.0,
             )
             if size_bytes > _MAX_RESOURCE_BYTES:
-                # AC-011: oversize entries are ``error``-only — unlink the
-                # bytes so the cap can't be bypassed by reading from disk
-                # and so the tempdir doesn't accumulate rejected payloads.
-                # The LRU entry is left in place; ``get_or_fetch`` checks
-                # ``cached.exists()`` and re-runs ``fetch`` when the file is
-                # missing, so the cap is re-evaluated on retry.
-                with contextlib.suppress(FileNotFoundError, OSError):
-                    os.unlink(local_path)
+                asset_cache.invalidate(path)
                 results.append(
                     {
                         'path': path,
@@ -2676,10 +2668,6 @@ def handle_resize_image(
     if not resolved_input.is_relative_to(cache_root):
         return tool_error('local_path must point inside the session asset cache')
 
-    # Decompression-bomb protection lives inside ``resize_image`` itself:
-    # it checks ``img.size`` after ``Image.open`` (header-only) and before
-    # any pixel decoding, raising ``ValueError('Image is too large to
-    # safely decode')`` past the ``_MAX_DECODED_PIXELS`` budget.
     try:
         dest_path, dest_size = resize_image(
             resolved_input,
@@ -2690,10 +2678,8 @@ def handle_resize_image(
     except ValueError as exc:
         return tool_error(str(exc))
 
-    # Re-resolve the destination after resize. The earlier ``resolved_input``
-    # check closed the input-side TOCTOU window, but ``resize_image`` reopens
-    # the path internally and writes a sibling — a swap between calls could
-    # land the output outside the session cache. Verify before returning.
+    # Re-check confinement post-resize to close the TOCTOU window between
+    # the input resolve and Pillow's internal reopen.
     try:
         resolved_dest = dest_path.resolve(strict=True)
     except (FileNotFoundError, OSError) as exc:

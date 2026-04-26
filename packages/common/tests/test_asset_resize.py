@@ -150,6 +150,15 @@ def test_resize_rejects_oversize_pixel_budget(tmp_path: Path, monkeypatch) -> No
         resize_image(src, max_width=64, max_height=64)
 
 
+def test_resize_rejects_nonpositive_dimensions(tmp_path: Path) -> None:
+    src = tmp_path / 'tiny.png'
+    Image.new('RGB', (50, 50), color=(0, 0, 0)).save(src, format='PNG')
+
+    for mw, mh in [(0, 64), (64, 0), (-1, 64), (64, -1)]:
+        with pytest.raises(ValueError, match='must be positive'):
+            resize_image(src, max_width=mw, max_height=mh)
+
+
 def test_resize_pixel_budget_at_boundary(tmp_path: Path, monkeypatch) -> None:
     """An image exactly at the budget is accepted; one pixel over is rejected.
     Locks in the ``>`` (not ``>=``) comparison so the cap can be set to the

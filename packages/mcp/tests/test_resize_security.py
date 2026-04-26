@@ -52,6 +52,27 @@ async def test_get_resources_oversize_rejected_after_download(mock_api, asset_ca
     assert str(_MAX_RESOURCE_BYTES) in msg
 
 
+@pytest.mark.asyncio
+async def test_oversize_path_invalidated_so_retry_refetches(mock_api, asset_cache, mcp_client):
+    """A rejected oversize asset must be evicted from the cache; a second
+    call for the same path must re-invoke the underlying fetch rather than
+    serve a stale tracked-but-missing entry."""
+    big_blob = b'\x00' * (_MAX_RESOURCE_BYTES + 1)
+    mock_api.get_resource = AsyncMock(return_value=big_blob)
+
+    await mcp_client.call_tool(
+        'memex_get_resources',
+        {'paths': ['images/huge.bin'], 'vault_id': 'test-vault'},
+    )
+    assert 'images/huge.bin' not in asset_cache
+
+    await mcp_client.call_tool(
+        'memex_get_resources',
+        {'paths': ['images/huge.bin'], 'vault_id': 'test-vault'},
+    )
+    assert mock_api.get_resource.call_count == 2
+
+
 # Finding 2 ------------------------------------------------------------------
 
 

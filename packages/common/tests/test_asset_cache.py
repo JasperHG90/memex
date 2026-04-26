@@ -254,3 +254,33 @@ async def test_eviction_oserror_logged_not_raised(
         await cache.get_or_fetch('b.png', fetcher)
 
     assert any('Failed to unlink evicted cache file' in record.message for record in caplog.records)
+
+
+async def test_invalidate_drops_entry_and_unlinks(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path)
+    fetcher = _CountingFetcher()
+
+    local, _, _ = await cache.get_or_fetch('foo.png', fetcher)
+    assert local.exists()
+    assert 'foo.png' in cache
+
+    cache.invalidate('foo.png')
+
+    assert 'foo.png' not in cache
+    assert not local.exists()
+
+
+async def test_invalidate_unknown_key_is_noop(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path)
+    cache.invalidate('never-fetched.png')
+
+
+async def test_invalidate_then_refetch_calls_fetch_again(tmp_path: Path) -> None:
+    cache = _make_cache(tmp_path)
+    fetcher = _CountingFetcher()
+
+    await cache.get_or_fetch('foo.png', fetcher)
+    cache.invalidate('foo.png')
+    await cache.get_or_fetch('foo.png', fetcher)
+
+    assert len(fetcher.calls) == 2

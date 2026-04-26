@@ -14,13 +14,9 @@ from PIL import Image, UnidentifiedImageError
 
 _ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'})
 
-# Decompression-bomb cap. Pillow's stock ``MAX_IMAGE_PIXELS`` (~89 MP) only
-# emits a warning, and its hard-error path is at 2× that. We enforce a
-# stricter, deterministic 32 MP budget by checking ``img.size`` after
-# ``Image.open`` (which reads only the header) and before ``thumbnail()``
-# triggers the actual decode. No process-global Pillow state is mutated, so
-# concurrent callers don't race and unrelated Pillow users elsewhere in the
-# process are unaffected.
+# Decompression-bomb cap, checked from the lazy ``Image.open`` header
+# before pixel decode. Pillow's stock ``MAX_IMAGE_PIXELS`` only warns and
+# its hard-error path is at 2× that; we want a deterministic refusal.
 _MAX_DECODED_PIXELS: int = 32 * 1024 * 1024  # 32 megapixels
 
 _SUFFIX_TO_FORMAT: dict[str, str] = {
@@ -57,6 +53,9 @@ def resize_image(
     explicitly-overridden) format. Rejects any source whose suffix or
     Pillow-detected format is not in the allowlist.
     """
+    if max_width <= 0 or max_height <= 0:
+        raise ValueError('max_width and max_height must be positive')
+
     suffix = local_path.suffix.lower()
     suffix_format = _SUFFIX_TO_FORMAT.get(suffix)
     if suffix_format is None:
@@ -70,10 +69,6 @@ def resize_image(
                     f'Unsupported image format {detected!r}; {_allowed_formats_message()}'
                 )
 
-            # ``Image.open`` is lazy — only the header is read, so ``img.size``
-            # is reliable before any pixels are decoded. Reject oversize
-            # inputs here so a pathological 100k×100k PNG can't exhaust
-            # memory inside ``thumbnail()``.
             width, height = img.size
             if width * height > _MAX_DECODED_PIXELS:
                 raise ValueError('Image is too large to safely decode')

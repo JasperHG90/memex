@@ -9,6 +9,7 @@ the LRU bound is exceeded.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import mimetypes
 import os
@@ -22,6 +23,10 @@ from typing import Any
 from cachetools import LRUCache
 
 logger = logging.getLogger(__name__)
+
+
+def _stat_size(path: Path) -> int:
+    return path.stat().st_size
 
 
 class _EvictingLRUCache(LRUCache):
@@ -81,9 +86,7 @@ class SessionAssetCache:
             pass
         except OSError as exc:
             logger.debug('Failed to unlink evicted cache file %s: %s', value, exc)
-        # Drop the per-key lock in the same critical section as the eviction so
-        # the locks dict stays bounded by the LRU. Keys registered via
-        # ``register()`` have no lock entry; ``pop(..., None)`` is a no-op.
+        # Bound the locks dict to the LRU size.
         self._locks.pop(key, None)
 
     def _local_path_for(self, path: str) -> Path:
@@ -104,30 +107,36 @@ class SessionAssetCache:
         path: str,
         fetch: Callable[[str], Awaitable[bytes]],
     ) -> tuple[Path, str | None, int]:
-        """Return ``(local_path, mime_type, size_bytes)`` for ``path``.
-
-        On cache hit the existing file is stat'd and returned; on miss the
-        ``fetch`` coroutine is awaited and the bytes are written to the
-        session tempdir before being inserted into the LRU cache.
-        """
-        cached = self._cache.get(path)
-        if cached is not None and cached.exists():
+        """Return ``(local_path, mime_type, size_bytes)`` for ``path``."""
+        cached: Path | None = self._cache.get(path)
+        if cached is not None and await asyncio.to_thread(cached.exists):
             mime, _ = mimetypes.guess_type(str(cached))
-            return cached, mime, cached.stat().st_size
+            size = await asyncio.to_thread(_stat_size, cached)
+            return cached, mime, size
 
         lock = await self._lock_for(path)
         async with lock:
             cached = self._cache.get(path)
-            if cached is not None and cached.exists():
+            if cached is not None and await asyncio.to_thread(cached.exists):
                 mime, _ = mimetypes.guess_type(str(cached))
-                return cached, mime, cached.stat().st_size
+                size = await asyncio.to_thread(_stat_size, cached)
+                return cached, mime, size
 
             data = await fetch(path)
             local = self._local_path_for(path)
-            local.write_bytes(data)
+            await asyncio.to_thread(local.write_bytes, data)
             self._cache[path] = local
             mime, _ = mimetypes.guess_type(str(local))
-            return local, mime, local.stat().st_size
+            size = await asyncio.to_thread(_stat_size, local)
+            return local, mime, size
+
+    def invalidate(self, path: str) -> None:
+        """Drop ``path`` from the LRU and unlink its backing file. Idempotent."""
+        local = self._cache.pop(path, None)
+        if local is not None:
+            with contextlib.suppress(FileNotFoundError, OSError):
+                os.unlink(local)
+        self._locks.pop(path, None)
 
     def register(self, local_path: Path) -> Path:
         """Insert an externally-created file into the LRU.
