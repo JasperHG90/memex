@@ -47,7 +47,7 @@ def test_resize_default_dimensions() -> None:
     sig = inspect.signature(resize_image)
     assert sig.parameters['max_width'].default == 1280
     assert sig.parameters['max_height'].default == 1280
-    assert sig.parameters['format'].default is None
+    assert sig.parameters['output_format'].default is None
 
 
 def test_resize_rejects_svg(tmp_path: Path) -> None:
@@ -87,7 +87,7 @@ def test_resize_with_explicit_format(tmp_path: Path) -> None:
     src = tmp_path / 'big.png'
     _write_png(src, size=(800, 800))
 
-    dest, _ = resize_image(src, max_width=200, max_height=200, format='JPEG')
+    dest, _ = resize_image(src, max_width=200, max_height=200, output_format='JPEG')
 
     # Suffix must reflect the actual bytes — a JPEG override on a .png
     # source must not leave the dest with a .png extension.
@@ -100,7 +100,7 @@ def test_resize_explicit_format_webp(tmp_path: Path) -> None:
     src = tmp_path / 'photo.png'
     _write_png(src, size=(800, 800))
 
-    dest, _ = resize_image(src, max_width=200, max_height=200, format='WEBP')
+    dest, _ = resize_image(src, max_width=200, max_height=200, output_format='WEBP')
 
     assert dest.suffix.lower() == '.webp'
     with Image.open(dest) as out:
@@ -113,7 +113,7 @@ def test_resize_explicit_format_jpg_alias(tmp_path: Path) -> None:
 
     # ``'JPG'`` is a common-but-non-canonical alias and must canonicalize
     # to ``.jpg`` on disk and ``JPEG`` in the bytes.
-    dest, _ = resize_image(src, max_width=200, max_height=200, format='JPG')
+    dest, _ = resize_image(src, max_width=200, max_height=200, output_format='JPG')
 
     assert dest.suffix.lower() in {'.jpg', '.jpeg'}
     with Image.open(dest) as out:

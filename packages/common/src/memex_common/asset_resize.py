@@ -39,7 +39,7 @@ def resize_image(
     *,
     max_width: int = 1280,
     max_height: int = 1280,
-    format: str | None = None,
+    output_format: str | None = None,
 ) -> tuple[Path, int]:
     """Resize ``local_path`` to fit within ``max_width`` x ``max_height``.
 
@@ -61,25 +61,25 @@ def resize_image(
                     f'Unsupported image format {detected!r}; {_allowed_formats_message()}'
                 )
 
-            output_format = (format or detected).upper()
-            if output_format == 'JPG':
-                output_format = 'JPEG'
-            if output_format not in _FORMAT_TO_SUFFIX:
+            resolved_format = (output_format or detected).upper()
+            if resolved_format == 'JPG':
+                resolved_format = 'JPEG'
+            if resolved_format not in _FORMAT_TO_SUFFIX:
                 raise ValueError(
-                    f'Unsupported output format {output_format!r}; {_allowed_formats_message()}'
+                    f'Unsupported output format {resolved_format!r}; {_allowed_formats_message()}'
                 )
 
             img.thumbnail((max_width, max_height))
-            dest_suffix = _FORMAT_TO_SUFFIX[output_format]
+            dest_suffix = _FORMAT_TO_SUFFIX[resolved_format]
             dest_path = local_path.with_name(
                 f'{local_path.stem}-{max_width}x{max_height}{dest_suffix}'
             )
 
             save_img: Image.Image = img
-            if output_format == 'JPEG' and img.mode not in ('RGB', 'L'):
+            if resolved_format == 'JPEG' and img.mode not in ('RGB', 'L'):
                 save_img = img.convert('RGB')
 
-            save_img.save(dest_path, format=output_format)
+            save_img.save(dest_path, format=resolved_format)
     except UnidentifiedImageError as exc:
         raise ValueError(
             f'Could not decode image at {local_path}; {_allowed_formats_message()}'
