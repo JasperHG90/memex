@@ -1,5 +1,6 @@
 """Tests for the memex_resize_image MCP tool."""
 
+import json
 import pytest
 from pathlib import Path
 
@@ -25,10 +26,12 @@ async def test_resize_writes_smaller_file(asset_cache, mcp_client):
     )
 
     assert len(result.content) == 1
-    dest_path = Path(result.content[0].text)
+    payload = json.loads(result.content[0].text)
+    dest_path = Path(payload['local_path'])
     assert dest_path.exists()
     assert dest_path.stat().st_size < src_size
     assert dest_path.is_relative_to(asset_cache.tempdir)
+    assert payload['size_bytes'] == dest_path.stat().st_size
 
 
 @pytest.mark.asyncio

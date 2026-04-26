@@ -13,6 +13,7 @@ Each test in this module proves a specific Phase 3 adversarial finding:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,10 @@ from fastmcp.exceptions import ToolError
 
 from memex_mcp.server import _MAX_GET_RESOURCES_PATHS, _MAX_RESOURCE_BYTES
 from helpers import parse_tool_result
+
+
+def _resize_payload(result) -> dict:
+    return json.loads(result.content[0].text)
 
 
 def _write_png(path: Path, size: tuple[int, int] = (64, 64)) -> Path:
@@ -157,14 +162,13 @@ async def test_resize_post_check_rejects_dest_outside_cache(asset_cache, mcp_cli
     def _fake_resize(*_args, **_kwargs):
         return rogue, rogue.stat().st_size
 
-    with patch('memex_mcp.server.resize_image', side_effect=_fake_resize):
+    with patch('memex_common.asset_resize.resize_image', side_effect=_fake_resize):
         with pytest.raises(ToolError, match='escaped session cache'):
             await mcp_client.call_tool(
                 'memex_resize_image',
                 {'local_path': str(src), 'max_width': 32, 'max_height': 32},
             )
 
-    # The post-check must unlink the bogus destination so it doesn't linger.
     assert not rogue.exists()
 
 
@@ -180,8 +184,9 @@ async def test_resize_registers_dest_in_cache(asset_cache, mcp_client):
         'memex_resize_image',
         {'local_path': str(src), 'max_width': 64, 'max_height': 64},
     )
-    dest_str = result.content[0].text
-    assert dest_str in asset_cache, f'{dest_str!r} not registered in {asset_cache!r}'
+    payload = _resize_payload(result)
+    assert payload['local_path'] in asset_cache
+    assert payload['size_bytes'] > 0
 
 
 # Finding 11 -----------------------------------------------------------------
@@ -201,6 +206,8 @@ async def test_resize_accepts_output_format_kwarg(asset_cache, mcp_client):
             'output_format': 'JPEG',
         },
     )
-    dest = Path(result.content[0].text)
+    payload = _resize_payload(result)
+    dest = Path(payload['local_path'])
     assert dest.exists()
     assert dest.suffix == '.jpg'
+    assert payload['size_bytes'] == dest.stat().st_size

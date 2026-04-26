@@ -28,14 +28,13 @@ import binascii
 import json
 import logging
 import mimetypes
-import os
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 
 from memex_common.asset_cache import SessionAssetCache
-from memex_common.asset_resize import resize_image
+from memex_common.asset_resize import validate_and_resize
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -2646,55 +2645,21 @@ def handle_resize_image(
     max_height = args.get('max_height', 1280)
     if not isinstance(max_width, int) or not isinstance(max_height, int):
         return tool_error("'max_width' and 'max_height' must be integers")
-    if max_width <= 0 or max_height <= 0:
-        return tool_error("'max_width' and 'max_height' must be positive")
 
     output_format = args.get('output_format')
     if output_format is not None and not isinstance(output_format, str):
         return tool_error("'output_format' must be a string when provided")
 
     try:
-        cache_root = asset_cache.tempdir.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        return tool_error(f'Asset cache tempdir is unavailable: {exc}')
-
-    try:
-        resolved_input = Path(local_path_arg).resolve(strict=True)
-    except FileNotFoundError:
-        return tool_error(f'local_path does not exist: {local_path_arg!r}')
-    except OSError as exc:
-        return tool_error(f'Could not resolve local_path: {exc}')
-
-    if not resolved_input.is_relative_to(cache_root):
-        return tool_error('local_path must point inside the session asset cache')
-
-    try:
-        dest_path, dest_size = resize_image(
-            resolved_input,
+        dest_path, dest_size = validate_and_resize(
+            asset_cache,
+            local_path_arg,
             max_width=max_width,
             max_height=max_height,
             output_format=output_format,
         )
     except ValueError as exc:
         return tool_error(str(exc))
-
-    # Re-check confinement post-resize to close the TOCTOU window between
-    # the input resolve and Pillow's internal reopen.
-    try:
-        resolved_dest = dest_path.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        return tool_error(f'Resize destination is unavailable: {exc}')
-
-    if not resolved_dest.is_relative_to(cache_root):
-        try:
-            os.unlink(dest_path)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        return tool_error('Resize destination escaped session cache')
-
-    asset_cache.register(dest_path)
 
     return json.dumps({'local_path': str(dest_path), 'size_bytes': dest_size})
 
@@ -2878,7 +2843,29 @@ def handle_kv_list(
     return json.dumps({'results': [_serialize_kv_entry(e) for e in entries or []]})
 
 
-HANDLERS = {
+class _StdHandler(Protocol):
+    def __call__(
+        self,
+        api: MemexAPIProtocol,
+        config: HermesMemexConfig,
+        vault_id: UUID | None,
+        args: dict[str, Any],
+    ) -> str: ...
+
+
+class _AssetCacheHandler(Protocol):
+    def __call__(
+        self,
+        api: MemexAPIProtocol,
+        config: HermesMemexConfig,
+        vault_id: UUID | None,
+        args: dict[str, Any],
+        *,
+        asset_cache: SessionAssetCache | None = None,
+    ) -> str: ...
+
+
+HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     # --- Vault-scoped (Stream 1) ---
     'memex_recall': handle_recall,
     'memex_retrieve_notes': handle_retrieve_notes,
@@ -2943,13 +2930,15 @@ def dispatch(
     vault_id: UUID | None,
     asset_cache: SessionAssetCache | None = None,
 ) -> str:
-    handler: Any = HANDLERS.get(tool_name)
+    handler = HANDLERS.get(tool_name)
     if handler is None:
         return tool_error(f'Unknown tool: {tool_name}')
     try:
         if tool_name in _ASSET_CACHE_TOOLS:
-            return handler(api, config, vault_id, args, asset_cache=asset_cache)
-        return handler(api, config, vault_id, args)
+            return cast(_AssetCacheHandler, handler)(
+                api, config, vault_id, args, asset_cache=asset_cache
+            )
+        return cast(_StdHandler, handler)(api, config, vault_id, args)
     except VaultResolutionError as exc:
         return tool_error(f'Unknown vault: {exc.name!r}')
 

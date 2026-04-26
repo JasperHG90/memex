@@ -1,13 +1,11 @@
 "FastMCP Memex server implementation"
 
-import contextlib
 import os
 import pathlib as plb
 import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Annotated, Any, Final
 from uuid import UUID
 import mimetypes
@@ -19,7 +17,7 @@ from fastmcp import FastMCP, Context
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.exceptions import ToolError
 
-from memex_common.asset_resize import resize_image
+from memex_common.asset_resize import validate_and_resize
 from fastmcp.utilities.logging import configure_logging
 import json
 
@@ -632,57 +630,21 @@ async def memex_resize_image(
         str | None,
         Field(description='Output format override (PNG/JPEG/WEBP/GIF). Defaults to source.'),
     ] = None,
-) -> str:
-    """Resize an image inside the session asset cache. Returns the new path."""
-    if max_width <= 0 or max_height <= 0:
-        raise ToolError('max_width and max_height must be positive')
-
+) -> dict[str, Any]:
+    """Resize an image inside the session asset cache."""
     cache = get_asset_cache(ctx)
     try:
-        cache_root = cache.tempdir.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
-        raise ToolError(f'Asset cache tempdir is unavailable: {exc}')
-
-    try:
-        resolved_input = Path(local_path).resolve(strict=True)
-    except FileNotFoundError:
-        raise ToolError(f'local_path does not exist: {local_path}')
-    except OSError as exc:
-        raise ToolError(f'cannot access local_path: {exc}')
-
-    if not resolved_input.is_relative_to(cache_root):
-        raise ToolError('local_path must point inside the session asset cache')
-
-    try:
-        dest_path, _ = await asyncio.to_thread(
-            resize_image,
-            resolved_input,
+        dest_path, size = await asyncio.to_thread(
+            validate_and_resize,
+            cache,
+            local_path,
             max_width=max_width,
             max_height=max_height,
             output_format=output_format,
         )
     except ValueError as exc:
         raise ToolError(str(exc))
-
-    # Re-check confinement post-resize to close the TOCTOU window between
-    # the input resolve and Pillow's internal reopen.
-    try:
-        resolved_dest = dest_path.resolve(strict=True)
-    except (FileNotFoundError, OSError):
-        with contextlib.suppress(FileNotFoundError, OSError):
-            os.unlink(dest_path)
-        raise ToolError('Resize destination escaped session cache')
-
-    if not resolved_dest.is_relative_to(cache_root):
-        with contextlib.suppress(FileNotFoundError, OSError):
-            os.unlink(dest_path)
-        raise ToolError('Resize destination escaped session cache')
-
-    try:
-        cache.register(dest_path)
-    except ValueError as exc:
-        raise ToolError(str(exc))
-    return str(dest_path)
+    return {'local_path': str(dest_path), 'size_bytes': size}
 
 
 @mcp.tool(

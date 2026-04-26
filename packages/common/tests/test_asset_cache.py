@@ -190,6 +190,9 @@ async def test_register_evicts_when_over_maxsize(tmp_path: Path) -> None:
     assert not paths[0].exists()
     assert paths[1].exists()
     assert paths[2].exists()
+    # register() never creates a per-key asyncio lock, so the locks dict
+    # must stay empty under register-only workloads.
+    assert cache._locks == {}
 
 
 async def test_register_rejects_path_outside_tempdir(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ import mimetypes
 import os
 import shutil
 import tempfile
+import threading
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from pathlib import Path
@@ -56,10 +57,17 @@ class _EvictingLRUCache(LRUCache):
 class SessionAssetCache:
     """Per-session on-disk cache for fetched assets.
 
-    Files live in ``self.tempdir`` and are keyed by their original asset path.
-    When the LRU bound is exceeded the evicted file is unlinked from disk.
-    Concurrent ``get_or_fetch`` calls for the same path coalesce into a single
-    fetch.
+    Files live in ``self.tempdir`` and are keyed by their original asset
+    path; ``get_or_fetch`` uses that key. ``register`` (used for derived
+    files like resized siblings) keys by the file's own absolute string
+    path instead, so the two key spaces are disjoint and ``__contains__``
+    accepts either form.
+
+    Concurrent ``get_or_fetch`` calls for the same path coalesce into a
+    single fetch. Mutations to the underlying cache are serialised with
+    a ``threading.Lock`` so the Hermes plugin can call ``register`` /
+    ``invalidate`` from its synchronous dispatch thread while the MCP
+    event loop is also running.
     """
 
     def __init__(
@@ -78,6 +86,7 @@ class SessionAssetCache:
         )
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_lock = asyncio.Lock()
+        self._mutation_lock = threading.Lock()
 
     def _unlink_evicted(self, key: str, value: Path) -> None:
         try:
@@ -86,7 +95,6 @@ class SessionAssetCache:
             pass
         except OSError as exc:
             logger.debug('Failed to unlink evicted cache file %s: %s', value, exc)
-        # Bound the locks dict to the LRU size.
         self._locks.pop(key, None)
 
     def _local_path_for(self, path: str) -> Path:
@@ -108,7 +116,9 @@ class SessionAssetCache:
         fetch: Callable[[str], Awaitable[bytes]],
     ) -> tuple[Path, str | None, int]:
         """Return ``(local_path, mime_type, size_bytes)`` for ``path``."""
-        cached: Path | None = self._cache.get(path)
+        cached: Path | None
+        with self._mutation_lock:
+            cached = self._cache.get(path)
         if cached is not None and await asyncio.to_thread(cached.exists):
             mime, _ = mimetypes.guess_type(str(cached))
             size = await asyncio.to_thread(_stat_size, cached)
@@ -116,7 +126,8 @@ class SessionAssetCache:
 
         lock = await self._lock_for(path)
         async with lock:
-            cached = self._cache.get(path)
+            with self._mutation_lock:
+                cached = self._cache.get(path)
             if cached is not None and await asyncio.to_thread(cached.exists):
                 mime, _ = mimetypes.guess_type(str(cached))
                 size = await asyncio.to_thread(_stat_size, cached)
@@ -125,26 +136,27 @@ class SessionAssetCache:
             data = await fetch(path)
             local = self._local_path_for(path)
             await asyncio.to_thread(local.write_bytes, data)
-            self._cache[path] = local
+            with self._mutation_lock:
+                self._cache[path] = local
             mime, _ = mimetypes.guess_type(str(local))
             size = await asyncio.to_thread(_stat_size, local)
             return local, mime, size
 
     def invalidate(self, path: str) -> None:
         """Drop ``path`` from the LRU and unlink its backing file. Idempotent."""
-        local = self._cache.pop(path, None)
+        with self._mutation_lock:
+            local = self._cache.pop(path, None)
+            self._locks.pop(path, None)
         if local is not None:
             with contextlib.suppress(FileNotFoundError, OSError):
                 os.unlink(local)
-        self._locks.pop(path, None)
 
     def register(self, local_path: Path) -> Path:
         """Insert an externally-created file into the LRU.
 
-        Used by callers that produce derived files in the session tempdir
-        (for example, resized image siblings) so those files participate in
-        LRU eviction and session cleanup. ``local_path`` must already live
-        under ``self.tempdir``; otherwise ``ValueError`` is raised.
+        Keyed by ``str(local_path)`` (the file's own absolute path) — distinct
+        from ``get_or_fetch`` which keys by the upstream asset path. ``local_path``
+        must already live under ``self.tempdir``; ``ValueError`` otherwise.
         """
         resolved = local_path.resolve()
         tempdir_resolved = self.tempdir.resolve()
@@ -152,20 +164,24 @@ class SessionAssetCache:
             raise ValueError(
                 f'register() refused: {local_path} is not inside session tempdir {self.tempdir}'
             )
-        self._cache[str(local_path)] = local_path
+        with self._mutation_lock:
+            self._cache[str(local_path)] = local_path
         return local_path
 
     def cleanup(self) -> None:
         """Remove the session tempdir and all cached files. Idempotent."""
         shutil.rmtree(self.tempdir, ignore_errors=True)
-        self._cache.clear()
-        self._locks.clear()
+        with self._mutation_lock:
+            self._cache.clear()
+            self._locks.clear()
 
     def __len__(self) -> int:
-        return len(self._cache)
+        with self._mutation_lock:
+            return len(self._cache)
 
     def __contains__(self, path: object) -> bool:
-        return path in self._cache
+        with self._mutation_lock:
+            return path in self._cache
 
     def __repr__(self) -> str:
         return (

@@ -8,9 +8,15 @@ format allowlist so SVG/PDF/audio cannot smuggle through Pillow plugins.
 
 from __future__ import annotations
 
+import contextlib
+import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PIL import Image, UnidentifiedImageError
+
+if TYPE_CHECKING:
+    from memex_common.asset_cache import SessionAssetCache
 
 _ALLOWED_INPUT_FORMATS: frozenset[str] = frozenset({'PNG', 'JPEG', 'WEBP', 'GIF'})
 
@@ -97,4 +103,65 @@ def resize_image(
             f'Could not decode image at {local_path}; {_allowed_formats_message()}'
         ) from exc
 
-    return dest_path, dest_path.stat().st_size
+    try:
+        size = dest_path.stat().st_size
+    except OSError as exc:
+        raise ValueError(f'Resize destination is unavailable: {exc}') from exc
+    return dest_path, size
+
+
+def validate_and_resize(
+    cache: SessionAssetCache,
+    local_path_str: str,
+    *,
+    max_width: int,
+    max_height: int,
+    output_format: str | None,
+) -> tuple[Path, int]:
+    """Resize an image confined to ``cache.tempdir``.
+
+    Resolves ``local_path_str`` strictly, refuses anything outside the
+    cache, runs :func:`resize_image`, re-checks the destination resolves
+    inside the cache (TOCTOU defense), and registers the result so it
+    participates in LRU eviction. Raises :class:`ValueError` on any
+    rejection — callers translate to their own error type.
+    """
+    if max_width <= 0 or max_height <= 0:
+        raise ValueError('max_width and max_height must be positive')
+
+    try:
+        cache_root = cache.tempdir.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f'Asset cache tempdir is unavailable: {exc}') from exc
+
+    try:
+        resolved_input = Path(local_path_str).resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f'local_path does not exist: {local_path_str}') from exc
+    except OSError as exc:
+        raise ValueError(f'Could not resolve local_path: {exc}') from exc
+
+    if not resolved_input.is_relative_to(cache_root):
+        raise ValueError('local_path must point inside the session asset cache')
+
+    dest_path, size = resize_image(
+        resolved_input,
+        max_width=max_width,
+        max_height=max_height,
+        output_format=output_format,
+    )
+
+    try:
+        resolved_dest = dest_path.resolve(strict=True)
+    except OSError as exc:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(dest_path)
+        raise ValueError('Resize destination escaped session cache') from exc
+
+    if not resolved_dest.is_relative_to(cache_root):
+        with contextlib.suppress(FileNotFoundError, OSError):
+            os.unlink(dest_path)
+        raise ValueError('Resize destination escaped session cache')
+
+    cache.register(dest_path)
+    return dest_path, size

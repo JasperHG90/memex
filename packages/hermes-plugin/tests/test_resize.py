@@ -238,8 +238,12 @@ def test_resize_rejects_dest_path_escape(monkeypatch, config, vault_id, asset_ca
 
     monkeypatch.setattr(Path, 'resolve', fake_resolve)
 
-    # Capture the dest path the handler will actually unlink (the real
-    # in-cache file) so we can assert the cleanup branch ran.
+    # Sanity check: the monkeypatch must NOT redirect the cache root or
+    # the input path, otherwise the input-side confinement check would
+    # falsely pass and the test would prove nothing.
+    assert asset_cache.tempdir.resolve(strict=True) == asset_cache.tempdir
+    assert src.resolve(strict=True) == src
+
     expected_dest = asset_cache.tempdir / f'{src.stem}-64x64.png'
 
     out = dispatch(
