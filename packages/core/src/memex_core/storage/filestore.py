@@ -23,6 +23,18 @@ from memex_core.config import (
 T = TypeVar('T', bound=FileStoreConfig)
 
 
+def _is_root_key(key: str) -> bool:
+    """Return True if *key* would resolve to the storage root.
+
+    Empty / whitespace-only / all-slash keys are rewritten to the root by
+    :func:`validate_path_safe` (the empty-key form is intentional — see
+    :meth:`BaseAsyncFileStore.check_connection`). Public read and write
+    entry points must reject such keys so callers don't end up issuing
+    operations against the bucket prefix itself.
+    """
+    return not key or not key.strip().strip('/')
+
+
 def validate_path_safe(base_path: str, requested_path: str, *, local: bool = False) -> str:
     """Validate that a requested path does not escape the base directory.
 
@@ -192,6 +204,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             src_key: Source path relative to root.
             dest_key: Destination path relative to root.
         """
+        if _is_root_key(src_key) or _is_root_key(dest_key):
+            raise ValueError(f'Refusing to move with root key: src={src_key!r}, dest={dest_key!r}')
         src_fp = self.join_path(src_key)
         dest_fp = self.join_path(dest_key)
         self._logger.debug(f'Moving file from {src_fp} to {dest_fp}')
@@ -225,6 +239,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             data: The data to be saved.
             txn_id: Optional transaction id. When provided the write is staged.
         """
+        if _is_root_key(key):
+            raise ValueError(f'Refusing to save to root key: {key!r}')
         if txn_id is not None:
             stage = self._get_stage(txn_id)
             target = f'{key}.stage_{txn_id}'
@@ -250,17 +266,13 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
             txn_id: Optional transaction id. When provided the delete is deferred.
             recursive: Whether to delete recursively.
         """
+        if _is_root_key(key):
+            raise ValueError(f'Refusing to delete root key: {key!r}')
         if txn_id is not None:
             stage = self._get_stage(txn_id)
             stage.pending_deletes[key] = recursive
         else:
             await self._delete(key, recursive=recursive)
-
-    @staticmethod
-    def _is_root_key(key: str) -> bool:
-        # Empty / whitespace / all-slashes resolve to the storage root and would
-        # otherwise be silently rewritten to the bucket prefix by validate_path_safe.
-        return not key or not key.strip().strip('/')
 
     async def load(self, key: str) -> bytes:
         """
@@ -272,7 +284,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             The loaded string data.
         """
-        if self._is_root_key(key):
+        if _is_root_key(key):
             raise FileNotFoundError(f'Resource key is empty: {key!r}')
         fp = self.join_path(key)
         self._logger.debug(f'Loading data from path: {fp}')
@@ -289,7 +301,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             True if the key exists, False otherwise.
         """
-        if self._is_root_key(key):
+        if _is_root_key(key):
             return False
         self._logger.debug(f'Checking for existence of key: {key}')
         async with self._semaphore:
@@ -305,7 +317,7 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             True if the key is a directory, False otherwise.
         """
-        if self._is_root_key(key):
+        if _is_root_key(key):
             return False
         async with self._semaphore:
             return await self._fs._isdir(self.join_path(key))

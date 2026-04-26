@@ -591,3 +591,50 @@ async def test_check_connection_still_works_after_guard(store: LocalAsyncFileSto
     # check_connection bypasses load/exists/is_dir and calls _fs._ls(join_path(''))
     # directly, so it must still succeed.
     assert await store.check_connection() is True
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_save_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    # save with a root key would write at the bucket prefix on S3 / fail with
+    # IsADirectoryError locally — refuse explicitly so the error is loud.
+    with pytest.raises(ValueError, match='Refusing to save'):
+        await store.save(bad_key, b'data')
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_delete_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    # delete(root_key, recursive=True) on S3 would target the bucket prefix —
+    # potentially destroying every object under it.
+    with pytest.raises(ValueError, match='Refusing to delete'):
+        await store.delete(bad_key, recursive=True)
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_move_file_rejects_root_src(store: LocalAsyncFileStore, bad_key: str) -> None:
+    with pytest.raises(ValueError, match='Refusing to move'):
+        await store.move_file(bad_key, 'dst.txt')
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_move_file_rejects_root_dest(store: LocalAsyncFileStore, bad_key: str) -> None:
+    await store.save('src.txt', b'data')
+    with pytest.raises(ValueError, match='Refusing to move'):
+        await store.move_file('src.txt', bad_key)
+    # Source must still exist — the guard runs before any side effects.
+    assert await store.exists('src.txt') is True
+
+
+@pytest.mark.asyncio
+async def test_delete_root_key_does_not_delete_files(store: LocalAsyncFileStore) -> None:
+    # Regression for the HIGH finding: an accidental delete('/', recursive=True)
+    # must not remove existing data under the root.
+    await store.save('keep/a.txt', b'a')
+    await store.save('keep/b.txt', b'b')
+    with pytest.raises(ValueError):
+        await store.delete('/', recursive=True)
+    assert await store.exists('keep/a.txt') is True
+    assert await store.exists('keep/b.txt') is True
