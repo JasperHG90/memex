@@ -554,3 +554,40 @@ class TestGetFilestore:
         config.model_dump.return_value = {'type': 'ftp'}
         with pytest.raises(ValueError, match='Unsupported file store type'):
             get_filestore(config)
+
+
+# ---------------------------------------------------------------------------
+# Empty-key rejection
+#
+# An empty / whitespace-only / all-slash key would be silently rewritten to the
+# storage root by ``validate_path_safe`` (root is allowed there because
+# ``check_connection`` lists the root). Public read methods must reject this so
+# callers don't end up issuing a "GET bucket/" against S3, which boto rejects
+# with ParamValidationError on the empty Key.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_load_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    with pytest.raises(FileNotFoundError, match='Resource key is empty'):
+        await store.load(bad_key)
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_exists_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    assert await store.exists(bad_key) is False
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_is_dir_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    assert await store.is_dir(bad_key) is False
+
+
+@pytest.mark.asyncio
+async def test_check_connection_still_works_after_guard(store: LocalAsyncFileStore) -> None:
+    # check_connection bypasses load/exists/is_dir and calls _fs._ls(join_path(''))
+    # directly, so it must still succeed.
+    assert await store.check_connection() is True

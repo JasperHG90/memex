@@ -256,6 +256,12 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         else:
             await self._delete(key, recursive=recursive)
 
+    @staticmethod
+    def _is_root_key(key: str) -> bool:
+        # Empty / whitespace / all-slashes resolve to the storage root and would
+        # otherwise be silently rewritten to the bucket prefix by validate_path_safe.
+        return not key or not key.strip().strip('/')
+
     async def load(self, key: str) -> bytes:
         """
         Load data from the storage backend.
@@ -266,6 +272,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             The loaded string data.
         """
+        if self._is_root_key(key):
+            raise FileNotFoundError(f'Resource key is empty: {key!r}')
         fp = self.join_path(key)
         self._logger.debug(f'Loading data from path: {fp}')
         async with self._semaphore:
@@ -281,6 +289,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             True if the key exists, False otherwise.
         """
+        if self._is_root_key(key):
+            return False
         self._logger.debug(f'Checking for existence of key: {key}')
         async with self._semaphore:
             return await self._fs._exists(self.join_path(key))
@@ -295,6 +305,8 @@ class BaseAsyncFileStore(Generic[T], metaclass=ABCMeta):
         Returns:
             True if the key is a directory, False otherwise.
         """
+        if self._is_root_key(key):
+            return False
         async with self._semaphore:
             return await self._fs._isdir(self.join_path(key))
 

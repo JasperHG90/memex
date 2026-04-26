@@ -25,6 +25,9 @@ async def get_resource(path: str, api: Annotated[MemexAPI, Depends(get_api)]):
 
     from fastapi.responses import Response
 
+    if not path or not path.strip().strip('/'):
+        raise HTTPException(status_code=404, detail='Resource path is empty')
+
     try:
         content = await api.get_resource(path)
         media_type, _ = mimetypes.guess_type(path)
