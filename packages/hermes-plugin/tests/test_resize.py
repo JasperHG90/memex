@@ -187,3 +187,120 @@ def test_resize_rejects_negative_dimensions(config, vault_id, asset_cache):
     data = json.loads(out)
     assert 'error' in data
     assert 'positive' in data['error'].lower() or 'must be' in data['error'].lower()
+
+
+def test_resize_registers_dest_in_cache(config, vault_id, asset_cache, tmp_path):
+    """Finding 4: a successful resize must insert the destination into the
+    LRU so the resized sibling participates in eviction and session cleanup
+    (otherwise it leaks until the session tempdir is torn down)."""
+    src = _write_png(asset_cache.tempdir / 'sample.png', size=(640, 480))
+
+    out = dispatch(
+        'memex_resize_image',
+        {'local_path': str(src), 'max_width': 64, 'max_height': 64},
+        api=None,  # type: ignore[arg-type]
+        config=config,
+        vault_id=vault_id,
+        asset_cache=asset_cache,
+    )
+    data = json.loads(out)
+    assert 'error' not in data
+    dest = Path(data['local_path'])
+    assert str(dest) in asset_cache
+
+
+def test_resize_rejects_dest_path_escape(monkeypatch, config, vault_id, asset_cache, tmp_path):
+    """Finding 10: defense-in-depth post-resize TOCTOU check. If the
+    destination resolves outside the cache root (e.g. via a symlink swap
+    while ``resize_image`` was running), the handler must unlink the file
+    and return a ``tool_error``."""
+    src = _write_png(asset_cache.tempdir / 'sample.png', size=(640, 480))
+
+    # Anchor a fake target outside the cache root that ``resolve`` will
+    # return in place of the real destination's resolution. The decoy needs
+    # to exist so ``resolve(strict=True)`` does not raise.
+    escape_dir = tmp_path / 'escape'
+    escape_dir.mkdir()
+    decoy = escape_dir / 'escaped.png'
+    _write_png(decoy)
+
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        # Only redirect resolution for paths produced by ``resize_image`` —
+        # those land in the cache tempdir with the deterministic
+        # ``-{w}x{h}.<suffix>`` stem. Everything else (the cache root, the
+        # input path) keeps its real resolution so the input-side checks
+        # still pass.
+        if self.parent == asset_cache.tempdir and '-64x64' in self.name:
+            return decoy
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'resolve', fake_resolve)
+
+    # Capture the dest path the handler will actually unlink (the real
+    # in-cache file) so we can assert the cleanup branch ran.
+    expected_dest = asset_cache.tempdir / f'{src.stem}-64x64.png'
+
+    out = dispatch(
+        'memex_resize_image',
+        {'local_path': str(src), 'max_width': 64, 'max_height': 64},
+        api=None,  # type: ignore[arg-type]
+        config=config,
+        vault_id=vault_id,
+        asset_cache=asset_cache,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'escaped' in data['error'].lower() or 'cache' in data['error'].lower()
+    # The handler unlinks ``dest_path`` (the original, in-cache target) —
+    # not the resolved decoy — so absence of the in-cache file proves the
+    # cleanup branch ran.
+    assert not expected_dest.exists()
+
+
+def test_resize_accepts_output_format_kwarg(config, vault_id, asset_cache):
+    """Finding 11: the renamed kwarg flows through to ``resize_image`` and
+    yields a destination with the requested suffix."""
+    src = _write_png(asset_cache.tempdir / 'sample.png', size=(128, 128))
+
+    out = dispatch(
+        'memex_resize_image',
+        {
+            'local_path': str(src),
+            'max_width': 64,
+            'max_height': 64,
+            'output_format': 'JPEG',
+        },
+        api=None,  # type: ignore[arg-type]
+        config=config,
+        vault_id=vault_id,
+        asset_cache=asset_cache,
+    )
+    data = json.loads(out)
+    assert 'error' not in data
+    assert Path(data['local_path']).suffix == '.jpg'
+
+
+def test_resize_rejects_decompression_bomb(monkeypatch, config, vault_id, asset_cache):
+    """Finding 7: monkey-patch ``Image.MAX_IMAGE_PIXELS`` to a tiny value and
+    feed in an image larger than the cap. The tool must surface a
+    ``tool_error`` (Pillow raises ``DecompressionBombError`` once the cap is
+    crossed; the handler maps that to a ``ValueError`` from the helper)."""
+    # 200x200 = 40k pixels, well above the cap below.
+    src = _write_png(asset_cache.tempdir / 'huge.png', size=(200, 200))
+
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', 100)
+
+    out = dispatch(
+        'memex_resize_image',
+        {'local_path': str(src), 'max_width': 64, 'max_height': 64},
+        api=None,  # type: ignore[arg-type]
+        config=config,
+        vault_id=vault_id,
+        asset_cache=asset_cache,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    err = data['error'].lower()
+    assert 'too large' in err or 'decompression' in err or 'safely decode' in err

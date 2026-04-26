@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from PIL import Image
+
 from memex_common.asset_cache import SessionAssetCache
 from memex_common.asset_resize import resize_image
 from tools.registry import tool_error  # type: ignore[import-not-found]
@@ -1001,7 +1003,7 @@ RESIZE_IMAGE_SCHEMA: dict[str, Any] = {
                 'description': 'Maximum height in pixels (default 1280).',
                 'default': 1280,
             },
-            'format': {
+            'output_format': {
                 'type': 'string',
                 'description': (
                     "Optional output format override; one of 'PNG', 'JPEG', "
@@ -2632,9 +2634,9 @@ def handle_resize_image(
     if max_width <= 0 or max_height <= 0:
         return tool_error("'max_width' and 'max_height' must be positive")
 
-    output_format = args.get('format')
+    output_format = args.get('output_format')
     if output_format is not None and not isinstance(output_format, str):
-        return tool_error("'format' must be a string when provided")
+        return tool_error("'output_format' must be a string when provided")
 
     try:
         cache_root = asset_cache.tempdir.resolve(strict=True)
@@ -2656,10 +2658,36 @@ def handle_resize_image(
             resolved_input,
             max_width=max_width,
             max_height=max_height,
-            format=output_format,
+            output_format=output_format,
         )
+    except Image.DecompressionBombError:
+        # Pillow flags images past ``Image.MAX_IMAGE_PIXELS`` (default 89 MP)
+        # before any pixels are decoded. Catch here so a pathological
+        # 100k x 100k PNG cannot exhaust memory through ``resize_image``'s
+        # internal ``Image.open`` call.
+        return tool_error('Image is too large to safely decode')
     except ValueError as exc:
         return tool_error(str(exc))
+
+    # Re-resolve the destination after resize. The earlier ``resolved_input``
+    # check closed the input-side TOCTOU window, but ``resize_image`` reopens
+    # the path internally and writes a sibling — a swap between calls could
+    # land the output outside the session cache. Verify before returning.
+    try:
+        resolved_dest = dest_path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        return tool_error(f'Resize destination is unavailable: {exc}')
+
+    if not resolved_dest.is_relative_to(cache_root):
+        try:
+            os.unlink(dest_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        return tool_error('Resize destination escaped session cache')
+
+    asset_cache.register(dest_path)
 
     return json.dumps({'local_path': str(dest_path), 'size_bytes': dest_size})
 
