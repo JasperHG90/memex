@@ -554,3 +554,98 @@ class TestGetFilestore:
         config.model_dump.return_value = {'type': 'ftp'}
         with pytest.raises(ValueError, match='Unsupported file store type'):
             get_filestore(config)
+
+
+# ---------------------------------------------------------------------------
+# Empty-key rejection
+#
+# An empty / whitespace-only / all-slash key would be silently rewritten to the
+# storage root by ``validate_path_safe`` (root is allowed there because
+# ``check_connection`` lists the root). Public read methods must reject this so
+# callers don't end up issuing a "GET bucket/" against S3, which boto rejects
+# with ParamValidationError on the empty Key.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_load_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    with pytest.raises(FileNotFoundError, match='Resource key is empty'):
+        await store.load(bad_key)
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_exists_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    assert await store.exists(bad_key) is False
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_is_dir_returns_false_for_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    assert await store.is_dir(bad_key) is False
+
+
+@pytest.mark.asyncio
+async def test_check_connection_still_works_after_guard(store: LocalAsyncFileStore) -> None:
+    # check_connection bypasses load/exists/is_dir and calls _fs._ls(join_path(''))
+    # directly, so it must still succeed.
+    assert await store.check_connection() is True
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_save_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    # save with a root key would write at the bucket prefix on S3 / fail with
+    # IsADirectoryError locally — refuse explicitly so the error is loud.
+    with pytest.raises(ValueError, match='Refusing to save'):
+        await store.save(bad_key, b'data')
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_delete_rejects_root_key(store: LocalAsyncFileStore, bad_key: str) -> None:
+    # delete(root_key, recursive=True) on S3 would target the bucket prefix —
+    # potentially destroying every object under it.
+    with pytest.raises(ValueError, match='Refusing to delete'):
+        await store.delete(bad_key, recursive=True)
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_move_file_rejects_root_src(store: LocalAsyncFileStore, bad_key: str) -> None:
+    with pytest.raises(ValueError, match='Refusing to move'):
+        await store.move_file(bad_key, 'dst.txt')
+
+
+@pytest.mark.parametrize('bad_key', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_move_file_rejects_root_dest(store: LocalAsyncFileStore, bad_key: str) -> None:
+    await store.save('src.txt', b'data')
+    with pytest.raises(ValueError, match='Refusing to move'):
+        await store.move_file('src.txt', bad_key)
+    # Source must still exist — the guard runs before any side effects.
+    assert await store.exists('src.txt') is True
+
+
+@pytest.mark.parametrize('bad_pattern', ['', '/', '///', '   '])
+@pytest.mark.asyncio
+async def test_glob_root_pattern_returns_empty(
+    store: LocalAsyncFileStore, bad_pattern: str
+) -> None:
+    # glob('') would otherwise list everything under the storage root, leaking
+    # an enumeration of the bucket prefix. Existence-style queries return [].
+    await store.save('a.txt', b'a')
+    assert await store.glob(bad_pattern) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_root_key_does_not_delete_files(store: LocalAsyncFileStore) -> None:
+    # Regression for the HIGH finding: an accidental delete('/', recursive=True)
+    # must not remove existing data under the root.
+    await store.save('keep/a.txt', b'a')
+    await store.save('keep/b.txt', b'b')
+    with pytest.raises(ValueError):
+        await store.delete('/', recursive=True)
+    assert await store.exists('keep/a.txt') is True
+    assert await store.exists('keep/b.txt') is True

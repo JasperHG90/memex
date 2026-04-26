@@ -100,3 +100,12 @@ def test_resource_not_found(client: TestClient):
     """Test 404 for non-existent resource."""
     resp = client.get('/api/v1/resources/non/existent/path.txt')
     assert resp.status_code == 404
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('path', ['', '/', '///'])
+def test_resource_empty_path_returns_404(client: TestClient, path: str):
+    """An empty/root path must 404 cleanly, not 500 from boto on an empty Key."""
+    resp = client.get(f'/api/v1/resources/{path}')
+    assert resp.status_code == 404
+    assert resp.json()['detail'] == 'Resource path is empty'
