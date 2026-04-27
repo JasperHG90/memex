@@ -41,6 +41,7 @@ from memex_hermes_plugin.memex.config import HermesMemexConfig
 from memex_hermes_plugin.memex.tools import (
     ADD_ASSETS_SCHEMA,
     ALL_SCHEMAS,
+    APPEND_SCHEMA,
     FIND_NOTE_SCHEMA,
     GET_ENTITIES_SCHEMA,
     GET_ENTITY_COOCCURRENCES_SCHEMA,
@@ -78,6 +79,7 @@ from memex_hermes_plugin.memex.tools import (
     _scope_from_key,
     dispatch,
 )
+from memex_common.schemas import NoteAppendRequest, NoteAppendResponse
 
 
 @pytest.fixture
@@ -125,6 +127,7 @@ def test_all_schemas_have_required_fields():
         'memex_retrieve_notes',
         'memex_survey',
         'memex_retain',
+        'memex_append',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
@@ -3328,3 +3331,169 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
         f'memex_list_templates / memex_get_template / memex_retain. '
         f'All tool calls: {[(tc.function.name, tc.function.arguments) for tc in tool_calls]!r}'
     )
+
+
+# ---------------------------------------------------------------------------
+# memex_append (handle_append) — issue #56
+# ---------------------------------------------------------------------------
+
+
+def _append_response(note_id, append_id, *, status='success', new_units=0):
+    return NoteAppendResponse(
+        status=status,
+        note_id=note_id,
+        append_id=append_id,
+        content_hash='abc',
+        delta_bytes=10,
+        new_unit_ids=[uuid4() for _ in range(new_units)],
+    )
+
+
+def test_append_schema_is_registered():
+    """memex_append must appear in ALL_SCHEMAS with its own slot."""
+    names = {s['name'] for s in ALL_SCHEMAS}
+    assert 'memex_append' in names
+    assert APPEND_SCHEMA['parameters']['required'] == ['delta']
+
+
+def test_append_dispatches_with_note_key(config, vault_id):
+    """handle_append builds a NoteAppendRequest and forwards it to the API."""
+    api = Mock()
+    note_id = uuid4()
+    append_id = uuid4()
+    api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
+
+    out = dispatch(
+        'memex_append',
+        {
+            'note_key': 'hermes:session:abc',
+            'delta': 'progress note',
+            'append_id': str(append_id),
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+
+    data = json.loads(out)
+    assert data['status'] == 'success'
+    assert data['note_id'] == str(note_id)
+    assert data['append_id'] == str(append_id)
+    assert data['delta_bytes'] == 10
+
+    api.append_to_note.assert_awaited_once()
+    request = api.append_to_note.call_args.args[0]
+    assert isinstance(request, NoteAppendRequest)
+    assert request.note_key == 'hermes:session:abc'
+    assert request.delta == 'progress note'
+    assert request.append_id == append_id
+    # vault_id from session is forwarded to the request body.
+    assert str(request.vault_id) == str(vault_id)
+
+
+def test_append_dispatches_with_note_id(config, vault_id):
+    """note_id is accepted as an alternative identifier."""
+    api = Mock()
+    note_id = uuid4()
+    append_id = uuid4()
+    api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
+
+    dispatch(
+        'memex_append',
+        {
+            'note_id': str(note_id),
+            'delta': 'x',
+            'append_id': str(append_id),
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+
+    request = api.append_to_note.call_args.args[0]
+    assert request.note_id == note_id
+    assert request.note_key is None
+
+
+def test_append_auto_generates_append_id(config, vault_id):
+    """When append_id is omitted, a fresh UUID is generated server-side."""
+    api = Mock()
+
+    def _fake(req: NoteAppendRequest):
+        return _append_response(uuid4(), req.append_id)
+
+    api.append_to_note = AsyncMock(side_effect=_fake)
+
+    out1 = dispatch(
+        'memex_append',
+        {'note_key': 'k1', 'delta': 'one'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    out2 = dispatch(
+        'memex_append',
+        {'note_key': 'k1', 'delta': 'two'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    a = json.loads(out1)['append_id']
+    b = json.loads(out2)['append_id']
+    assert a and b and a != b
+
+
+def test_append_missing_delta_returns_error(config, vault_id):
+    """delta is required — missing → tool_error JSON, no API call."""
+    api = Mock()
+    api.append_to_note = AsyncMock()
+
+    out = dispatch(
+        'memex_append',
+        {'note_key': 'k'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data or 'isError' in data, out
+    api.append_to_note.assert_not_called()
+
+
+def test_append_missing_identifier_returns_error(config, vault_id):
+    """Without note_key or note_id, returns an error and skips the API call."""
+    api = Mock()
+    api.append_to_note = AsyncMock()
+
+    out = dispatch(
+        'memex_append',
+        {'delta': 'x'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data or 'isError' in data, out
+    api.append_to_note.assert_not_called()
+
+
+def test_append_api_failure_returns_error(config, vault_id):
+    """If the API raises (e.g. 409 conflict), handle_append returns a tool_error."""
+    api = Mock()
+    api.append_to_note = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            'append_id conflict',
+            request=Mock(),
+            response=Mock(status_code=409),
+        )
+    )
+
+    out = dispatch(
+        'memex_append',
+        {'note_key': 'k', 'delta': 'x'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data or 'isError' in data, out

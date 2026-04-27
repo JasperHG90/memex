@@ -24,6 +24,8 @@ from memex_common.schemas import (
     DefaultVaultsResponse,
     FindNoteResult,
     MemoryLinkDTO,
+    NoteAppendRequest,
+    NoteAppendResponse,
     NoteCreateDTO,
     ReflectionResultDTO,
     MemoryUnitDTO,
@@ -209,6 +211,17 @@ class RemoteMemexAPI:
         if response.status_code == 202:
             return BatchJobStatus(**response.json())
         return IngestResponse(**response.json())
+
+    async def append_to_note(self, request: NoteAppendRequest) -> NoteAppendResponse:
+        """Atomically append a delta to an existing note (issue #56).
+
+        Identify the note by ``note_key`` + ``vault_id`` (preferred) or by
+        ``note_id``. The server reads the parent's body, concatenates ``delta``,
+        and re-runs incremental extraction. Idempotent on ``append_id``.
+        """
+        response = await self.client.post('notes/append', json=request.model_dump(mode='json'))
+        response.raise_for_status()
+        return NoteAppendResponse(**response.json())
 
     async def ingest_batch(
         self, notes: list[NoteCreateDTO], vault_id: str | UUID | None = None, batch_size: int = 32

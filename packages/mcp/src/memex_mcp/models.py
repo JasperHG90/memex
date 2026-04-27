@@ -397,6 +397,16 @@ class McpAddNoteResult(BaseModel):
     overlapping_notes: list[McpOverlap] = []
 
 
+class McpAppendNoteResult(BaseModel):
+    """Outcome of memex_append_note. Compact by design — full DTO via memex_read_note."""
+
+    note_id: UUID
+    append_id: UUID
+    status: str  # 'success' or 'replayed'
+    delta_bytes: int
+    new_unit_count: int
+
+
 # ── Lineage ──
 
 

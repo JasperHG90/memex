@@ -1,6 +1,7 @@
 """Custom models for Memex used internally for note management and retrieval."""
 
 import datetime as dt
+import re
 from enum import Enum
 from typing import Any, Annotated
 from uuid import UUID
@@ -1207,3 +1208,153 @@ def filter_toc(
         # depth >= 1: return full tree (no trimming needed)
 
     return toc
+
+
+_APPEND_JOINERS: dict[str, str] = {
+    'paragraph': '\n\n',
+    'newline': '\n',
+    'none': '',
+}
+
+# Matches anything that the markdown frontmatter parser would treat as the
+# start of a YAML frontmatter block — i.e. ``---`` followed by optional
+# whitespace and a newline. Mirrors ``FRONTMATTER_PATTERN`` in
+# ``memex_core.services.ingestion`` so the schema validator and the service
+# agree on what "starts with frontmatter" means.
+APPEND_FRONTMATTER_PREFIX_PATTERN = re.compile(r'\A---[ \t]*\r?\n')
+
+# Server-side cap on the delta payload, in BYTES (not characters). 200 KiB.
+# Pydantic's ``max_length`` counts characters, so we enforce the byte cap in
+# the model_validator and document it in the user-facing description.
+APPEND_DELTA_MAX_BYTES = 200_000
+
+
+def append_joiner_separator(joiner: str) -> str:
+    """Map a joiner enum value to its actual separator string."""
+    try:
+        return _APPEND_JOINERS[joiner]
+    except KeyError as exc:
+        raise ValueError(
+            f'Unknown joiner {joiner!r}; expected one of {sorted(_APPEND_JOINERS)}'
+        ) from exc
+
+
+def validate_append_delta(delta: str) -> None:
+    """Raise DeltaValidationError if ``delta`` violates any shape rule of the append endpoint."""
+    from memex_common.exceptions import DeltaValidationError
+
+    if not delta:
+        raise DeltaValidationError('delta must not be empty.')
+    if APPEND_FRONTMATTER_PREFIX_PATTERN.match(delta):
+        raise DeltaValidationError(
+            "delta must not begin with '---' followed by a newline "
+            '(would be ambiguous with frontmatter).'
+        )
+    if not delta.strip():
+        raise DeltaValidationError('delta must contain non-whitespace characters.')
+    if '\x00' in delta:
+        raise DeltaValidationError('delta must not contain NUL bytes (\\x00).')
+    if len(delta.encode('utf-8')) > APPEND_DELTA_MAX_BYTES:
+        raise DeltaValidationError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
+
+
+class NoteAppendRequest(BaseModel):
+    """Request body for POST /api/v1/notes/append.
+
+    The caller identifies the target note by note_key + vault_id (the dominant
+    pattern — agents created the note with their own stable key and never see
+    a UUID), or by note_id (convenience for callers that already hold one
+    from a prior search). Exactly one identifier is required; passing both
+    is rejected with 422 to surface caller confusion loudly.
+
+    `delta` is the new content snippet to append. It is concatenated onto the
+    end of the parent's body using `joiner` and re-ingested through the
+    existing incremental block-diff pipeline so only the new chunks invoke
+    the LLM.
+
+    `append_id` is a caller-supplied UUID. Retrying with the same append_id
+    replays the cached outcome from the note_appends audit table without
+    mutating the body twice. Reusing an append_id with a different parent or
+    a different delta raises 409.
+    """
+
+    note_key: str | None = Field(
+        default=None,
+        description=(
+            'Stable user-facing key the note was created with. Preferred '
+            'identifier for agents that own the key.'
+        ),
+        examples=['session-2026-04-26-jasper'],
+    )
+    vault_id: str | UUID | None = Field(
+        default=None,
+        description='Vault scope. Required when identifying by note_key.',
+    )
+    note_id: UUID | None = Field(
+        default=None,
+        description=(
+            'Direct UUID. Convenience for callers that already have one. '
+            'Mutually exclusive with note_key — passing both returns 422.'
+        ),
+    )
+    delta: str = Field(
+        description=(
+            'New content to append. Must NOT begin with `---` followed by a '
+            'newline (would be ambiguous with frontmatter), must not be '
+            'whitespace-only, and must fit within 200_000 UTF-8 bytes. NUL '
+            'bytes (\\x00) are rejected — Postgres TEXT cannot store them.'
+        ),
+    )
+    append_id: UUID = Field(
+        description=(
+            'Caller-supplied idempotency token. Reusing the same value '
+            'with the same delta+parent is a safe replay.'
+        ),
+    )
+    joiner: str = Field(
+        default='paragraph',
+        description=(
+            'Separator between parent body and delta. '
+            "'paragraph' (\\n\\n, default), 'newline' (\\n), or 'none' (no separator)."
+        ),
+    )
+    user_notes: str | None = Field(
+        default=None,
+        description=(
+            'Optional user-provided commentary. Stored on the note metadata; '
+            'NOT re-injected into the body.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def _require_one_identifier(self) -> 'NoteAppendRequest':
+        if self.note_id is None and self.note_key is None:
+            raise ValueError('One of note_id or note_key is required.')
+        if self.note_id is not None and self.note_key is not None:
+            raise ValueError(
+                'Pass either note_id or note_key, not both. If you meant note_key, drop note_id.'
+            )
+        if self.note_id is None and self.note_key is not None and self.vault_id is None:
+            raise ValueError('vault_id is required when identifying by note_key.')
+        if self.joiner not in _APPEND_JOINERS:
+            raise ValueError(
+                f'Unknown joiner {self.joiner!r}; expected one of {sorted(_APPEND_JOINERS)}.'
+            )
+        validate_append_delta(self.delta)
+        return self
+
+
+class NoteAppendResponse(BaseModel):
+    """Response body for POST /api/v1/notes/append."""
+
+    status: str = Field(
+        description="'success' on first apply, 'replayed' on idempotent retry.",
+    )
+    note_id: UUID = Field(description='The (unchanged) note_id of the appended-to note.')
+    append_id: UUID = Field(description='Echoes the caller-supplied idempotency token.')
+    content_hash: str = Field(description='content_hash of the resulting full body.')
+    delta_bytes: int = Field(description='Length of the delta in UTF-8 bytes.')
+    new_unit_ids: list[UUID] = Field(
+        default_factory=list,
+        description='Memory units newly extracted from the delta.',
+    )

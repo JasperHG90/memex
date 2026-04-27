@@ -9,9 +9,14 @@ import os
 import pathlib as plb
 import re
 import tempfile
+import time
+import unicodedata
 from datetime import date, datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from memex_core.services.notes import NoteService
 
 import dspy
 import stamina
@@ -189,6 +194,7 @@ class IngestionService:
         memory: MemoryEngine,
         file_processor: FileContentProcessor,
         vaults: VaultService,
+        notes: 'NoteService | None' = None,
     ) -> None:
         self.metastore = metastore
         self.filestore = filestore
@@ -197,6 +203,9 @@ class IngestionService:
         self.memory = memory
         self._file_processor = file_processor
         self._vaults = vaults
+        # Optional for backwards compatibility with callers that build the
+        # IngestionService without a NoteService. append_to_note() requires it.
+        self._notes = notes
 
     async def ingest_from_url(
         self,
@@ -406,13 +415,30 @@ ingested_at: {now}
             vault = await session.get(Vault, target_vault_id)
             vault_name = vault.name if vault else str(target_vault_id)
 
-            stmt = select(Note.content_hash).where(col(Note.id) == note_uuid)
-            stored_hash = (await session.exec(stmt)).first()
-            if stored_hash is not None:
+            from sqlalchemy import func
+
+            stmt = select(
+                Note.content_hash,
+                func.coalesce(func.length(Note.original_text), 0) > 0,
+            ).where(col(Note.id) == note_uuid)
+            existing_row = (await session.exec(stmt)).first()
+            if existing_row is not None:
+                stored_hash, has_stored_text = existing_row
                 if stored_hash == note.content_fingerprint:
                     logger.info(f'Document {note_uuid} unchanged. Skipping ingestion.')
                     return {'status': 'skipped', 'reason': 'idempotency_check'}
                 logger.info(f'Document {note_uuid} exists but content changed. Incremental update.')
+                # Telemetry: track overwrites of an already-populated note. A
+                # high rate is a signal that callers should switch to
+                # memex_append_note for additive updates instead of resending
+                # the full body.
+                if has_stored_text:
+                    try:
+                        from memex_core.metrics import NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL
+
+                        NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL.labels(surface='ingest_api').inc()
+                    except Exception:  # pragma: no cover — metrics never block ingest
+                        logger.debug('NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL increment failed')
 
         # 3. Open Transaction
         # Staging txn_id must be unique per in-flight transaction, not derived from
@@ -500,6 +526,383 @@ ingested_at: {now}
                 )
 
         return result
+
+    async def append_to_note(
+        self,
+        *,
+        note_id: UUID | None,
+        note_key: str | None,
+        vault_id: UUID | str | None,
+        delta: str,
+        append_id: UUID,
+        joiner: str = 'paragraph',
+        user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
+    ) -> dict[str, Any]:
+        """Atomically append delta content onto an existing note's body.
+
+        Identifies the parent by note_key+vault_id (preferred) or note_id, takes
+        a per-parent advisory lock + SELECT FOR UPDATE, looks up append_id in
+        the note_appends audit table for replay, then re-ingests the parent's
+        body+delta through the existing incremental extraction pipeline. Because
+        the same note_id is reused, only the new chunks invoke the LLM.
+
+        Returns:
+            dict with status ('success' | 'replayed'), note_id, append_id,
+            content_hash (resulting), delta_bytes, new_unit_ids.
+
+        Raises:
+            FeatureDisabledError: server.append_enabled is False.
+            NoteNotFoundError: parent not found in the supplied vault.
+            NoteNotAppendableError: parent.status is archived or superseded.
+            AppendIdConflictError: append_id already used with different parent/delta.
+            AppendLockTimeoutError: could not acquire the append lock in time.
+        """
+        from memex_common.exceptions import (
+            AppendIdConflictError,
+            AppendLockTimeoutError,
+            FeatureDisabledError,
+            NoteNotAppendableError,
+            NoteNotFoundError,
+        )
+        from memex_core.metrics import (
+            NOTE_APPEND_DURATION_SECONDS,
+            NOTE_APPEND_TOTAL,
+        )
+
+        _t_start = time.monotonic()
+        try:
+            result = await self._append_to_note_inner(
+                note_id=note_id,
+                note_key=note_key,
+                vault_id=vault_id,
+                delta=delta,
+                append_id=append_id,
+                joiner=joiner,
+                user_notes=user_notes,
+                pre_resolved=pre_resolved,
+            )
+            NOTE_APPEND_TOTAL.labels(outcome=result.get('status') or 'success').inc()
+            return result
+        except FeatureDisabledError:
+            NOTE_APPEND_TOTAL.labels(outcome='disabled').inc()
+            raise
+        except AppendLockTimeoutError:
+            NOTE_APPEND_TOTAL.labels(outcome='lock_timeout').inc()
+            raise
+        except AppendIdConflictError:
+            NOTE_APPEND_TOTAL.labels(outcome='conflict').inc()
+            raise
+        except NoteNotFoundError:
+            NOTE_APPEND_TOTAL.labels(outcome='not_found').inc()
+            raise
+        except NoteNotAppendableError:
+            NOTE_APPEND_TOTAL.labels(outcome='not_appendable').inc()
+            raise
+        except Exception:
+            NOTE_APPEND_TOTAL.labels(outcome='error').inc()
+            raise
+        finally:
+            NOTE_APPEND_DURATION_SECONDS.observe(time.monotonic() - _t_start)
+
+    async def _append_to_note_inner(
+        self,
+        *,
+        note_id: UUID | None,
+        note_key: str | None,
+        vault_id: UUID | str | None,
+        delta: str,
+        append_id: UUID,
+        joiner: str = 'paragraph',
+        user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
+    ) -> dict[str, Any]:
+        """Inner implementation of ``append_to_note``. Telemetry wraps this."""
+        from memex_common.exceptions import (
+            AppendIdConflictError,
+            AppendLockTimeoutError,
+            FeatureDisabledError,
+            NoteNotAppendableError,
+            NoteNotFoundError,
+        )
+        from memex_common.schemas import append_joiner_separator
+        from memex_core.memory.sql_models import Note, NoteAppend
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.exc import DBAPIError, OperationalError
+        from sqlmodel import select
+
+        from memex_common.schemas import validate_append_delta
+
+        if not self.config.server.append_enabled:
+            raise FeatureDisabledError('Atomic note-append endpoint is disabled by config.')
+        if self._notes is None:
+            raise RuntimeError(
+                'IngestionService.append_to_note requires NoteService to be wired in.'
+            )
+        validate_append_delta(delta)
+
+        sep = append_joiner_separator(joiner)
+        delta_encoded = delta.encode('utf-8')
+        delta_bytes_count = len(delta_encoded)
+        # Hash the NFC-normalised form so a retry that gets NFD-normalised by
+        # an HTTP intermediary or a different agent runtime hashes the same as
+        # the original call — i.e. is a true replay rather than a 409 conflict.
+        # The parent body still receives the caller's original byte-form delta.
+        delta_sha256 = hashlib.sha256(
+            unicodedata.normalize('NFC', delta).encode('utf-8')
+        ).hexdigest()
+        timeout_seconds = float(self.config.server.append_lock_acquire_timeout_seconds)
+
+        # Resolve the identifier outside the txn so a 404 short-circuits
+        # before we open any locks or stage files. The route layer pre-resolves
+        # for vault-access enforcement; reuse that result instead of opening a
+        # second session.
+        if pre_resolved is not None:
+            parent_id, parent_vault_id = pre_resolved
+        else:
+            parent_id, parent_vault_id = await self._notes.resolve_note_id(
+                note_id=note_id,
+                note_key=note_key,
+                vault_id=vault_id,
+            )
+
+        txn_id = str(uuid4())  # never reuse parent_id — would collide on _active_stages
+
+        async with AsyncTransaction(self.metastore, self.filestore, txn_id) as txn:
+            session = txn.db_session
+
+            # Acquire per-parent advisory lock with timeout. Bigint key uses
+            # the lower 63 bits of the parent UUID. A collision (two distinct
+            # parents hashing to the same lock_key) only causes harmless false
+            # serialization on the advisory lock — never data corruption,
+            # because the row lock is taken on the canonical parent_id.
+            lock_key = parent_id.int & 0x7FFFFFFFFFFFFFFF
+
+            # SET LOCAL lock_timeout caps how long pg_advisory_xact_lock blocks.
+            timeout_ms = max(1, int(timeout_seconds * 1000))
+            await session.exec(sa_text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
+            lock_acquire_start = time.monotonic()
+            try:
+                await session.exec(
+                    sa_text('SELECT pg_advisory_xact_lock(:k)'),
+                    params={'k': lock_key},
+                )
+            except (OperationalError, DBAPIError) as exc:
+                pgcode = getattr(getattr(exc, 'orig', None), 'pgcode', None)
+                if pgcode == '55P03':  # lock_not_available
+                    raise AppendLockTimeoutError(
+                        f'Could not acquire append lock on note {parent_id} '
+                        f'within {timeout_seconds}s.'
+                    ) from exc
+                raise
+            logger.debug(
+                'append_to_note advisory lock acquired in %.3fs for note %s',
+                time.monotonic() - lock_acquire_start,
+                parent_id,
+            )
+
+            # Lock the parent row. lock_timeout still applies — non-append
+            # writers (e.g. set_note_status, update_note_title) take the row
+            # lock from a different code path; we don't want to hang here.
+            try:
+                parent = (
+                    await session.exec(
+                        select(Note).where(col(Note.id) == parent_id).with_for_update()
+                    )
+                ).first()
+            except (OperationalError, DBAPIError) as exc:
+                pgcode = getattr(getattr(exc, 'orig', None), 'pgcode', None)
+                if pgcode == '55P03':  # lock_not_available — row lock contended
+                    raise AppendLockTimeoutError(
+                        f'Could not acquire row lock on note {parent_id} '
+                        f'within {timeout_seconds}s (concurrent writer).'
+                    ) from exc
+                raise
+
+            # Cap lock_timeout for the extraction phase so any internal lock
+            # acquire downstream still surfaces a 55P03 instead of hanging.
+            extraction_timeout_seconds = float(
+                self.config.server.append_extraction_lock_timeout_seconds
+            )
+            extraction_timeout_ms = max(1, int(extraction_timeout_seconds * 1000))
+            await session.exec(sa_text(f"SET LOCAL lock_timeout = '{extraction_timeout_ms}ms'"))
+
+            # Verify state.
+            if parent is None:
+                raise NoteNotFoundError(f'Note {parent_id} not found.')
+            # Re-verify vault under the row lock — closes the TOCTOU between
+            # the route's auth-time resolve and the lock acquisition here.
+            if parent.vault_id != parent_vault_id:
+                raise NoteNotFoundError(
+                    f'Note {parent_id} is in vault {parent.vault_id}, not {parent_vault_id}.'
+                )
+            if parent.status != 'active':
+                raise NoteNotAppendableError(
+                    f'Note {parent_id} status is {parent.status!r}; '
+                    f'only active notes can be appended to.'
+                )
+
+            # Idempotency: did we already process this append_id?
+            prior_stmt = select(NoteAppend).where(col(NoteAppend.append_id) == append_id)
+            prior = (await session.exec(prior_stmt)).first()
+            if prior is not None:
+                if (
+                    prior.note_id != parent_id
+                    or prior.delta_sha256 != delta_sha256
+                    or prior.joiner != joiner
+                ):
+                    raise AppendIdConflictError(
+                        f'append_id {append_id} previously used with a different '
+                        f'(note_id, delta, joiner) tuple; refusing to silently overwrite.'
+                    )
+                # Replay — return cached outcome verbatim. No body mutation.
+                return {
+                    'status': 'replayed',
+                    'note_id': parent_id,
+                    'append_id': append_id,
+                    'content_hash': prior.resulting_content_hash,
+                    'delta_bytes': prior.delta_bytes,
+                    'new_unit_ids': [str(uid) for uid in prior.new_unit_ids],
+                }
+
+            # Build the new full body. We always insert sep between parent body
+            # and delta when the parent has any content; if the parent is empty,
+            # the delta is the whole body.
+            parent_body = parent.original_text or ''
+            if parent_body:
+                new_body = parent_body + sep + delta
+            else:
+                new_body = delta
+
+            # Carry forward the parent's metadata so the re-ingestion path
+            # doesn't lose source_uri / tags / author.
+            parent_meta = parent.doc_metadata or {}
+            tags = list(parent_meta.get('tags') or [])
+            source_uri = parent_meta.get('source_uri')
+            author = parent_meta.get('author')
+            template = parent_meta.get('template')
+            event_date = parent.publish_date or parent.created_at
+
+            # Build the RetainContent payload. Mirror the shape ingest() uses
+            # so document tracking + chunk extraction see a familiar payload.
+            retain_content = RetainContent(
+                content=new_body,
+                event_date=event_date,
+                payload={
+                    'source': 'note',
+                    'note_name': parent.title,
+                    'note_description': parent.description or '',
+                    'author': author,
+                    'uuid': str(parent_id),
+                    'filestore_path': parent.filestore_path,
+                    'assets': list(parent.assets or []),
+                    'source_uri': source_uri,
+                    # New content_hash will be computed downstream from content.
+                    'content_fingerprint': hashlib.md5(new_body.encode('utf-8')).hexdigest(),
+                    'tags': tags,
+                    'template': template,
+                },
+                vault_id=parent.vault_id,
+            )
+
+            # Re-ingest with the SAME note_id. Existing two-gate idempotency
+            # sees the note exists (gate-1) but content_hash differs (gate-2)
+            # → routes to the incremental extraction path, which only invokes
+            # the LLM on the new chunks introduced by `delta`.
+            result = await self.memory.retain(
+                session=session,
+                contents=[retain_content],
+                note_id=str(parent_id),
+                reflect_after=False,
+                agent_name='append',
+            )
+            new_unit_ids: list[UUID] = [UUID(str(uid)) for uid in result.get('unit_ids') or []]
+
+            # If the caller supplied user_notes, stash them on the metadata
+            # without re-injecting into the body (the parent already had its
+            # user_notes baked into original_text on first ingest).
+            if user_notes is not None:
+                from sqlalchemy.orm.attributes import flag_modified
+
+                refreshed = (
+                    await session.exec(select(Note).where(col(Note.id) == parent_id))
+                ).first()
+                if refreshed is not None:
+                    md = dict(refreshed.doc_metadata or {})
+                    md['user_notes'] = user_notes
+                    refreshed.doc_metadata = md
+                    flag_modified(refreshed, 'doc_metadata')
+                    session.add(refreshed)
+
+            # Audit row — same transaction as the body mutation, so rollback
+            # erases both. After commit, the row is the canonical record for
+            # idempotent replay.
+            #
+            # The new content_hash was just upserted by track_document; query
+            # it back so the audit reflects what's actually persisted (we
+            # don't want to re-implement track_document's hash logic here).
+            refreshed_hash = (
+                await session.exec(select(Note.content_hash).where(col(Note.id) == parent_id))
+            ).first()
+            if refreshed_hash is None:
+                logger.error(
+                    'append_to_note: refreshed content_hash is NULL for parent %s '
+                    'after track_document — audit row will record empty hash. '
+                    'Investigate: track_document may have failed silently or the '
+                    'row vanished mid-transaction.',
+                    parent_id,
+                )
+            # ``applied_at`` is filled by the server-default (now()) at INSERT
+            # time, so the audit timestamp reflects actual commit time rather
+            # than start-of-call (lock-acquire latency would otherwise skew it).
+            audit_row = NoteAppend(
+                append_id=append_id,
+                note_id=parent_id,
+                delta_sha256=delta_sha256,
+                delta_bytes=delta_bytes_count,
+                joiner=joiner,
+                resulting_content_hash=refreshed_hash or '',
+                new_unit_ids=new_unit_ids,
+            )
+            session.add(audit_row)
+
+        # Emit AFTER commit so a rolled-back mutation can't record the event.
+        # Swallow failures so audit-store outages don't fail a committed append.
+        try:
+            audit_event(
+                self._audit_service,
+                'note.appended',
+                'note',
+                str(parent_id),
+                append_id=str(append_id),
+                delta_bytes=delta_bytes_count,
+            )
+        except Exception:
+            logger.exception(
+                'Failed to emit audit event for successful append (note=%s, append_id=%s)',
+                parent_id,
+                append_id,
+            )
+
+        # Contradictions can run on committed data.
+        contradiction_coro = result.pop('contradiction_task', None)
+        if contradiction_coro is not None:
+            try:
+                await contradiction_coro
+            except Exception:
+                logger.exception(
+                    'Post-commit contradiction detection failed for appended note %s',
+                    parent_id,
+                )
+
+        return {
+            'status': 'success',
+            'note_id': parent_id,
+            'append_id': append_id,
+            'content_hash': refreshed_hash or '',
+            'delta_bytes': delta_bytes_count,
+            'new_unit_ids': [str(uid) for uid in new_unit_ids],
+        }
 
     async def ingest_batch_internal(
         self,

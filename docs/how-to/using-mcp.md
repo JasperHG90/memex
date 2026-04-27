@@ -28,7 +28,7 @@ The Memex MCP server exposes 35 tools organized into 7 categories:
 | :--- | :--- | :--- |
 | `search` | `memex_memory_search`, `memex_note_search`, `memex_find_note`, `memex_search_user_notes`, `memex_survey` | Search facts/notes, fuzzy title lookup, user annotations, broad surveys. Search results include `related_notes` and `links` for relationship discovery. |
 | `read` | `memex_get_page_indices`, `memex_get_nodes`, `memex_get_notes_metadata`, `memex_read_note` | Read note content via TOC + sections. Page indices include `related_notes`. |
-| `write` | `memex_add_note`, `memex_set_note_status`, `memex_rename_note`, `memex_update_user_notes`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes, user annotations, and templates |
+| `write` | `memex_add_note`, `memex_append_note`, `memex_set_note_status`, `memex_rename_note`, `memex_update_user_notes`, `memex_get_template`, `memex_list_templates`, `memex_register_template` | Create/modify notes, user annotations, and templates |
 | `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault`, `memex_get_vault_summary` | List notes, vaults, recent activity, vault summaries |
 | `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | Manage file attachments (images, PDFs) |
 | `entities` | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | Knowledge graph exploration |
@@ -152,6 +152,7 @@ The assistant should call `memex_list_vaults` and return your vault names. If th
 - **Prefer page index over full reads**: Use `memex_get_page_indices` then `memex_get_nodes` instead of `memex_read_note` for large notes.
 - **Use `include_seen=false` on follow-up searches**: The server tracks returned results per session. Setting `include_seen=false` compresses already-seen results to just an ID, saving significant tokens in iterative workflows.
 - **Check overlaps before adding notes**: `memex_add_note` returns `overlapping_notes` when similar content exists. Update or supersede the existing note instead of creating duplicates.
+- **Append, don't re-send the full body**: To extend a note you already created (session log, ongoing reflection), call `memex_append_note(note_key=..., delta=...)` rather than `memex_add_note` / `memex_retain`. Append sends only the delta, runs incremental extraction (only new chunks invoke the LLM), and is atomic + idempotent (caller-supplied `append_id`).
 - **Set `token_budget` on broad searches**: Cap retrieval cost on `memex_memory_search` and `memex_survey` when you need a quick answer, not exhaustive results.
 - **Skip `memex_get_notes_metadata` after `memex_note_search`**: Note metadata is already inline in note search results. Only call it after `memex_memory_search`.
 - **Use `memex_survey` for panoramic queries**: It decomposes, parallelizes, and deduplicates automatically — fewer tokens than manual multi-search.

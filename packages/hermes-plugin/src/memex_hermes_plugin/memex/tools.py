@@ -40,6 +40,7 @@ from memex_common.asset_cache import (
     SessionAssetCache,
 )
 from memex_common.asset_resize import validate_and_resize
+from memex_common.schemas import NoteAppendRequest
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -66,6 +67,7 @@ class MemexAPIProtocol(Protocol):
 
     # Ingestion & retrieval
     async def ingest(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def append_to_note(self, *args: Any, **kwargs: Any) -> Any: ...
     async def search(self, *args: Any, **kwargs: Any) -> Any: ...
     async def search_notes(self, *args: Any, **kwargs: Any) -> Any: ...
     async def search_entities(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -297,12 +299,13 @@ SURVEY_SCHEMA: dict[str, Any] = {
 RETAIN_SCHEMA: dict[str, Any] = {
     'name': 'memex_retain',
     'description': (
-        'Ingest a note into Memex. If note_key is provided and matches an existing '
-        'note, the content is upserted (enables incremental session capture). Pass '
-        'the session note key from the system prompt to append meaningful progress '
-        'to the running session note. For structured captures (ADRs, retros, '
-        'technical briefs, RFCs), call memex_list_templates first and pass the '
-        'chosen slug as `template` for provenance and downstream filtering.'
+        'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
+        'If note_key matches an existing note the content is upserted. For appending '
+        'NEW content to a session note (or any existing note) prefer memex_append — '
+        'it sends only the delta and is atomic, avoiding the full-body re-send. '
+        'For structured captures (ADRs, retros, technical briefs, RFCs), call '
+        'memex_list_templates first and pass the chosen slug as `template` for '
+        'provenance and downstream filtering.'
     ),
     'parameters': {
         'type': 'object',
@@ -364,6 +367,63 @@ RETAIN_SCHEMA: dict[str, Any] = {
         'required': ['name', 'description', 'content'],
     },
 }
+
+APPEND_SCHEMA: dict[str, Any] = {
+    'name': 'memex_append',
+    'description': (
+        'Atomically append new content to an existing note. Send ONLY the delta '
+        '— the server reads the existing body and concatenates server-side. Use '
+        'this in preference to memex_retain when continuing an in-progress note '
+        '(e.g. the running session note): the round-trip cost is the delta size, '
+        'not the cumulative body, and concurrent agents on the same note serialise '
+        'cleanly. Identify the note by note_key (preferred) or note_id.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'delta': {
+                'type': 'string',
+                'description': (
+                    'New content to append. Just the new snippet — do NOT include '
+                    'the existing body. Must not start with `---` (would clash '
+                    'with frontmatter detection).'
+                ),
+            },
+            'note_key': {
+                'type': 'string',
+                'description': (
+                    'Stable key the note was created with. Preferred — pass the '
+                    'session note key from the system prompt to extend the '
+                    'running session note.'
+                ),
+            },
+            'note_id': {
+                'type': 'string',
+                'description': (
+                    'Direct note UUID. Use only when you already have one from a '
+                    'prior search; note_key is the preferred identifier.'
+                ),
+            },
+            'append_id': {
+                'type': 'string',
+                'description': (
+                    'Idempotency token (UUID). Reusing the same value with the '
+                    'same delta+parent is a safe replay; auto-generated when '
+                    'omitted.'
+                ),
+            },
+            'joiner': {
+                'type': 'string',
+                'description': (
+                    "Separator between parent body and delta: 'paragraph' "
+                    "(default), 'newline', or 'none'."
+                ),
+            },
+        },
+        'required': ['delta'],
+    },
+}
+
 
 LIST_ENTITIES_SCHEMA: dict[str, Any] = {
     'name': 'memex_list_entities',
@@ -1165,6 +1225,7 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     RETRIEVE_NOTES_SCHEMA,
     SURVEY_SCHEMA,
     RETAIN_SCHEMA,
+    APPEND_SCHEMA,
     LIST_ENTITIES_SCHEMA,
     GET_ENTITY_MENTIONS_SCHEMA,
     GET_ENTITY_COOCCURRENCES_SCHEMA,
@@ -1528,6 +1589,75 @@ def handle_retain(
             'status': getattr(result, 'status', 'ok'),
             'note_id': getattr(result, 'note_id', None),
             'note_key': note_key,
+        }
+    )
+
+
+def handle_append(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Atomic delta append for an existing note (issue #56).
+
+    Identify by note_key (preferred) or note_id. Sends only the delta over
+    the wire; the server reads the parent body, concatenates, and re-runs
+    incremental extraction with the same note_id.
+
+    Vault scope is the session-bound ``vault_id`` parameter (Hermes sessions
+    are single-vault by design); any ``vault_id`` in ``args`` is ignored.
+    Cross-vault appends require the REST or MCP surfaces.
+    """
+    from uuid import uuid4
+
+    try:
+        delta = _require(args, 'delta')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    note_key = args.get('note_key') or None
+    note_id_raw = args.get('note_id') or None
+    if not note_key and not note_id_raw:
+        return tool_error('Pass note_key (preferred) or note_id to identify the note to append to.')
+
+    try:
+        note_id_uuid = UUID(note_id_raw) if note_id_raw else None
+    except (ValueError, TypeError):
+        return tool_error(f'note_id is not a valid UUID: {note_id_raw!r}')
+
+    raw_append_id = args.get('append_id') or None
+    try:
+        append_id = UUID(raw_append_id) if raw_append_id else uuid4()
+    except (ValueError, TypeError):
+        return tool_error(f'append_id is not a valid UUID: {raw_append_id!r}')
+
+    joiner = args.get('joiner') or 'paragraph'
+    user_notes = args.get('user_notes') or None
+
+    request = NoteAppendRequest(
+        note_id=note_id_uuid,
+        note_key=note_key,
+        vault_id=str(vault_id) if vault_id else None,
+        delta=delta,
+        append_id=append_id,
+        joiner=joiner,
+        user_notes=user_notes,
+    )
+
+    try:
+        response = run_sync(api.append_to_note(request), timeout=60.0)
+    except Exception as e:
+        logger.warning('memex_append failed: %s', e)
+        return tool_error(f'Append failed: {e}')
+
+    return json.dumps(
+        {
+            'status': getattr(response, 'status', 'ok'),
+            'note_id': str(getattr(response, 'note_id', '') or ''),
+            'append_id': str(getattr(response, 'append_id', '') or ''),
+            'delta_bytes': getattr(response, 'delta_bytes', 0),
+            'new_unit_count': len(getattr(response, 'new_unit_ids', []) or []),
         }
     )
 
@@ -2870,6 +3000,7 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     'memex_retrieve_notes': handle_retrieve_notes,
     'memex_survey': handle_survey,
     'memex_retain': handle_retain,
+    'memex_append': handle_append,
     'memex_list_entities': handle_list_entities,
     'memex_get_entity_mentions': handle_get_entity_mentions,
     'memex_get_entity_cooccurrences': handle_get_entity_cooccurrences,

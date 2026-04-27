@@ -432,6 +432,7 @@ class TestSetNoteStatusCascade:
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=mock_note)
         mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
         mock_exec_result.all.return_value = units
         mock_session.exec = AsyncMock(return_value=mock_exec_result)
         mock_session.add = MagicMock()
@@ -456,6 +457,7 @@ class TestSetNoteStatusCascade:
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=mock_note)
         mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
         mock_exec_result.all.return_value = units
         mock_session.exec = AsyncMock(return_value=mock_exec_result)
         mock_session.add = MagicMock()
@@ -482,6 +484,7 @@ class TestSetNoteStatusCascade:
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=mock_note)
         mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
         mock_exec_result.all.return_value = units
         mock_session.exec = AsyncMock(return_value=mock_exec_result)
         mock_session.add = MagicMock()

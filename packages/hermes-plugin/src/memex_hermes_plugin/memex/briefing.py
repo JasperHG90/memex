@@ -122,8 +122,14 @@ Match the tool to the query type:
   `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)`
   / `memex_kv_list()`. Keys MUST start with a namespace: `global:`, `user:`,
   `project:<id>:`, or `app:<id>:`. Deletion is CLI-only (use `memex kv delete`).
-- **Capturing work** → `memex_retain`. Pass the session note key below for
-  incremental progress captures; omit it for a standalone note.
+- **Capturing work**:
+    - `memex_retain` for a NEW note (or to fully overwrite an existing one).
+      Pass a fresh note_key for a one-off capture.
+    - `memex_append(note_key=..., delta=...)` to ADD progress to an existing
+      note (the running session note, an ongoing reflection, a meeting log).
+      Send only the new content — the server reads the existing body and
+      concatenates atomically. Prefer this over re-`memex_retain`-ing the
+      whole body each turn.
 - **Templates for structured captures** → `memex_list_templates` to see slugs,
   `memex_get_template(slug)` for the markdown scaffold, then `memex_retain(...,
   template=slug)` so the note is tagged for filtering. Prefer a template for
@@ -151,10 +157,12 @@ def format_briefing_block(
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
     lines.append(
-        f'\nSession note key: `{session_note_key}`. Call '
-        '`memex_retain(note_key="...", background=true)` with this key when '
-        'you complete meaningful work — the note accumulates across the '
-        'session and is finalized at exit.'
+        f'\nSession note key: `{session_note_key}`. Use '
+        '`memex_append(note_key="...", delta="...")` with this key to add '
+        'meaningful progress to the running session note — only the delta '
+        'goes over the wire and the server concatenates atomically. '
+        'Use `memex_retain(note_key="...")` only for the FIRST capture or to '
+        'fully replace the body; otherwise prefer append.'
     )
 
     if kv_instructions_if_no_vault:

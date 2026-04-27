@@ -1243,6 +1243,37 @@ class ServerConfig(BaseModel):
         description='Server default vault for writes when no client preference is set.',
     )
 
+    append_enabled: bool = Field(
+        default=True,
+        description=(
+            'Enable the atomic note-append endpoint (POST /api/v1/notes/append, '
+            'memex_append_note tool, and memex note append CLI). When False, '
+            'all three return 503 / FeatureDisabledError. Acts as a kill-switch '
+            'so the feature can be turned off without redeploying.'
+        ),
+    )
+
+    append_lock_acquire_timeout_seconds: float = Field(
+        default=30.0,
+        ge=0.1,
+        description=(
+            'How long to wait for the per-parent advisory lock + row lock '
+            'before returning 503 to the caller. The lock is held for the '
+            'duration of the LM extraction; tune higher if hot parents see '
+            'long extraction queues, lower to surface contention sooner.'
+        ),
+    )
+
+    append_extraction_lock_timeout_seconds: float = Field(
+        default=300.0,
+        ge=0.1,
+        description=(
+            'Upper bound on Postgres lock_timeout while LM extraction runs '
+            'inside an append. Prevents an unbounded hang if the extraction '
+            'pipeline ever issues a contended lock acquire downstream.'
+        ),
+    )
+
     default_reader_vault: str = Field(
         default=GLOBAL_VAULT_NAME,
         description='Server default vault for reads when no client preference is set.',

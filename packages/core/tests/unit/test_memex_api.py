@@ -56,7 +56,7 @@ async def test_ingest_existing_note(api, mock_session, mock_filestore):
 
     # 2. Document existence check (exists with matching content_fingerprint)
     mock_doc_res = MagicMock()
-    mock_doc_res.first.return_value = note.content_fingerprint
+    mock_doc_res.first.return_value = (note.content_fingerprint, True)
 
     mock_session.exec.side_effect = [mock_vault_res, mock_doc_res]
 

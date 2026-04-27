@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -17,12 +18,23 @@ from sqlalchemy import func, text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
-
 from memex_core.config import MemexConfig
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
+
+
+def derive_note_uuid_from_key(note_key: str) -> UUID:
+    """Derive a deterministic Note.id UUID from a user-supplied note_key.
+
+    Mirrors NoteInput.note_key (api.py): if the caller passed an actual UUID
+    string, use it; otherwise, hash the key with MD5.
+    """
+    try:
+        return UUID(note_key)
+    except ValueError:
+        return UUID(hashlib.md5(note_key.encode('utf-8')).hexdigest())
 
 
 _VALID_DATE_FIELDS = {'coalesce', 'created_at', 'publish_date'}
@@ -142,6 +154,56 @@ class NoteService:
             return self.filestore.join_path(path)
         return None
 
+    async def resolve_note_id(
+        self,
+        *,
+        note_id: UUID | None,
+        note_key: str | None,
+        vault_id: UUID | str | None,
+    ) -> tuple[UUID, UUID]:
+        """Resolve a (note_id, vault_id) pair from any combination of identifiers.
+
+        Returns the canonical (note_id, vault_id) of an existing note. Raises
+        NoteNotFoundError when no row matches in the supplied vault.
+
+        Exactly one of note_id or note_key is required. note_key requires
+        vault_id. note_id without vault_id returns the row's actual vault.
+        """
+        from memex_common.exceptions import MemexError
+        from memex_core.memory.sql_models import Note
+
+        if note_id is None and note_key is None:
+            raise MemexError('One of note_id or note_key is required.')
+        if note_id is not None and note_key is not None:
+            raise MemexError(
+                'Pass either note_id or note_key, not both. If you meant note_key, drop note_id.'
+            )
+        if note_id is None and note_key is not None and vault_id is None:
+            raise MemexError('vault_id is required when identifying by note_key.')
+
+        target_id: UUID
+        target_vault: UUID | None = None
+
+        if note_id is not None:
+            target_id = note_id
+        else:
+            assert note_key is not None
+            target_id = derive_note_uuid_from_key(note_key)
+
+        if vault_id is not None:
+            resolved_vault = await self._vaults.resolve_vault_identifier(vault_id)
+            target_vault = resolved_vault
+
+        async with self.metastore.session() as session:
+            doc = await session.get(Note, target_id)
+            if not doc:
+                raise NoteNotFoundError(f'Note {target_id} not found.')
+            if target_vault is not None and doc.vault_id != target_vault:
+                # Caller explicitly scoped to a vault; the note lives elsewhere.
+                # Treat as not-found rather than 403 to avoid leaking existence.
+                raise NoteNotFoundError(f'Note {target_id} not found in vault {target_vault}.')
+            return doc.id, doc.vault_id
+
     async def set_note_status(
         self,
         note_id: UUID,
@@ -155,6 +217,7 @@ class NoteService:
         When status is 'active', reactivates all memory units (sets them back to active).
         """
         from memex_core.memory.sql_models import MemoryUnit, Note
+        from sqlmodel import select
 
         valid_statuses = ('active', 'superseded', 'appended', 'archived')
         if status not in valid_statuses:
@@ -163,7 +226,12 @@ class NoteService:
         note_vault_id: UUID | None = None
 
         async with self.metastore.session() as session:
-            doc = await session.get(Note, note_id)
+            # SELECT ... FOR UPDATE so concurrent appends/status changes serialise
+            # at the row level rather than racing each other (closes the gap that
+            # would otherwise let an append commit between this read and our
+            # write of the new status).
+            stmt = select(Note).where(col(Note.id) == note_id).with_for_update()
+            doc = (await session.exec(stmt)).first()
             if not doc:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 

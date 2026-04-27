@@ -131,7 +131,7 @@ Embedding and reranking models are configurable via `server.embedding_model` and
 ### Key architectural patterns
 
 - **Distributed reflection queue**: PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming
-- **Append-only design**: notes are immutable, new versions create new entries (lifecycle: active → superseded/appended/archived)
+- **Note identity is stable; content is mutable in place**. Each note has a stable `note_id` (derived deterministically from `note_key + vault_id`). Two ways to update an existing note's body, both keeping the same `note_id`: (a) **append** — `memex_append_note(note_key=...)` adds a delta to the end (issue #56); (b) **overwrite** — `memex_retain(note_key=...)` / `memex_add_note(note_key=...)` re-ingests the full body. Both run incremental block-diff extraction (only changed chunks invoke the LLM). Lifecycle states (`active` / `superseded` / `archived`) gate operations: appends/overwrites are rejected on non-`active` parents; status transitions are non-destructive. The audit log (`note_appends`, `audit_events`) is genuinely append-only — every mutation leaves a row.
 - **fsspec abstraction**: storage is backend-agnostic (local, S3, GCS)
 - **Circuit breaker**: LLM call resilience with Prometheus metrics
 - **Leader election**: Postgres advisory locks for background reflection scheduling

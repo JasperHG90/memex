@@ -145,6 +145,58 @@ memex note add --file ./large-dataset/ --background
 
 ---
 
+### `note append`
+
+```
+memex note append [NOTE_ID] [OPTIONS]
+```
+
+Atomically append a content delta to an existing note. Sends only the delta over the wire — incremental block-diff extraction reuses the parent's chunks and invokes the LLM only on the new content.
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `NOTE_ID` | one of `NOTE_ID` / `--key` | Note UUID. Mutually exclusive with `--key`. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--key` | `-k` | str | - | Stable note key set at creation time. Preferred identifier. |
+| `--vault` | `-v` | str | - | Vault scope. Required when `--key` is given. |
+| `--delta` | `-d` | str | - | Content snippet to append. |
+| `--delta-file` | `-f` | path | - | Read delta from file. |
+| `--joiner` | | str | `paragraph` | Separator between body and delta: `paragraph` (`\n\n`), `newline` (`\n`), or `none`. |
+| `--append-id` | | str (UUID) | auto | Idempotency token. Same value with same delta replays the cached outcome. |
+| `--user-notes` | `-n` | str | - | Optional commentary stored on note metadata. |
+| `--quiet` | `-q` | bool | False | Print only the new unit count. |
+
+If `--delta` and `--delta-file` are both omitted and stdin is piped, the delta is read from stdin.
+
+#### Examples
+
+```bash
+# Append to a session note by its stable key
+memex note append --key session-2026-04-26 --vault default \
+  --delta "step 3: implemented the cache invalidation"
+
+# Append from a file
+memex note append --key journal-2026 --vault default --delta-file ./entry.md
+
+# Stream from another command via stdin
+git log --oneline -1 | memex note append --key changelog --vault default
+
+# Idempotent retry (safe under network errors)
+memex note append --key session --vault default \
+  --delta "step 4" --append-id 8a1c-...
+
+# Append by note_id directly (no --key needed)
+memex note append 550e8400-e29b-41d4-a716-446655440000 --delta "more content"
+```
+
+---
+
 ### `memory search`
 
 ```

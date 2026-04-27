@@ -12,7 +12,12 @@ from pydantic import BaseModel
 
 from memex_common.exceptions import (
     AmbiguousResourceError,
+    AppendIdConflictError,
+    AppendLockTimeoutError,
+    DeltaValidationError,
+    FeatureDisabledError,
     MemexError,
+    NoteNotAppendableError,
     ResourceNotFoundError,
     VaultNotFoundError,
 )
@@ -55,6 +60,18 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, AmbiguousResourceError):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, (AppendIdConflictError, NoteNotAppendableError)):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, AppendLockTimeoutError):
+        return HTTPException(
+            status_code=503,
+            detail=str(e),
+            headers={'Retry-After': '5'},
+        )
+    if isinstance(e, FeatureDisabledError):
+        return HTTPException(status_code=503, detail=str(e))
+    if isinstance(e, DeltaValidationError):
+        return HTTPException(status_code=422, detail=str(e))
     if isinstance(e, MemexError):
         return HTTPException(status_code=400, detail=str(e))
 

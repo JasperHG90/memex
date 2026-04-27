@@ -83,6 +83,7 @@ class TestNoteServiceAuditEvents:
         mock_note = MagicMock(spec=Note)
         mock_note.id = note_id
         mock_session.get.return_value = mock_note
+        mock_session.exec.return_value.first.return_value = mock_note
 
         result = await note_service.set_note_status(note_id, 'archived')
 

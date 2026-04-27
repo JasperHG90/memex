@@ -23,6 +23,7 @@ from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
     IngestResponse,
+    NoteAppendRequest,
     NoteCreateDTO,
     NoteDTO,
     IngestURLRequest,
@@ -304,6 +305,130 @@ async def add_note(
             console.print(f'[green]Note added successfully![/green] UUID: {result.note_id}')
             if result.unit_ids:
                 console.print(f'Extracted {len(result.unit_ids)} memory units.')
+
+
+@app.command('append')
+@async_command
+async def append_note(
+    ctx: typer.Context,
+    note_id: Annotated[
+        str | None,
+        typer.Argument(help='Note UUID. Use --key to identify by note_key instead.'),
+    ] = None,
+    key: Annotated[
+        str | None,
+        typer.Option(
+            '--key', '-k', help='Stable note key set at creation time. Preferred identifier.'
+        ),
+    ] = None,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope. Required when --key is given.'),
+    ] = None,
+    delta: Annotated[
+        str | None,
+        typer.Option('--delta', '-d', help='Content snippet to append.'),
+    ] = None,
+    delta_file: Annotated[
+        pathlib.Path | None,
+        typer.Option('--delta-file', '-f', help='Read delta from this file.'),
+    ] = None,
+    joiner: Annotated[
+        str,
+        typer.Option(
+            '--joiner',
+            help="Separator between parent body and delta: 'paragraph', 'newline', or 'none'.",
+        ),
+    ] = 'paragraph',
+    append_id: Annotated[
+        str | None,
+        typer.Option(
+            '--append-id',
+            help='Caller-supplied UUID idempotency token. Auto-generated when omitted.',
+        ),
+    ] = None,
+    user_notes: Annotated[
+        str | None,
+        typer.Option('--user-notes', '-n', help='Optional commentary stored on the note.'),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option('--quiet', '-q', help='Print only the new unit count.'),
+    ] = False,
+) -> None:
+    """Atomically append a delta to an existing note (no Read-Modify-Write)."""
+    import sys
+    from uuid import UUID, uuid4
+
+    # Resolve delta from --delta, --delta-file, or stdin
+    if delta and delta_file:
+        console.print('[red]Cannot pass both --delta and --delta-file.[/red]')
+        raise typer.Exit(1)
+
+    delta_text: str | None = delta
+    if delta_text is None and delta_file is not None:
+        async with aiofiles.open(delta_file, 'r', encoding='utf-8') as f:
+            delta_text = await f.read()
+    if delta_text is None and not sys.stdin.isatty():
+        delta_text = sys.stdin.read()
+    if not delta_text:
+        console.print('[red]Provide a delta via --delta, --delta-file, or stdin.[/red]')
+        raise typer.Exit(1)
+
+    if not note_id and not key:
+        console.print('[red]Pass either a note_id argument or --key.[/red]')
+        raise typer.Exit(1)
+    if note_id and key:
+        # Both ways of identifying the note were supplied. The schema would
+        # silently let note_id win, which is hostile if the user genuinely
+        # meant --key — they'd hit a different note than they typed.
+        console.print(
+            '[red]Pass either a note_id argument or --key, not both. '
+            'If you meant --key, drop the positional note_id.[/red]'
+        )
+        raise typer.Exit(1)
+    if key and not vault:
+        console.print('[red]--vault is required when identifying by --key.[/red]')
+        raise typer.Exit(1)
+
+    try:
+        resolved_append_id = UUID(append_id) if append_id else uuid4()
+    except ValueError:
+        console.print(f'[red]--append-id must be a UUID. Got: {append_id!r}[/red]')
+        raise typer.Exit(1)
+    try:
+        resolved_note_id: UUID | None = UUID(note_id) if note_id else None
+    except ValueError:
+        console.print(f'[red]note_id must be a UUID. Got: {note_id!r}[/red]')
+        raise typer.Exit(1)
+
+    request = NoteAppendRequest(
+        note_id=resolved_note_id,
+        note_key=key,
+        vault_id=vault,
+        delta=delta_text,
+        append_id=resolved_append_id,
+        joiner=joiner,
+        user_notes=user_notes,
+    )
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            response = await api.append_to_note(request)
+        except Exception as e:
+            handle_api_error(e)
+
+    if quiet:
+        console.print(str(len(response.new_unit_ids)))
+        return
+
+    status_color = 'green' if response.status == 'success' else 'yellow'
+    console.print(
+        f'[{status_color}]{response.status}[/{status_color}] · note_id=[cyan]{response.note_id}[/cyan] '
+        f'· delta_bytes={response.delta_bytes} · '
+        f'new_units=[bold]{len(response.new_unit_ids)}[/bold]'
+    )
 
 
 @app.command('list')
