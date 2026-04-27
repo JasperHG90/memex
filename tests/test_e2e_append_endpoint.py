@@ -45,7 +45,7 @@ def _append(client: TestClient, *, note_key: str | None = None, **kwargs: Any) -
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_via_http_grows_body(client: TestClient) -> None:
     note_key = f'e2e-append-{uuid4()}'
     parent_id = _create_parent(client, note_key, '# Day 1\n\nfirst line.\n')
@@ -65,7 +65,7 @@ def test_e2e_append_via_http_grows_body(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_replay_returns_replayed_status(client: TestClient) -> None:
     note_key = f'e2e-replay-{uuid4()}'
     _create_parent(client, note_key, 'base body')
@@ -89,7 +89,7 @@ def test_e2e_append_replay_returns_replayed_status(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_id_conflict_returns_409(client: TestClient) -> None:
     note_key = f'e2e-conflict-{uuid4()}'
     _create_parent(client, note_key, 'body')
@@ -114,7 +114,7 @@ def test_e2e_append_id_conflict_returns_409(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_to_archived_parent_returns_409(client: TestClient) -> None:
     note_key = f'e2e-archived-{uuid4()}'
     parent_id = _create_parent(client, note_key, 'body')
@@ -127,7 +127,7 @@ def test_e2e_append_to_archived_parent_returns_409(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_validation_errors(client: TestClient) -> None:
     note_key = f'e2e-validation-{uuid4()}'
     _create_parent(client, note_key, 'body')
@@ -150,7 +150,7 @@ def test_e2e_append_validation_errors(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_unknown_parent_returns_404(client: TestClient) -> None:
     r = client.post(
         '/api/v1/notes/append',
@@ -164,7 +164,7 @@ def test_e2e_append_unknown_parent_returns_404(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_idempotent_replay_after_committed_call(client: TestClient) -> None:
     note_key = f'e2e-audit-{uuid4()}'
     parent_id = _create_parent(client, note_key, 'base')
@@ -179,7 +179,7 @@ def test_e2e_append_idempotent_replay_after_committed_call(client: TestClient) -
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_append_50_serial_grows_body_correctly(client: TestClient) -> None:
     note_key = f'e2e-stress-{uuid4()}'
     parent_id = _create_parent(client, note_key, 'header')
@@ -198,7 +198,7 @@ def test_e2e_append_50_serial_grows_body_correctly(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_concurrent_distinct_appends_serialise(client: TestClient) -> None:
     note_key = f'e2e-concurrent-{uuid4()}'
     parent_id = _create_parent(client, note_key, 'header')
@@ -231,7 +231,7 @@ def test_e2e_concurrent_distinct_appends_serialise(client: TestClient) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.llm_mock
+@pytest.mark.llm
 def test_e2e_concurrent_same_append_id_is_idempotent(client: TestClient) -> None:
     note_key = f'e2e-same-id-{uuid4()}'
     parent_id = _create_parent(client, note_key, 'base')
