@@ -197,7 +197,9 @@ async def test_append_by_note_key_round_trips(api, metastore):
 @pytest.mark.asyncio
 async def test_append_by_note_key_missing_vault_raises(api, metastore):
     """note_key without vault_id is rejected at the service layer."""
-    with pytest.raises(ValueError, match='vault_id is required'):
+    from memex_common.exceptions import MemexError
+
+    with pytest.raises(MemexError, match='vault_id is required'):
         await api.append_to_note(
             note_key='unrouted',
             vault_id=None,
@@ -209,10 +211,12 @@ async def test_append_by_note_key_missing_vault_raises(api, metastore):
 @pytest.mark.asyncio
 async def test_append_with_both_identifiers_rejected(api, metastore):
     """Passing both note_id and note_key is rejected — service, schema, and CLI agree."""
+    from memex_common.exceptions import MemexError
+
     api.memory.retain.side_effect = _make_retain_upsert()
     parent_id = await _seed_parent_note(api, note_key='primary', body='body')
 
-    with pytest.raises(ValueError, match='Pass either note_id or note_key'):
+    with pytest.raises(MemexError, match='Pass either note_id or note_key'):
         await api.append_to_note(
             note_id=parent_id,
             note_key='completely-different-key',
@@ -247,6 +251,41 @@ async def test_append_idempotent_replay_returns_same_outcome(api, metastore):
         doc = await session.get(Note, parent_id)
         assert doc is not None
         assert doc.original_text.count('added') == 1
+        rows = (
+            await session.exec(select(NoteAppend).where(col(NoteAppend.note_id) == parent_id))
+        ).all()
+        assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_append_replay_unicode_normalization_independent(api, metastore):
+    """Same logical content sent first as NFD then as NFC must replay, not 409.
+
+    The service hashes the NFC-normalised form for the conflict check, so a
+    retry that an HTTP intermediary or alternate runtime has re-normalised
+    must collide with the original on delta_sha256 and return ``replayed``.
+    """
+    api.memory.retain.side_effect = _make_retain_upsert()
+    parent_id = await _seed_parent_note(api, note_key='nfd-replay', body='base')
+    append_id = uuid4()
+
+    nfd_delta = 'café'
+    nfc_delta = 'café'
+    assert nfd_delta != nfc_delta
+    assert len(nfd_delta) == 5 and len(nfc_delta) == 4
+
+    first = await api.append_to_note(note_id=parent_id, delta=nfd_delta, append_id=append_id)
+    assert first['status'] == 'success'
+
+    second = await api.append_to_note(note_id=parent_id, delta=nfc_delta, append_id=append_id)
+    assert second['status'] == 'replayed'
+    assert second['note_id'] == parent_id
+    assert second['append_id'] == append_id
+
+    async with metastore.session() as session:
+        doc = await session.get(Note, parent_id)
+        assert doc is not None
+        assert doc.original_text.count(nfd_delta) == 1
         rows = (
             await session.exec(select(NoteAppend).where(col(NoteAppend.note_id) == parent_id))
         ).all()

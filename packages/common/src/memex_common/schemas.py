@@ -1244,7 +1244,7 @@ def validate_append_delta(delta: str) -> None:
     from memex_common.exceptions import DeltaValidationError
 
     if not delta:
-        raise DeltaValidationError('delta must contain non-whitespace characters.')
+        raise DeltaValidationError('delta must not be empty.')
     if APPEND_FRONTMATTER_PREFIX_PATTERN.match(delta):
         raise DeltaValidationError(
             "delta must not begin with '---' followed by a newline "
@@ -1298,7 +1298,6 @@ class NoteAppendRequest(BaseModel):
         ),
     )
     delta: str = Field(
-        min_length=1,
         description=(
             'New content to append. Must NOT begin with `---` followed by a '
             'newline (would be ambiguous with frontmatter), must not be '

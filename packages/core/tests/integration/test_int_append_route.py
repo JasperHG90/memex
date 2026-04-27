@@ -267,7 +267,8 @@ class TestAppendRouteErrorMapping:
         )
         resp = await self._post(http)
         assert resp.status_code == 503
-        assert resp.headers.get('retry-after') == '5'
+        # FeatureDisabled is a kill-switch, not a transient timeout — no Retry-After.
+        assert resp.headers.get('retry-after') is None
 
 
 @pytest.mark.integration

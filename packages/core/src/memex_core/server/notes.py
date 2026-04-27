@@ -363,12 +363,16 @@ _APPEND_RESPONSES: dict[int | str, dict[str, object]] = {
     },
     503: {
         'description': (
-            'Append lock could not be acquired in time, or the endpoint is '
-            'administratively disabled. Retry after the `Retry-After` header.'
+            'Append lock could not be acquired in time (transient — the '
+            '`Retry-After` header is set), or the endpoint has been '
+            'administratively disabled (no `Retry-After`; admin must re-enable).'
         ),
         'headers': {
             'Retry-After': {
-                'description': 'Seconds to wait before retrying.',
+                'description': (
+                    'Seconds to wait before retrying. Only set when the 503 '
+                    'is a lock-acquisition timeout, not a kill-switch.'
+                ),
                 'schema': {'type': 'integer'},
             },
         },
@@ -418,7 +422,7 @@ async def append_to_note(
             user_notes=request.user_notes,
             pre_resolved=(parent_id, parent_vault_id),
         )
-    except (MemexError, KeyError, RuntimeError, OSError) as e:
+    except MemexError as e:
         raise _handle_error(e, 'Failed to append to note')
 
     return NoteAppendResponse(
