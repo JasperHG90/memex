@@ -401,10 +401,7 @@ async def append_to_note(
     parent, delta, or joiner returns 409.
     """
     try:
-        # Resolve the parent's vault BEFORE forwarding so we can enforce the
-        # auth context's vault restrictions. Both note_key+vault_id and
-        # note_id-only callers end up with a concrete vault_id here.
-        _parent_id, parent_vault_id = await api.notes.resolve_note_id(
+        parent_id, parent_vault_id = await api.notes.resolve_note_id(
             note_id=request.note_id,
             note_key=request.note_key,
             vault_id=request.vault_id,
@@ -419,8 +416,9 @@ async def append_to_note(
             append_id=request.append_id,
             joiner=request.joiner,
             user_notes=request.user_notes,
+            pre_resolved=(parent_id, parent_vault_id),
         )
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+    except (MemexError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to append to note')
 
     return NoteAppendResponse(

@@ -169,16 +169,17 @@ class NoteService:
         Exactly one of note_id or note_key is required. note_key requires
         vault_id. note_id without vault_id returns the row's actual vault.
         """
+        from memex_common.exceptions import MemexError
         from memex_core.memory.sql_models import Note
 
         if note_id is None and note_key is None:
-            raise ValueError('One of note_id or note_key is required.')
+            raise MemexError('One of note_id or note_key is required.')
         if note_id is not None and note_key is not None:
-            raise ValueError(
+            raise MemexError(
                 'Pass either note_id or note_key, not both. If you meant note_key, drop note_id.'
             )
         if note_id is None and note_key is not None and vault_id is None:
-            raise ValueError('vault_id is required when identifying by note_key.')
+            raise MemexError('vault_id is required when identifying by note_key.')
 
         target_id: UUID
         target_vault: UUID | None = None

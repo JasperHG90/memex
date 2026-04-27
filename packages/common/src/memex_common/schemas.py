@@ -1240,20 +1240,22 @@ def append_joiner_separator(joiner: str) -> str:
 
 
 def validate_append_delta(delta: str) -> None:
-    """Raise ValueError if ``delta`` violates any shape rule of the append endpoint."""
+    """Raise DeltaValidationError if ``delta`` violates any shape rule of the append endpoint."""
+    from memex_common.exceptions import DeltaValidationError
+
     if not delta:
-        raise ValueError('delta must contain non-whitespace characters.')
+        raise DeltaValidationError('delta must contain non-whitespace characters.')
     if APPEND_FRONTMATTER_PREFIX_PATTERN.match(delta):
-        raise ValueError(
+        raise DeltaValidationError(
             "delta must not begin with '---' followed by a newline "
             '(would be ambiguous with frontmatter).'
         )
     if not delta.strip():
-        raise ValueError('delta must contain non-whitespace characters.')
+        raise DeltaValidationError('delta must contain non-whitespace characters.')
     if '\x00' in delta:
-        raise ValueError('delta must not contain NUL bytes (\\x00).')
+        raise DeltaValidationError('delta must not contain NUL bytes (\\x00).')
     if len(delta.encode('utf-8')) > APPEND_DELTA_MAX_BYTES:
-        raise ValueError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
+        raise DeltaValidationError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
 
 
 class NoteAppendRequest(BaseModel):

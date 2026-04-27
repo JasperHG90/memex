@@ -87,3 +87,13 @@ class AppendLockTimeoutError(MemexError):
     """
 
     pass
+
+
+class DeltaValidationError(MemexError, ValueError):
+    """Raised when an append delta fails the shape/size/encoding rules.
+
+    Inherits ``ValueError`` so Pydantic surfaces it as a 422 from inside
+    model_validators.
+    """
+
+    pass

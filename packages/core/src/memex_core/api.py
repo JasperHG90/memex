@@ -711,6 +711,7 @@ class MemexAPI:
         append_id: UUID,
         joiner: str = 'paragraph',
         user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
     ) -> dict[str, Any]:
         """Atomically append a content delta to an existing note. Delegates to IngestionService.
 
@@ -727,6 +728,7 @@ class MemexAPI:
             append_id=append_id,
             joiner=joiner,
             user_notes=user_notes,
+            pre_resolved=pre_resolved,
         )
 
     async def get_resource(self, path: str) -> bytes:

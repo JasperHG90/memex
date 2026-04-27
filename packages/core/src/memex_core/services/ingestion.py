@@ -532,6 +532,7 @@ ingested_at: {now}
         append_id: UUID,
         joiner: str = 'paragraph',
         user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
     ) -> dict[str, Any]:
         """Atomically append delta content onto an existing note's body.
 
@@ -574,6 +575,7 @@ ingested_at: {now}
                 append_id=append_id,
                 joiner=joiner,
                 user_notes=user_notes,
+                pre_resolved=pre_resolved,
             )
             NOTE_APPEND_TOTAL.labels(outcome=result.get('status') or 'success').inc()
             return result
@@ -608,6 +610,7 @@ ingested_at: {now}
         append_id: UUID,
         joiner: str = 'paragraph',
         user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
     ) -> dict[str, Any]:
         """Inner implementation of ``append_to_note``. Telemetry wraps this."""
         from memex_common.exceptions import (
@@ -646,12 +649,17 @@ ingested_at: {now}
         timeout_seconds = float(self.config.server.append_lock_acquire_timeout_seconds)
 
         # Resolve the identifier outside the txn so a 404 short-circuits
-        # before we open any locks or stage files.
-        parent_id, parent_vault_id = await self._notes.resolve_note_id(
-            note_id=note_id,
-            note_key=note_key,
-            vault_id=vault_id,
-        )
+        # before we open any locks or stage files. The route layer pre-resolves
+        # for vault-access enforcement; reuse that result instead of opening a
+        # second session.
+        if pre_resolved is not None:
+            parent_id, parent_vault_id = pre_resolved
+        else:
+            parent_id, parent_vault_id = await self._notes.resolve_note_id(
+                note_id=note_id,
+                note_key=note_key,
+                vault_id=vault_id,
+            )
 
         txn_id = str(uuid4())  # never reuse parent_id — would collide on _active_stages
 
@@ -710,6 +718,12 @@ ingested_at: {now}
             # Verify state.
             if parent is None:
                 raise NoteNotFoundError(f'Note {parent_id} not found.')
+            # Re-verify vault under the row lock — closes the TOCTOU between
+            # the route's auth-time resolve and the lock acquisition here.
+            if parent.vault_id != parent_vault_id:
+                raise NoteNotFoundError(
+                    f'Note {parent_id} is in vault {parent.vault_id}, not {parent_vault_id}.'
+                )
             if parent.status != 'active':
                 raise NoteNotAppendableError(
                     f'Note {parent_id} status is {parent.status!r}; '
