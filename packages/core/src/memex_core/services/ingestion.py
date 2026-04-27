@@ -415,10 +415,15 @@ ingested_at: {now}
             vault = await session.get(Vault, target_vault_id)
             vault_name = vault.name if vault else str(target_vault_id)
 
-            stmt = select(Note.content_hash, Note.original_text).where(col(Note.id) == note_uuid)
+            from sqlalchemy import func
+
+            stmt = select(
+                Note.content_hash,
+                func.coalesce(func.length(Note.original_text), 0) > 0,
+            ).where(col(Note.id) == note_uuid)
             existing_row = (await session.exec(stmt)).first()
             if existing_row is not None:
-                stored_hash, stored_text = existing_row
+                stored_hash, has_stored_text = existing_row
                 if stored_hash == note.content_fingerprint:
                     logger.info(f'Document {note_uuid} unchanged. Skipping ingestion.')
                     return {'status': 'skipped', 'reason': 'idempotency_check'}
@@ -427,7 +432,7 @@ ingested_at: {now}
                 # high rate is a signal that callers should switch to
                 # memex_append_note for additive updates instead of resending
                 # the full body.
-                if stored_text:
+                if has_stored_text:
                     try:
                         from memex_core.metrics import NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL
 
@@ -675,7 +680,6 @@ ingested_at: {now}
 
             # SET LOCAL lock_timeout caps how long pg_advisory_xact_lock blocks.
             timeout_ms = max(1, int(timeout_seconds * 1000))
-            assert isinstance(timeout_ms, int)
             await session.exec(sa_text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
             lock_acquire_start = time.monotonic()
             try:
@@ -721,7 +725,6 @@ ingested_at: {now}
                 self.config.server.append_extraction_lock_timeout_seconds
             )
             extraction_timeout_ms = max(1, int(extraction_timeout_seconds * 1000))
-            assert isinstance(extraction_timeout_ms, int)
             await session.exec(sa_text(f"SET LOCAL lock_timeout = '{extraction_timeout_ms}ms'"))
 
             # Verify state.
@@ -841,6 +844,14 @@ ingested_at: {now}
             refreshed_hash = (
                 await session.exec(select(Note.content_hash).where(col(Note.id) == parent_id))
             ).first()
+            if refreshed_hash is None:
+                logger.error(
+                    'append_to_note: refreshed content_hash is NULL for parent %s '
+                    'after track_document — audit row will record empty hash. '
+                    'Investigate: track_document may have failed silently or the '
+                    'row vanished mid-transaction.',
+                    parent_id,
+                )
             # ``applied_at`` is filled by the server-default (now()) at INSERT
             # time, so the audit timestamp reflects actual commit time rather
             # than start-of-call (lock-acquire latency would otherwise skew it).
