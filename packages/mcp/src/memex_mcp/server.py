@@ -1119,10 +1119,9 @@ async def memex_append_note(
             description=(
                 'New content to append. Just the new snippet — do NOT include the '
                 'existing body. Must not begin with `---` (would be ambiguous '
-                'with frontmatter).'
+                'with frontmatter). Server enforces a 200 KB UTF-8 byte cap.'
             ),
             min_length=1,
-            max_length=200_000,
         ),
     ],
     note_key: Annotated[

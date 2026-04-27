@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memex_common.config import GLOBAL_VAULT_ID
+from memex_core.server import app
 
 VAULT = str(GLOBAL_VAULT_ID)
 
@@ -205,17 +206,18 @@ def test_e2e_concurrent_distinct_appends_serialise(client: TestClient) -> None:
 
     deltas = [f'concurrent-{i}' for i in range(5)]
 
-    def _post(delta: str):
-        return client.post(
-            '/api/v1/notes/append',
-            json={
-                'note_key': note_key,
-                'vault_id': VAULT,
-                'delta': delta,
-                'append_id': str(uuid4()),
-                'joiner': 'newline',
-            },
-        )
+    def _post(delta: str) -> httpx.Response:
+        with TestClient(app) as tc:
+            return tc.post(
+                '/api/v1/notes/append',
+                json={
+                    'note_key': note_key,
+                    'vault_id': VAULT,
+                    'delta': delta,
+                    'append_id': str(uuid4()),
+                    'joiner': 'newline',
+                },
+            )
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         responses = list(pool.map(_post, deltas))
@@ -243,8 +245,9 @@ def test_e2e_concurrent_same_append_id_is_idempotent(client: TestClient) -> None
         'append_id': append_id,
     }
 
-    def _post(_):
-        return client.post('/api/v1/notes/append', json=payload)
+    def _post(_: int) -> httpx.Response:
+        with TestClient(app) as tc:
+            return tc.post('/api/v1/notes/append', json=payload)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         responses = list(pool.map(_post, range(5)))
