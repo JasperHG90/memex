@@ -228,6 +228,22 @@ VAULT DEFAULTS — vault parameters are optional. Writes default to the active v
 reads default to search vaults (from .memex.yaml or global config). Only pass
 vault_id/vault_ids to override.
 
+STORAGE MODEL — three layers, distinct purposes:
+- **Notes**: source documents (markdown). New versions create new entries via
+  `note_key`; old versions remain queryable. Append progress with
+  `memex_append_note`, never by re-sending the whole body.
+- **Memory units**: extracted facts/observations/events. **Append-only.**
+  Reflection tracks trend-based staleness; contradiction detection
+  auto-supersedes via new notes. Do NOT try to edit, replace, or delete
+  memory units — to record a change, ingest a new note via `memex_add_note`
+  (or `memex_append_note` to extend an existing one).
+- **KV store**: namespaced operational state — preferences, project bindings,
+  conventions. Mutable upsert by exact key. NOT for content learned from
+  notes; use note ingestion for that.
+
+RULE: never mark memory units stale, resolved, or superseded by hand. The
+system handles it.
+
 ROUTING — select retrieval strategy by query type:
 
 IF you know (part of) the note title:
@@ -239,7 +255,7 @@ IF query asks about relationships, connections, "how X fits in", "what relates t
   → ENTITY EXPLORATION (can combine with SEARCH)
   1. `memex_list_entities(query="X")` → entity IDs, types, mention counts
   2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
-  3. `memex_get_entity_mentions(entity_id)` → source facts linking back to notes
+  3. `memex_get_entity_mentions(entity_id)` → source memory units (facts/observations/events) linking back to notes
   4. Read source notes via SEARCH/READ below as needed
   Note: search results include `related_notes` and contradiction `links`.
   For full relationship links (temporal, semantic, causal), use `memex_get_memory_links`.
@@ -255,13 +271,14 @@ IF query is broad (e.g. "explain X and how it fits the architecture", "what do y
   → `memex_survey(query)` — auto-decomposes into sub-questions, parallel search, grouped results.
   For manual control, use ENTITY EXPLORATION and SEARCH in parallel instead.
 
-IF storing/retrieving structured facts, preferences, or conventions:
+IF storing/retrieving namespaced operational pointers (preferences, conventions, project bindings):
   → KV STORE
-  - `memex_kv_write(value, key)` — store a user fact or preference
+  - `memex_kv_write(value, key)` — store an operational pointer
   - `memex_kv_get(key)` — exact key lookup
-  - `memex_kv_search(query)` — fuzzy semantic search over stored facts
-  - `memex_kv_list()` — list all stored facts
-  When the user states a preference, convention, or static fact (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
+  - `memex_kv_search(query)` — fuzzy semantic search over KV entries
+  - `memex_kv_list()` — list KV entries
+  When the user states a preference or convention (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
+  KV is NOT for facts learned from content (events, observations, claims) — use `memex_add_note` for those; extraction will turn them into memory units.
   Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
 
 RESPONSE FORMAT — MANDATORY for every response:
@@ -436,9 +453,11 @@ async def memex_read_note(
     name='memex_set_note_status',
     description=(
         'Set note lifecycle status: active, superseded, appended, archived. '
-        'Use to supersede an outdated note, mark it as appended, or archive it. '
-        'When superseded, all memory units are marked stale. '
-        'Optionally link to the replacing/parent note.'
+        '**Cascading side-effect:** marking a note `superseded` flags every '
+        'memory unit extracted from it as stale. Prefer letting contradiction '
+        'detection auto-supersede facts via a new ingested note; reach for '
+        'this tool only for explicit archival or when an immediate state '
+        'change is required. Optionally link to the replacing/parent note.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -486,9 +505,12 @@ async def memex_set_note_status(
 @mcp.tool(
     name='memex_update_user_notes',
     description=(
-        'Update user_notes on an existing note and reprocess into the memory graph. '
-        'Pass null to delete all user annotations. '
-        'Old user_notes MemoryUnits are deleted and new ones extracted.'
+        'Update the `user_notes` field on an existing note and reprocess it '
+        'into the memory graph. Pass null to clear the field. Note: this is '
+        "one of the few surfaces where a note's extracted memory units are "
+        'deleted rather than superseded — old `user_notes` memory units are '
+        'removed and new ones are extracted from the new text. Use sparingly; '
+        'for content that should remain auditable, ingest a new note instead.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -2978,8 +3000,11 @@ async def memex_find_note(
 @mcp.tool(
     name='memex_kv_write',
     description=(
-        'Write a fact to the key-value store. Generates an embedding for semantic search. '
-        'Use for storing structured preferences, settings, or facts. '
+        'Write a namespaced operational pointer to the key-value store — a '
+        'preference, project binding, or convention. Generates an embedding '
+        'for fuzzy lookup. NOT for facts learned from content (events, '
+        'observations, claims) — those become memory units when you call '
+        '`memex_add_note`. '
         'Key MUST start with a namespace prefix: '
         '"global:" (always loaded), "user:" (personal prefs), '
         '"project:<project-id>:" (project-scoped), or '
@@ -2993,7 +3018,10 @@ async def memex_find_note(
 )
 async def memex_kv_write(
     ctx: Context,
-    value: Annotated[str, Field(description='The fact or preference text to store.')],
+    value: Annotated[
+        str,
+        Field(description="The pointer's value (preference, binding, or convention)."),
+    ],
     key: Annotated[
         str,
         Field(
@@ -3015,7 +3043,7 @@ async def memex_kv_write(
         ),
     ] = None,
 ) -> McpKVWriteResult:
-    """Write a fact to the KV store with embedding generation."""
+    """Write an operational pointer to the KV store with embedding generation."""
     try:
         api = get_api(ctx)
 
@@ -3043,7 +3071,7 @@ async def memex_kv_write(
 
 @mcp.tool(
     name='memex_kv_get',
-    description='Get a fact by exact key from the KV store.',
+    description='Get a KV entry by exact key.',
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -3078,7 +3106,7 @@ async def memex_kv_get(
 @mcp.tool(
     name='memex_kv_search',
     description=(
-        'Fuzzy search facts in the KV store by semantic similarity. '
+        'Fuzzy search KV entries by semantic similarity. '
         'Returns the closest matching entries. '
         'Optionally filter by namespace prefixes (global, user, project).'
     ),
@@ -3124,8 +3152,8 @@ async def memex_kv_search(
 @mcp.tool(
     name='memex_kv_list',
     description=(
-        'List all entries in the key-value store. Shows stored facts, preferences, '
-        'and settings. Optionally filter by namespace prefixes (global, user, project).'
+        'List KV entries (preferences, project bindings, conventions). '
+        'Optionally filter by namespace prefixes (global, user, project).'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
