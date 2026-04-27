@@ -272,6 +272,40 @@ Add a note to the Memex knowledge base. The vault parameter is optional and defa
 
 On success, returns the note ID. If similar notes already exist, includes overlap warnings with note titles, similarity percentages, and IDs.
 
+`memex_add_note` covers two cases:
+
+- **Create** — first call with a given `note_key` creates the note.
+- **Overwrite** — subsequent calls with the same `note_key + vault_id` replace the body. The note keeps the same `note_id`; incremental block-diff extraction re-evaluates only changed chunks. Memory units backed by chunks that no longer match the new body are marked `stale` (the parent stays `active`).
+
+For **additive** updates to a note you've already created (continuing a session, growing a journal entry), prefer [`memex_append_note`](#memex_append_note) — it sends only the new content, not the full body.
+
+---
+
+### `memex_append_note`
+
+Atomically append a content delta to an existing note's body without reading it back first. Identify the parent by `note_key + vault_id` (preferred — agents normally own the key, not a UUID) or by `note_id`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `note_key` | string | One of `note_key`/`note_id` | - | Stable note key set at creation time. Preferred identifier. |
+| `vault_id` | string | When `note_key` is given | - | Vault scope. Required with `note_key`. |
+| `note_id` | string | One of `note_key`/`note_id` | - | Direct UUID. Mutually exclusive with `note_key`. |
+| `delta` | string | Yes | - | New content snippet (1 – 200_000 UTF-8 bytes). Must not begin with `---\n` (frontmatter), be whitespace-only, or contain NUL bytes. |
+| `append_id` | string | No | auto-generated | Caller-supplied UUID for idempotent retry. Reusing the same value with the same `(note_id, delta, joiner)` returns `status='replayed'` from the audit table without mutating the body twice. |
+| `joiner` | string | No | `paragraph` | Separator between parent body and delta: `paragraph` (`\n\n`), `newline` (`\n`), or `none`. |
+| `user_notes` | string | No | - | Stored on the note's metadata; not re-injected into the body. |
+
+**Behaviour**
+
+- The server reads the parent's `original_text`, concatenates `parent_body + sep + delta`, and re-ingests the result with the **same `note_id`**. Two-gate idempotency + incremental block-diff extraction fires automatically — only the new (delta-side) chunks invoke the LLM.
+- Append + audit row commit atomically in a single DB transaction. Two writers on the same parent serialise via a `pg_advisory_xact_lock` keyed on the parent UUID plus a `SELECT FOR UPDATE` row lock.
+- Idempotent retry: same `append_id` ⇒ `status='replayed'`, identical response. Conflicting reuse (different parent / different delta / different joiner) returns 409.
+- Rejected when the parent is `archived` or `superseded` (409). Disabled state returns 503 with `Retry-After`.
+
+**Returns**: `status` (`success`/`replayed`), `note_id`, `append_id`, `content_hash` (resulting body), `delta_bytes`, `new_unit_ids`.
+
+**Use this instead of `memex_retain` / `memex_add_note` whenever you're continuing an existing note** — it's atomic, sends only the delta over the wire, and idempotent across network retries.
+
 ---
 
 ### `memex_set_note_status`

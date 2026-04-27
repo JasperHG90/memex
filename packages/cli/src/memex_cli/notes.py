@@ -391,8 +391,16 @@ async def append_note(
         console.print('[red]--vault is required when identifying by --key.[/red]')
         raise typer.Exit(1)
 
-    resolved_append_id = UUID(append_id) if append_id else uuid4()
-    resolved_note_id: UUID | None = UUID(note_id) if note_id else None
+    try:
+        resolved_append_id = UUID(append_id) if append_id else uuid4()
+    except ValueError:
+        console.print(f'[red]--append-id must be a UUID. Got: {append_id!r}[/red]')
+        raise typer.Exit(1)
+    try:
+        resolved_note_id: UUID | None = UUID(note_id) if note_id else None
+    except ValueError:
+        console.print(f'[red]note_id must be a UUID. Got: {note_id!r}[/red]')
+        raise typer.Exit(1)
 
     request = NoteAppendRequest(
         note_id=resolved_note_id,

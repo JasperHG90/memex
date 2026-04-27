@@ -18,27 +18,23 @@ from sqlalchemy import func, text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
+from memex_core.config import MemexConfig
+from memex_core.services.audit import AuditService, audit_event
+from memex_core.services.vaults import VaultService
+from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
+from memex_core.storage.filestore import BaseAsyncFileStore
 
 
 def derive_note_uuid_from_key(note_key: str) -> UUID:
     """Derive a deterministic Note.id UUID from a user-supplied note_key.
 
     Mirrors NoteInput.note_key (api.py): if the caller passed an actual UUID
-    string, use it; otherwise, hash the key with MD5 and interpret the 32-char
-    hex digest as a UUID. This is the same mapping ingestion uses, which means
-    create(note_key='X') and append(note_key='X') resolve to the same Note row.
+    string, use it; otherwise, hash the key with MD5.
     """
     try:
         return UUID(note_key)
     except ValueError:
         return UUID(hashlib.md5(note_key.encode('utf-8')).hexdigest())
-
-
-from memex_core.config import MemexConfig
-from memex_core.services.audit import AuditService, audit_event
-from memex_core.services.vaults import VaultService
-from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
-from memex_core.storage.filestore import BaseAsyncFileStore
 
 
 _VALID_DATE_FIELDS = {'coalesce', 'created_at', 'publish_date'}
@@ -170,16 +166,17 @@ class NoteService:
         Returns the canonical (note_id, vault_id) of an existing note. Raises
         NoteNotFoundError when no row matches in the supplied vault.
 
-        Resolution rules:
-        - note_id wins when both note_id and note_key are supplied.
-        - note_key requires vault_id (validated upstream by the request schema).
-        - When only note_id is supplied with no vault_id, the row's actual
-          vault_id is returned (parity with other note routes that take id only).
+        Exactly one of note_id or note_key is required. note_key requires
+        vault_id. note_id without vault_id returns the row's actual vault.
         """
         from memex_core.memory.sql_models import Note
 
         if note_id is None and note_key is None:
             raise ValueError('One of note_id or note_key is required.')
+        if note_id is not None and note_key is not None:
+            raise ValueError(
+                'Pass either note_id or note_key, not both. If you meant note_key, drop note_id.'
+            )
         if note_id is None and note_key is not None and vault_id is None:
             raise ValueError('vault_id is required when identifying by note_key.')
 

@@ -127,6 +127,7 @@ def test_all_schemas_have_required_fields():
         'memex_retrieve_notes',
         'memex_survey',
         'memex_retain',
+        'memex_append',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',

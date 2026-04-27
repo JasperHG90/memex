@@ -1239,14 +1239,31 @@ def append_joiner_separator(joiner: str) -> str:
         ) from exc
 
 
+def validate_append_delta(delta: str) -> None:
+    """Raise ValueError if ``delta`` violates any shape rule of the append endpoint."""
+    if not delta:
+        raise ValueError('delta must contain non-whitespace characters.')
+    if APPEND_FRONTMATTER_PREFIX_PATTERN.match(delta):
+        raise ValueError(
+            "delta must not begin with '---' followed by a newline "
+            '(would be ambiguous with frontmatter).'
+        )
+    if not delta.strip():
+        raise ValueError('delta must contain non-whitespace characters.')
+    if '\x00' in delta:
+        raise ValueError('delta must not contain NUL bytes (\\x00).')
+    if len(delta.encode('utf-8')) > APPEND_DELTA_MAX_BYTES:
+        raise ValueError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
+
+
 class NoteAppendRequest(BaseModel):
     """Request body for POST /api/v1/notes/append.
 
     The caller identifies the target note by note_key + vault_id (the dominant
     pattern — agents created the note with their own stable key and never see
     a UUID), or by note_id (convenience for callers that already hold one
-    from a prior search). At least one identifier is required; if both are
-    given, note_id wins.
+    from a prior search). Exactly one identifier is required; passing both
+    is rejected with 422 to surface caller confusion loudly.
 
     `delta` is the new content snippet to append. It is concatenated onto the
     end of the parent's body using `joiner` and re-ingested through the
@@ -1275,7 +1292,7 @@ class NoteAppendRequest(BaseModel):
         default=None,
         description=(
             'Direct UUID. Convenience for callers that already have one. '
-            'When supplied alongside note_key, note_id wins.'
+            'Mutually exclusive with note_key — passing both returns 422.'
         ),
     )
     delta: str = Field(
@@ -1312,32 +1329,17 @@ class NoteAppendRequest(BaseModel):
     def _require_one_identifier(self) -> 'NoteAppendRequest':
         if self.note_id is None and self.note_key is None:
             raise ValueError('One of note_id or note_key is required.')
+        if self.note_id is not None and self.note_key is not None:
+            raise ValueError(
+                'Pass either note_id or note_key, not both. If you meant note_key, drop note_id.'
+            )
         if self.note_id is None and self.note_key is not None and self.vault_id is None:
             raise ValueError('vault_id is required when identifying by note_key.')
         if self.joiner not in _APPEND_JOINERS:
             raise ValueError(
                 f'Unknown joiner {self.joiner!r}; expected one of {sorted(_APPEND_JOINERS)}.'
             )
-        # Reject any frontmatter-prefix shape the parser would later consume,
-        # not just the exact `---\n` / `---\r\n` literals.
-        if APPEND_FRONTMATTER_PREFIX_PATTERN.match(self.delta):
-            raise ValueError(
-                "delta must not begin with '---' followed by a newline "
-                '(would be ambiguous with frontmatter).'
-            )
-        # Whitespace-only delta is meaningless: trying to append "   " adds no
-        # information and fails the service's downstream non-empty check.
-        if not self.delta.strip():
-            raise ValueError('delta must contain non-whitespace characters.')
-        # Postgres TEXT cannot store NUL. Catch this at the API boundary so a
-        # hostile / buggy client gets 422, not a generic 500 from psycopg.
-        if '\x00' in self.delta:
-            raise ValueError('delta must not contain NUL bytes (\\x00).')
-        # Byte-aware cap. Pydantic's ``min_length`` is enforced separately on
-        # character count for fail-fast on tiny inputs; the byte cap is
-        # what the storage layer actually has to honour.
-        if len(self.delta.encode('utf-8')) > APPEND_DELTA_MAX_BYTES:
-            raise ValueError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
+        validate_append_delta(self.delta)
         return self
 
 

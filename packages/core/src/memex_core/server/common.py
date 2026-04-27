@@ -69,6 +69,8 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         )
     if isinstance(e, MemexError):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, ValueError):
+        return HTTPException(status_code=400, detail=str(e))
 
     correlation_id = get_session_id()
     return HTTPException(

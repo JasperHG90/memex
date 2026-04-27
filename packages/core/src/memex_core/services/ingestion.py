@@ -9,6 +9,8 @@ import os
 import pathlib as plb
 import re
 import tempfile
+import time
+import unicodedata
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import UUID, uuid4
@@ -561,7 +563,6 @@ ingested_at: {now}
             NOTE_APPEND_DURATION_SECONDS,
             NOTE_APPEND_TOTAL,
         )
-        import time
 
         _t_start = time.monotonic()
         try:
@@ -621,12 +622,8 @@ ingested_at: {now}
         from sqlalchemy import text as sa_text
         from sqlalchemy.exc import DBAPIError, OperationalError
         from sqlmodel import select
-        import time
 
-        from memex_common.schemas import (
-            APPEND_DELTA_MAX_BYTES,
-            APPEND_FRONTMATTER_PREFIX_PATTERN,
-        )
+        from memex_common.schemas import validate_append_delta
 
         if not self.config.server.append_enabled:
             raise FeatureDisabledError('Atomic note-append endpoint is disabled by config.')
@@ -634,19 +631,7 @@ ingested_at: {now}
             raise RuntimeError(
                 'IngestionService.append_to_note requires NoteService to be wired in.'
             )
-        if not delta or not delta.strip():
-            raise ValueError('delta must contain non-whitespace characters.')
-        if APPEND_FRONTMATTER_PREFIX_PATTERN.match(delta):
-            raise ValueError(
-                "delta must not begin with '---' followed by a newline "
-                '(would be ambiguous with frontmatter).'
-            )
-        if '\x00' in delta:
-            raise ValueError('delta must not contain NUL bytes (\\x00).')
-        if len(delta.encode('utf-8')) > APPEND_DELTA_MAX_BYTES:
-            raise ValueError(f'delta exceeds {APPEND_DELTA_MAX_BYTES} UTF-8 bytes.')
-
-        import unicodedata
+        validate_append_delta(delta)
 
         sep = append_joiner_separator(joiner)
         delta_encoded = delta.encode('utf-8')
@@ -719,18 +704,16 @@ ingested_at: {now}
                     ) from exc
                 raise
 
-            # Now that both locks are held, the extraction phase can run
-            # without a deadline — drop lock_timeout to default for the rest
-            # of the transaction.
+            # `lock_timeout = 0` means "no timeout"; LM extraction runs unbounded.
             await session.exec(sa_text('SET LOCAL lock_timeout = 0'))
 
             # Verify state.
             if parent is None:
                 raise NoteNotFoundError(f'Note {parent_id} not found.')
-            if parent.status not in ('active', 'appended'):
+            if parent.status != 'active':
                 raise NoteNotAppendableError(
                     f'Note {parent_id} status is {parent.status!r}; '
-                    f'only active or appended notes can be appended to.'
+                    f'only active notes can be appended to.'
                 )
 
             # Idempotency: did we already process this append_id?
@@ -849,19 +832,23 @@ ingested_at: {now}
             )
             session.add(audit_row)
 
-        # ─── Post-commit work ──────────────────────────────────────────────
-        # audit_event spawns a background task immediately; firing it from
-        # inside the AsyncTransaction would let the audit log record an
-        # `note.appended` even when the body mutation rolled back. Emit it
-        # only after the `async with` exits cleanly.
-        audit_event(
-            self._audit_service,
-            'note.appended',
-            'note',
-            str(parent_id),
-            append_id=str(append_id),
-            delta_bytes=delta_bytes_count,
-        )
+        # Emit AFTER commit so a rolled-back mutation can't record the event.
+        # Swallow failures so audit-store outages don't fail a committed append.
+        try:
+            audit_event(
+                self._audit_service,
+                'note.appended',
+                'note',
+                str(parent_id),
+                append_id=str(append_id),
+                delta_bytes=delta_bytes_count,
+            )
+        except Exception:
+            logger.exception(
+                'Failed to emit audit event for successful append (note=%s, append_id=%s)',
+                parent_id,
+                append_id,
+            )
 
         # Contradictions can run on committed data.
         contradiction_coro = result.pop('contradiction_task', None)

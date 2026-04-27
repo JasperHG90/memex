@@ -886,6 +886,63 @@ Delete a note and all associated data (memory units, chunks, links, assets).
 
 ---
 
+### `POST /api/v1/notes/append`
+
+Atomically append a content delta to an existing note's body. Identify the parent by `note_key + vault_id` (preferred) or `note_id`.
+
+The server reads `original_text`, concatenates `parent_body + sep + delta`, and re-runs incremental block-diff extraction with the same `note_id` so only the new chunks invoke the LLM. Body update + audit row commit in a single DB transaction. Two writers on the same parent serialise via a `pg_advisory_xact_lock` plus `SELECT FOR UPDATE` row lock.
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `note_key` | string | one of (`note_key`, `note_id`) | Stable note key set at creation time. Preferred. |
+| `vault_id` | string | when `note_key` is given | Vault scope. |
+| `note_id` | string (UUID) | one of (`note_key`, `note_id`) | Mutually exclusive with `note_key`. |
+| `delta` | string | yes | New content (1 – 200 000 UTF-8 bytes). Must not begin with `---\n`, be whitespace-only, or contain NUL. |
+| `append_id` | string (UUID) | yes | Caller-supplied idempotency token. Reuse with the same `(note_id, delta, joiner)` returns `status='replayed'`. |
+| `joiner` | string | no (default `paragraph`) | `paragraph` (`\n\n`), `newline` (`\n`), or `none`. |
+| `user_notes` | string | no | Stored on note metadata; not re-injected into body. |
+
+#### Response (200)
+
+```json
+{
+  "status": "success",            // or "replayed"
+  "note_id": "550e8400-…",
+  "append_id": "8a1c…",
+  "content_hash": "<md5 of resulting body>",
+  "delta_bytes": 42,
+  "new_unit_ids": ["…"]
+}
+```
+
+#### Errors
+
+- **400** — invalid delta (empty / whitespace-only / NUL / oversized / starts with `---\n`).
+- **404** — parent not found, or the resolved vault does not match the supplied `vault_id`.
+- **409** — parent is `archived` / `superseded` / not appendable; or `append_id` reused with different parent, delta, or joiner.
+- **422** — Pydantic validation error (e.g., both `note_id` and `note_key` supplied).
+- **503** — feature disabled (`server.append_enabled = false`) or could not acquire append lock within 30s. Includes `Retry-After: 5`.
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8000/api/v1/notes/append \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "note_key": "session-2026-04-26",
+    "vault_id": "550e8400-e29b-41d4-a716-446655440000",
+    "delta": "step 3: did the third thing",
+    "append_id": "'"$(uuidgen)"'",
+    "joiner": "paragraph"
+  }'
+```
+
+Use this in preference to re-sending the full body via `POST /api/v1/notes` whenever you're adding to a note you've already created — it's atomic, sends only the delta, and idempotent across network retries.
+
+---
+
 ### `PATCH /api/v1/notes/{note_id}/status`
 
 Set note lifecycle status (active, superseded, appended).
