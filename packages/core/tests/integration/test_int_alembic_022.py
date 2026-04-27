@@ -8,82 +8,28 @@ upgrade/downgrade pair is reversible. Reuses the helpers from
 
 from __future__ import annotations
 
-import pathlib as plb
-import secrets
 from typing import AsyncGenerator
-from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import NullPool, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.postgres import PostgresContainer
 
+from _alembic_test_helpers import (  # noqa: F401
+    alembic_downgrade as _alembic_downgrade,
+    alembic_upgrade as _alembic_upgrade,
+    make_fresh_db,
+)
+
 pytestmark = [pytest.mark.integration]
-
-
-def _alembic_cfg_for(db_url: str) -> Config:
-    import memex_core
-
-    package_dir = plb.Path(memex_core.__file__).resolve().parent
-    cfg = Config(str(package_dir / 'alembic.ini'))
-    cfg.set_main_option('script_location', str(package_dir / 'alembic'))
-    cfg.set_main_option('sqlalchemy.url', db_url)
-    return cfg
 
 
 @pytest_asyncio.fixture
 async def fresh_db_url(postgres_container: PostgresContainer) -> AsyncGenerator[str, None]:
-    db_name = 'mig022_' + secrets.token_hex(6)
-
-    base_url = postgres_container.get_connection_url().replace('psycopg2', 'asyncpg')
-    parsed = urlparse(base_url)
-    admin_url = urlunparse(parsed._replace(path='/postgres'))
-    new_url = urlunparse(parsed._replace(path=f'/{db_name}'))
-
-    admin_engine = create_async_engine(admin_url, poolclass=NullPool, isolation_level='AUTOCOMMIT')
-    async with admin_engine.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
-
-    new_engine = create_async_engine(new_url, poolclass=NullPool)
-    async with new_engine.begin() as conn:
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
-    await new_engine.dispose()
-
-    try:
-        yield new_url
-    finally:
-        admin_engine = create_async_engine(
-            admin_url, poolclass=NullPool, isolation_level='AUTOCOMMIT'
-        )
-        async with admin_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity '
-                    'WHERE datname = :db AND pid <> pg_backend_pid()'
-                ),
-                {'db': db_name},
-            )
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
-        await admin_engine.dispose()
-
-
-async def _alembic_upgrade(db_url: str, target: str = 'head') -> None:
-    import asyncio
-
-    cfg = _alembic_cfg_for(db_url)
-    await asyncio.to_thread(command.upgrade, cfg, target)
-
-
-async def _alembic_downgrade(db_url: str, target: str) -> None:
-    import asyncio
-
-    cfg = _alembic_cfg_for(db_url)
-    await asyncio.to_thread(command.downgrade, cfg, target)
+    """Create an empty DB in the session container, yield its URL, then drop it."""
+    async for url in make_fresh_db(postgres_container, db_prefix='mig022'):
+        yield url
 
 
 @pytest.mark.asyncio

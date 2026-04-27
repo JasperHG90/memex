@@ -22,113 +22,29 @@ each test creates and drops its own database in the same Postgres instance.
 
 from __future__ import annotations
 
-import pathlib as plb
 from typing import AsyncGenerator
-from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import NullPool, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.postgres import PostgresContainer
+
+from _alembic_test_helpers import (  # noqa: F401
+    alembic_downgrade as _alembic_downgrade,
+    alembic_upgrade as _alembic_upgrade,
+    make_fresh_db,
+)
 
 # Mark the whole module as integration so it only runs under `-m integration`.
 pytestmark = [pytest.mark.integration]
 
 
-def _alembic_cfg_for(db_url: str) -> Config:
-    """Build an Alembic Config that points at memex_core's alembic dir but
-    targets `db_url` instead of the default URL resolution."""
-    import memex_core
-
-    package_dir = plb.Path(memex_core.__file__).resolve().parent
-    cfg = Config(str(package_dir / 'alembic.ini'))
-    cfg.set_main_option('script_location', str(package_dir / 'alembic'))
-    # The async env helper falls back to the ini's `sqlalchemy.url` when
-    # MEMEX env vars aren't set; we set both for safety.
-    cfg.set_main_option('sqlalchemy.url', db_url)
-    return cfg
-
-
-def _sync_url(asyncpg_url: str) -> str:
-    """Convert `postgresql+asyncpg://...` → `postgresql://...` for sync use
-    (createdb / dropdb / reflection helpers)."""
-    parsed = urlparse(asyncpg_url)
-    scheme = parsed.scheme.split('+')[0]
-    return urlunparse(parsed._replace(scheme=scheme))
-
-
 @pytest_asyncio.fixture
 async def fresh_db_url(postgres_container: PostgresContainer) -> AsyncGenerator[str, None]:
-    """Create an empty database in the session container, yield its URL, then drop it.
-
-    Each test gets a clean DB so `alembic upgrade head` runs from base.
-    """
-    import secrets
-
-    db_name = 'mig021_' + secrets.token_hex(6)
-
-    base_url = postgres_container.get_connection_url().replace('psycopg2', 'asyncpg')
-    parsed = urlparse(base_url)
-    admin_url = urlunparse(parsed._replace(path='/postgres'))
-    new_url = urlunparse(parsed._replace(path=f'/{db_name}'))
-
-    admin_engine = create_async_engine(admin_url, poolclass=NullPool, isolation_level='AUTOCOMMIT')
-    async with admin_engine.connect() as conn:
-        # f-string is required because Postgres DDL cannot bind identifiers as
-        # parameters. Safe here because db_name is `'mig021_' + secrets.token_hex(6)`
-        # — a fixed prefix plus pure-hex chars, no caller-controlled input.
-        await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-    await admin_engine.dispose()
-
-    # Required extensions live on the new DB; create them once before alembic.
-    new_engine = create_async_engine(new_url, poolclass=NullPool)
-    async with new_engine.begin() as conn:
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
-    await new_engine.dispose()
-
-    try:
-        yield new_url
-    finally:
-        # Drop the database. A fresh AUTOCOMMIT connection is required because
-        # DROP DATABASE cannot run inside a transaction.
-        admin_engine = create_async_engine(
-            admin_url, poolclass=NullPool, isolation_level='AUTOCOMMIT'
-        )
-        async with admin_engine.connect() as conn:
-            # Terminate any other connections to the database first.
-            await conn.execute(
-                text(
-                    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity '
-                    'WHERE datname = :db AND pid <> pg_backend_pid()'
-                ),
-                {'db': db_name},
-            )
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
-        await admin_engine.dispose()
-
-
-async def _alembic_upgrade(db_url: str, target: str = 'head') -> None:
-    """Run `alembic upgrade <target>` against `db_url`.
-
-    `memex_core/alembic/env.py` calls `asyncio.run(run_async_migrations())` from
-    `run_migrations_online()`. That cannot execute inside an existing event
-    loop, so we offload the synchronous Alembic API call to a worker thread.
-    """
-    import asyncio
-
-    cfg = _alembic_cfg_for(db_url)
-    await asyncio.to_thread(command.upgrade, cfg, target)
-
-
-async def _alembic_downgrade(db_url: str, target: str) -> None:
-    import asyncio
-
-    cfg = _alembic_cfg_for(db_url)
-    await asyncio.to_thread(command.downgrade, cfg, target)
+    """Create an empty database in the session container, yield its URL, then drop it."""
+    async for url in make_fresh_db(postgres_container, db_prefix='mig021'):
+        yield url
 
 
 @pytest.mark.asyncio

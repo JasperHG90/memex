@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import unicodedata
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -269,8 +270,9 @@ async def test_append_replay_unicode_normalization_independent(api, metastore):
     parent_id = await _seed_parent_note(api, note_key='nfd-replay', body='base')
     append_id = uuid4()
 
-    nfd_delta = 'café'
-    nfc_delta = 'café'
+    base = 'café'
+    nfd_delta = unicodedata.normalize('NFD', base)
+    nfc_delta = unicodedata.normalize('NFC', base)
     assert nfd_delta != nfc_delta
     assert len(nfd_delta) == 5 and len(nfc_delta) == 4
 
