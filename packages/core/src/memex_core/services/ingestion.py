@@ -667,12 +667,15 @@ ingested_at: {now}
             session = txn.db_session
 
             # Acquire per-parent advisory lock with timeout. Bigint key uses
-            # the lower 63 bits of the parent UUID — collision probability is
-            # negligible at any plausible vault size (~3.4B notes).
+            # the lower 63 bits of the parent UUID. A collision (two distinct
+            # parents hashing to the same lock_key) only causes harmless false
+            # serialization on the advisory lock — never data corruption,
+            # because the row lock is taken on the canonical parent_id.
             lock_key = parent_id.int & 0x7FFFFFFFFFFFFFFF
 
             # SET LOCAL lock_timeout caps how long pg_advisory_xact_lock blocks.
             timeout_ms = max(1, int(timeout_seconds * 1000))
+            assert isinstance(timeout_ms, int)
             await session.exec(sa_text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
             lock_acquire_start = time.monotonic()
             try:
@@ -712,8 +715,14 @@ ingested_at: {now}
                     ) from exc
                 raise
 
-            # `lock_timeout = 0` means "no timeout"; LM extraction runs unbounded.
-            await session.exec(sa_text('SET LOCAL lock_timeout = 0'))
+            # Cap lock_timeout for the extraction phase so any internal lock
+            # acquire downstream still surfaces a 55P03 instead of hanging.
+            extraction_timeout_seconds = float(
+                self.config.server.append_extraction_lock_timeout_seconds
+            )
+            extraction_timeout_ms = max(1, int(extraction_timeout_seconds * 1000))
+            assert isinstance(extraction_timeout_ms, int)
+            await session.exec(sa_text(f"SET LOCAL lock_timeout = '{extraction_timeout_ms}ms'"))
 
             # Verify state.
             if parent is None:

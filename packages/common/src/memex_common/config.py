@@ -1264,6 +1264,16 @@ class ServerConfig(BaseModel):
         ),
     )
 
+    append_extraction_lock_timeout_seconds: float = Field(
+        default=300.0,
+        ge=0.1,
+        description=(
+            'Upper bound on Postgres lock_timeout while LM extraction runs '
+            'inside an append. Prevents an unbounded hang if the extraction '
+            'pipeline ever issues a contended lock acquire downstream.'
+        ),
+    )
+
     default_reader_vault: str = Field(
         default=GLOBAL_VAULT_NAME,
         description='Server default vault for reads when no client preference is set.',
