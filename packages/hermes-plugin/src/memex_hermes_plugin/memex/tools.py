@@ -1604,6 +1604,10 @@ def handle_append(
     Identify by note_key (preferred) or note_id. Sends only the delta over
     the wire; the server reads the parent body, concatenates, and re-runs
     incremental extraction with the same note_id.
+
+    Vault scope is the session-bound ``vault_id`` parameter (Hermes sessions
+    are single-vault by design); any ``vault_id`` in ``args`` is ignored.
+    Cross-vault appends require the REST or MCP surfaces.
     """
     from uuid import uuid4
 

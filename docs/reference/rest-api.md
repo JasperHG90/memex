@@ -900,7 +900,7 @@ The server reads `original_text`, concatenates `parent_body + sep + delta`, and 
 | `vault_id` | string | when `note_key` is given | Vault scope. |
 | `note_id` | string (UUID) | one of (`note_key`, `note_id`) | Mutually exclusive with `note_key`. |
 | `delta` | string | yes | New content (1 – 200 000 UTF-8 bytes). Must not begin with `---\n`, be whitespace-only, or contain NUL. |
-| `append_id` | string (UUID) | yes | Caller-supplied idempotency token. Reuse with the same `(note_id, delta, joiner)` returns `status='replayed'`. |
+| `append_id` | string (UUID) | yes | Caller-supplied idempotency token. Reuse with the same `(note_id, delta, joiner)` returns `status='replayed'`. The CLI, MCP, and Hermes surfaces auto-generate this when omitted; direct HTTP callers must supply one. |
 | `joiner` | string | no (default `paragraph`) | `paragraph` (`\n\n`), `newline` (`\n`), or `none`. |
 | `user_notes` | string | no | Stored on note metadata; not re-injected into body. |
 
@@ -919,11 +919,10 @@ The server reads `original_text`, concatenates `parent_body + sep + delta`, and 
 
 #### Errors
 
-- **400** — invalid delta (empty / whitespace-only / NUL / oversized / starts with `---\n`).
 - **404** — parent not found, or the resolved vault does not match the supplied `vault_id`.
 - **409** — parent is `archived` / `superseded` / not appendable; or `append_id` reused with different parent, delta, or joiner.
-- **422** — Pydantic validation error (e.g., both `note_id` and `note_key` supplied).
-- **503** — feature disabled (`server.append_enabled = false`) or could not acquire append lock within 30s. Includes `Retry-After: 5`.
+- **422** — Pydantic validation error (missing identifier, both `note_id` and `note_key` supplied, oversized delta, frontmatter delta, NUL bytes, etc.).
+- **503** — could not acquire append lock within 30s (transient — includes `Retry-After: 5`) **or** feature disabled (`server.append_enabled = false`; no `Retry-After` — admin must re-enable).
 
 #### Example
 
