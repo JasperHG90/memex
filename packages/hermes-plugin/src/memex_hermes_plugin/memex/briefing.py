@@ -88,22 +88,45 @@ class BriefingCache:
             self._ready.clear()
 
 
+_STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
+
+Three layers, distinct purposes:
+
+- **Notes** — source documents (markdown). New versions create new entries via
+  `note_key` upsert; old versions remain queryable. Append progress with
+  `memex_append`, never by re-sending the whole body.
+- **Memory units** — atomic facts/observations/events extracted from notes.
+  **Append-only.** Memex maintains them via reflection (trend-based staleness)
+  and contradiction detection (auto-supersession with confidence adjustment).
+  You cannot edit, replace, or delete memory units. To record that something
+  has changed, retain a new note with the new state — Memex links the old and
+  new automatically.
+- **KV store** — namespaced operational state: preferences, project bindings,
+  conventions. Mutable upsert by exact key. **Not** a place for facts learned
+  from content — those become memory units when you `memex_retain` (or
+  `memex_append`) a note.
+
+Don't try to mark facts resolved or stale by hand. Reflection and contradiction
+detection handle supersession; the right action is always to retain (or append
+to) a note that records the current state."""
+
+
 _ROUTING_GUIDE = """### How to use Memex tools
 
 Match the tool to the query type:
 
-- **Title known** → `memex_find_note(query="title fragment")` for title lookups.
-  Returns note IDs and match scores.
 - **Vault scoping** — pass `vault_ids=["my-vault", "rituals"]` or `vault_ids=["*"]`
   for all vaults. Omit to use the session-bound vault. Do NOT use `tags` for
   vault filtering — `tags` filters note metadata (e.g. "meeting", "bug").
 - **Vault discovery** → `memex_list_vaults()` to enumerate available vaults;
   `memex_get_vault_summary(vault_id="...")` for a precomputed narrative view
   of a vault's contents.
+- **Title known** → `memex_find_note(query="title fragment")` for title lookups.
+  Returns note IDs and match scores.
 - **Content / document lookup** → call `memex_recall` AND `memex_retrieve_notes`
-  in the same assistant message. Recall returns distilled facts; retrieve_notes
-  returns source documents. Use both only when the query genuinely benefits —
-  a simple title lookup doesn't.
+  in the same assistant message. Recall returns distilled memory units;
+  retrieve_notes returns source documents. Use both only when the query
+  genuinely benefits — a simple title lookup doesn't.
 - **Broad / panoramic** ("what do you know about X?", "overview of X") →
   `memex_survey(query)` as a single call. The server decomposes into
   sub-questions and fans out in parallel.
@@ -118,10 +141,12 @@ Match the tool to the query type:
   links (temporal / semantic / causal / contradiction) between memory units;
   `memex_get_lineage(entity_type=..., entity_id=...)` for the provenance chain
   (note ↔ memory_unit ↔ observation ↔ mental_model).
-- **KV store** → persist facts and preferences across sessions with
-  `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)`
-  / `memex_kv_list()`. Keys MUST start with a namespace: `global:`, `user:`,
-  `project:<id>:`, or `app:<id>:`. Deletion is CLI-only (use `memex kv delete`).
+- **KV store** → persist namespaced operational state — preferences, project
+  bindings, conventions — with `memex_kv_write(value, key)` /
+  `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys MUST
+  start with a namespace: `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
+  KV is NOT for content learned from notes — use `memex_retain` /
+  `memex_append` for that. Deletion is CLI-only (use `memex kv delete`).
 - **Capturing work**:
     - `memex_retain` for a NEW note (or to fully overwrite an existing one).
       Pass a fresh note_key for a one-off capture.
@@ -155,6 +180,8 @@ def format_briefing_block(
         lines.append(f'Active vault: `{vault_id}` · Project: `{project_id}`')
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
+
+    lines.append('\n' + _STORAGE_MODEL_PRIMER)
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '

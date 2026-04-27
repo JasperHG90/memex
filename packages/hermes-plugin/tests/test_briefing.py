@@ -9,6 +9,7 @@ from uuid import uuid4
 from memex_hermes_plugin.memex.briefing import (
     BriefingCache,
     _ROUTING_GUIDE,
+    _STORAGE_MODEL_PRIMER,
     format_briefing_block,
 )
 
@@ -129,8 +130,11 @@ def test_routing_guide_title_bullet_uses_find_note():
     assert '**Title known**' in _ROUTING_GUIDE
     assert 'memex_find_note' in _ROUTING_GUIDE
     # Title-known bullet must no longer point at retrieve_notes for title lookups.
-    title_line_end = _ROUTING_GUIDE.index('\n', _ROUTING_GUIDE.index('**Title known**'))
-    title_bullet = _ROUTING_GUIDE[_ROUTING_GUIDE.index('**Title known**') : title_line_end + 120]
+    title_idx = _ROUTING_GUIDE.index('**Title known**')
+    next_bullet = _ROUTING_GUIDE.find('\n- **', title_idx)
+    title_bullet = (
+        _ROUTING_GUIDE[title_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[title_idx:]
+    )
     assert 'memex_retrieve_notes' not in title_bullet
 
 
@@ -193,3 +197,73 @@ def test_routing_guide_bullets_render_in_formatted_block():
         'memex_find_note',
     ):
         assert marker in block
+
+
+# --- Storage-model primer (the OrangeHermes regression fence) ---
+
+
+def test_storage_model_primer_names_three_layers():
+    """The primer must teach all three storage layers by name."""
+    assert '**Notes**' in _STORAGE_MODEL_PRIMER
+    assert '**Memory units**' in _STORAGE_MODEL_PRIMER
+    assert '**KV store**' in _STORAGE_MODEL_PRIMER
+
+
+def test_storage_model_primer_states_append_only_invariant():
+    """Memory units are append-only; the primer must say so."""
+    assert 'Append-only' in _STORAGE_MODEL_PRIMER or 'append-only' in _STORAGE_MODEL_PRIMER
+    # And explicitly forbid edit/delete on memory units.
+    assert 'cannot edit' in _STORAGE_MODEL_PRIMER
+
+
+def test_storage_model_primer_warns_against_manual_invalidation():
+    """The primer must explicitly tell agents not to mark facts resolved/stale by hand."""
+    assert "Don't try to mark facts resolved or stale" in _STORAGE_MODEL_PRIMER
+
+
+def test_storage_model_primer_routes_kv_away_from_learned_facts():
+    """The primer must route 'facts learned from content' away from KV toward retain/append."""
+    assert 'KV' in _STORAGE_MODEL_PRIMER
+    # KV bullet must say it is NOT for learned facts.
+    assert 'Not' in _STORAGE_MODEL_PRIMER and 'learned' in _STORAGE_MODEL_PRIMER
+
+
+def test_storage_model_primer_renders_in_formatted_block():
+    """Primer must render in the system-prompt block."""
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    assert '### How Memex stores knowledge' in block
+    assert '**Memory units**' in block
+    assert 'Append-only' in block or 'append-only' in block
+
+
+def test_storage_model_primer_precedes_routing_guide():
+    """Primer must appear before the routing guide so the agent reads the model first."""
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    assert block.index('### How Memex stores knowledge') < block.index('### How to use Memex tools')
+
+
+def test_kv_bullet_no_longer_persists_facts():
+    """The KV bullet in the routing guide must not advertise itself as a fact store.
+
+    Regression fence for the OrangeHermes muddle: agents previously read 'persist
+    facts and preferences across sessions' and wrote system-status flags into KV
+    to mark stale memory units 'resolved'.
+    """
+    kv_idx = _ROUTING_GUIDE.index('**KV store**')
+    next_bullet = _ROUTING_GUIDE.find('\n- **', kv_idx)
+    kv_bullet = _ROUTING_GUIDE[kv_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[kv_idx:]
+    assert 'persist facts' not in kv_bullet
+    # Bullet must still route the agent toward retain/append for learned content.
+    assert 'memex_retain' in kv_bullet or 'memex_append' in kv_bullet
