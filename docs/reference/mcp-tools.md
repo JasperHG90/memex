@@ -304,7 +304,7 @@ Atomically append a content delta to an existing note's body without reading it 
 
 **Returns**: `status` (`success`/`replayed`), `note_id`, `append_id`, `content_hash` (resulting body), `delta_bytes`, `new_unit_ids`.
 
-**Use this instead of `memex_retain` / `memex_add_note` whenever you're continuing an existing note** — it's atomic, sends only the delta over the wire, and idempotent across network retries.
+**Use this instead of `memex_add_note` whenever you're continuing an existing note** — it's atomic, sends only the delta over the wire, and idempotent across network retries.
 
 ---
 

@@ -123,11 +123,11 @@ def test_all_schemas_have_required_fields():
     must be registered exactly (AC-086 + AC-008)."""
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
-        'memex_recall',
-        'memex_retrieve_notes',
+        'memex_memory_search',
+        'memex_note_search',
         'memex_survey',
-        'memex_retain',
-        'memex_append',
+        'memex_add_note',
+        'memex_append_note',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
@@ -202,7 +202,7 @@ def test_retain_content_description_instructs_on_structure():
     with no blank lines — extraction had to infer structure. This guard fails
     loudly if the contract gets deleted.
     """
-    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_retain')
+    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_add_note')
     desc = retain['parameters']['properties']['content']['description']
     assert '##' in desc, 'retain content description must show `##` section usage'
     assert '# <Title>' in desc, 'retain content description must show the H1 template'
@@ -215,7 +215,7 @@ def test_retain_content_description_instructs_on_structure():
 def test_recall_returns_serialized_results(config, vault_id):
     api = Mock()
     api.search = AsyncMock(return_value=[_fake_memory_unit('X is Y')])
-    out = dispatch('memex_recall', {'query': 'X'}, api=api, config=config, vault_id=vault_id)
+    out = dispatch('memex_memory_search', {'query': 'X'}, api=api, config=config, vault_id=vault_id)
     data = json.loads(out)
     assert data['count'] == 1
     assert data['results'][0]['text'] == 'X is Y'
@@ -224,7 +224,7 @@ def test_recall_returns_serialized_results(config, vault_id):
 
 def test_recall_missing_query_returns_error(config, vault_id):
     api = Mock()
-    out = dispatch('memex_recall', {}, api=api, config=config, vault_id=vault_id)
+    out = dispatch('memex_memory_search', {}, api=api, config=config, vault_id=vault_id)
     assert 'error' in json.loads(out)
 
 
@@ -232,7 +232,7 @@ def test_retrieve_notes(config, vault_id):
     api = Mock()
     api.search_notes = AsyncMock(return_value=[_fake_note_result('doc')])
     out = dispatch(
-        'memex_retrieve_notes',
+        'memex_note_search',
         {'query': 'doc'},
         api=api,
         config=config,
@@ -280,7 +280,7 @@ def test_retain_ingests_note(config, vault_id):
     api = Mock()
     api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
     out = dispatch(
-        'memex_retain',
+        'memex_add_note',
         {
             'name': 'decision',
             'description': 'short',
@@ -304,7 +304,7 @@ def test_retain_ingests_note(config, vault_id):
 def test_retain_missing_required_params(config, vault_id):
     api = Mock()
     out = dispatch(
-        'memex_retain',
+        'memex_add_note',
         {'name': 'x'},
         api=api,
         config=config,
@@ -319,9 +319,9 @@ def test_retain_schema_advertises_template_param():
     The schema is what the model sees; if `template` isn't here, the agent
     can't pass it even if our handler would accept it.
     """
-    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_retain')
+    retain = next(s for s in ALL_SCHEMAS if s['name'] == 'memex_add_note')
     assert 'template' in retain['parameters']['properties'], (
-        'memex_retain must expose a `template` property for ADR/RFC/retro provenance'
+        'memex_add_note must expose a `template` property for ADR/RFC/retro provenance'
     )
     assert 'template' not in retain['parameters'].get('required', [])
 
@@ -331,7 +331,7 @@ def test_retain_uses_provided_template(config, vault_id):
     api = Mock()
     api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
     out = dispatch(
-        'memex_retain',
+        'memex_add_note',
         {
             'name': 'ADR: postgres advisory locks',
             'description': 'leader election strategy',
@@ -354,7 +354,7 @@ def test_retain_falls_back_to_hermes_user_note_template(config, vault_id):
     api = Mock()
     api.ingest = AsyncMock(return_value=IngestResponse(status='success', note_id=str(uuid4())))
     dispatch(
-        'memex_retain',
+        'memex_add_note',
         {
             'name': 'plain note',
             'description': 'free-form capture',
@@ -379,7 +379,7 @@ def test_list_templates_output_includes_action_hint(config, vault_id):
     assert 'next' in data, 'list_templates must surface a follow-up hint to the agent'
     nxt = data['next']
     assert 'memex_get_template' in nxt
-    assert 'memex_retain' in nxt
+    assert 'memex_add_note' in nxt
     assert 'template=slug' in nxt
 
 
@@ -518,7 +518,7 @@ def test_unknown_tool(config, vault_id):
 def test_recall_forwards_api_errors(config, vault_id):
     api = Mock()
     api.search = AsyncMock(side_effect=RuntimeError('backend down'))
-    out = dispatch('memex_recall', {'query': 'x'}, api=api, config=config, vault_id=vault_id)
+    out = dispatch('memex_memory_search', {'query': 'x'}, api=api, config=config, vault_id=vault_id)
     assert 'backend down' in json.loads(out)['error']
 
 
@@ -606,7 +606,7 @@ def test_resolve_vault_ids_unknown_name_raises_tool_error(config, vault_id):
     api.resolve_vault_identifier = AsyncMock(side_effect=_http_404_error())
     api.search = AsyncMock()
     out = dispatch(
-        'memex_recall',
+        'memex_memory_search',
         {'query': 'x', 'vault_ids': ['nonexistent']},
         api=api,
         config=config,
@@ -646,7 +646,7 @@ def test_recall_uses_bound_vault_when_vault_ids_omitted(config, vault_id):
     """AC-009: no ``vault_ids`` arg → ``api.search(vault_ids=[bound_vault_id], ...)``."""
     api = Mock()
     api.search = AsyncMock(return_value=[])
-    dispatch('memex_recall', {'query': 'x'}, api=api, config=config, vault_id=vault_id)
+    dispatch('memex_memory_search', {'query': 'x'}, api=api, config=config, vault_id=vault_id)
     assert api.search.call_args.kwargs['vault_ids'] == [vault_id]
 
 
@@ -657,7 +657,7 @@ def test_recall_resolves_vault_names_via_helper(config, vault_id):
     api.resolve_vault_identifier = AsyncMock(return_value=resolved)
     api.search = AsyncMock(return_value=[])
     dispatch(
-        'memex_recall',
+        'memex_memory_search',
         {'query': 'x', 'vault_ids': ['rituals']},
         api=api,
         config=config,
@@ -677,7 +677,7 @@ def test_recall_wildcard_vault_ids_lists_all(config, vault_id):
     api.list_vaults = AsyncMock(return_value=[v1, v2])
     api.search = AsyncMock(return_value=[])
     dispatch(
-        'memex_recall',
+        'memex_memory_search',
         {'query': 'x', 'vault_ids': ['*']},
         api=api,
         config=config,
@@ -691,7 +691,7 @@ def test_recall_tags_are_forwarded_unchanged(config, vault_id):
     api = Mock()
     api.search = AsyncMock(return_value=[])
     dispatch(
-        'memex_recall',
+        'memex_memory_search',
         {'query': 'x', 'tags': ['meeting']},
         api=api,
         config=config,
@@ -714,7 +714,7 @@ def test_retrieve_notes_uses_bound_vault_by_default(config, vault_id):
     api = Mock()
     api.search_notes = AsyncMock(return_value=[])
     dispatch(
-        'memex_retrieve_notes',
+        'memex_note_search',
         {'query': 'doc'},
         api=api,
         config=config,
@@ -730,7 +730,7 @@ def test_retrieve_notes_resolves_vault_names(config, vault_id):
     api.resolve_vault_identifier = AsyncMock(return_value=resolved)
     api.search_notes = AsyncMock(return_value=[])
     dispatch(
-        'memex_retrieve_notes',
+        'memex_note_search',
         {'query': 'doc', 'vault_ids': ['rituals']},
         api=api,
         config=config,
@@ -3204,7 +3204,7 @@ def test_retain_content_is_structured_markdown_via_gemini():
                     'semantic search for "conclusions" missed it. The '
                     'assistant fell back to a generalized summary of recent '
                     'activity. Capture this as a structured post-mortem via '
-                    'memex_retain with name "Retrieval Failure: Daily '
+                    'memex_add_note with name "Retrieval Failure: Daily '
                     'Reflection Conclusions", a one-sentence description, '
                     'and content covering date, symptom, root cause, outcome, '
                     'and lesson.'
@@ -3212,7 +3212,7 @@ def test_retain_content_is_structured_markdown_via_gemini():
             }
         ],
         tools=[tool],
-        tool_choice={'type': 'function', 'function': {'name': 'memex_retain'}},
+        tool_choice={'type': 'function', 'function': {'name': 'memex_add_note'}},
         temperature=0,
         timeout=30,
         api_key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'),
@@ -3220,12 +3220,12 @@ def test_retain_content_is_structured_markdown_via_gemini():
 
     tool_calls = resp.choices[0].message.tool_calls or []
     assert tool_calls, f'model did not call a tool: {resp.choices[0].message!r}'
-    retain = next((tc for tc in tool_calls if tc.function.name == 'memex_retain'), None)
+    retain = next((tc for tc in tool_calls if tc.function.name == 'memex_add_note'), None)
     assert retain is not None, f'model called a different tool: {tool_calls!r}'
 
     args = json.loads(retain.function.arguments)
     body = args.get('content', '')
-    assert body, f'memex_retain called with empty content; args={args!r}'
+    assert body, f'memex_add_note called with empty content; args={args!r}'
 
     # Structural assertions — brittle-by-design; this IS the contract.
     assert body.lstrip().startswith('# '), (
@@ -3317,10 +3317,10 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
             f'agent fetched template {slug!r}; expected agent_reflection'
         )
         return
-    if name == 'memex_retain':
+    if name == 'memex_add_note':
         template = args.get('template')
         assert template == 'agent_reflection', (
-            f'agent called memex_retain without (or with wrong) template '
+            f'agent called memex_add_note without (or with wrong) template '
             f'(template={template!r}). The routing fix must steer structured '
             f'captures to a template. Tool call args: {args!r}'
         )
@@ -3328,13 +3328,13 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
 
     pytest.fail(
         f'agent called unexpected tool {name!r}; expected one of '
-        f'memex_list_templates / memex_get_template / memex_retain. '
+        f'memex_list_templates / memex_get_template / memex_add_note. '
         f'All tool calls: {[(tc.function.name, tc.function.arguments) for tc in tool_calls]!r}'
     )
 
 
 # ---------------------------------------------------------------------------
-# memex_append (handle_append) — issue #56
+# memex_append_note (handle_append) — issue #56
 # ---------------------------------------------------------------------------
 
 
@@ -3350,9 +3350,9 @@ def _append_response(note_id, append_id, *, status='success', new_units=0):
 
 
 def test_append_schema_is_registered():
-    """memex_append must appear in ALL_SCHEMAS with its own slot."""
+    """memex_append_note must appear in ALL_SCHEMAS with its own slot."""
     names = {s['name'] for s in ALL_SCHEMAS}
-    assert 'memex_append' in names
+    assert 'memex_append_note' in names
     assert APPEND_SCHEMA['parameters']['required'] == ['delta']
 
 
@@ -3364,7 +3364,7 @@ def test_append_dispatches_with_note_key(config, vault_id):
     api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
 
     out = dispatch(
-        'memex_append',
+        'memex_append_note',
         {
             'note_key': 'hermes:session:abc',
             'delta': 'progress note',
@@ -3399,7 +3399,7 @@ def test_append_dispatches_with_note_id(config, vault_id):
     api.append_to_note = AsyncMock(return_value=_append_response(note_id, append_id))
 
     dispatch(
-        'memex_append',
+        'memex_append_note',
         {
             'note_id': str(note_id),
             'delta': 'x',
@@ -3425,14 +3425,14 @@ def test_append_auto_generates_append_id(config, vault_id):
     api.append_to_note = AsyncMock(side_effect=_fake)
 
     out1 = dispatch(
-        'memex_append',
+        'memex_append_note',
         {'note_key': 'k1', 'delta': 'one'},
         api=api,
         config=config,
         vault_id=vault_id,
     )
     out2 = dispatch(
-        'memex_append',
+        'memex_append_note',
         {'note_key': 'k1', 'delta': 'two'},
         api=api,
         config=config,
@@ -3449,7 +3449,7 @@ def test_append_missing_delta_returns_error(config, vault_id):
     api.append_to_note = AsyncMock()
 
     out = dispatch(
-        'memex_append',
+        'memex_append_note',
         {'note_key': 'k'},
         api=api,
         config=config,
@@ -3466,7 +3466,7 @@ def test_append_missing_identifier_returns_error(config, vault_id):
     api.append_to_note = AsyncMock()
 
     out = dispatch(
-        'memex_append',
+        'memex_append_note',
         {'delta': 'x'},
         api=api,
         config=config,
@@ -3489,7 +3489,7 @@ def test_append_api_failure_returns_error(config, vault_id):
     )
 
     out = dispatch(
-        'memex_append',
+        'memex_append_note',
         {'note_key': 'k', 'delta': 'x'},
         api=api,
         config=config,

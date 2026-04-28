@@ -10,7 +10,7 @@ See `memex/README.md` for the plugin-local documentation shown by `hermes memory
 
 Most agent memory backends are opaque: a SaaS vendor decides what gets stored, how it is indexed, and when it is surfaced. Memex takes the opposite approach. You own the Postgres database, the markdown files, the vault structure. You can inspect, export, or migrate at any time.
 
-Inside Hermes, Memex exposes a tool family covering memory-unit recall (facts/observations/events), whole-note retrieval, query-decomposing surveys, ingestion (`memex_retain` for new notes, `memex_append` for delta-only progress), the knowledge graph, note lifecycle, templates, assets, and namespaced operational state via the KV store. A session briefing — including a storage-model primer that explains how Memex's three layers (notes / memory units / KV) interact — is injected into the system prompt at startup; the full transcript is ingested at session end. Per-project vault binding mirrors the pattern used by Memex's Claude Code plugin.
+Inside Hermes, Memex exposes a tool family covering memory-unit recall (facts/observations/events), whole-note retrieval, query-decomposing surveys, ingestion (`memex_add_note` for new notes, `memex_append_note` for delta-only progress), the knowledge graph, note lifecycle, templates, assets, and namespaced operational state via the KV store. A session briefing — including a storage-model primer that explains how Memex's three layers (notes / memory units / KV) interact — is injected into the system prompt at startup; the full transcript is ingested at session end. Per-project vault binding mirrors the pattern used by Memex's Claude Code plugin.
 
 ## Prerequisites
 
@@ -97,7 +97,7 @@ The plugin writes non-secret config to `$HERMES_HOME/memex/config.json`. Secrets
 | `recall.notes_limit` | `3` | Prefetch note count |
 | `recall.strategies` | `[semantic, keyword, temporal, graph, mental_model]` | TEMPR strategies to fuse |
 | `recall.token_budget` | `2048` | Token budget per recall |
-| `recall.include_stale` | `false` | Include stale memory units in prefetch (the `memex_recall` tool exposes `include_stale` for ad-hoc filtering) |
+| `recall.include_stale` | `false` | Include stale memory units in prefetch (the `memex_memory_search` tool exposes `include_stale` for ad-hoc filtering) |
 | `recall.include_superseded` | `false` | Include superseded memory units in prefetch (no tool-level toggle currently — superseded is config-only) |
 | `recall.expand_query` | `false` | LLM query expansion for prefetch |
 | `retain.session_template` | `hermes-session` | Template name for session notes |
@@ -123,11 +123,11 @@ Primary tools (the ones the LLM reaches for most often):
 
 | Tool | Purpose |
 |---|---|
-| `memex_recall` | Search memory units (facts/observations/events). TEMPR fusion. |
-| `memex_retrieve_notes` | Search whole notes ranked by relevance. |
+| `memex_memory_search` | Search memory units (facts/observations/events). TEMPR fusion. |
+| `memex_note_search` | Search whole notes ranked by relevance. |
 | `memex_survey` | Decompose a broad query into sub-questions; server fans out. |
-| `memex_retain` | Ingest a NEW note, or fully overwrite an existing one. |
-| `memex_append` | Atomically append a delta to an existing note (preferred over re-`retain` for in-progress notes). |
+| `memex_add_note` | Ingest a NEW note, or fully overwrite an existing one. |
+| `memex_append_note` | Atomically append a delta to an existing note (preferred over re-`retain` for in-progress notes). |
 | `memex_list_entities` | Search entities by name/type. |
 | `memex_get_entity_mentions` | Source memory units mentioning a specific entity. |
 | `memex_get_entity_cooccurrences` | Related entities with co-occurrence counts. |
@@ -136,11 +136,11 @@ Additional tools cover note lifecycle (`memex_set_note_status`, `memex_update_us
 
 ### Routing (delivered via the system prompt)
 
-- **Content lookup** — `memex_recall` + `memex_retrieve_notes` in parallel (same assistant message).
+- **Content lookup** — `memex_memory_search` + `memex_note_search` in parallel (same assistant message).
 - **Broad / panoramic query** — `memex_survey` (single call).
 - **Entity graph** — `memex_list_entities` first; then `memex_get_entity_mentions` and/or `memex_get_entity_cooccurrences` (safe to parallelise if both are needed).
 - **Title known** — `memex_find_note` with a title fragment.
-- **Capturing work** — `memex_retain` for a fresh note; `memex_append` to extend the running session note (or any existing note) without re-sending the full body.
+- **Capturing work** — `memex_add_note` for a fresh note; `memex_append_note` to extend the running session note (or any existing note) without re-sending the full body.
 
 ## Memory modes
 

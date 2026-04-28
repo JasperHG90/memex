@@ -31,10 +31,10 @@ async def test_asset_add_list_get_round_trip(initialized_provider, live_api, liv
     Byte-equality after the round trip proves the full stack preserves
     binary content across the Hermes base64 ↔ bytes boundary.
     """
-    # 1. Seed a note via memex_retain (matches test_retain_roundtrip_via_real_server pattern).
+    # 1. Seed a note via memex_add_note (matches test_retain_roundtrip_via_real_server pattern).
     marker = f'asset-rt-{uuid4().hex}'
     retain_raw = initialized_provider.handle_tool_call(
-        'memex_retain',
+        'memex_add_note',
         {
             'name': marker,
             'description': 'asset round-trip integration test',

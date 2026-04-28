@@ -1,9 +1,11 @@
 """Session note key lifecycle.
 
 Each Hermes session gets a unique ``note_key`` that the plugin exposes to the
-model via ``system_prompt_block``. The model calls ``memex_retain(note_key=...)``
-to append meaningful progress; ``on_session_end`` finalizes the note with the
-full transcript. Memex's note-key upsert semantics handle idempotency.
+model via ``system_prompt_block``. The model calls
+``memex_append_note(note_key=...)`` to add meaningful progress, or
+``memex_add_note(note_key=...)`` for the initial capture or a full overwrite;
+``on_session_end`` finalizes the note with the full transcript. Memex's
+note-key upsert semantics handle idempotency.
 """
 
 from __future__ import annotations

@@ -126,16 +126,16 @@ def test_routing_guide_documents_vault_discovery():
 
 
 def test_routing_guide_title_bullet_uses_find_note():
-    """AC-089: Title known bullet must reference memex_find_note, not memex_retrieve_notes."""
+    """AC-089: Title known bullet must reference memex_find_note, not memex_note_search."""
     assert '**Title known**' in _ROUTING_GUIDE
     assert 'memex_find_note' in _ROUTING_GUIDE
-    # Title-known bullet must no longer point at retrieve_notes for title lookups.
+    # Title-known bullet must no longer point at note_search for title lookups.
     title_idx = _ROUTING_GUIDE.index('**Title known**')
     next_bullet = _ROUTING_GUIDE.find('\n- **', title_idx)
     title_bullet = (
         _ROUTING_GUIDE[title_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[title_idx:]
     )
-    assert 'memex_retrieve_notes' not in title_bullet
+    assert 'memex_note_search' not in title_bullet
 
 
 def test_routing_guide_documents_kv_store():

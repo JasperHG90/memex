@@ -81,11 +81,11 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
     names = {s['name'] for s in schemas}
     expected = {
         # Stream 1 (vault-scoped)
-        'memex_recall',
-        'memex_retrieve_notes',
+        'memex_memory_search',
+        'memex_note_search',
         'memex_survey',
-        'memex_retain',
-        'memex_append',
+        'memex_add_note',
+        'memex_append_note',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
@@ -135,7 +135,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
 class TestGetToolSchemasBeforeInitialize:
     def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
-        pre-init. After Stream 6 + asset disk-handoff + memex_append we
+        pre-init. After Stream 6 + asset disk-handoff + memex_append_note we
         register exactly 36 tools (8 Stream-1 baseline + 27 from prior
         streams + memex_resize_image), and the assertion is strict equality.
         """
@@ -145,11 +145,11 @@ class TestGetToolSchemasBeforeInitialize:
         names = {s['name'] for s in schemas}
         expected = {
             # Stream 1 (vault-scoped)
-            'memex_recall',
-            'memex_retrieve_notes',
+            'memex_memory_search',
+            'memex_note_search',
             'memex_survey',
-            'memex_retain',
-            'memex_append',
+            'memex_add_note',
+            'memex_append_note',
             'memex_list_entities',
             'memex_get_entity_mentions',
             'memex_get_entity_cooccurrences',
@@ -200,7 +200,7 @@ class TestGetToolSchemasBeforeInitialize:
         initialized provider whose config explicitly says ``context`` hides them.
         """
         # Pre-init: full 36-tool set (8 Stream 1 baseline including
-        # memex_append + 27 from prior streams + memex_resize_image).
+        # memex_append_note + 27 from prior streams + memex_resize_image).
         p = MemexMemoryProvider()
         assert len(p.get_tool_schemas()) == 36
 

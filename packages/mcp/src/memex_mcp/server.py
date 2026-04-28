@@ -1130,7 +1130,7 @@ async def memex_add_note(
     description=(
         'Atomically append new content to an existing note. Send only the delta '
         '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_add_note / memex_retain when adding to a '
+        'this in preference to memex_add_note when adding to a '
         'known existing note (e.g. a session log, an ongoing reflection). '
         'Identify the note by the note_key you set when creating it (preferred); '
         'note_id is also accepted if you already have one from a search.'

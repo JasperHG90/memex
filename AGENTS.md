@@ -60,7 +60,7 @@ Python monorepo managed by `uv` with 8 packages.
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
 | `packages/firefox-extension` | — | TypeScript/WebExtension for saving pages to Memex |
 | `packages/claude-code-plugin` | — | Claude Code plugin: `/remember` and `/recall` skills, session hooks, MCP server config |
-| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — primary tools (recall, retrieve_notes, survey, retain, append, list_entities, get_entity_mentions, get_entity_cooccurrences) plus note lifecycle, templates, assets, and KV surfaces (~36 schemas total). Session briefings include a storage-model primer (notes / memory units / KV) and per-project vault binding |
+| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — primary tools (memory_search, note_search, survey, add_note, append_note, list_entities, get_entity_mentions, get_entity_cooccurrences) plus note lifecycle, templates, assets, and KV surfaces (~36 schemas total). Tool names mirror the MCP server. Session briefings include a storage-model primer (notes / memory units / KV) and per-project vault binding |
 
 ### Dependency graph
 
@@ -131,7 +131,7 @@ Embedding and reranking models are configurable via `server.embedding_model` and
 ### Key architectural patterns
 
 - **Distributed reflection queue**: PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming
-- **Note identity is stable; content is mutable in place**. Each note has a stable `note_id` (derived deterministically from `note_key + vault_id`). Two ways to update an existing note's body, both keeping the same `note_id`: (a) **append** — `memex_append_note(note_key=...)` adds a delta to the end (issue #56); (b) **overwrite** — `memex_retain(note_key=...)` / `memex_add_note(note_key=...)` re-ingests the full body. Both run incremental block-diff extraction (only changed chunks invoke the LLM). Lifecycle states (`active` / `superseded` / `archived`) gate operations: appends/overwrites are rejected on non-`active` parents; status transitions are non-destructive. The audit log (`note_appends`, `audit_events`) is genuinely append-only — every mutation leaves a row.
+- **Note identity is stable; content is mutable in place**. Each note has a stable `note_id` (derived deterministically from `note_key + vault_id`). Two ways to update an existing note's body, both keeping the same `note_id`: (a) **append** — `memex_append_note(note_key=...)` adds a delta to the end (issue #56); (b) **overwrite** — `memex_add_note(note_key=...)` re-ingests the full body. Both run incremental block-diff extraction (only changed chunks invoke the LLM). Lifecycle states (`active` / `superseded` / `archived`) gate operations: appends/overwrites are rejected on non-`active` parents; status transitions are non-destructive. The audit log (`note_appends`, `audit_events`) is genuinely append-only — every mutation leaves a row.
 - **fsspec abstraction**: storage is backend-agnostic (local, S3, GCS)
 - **Circuit breaker**: LLM call resilience with Prometheus metrics
 - **Leader election**: Postgres advisory locks for background reflection scheduling

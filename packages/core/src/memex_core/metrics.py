@@ -107,5 +107,5 @@ NOTE_APPEND_DURATION_SECONDS = Histogram(
 NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL = Counter(
     'memex_retain_with_existing_note_key_total',
     'Ingestions that re-used an existing non-empty note (candidate for memex_append_note).',
-    ['surface'],  # ingest_api | mcp_add_note | hermes_retain
+    ['surface'],  # ingest_api | mcp_add_note | hermes_add_note
 )

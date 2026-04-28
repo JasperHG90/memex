@@ -25,11 +25,11 @@ Config lives at `$HERMES_HOME/memex/config.json`. Secrets (API key) go to `$HERM
 
 Primary tools:
 
-- `memex_recall` — memory-unit search (facts, observations, events)
-- `memex_retrieve_notes` — whole-note search
+- `memex_memory_search` — memory-unit search (facts, observations, events)
+- `memex_note_search` — whole-note search
 - `memex_survey` — broad query decomposition (server-side parallel fan-out)
-- `memex_retain` — ingest a NEW note (or fully overwrite an existing one)
-- `memex_append` — atomic delta-append to an existing note
+- `memex_add_note` — ingest a NEW note (or fully overwrite an existing one)
+- `memex_append_note` — atomic delta-append to an existing note
 - `memex_list_entities` — entity-graph search
 - `memex_get_entity_mentions` — source memory units mentioning an entity
 - `memex_get_entity_cooccurrences` — related entities

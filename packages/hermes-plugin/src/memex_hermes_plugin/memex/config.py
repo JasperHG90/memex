@@ -55,7 +55,7 @@ class RetainConfig(BaseModel):
     # Format string for the session-note title. Available substitutions:
     #   {agent_identity} {platform} {date} {session_id} {session_id_short}
     # The agent can also override the title mid-session by calling
-    # ``memex_retain(name=..., note_key=<session_note_key>)`` directly.
+    # ``memex_add_note(name=..., note_key=<session_note_key>)`` directly.
     session_title_template: str = 'Hermes session [{agent_identity}@{platform}] — {date}'
 
 

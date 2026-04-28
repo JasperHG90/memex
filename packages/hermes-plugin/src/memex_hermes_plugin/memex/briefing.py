@@ -93,7 +93,7 @@ _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
 Three layers:
 
 - **Notes** — source markdown documents. `note_key` upsert creates new
-  versions; old versions stay queryable. Use `memex_append` to extend an
+  versions; old versions stay queryable. Use `memex_append_note` to extend an
   existing note instead of re-sending the whole body.
 - **Memory units** — atomic facts/events extracted from notes at ingestion.
   **Append-only.** Contradiction detection runs at extraction time: it
@@ -125,7 +125,7 @@ Match the tool to the query type:
   of a vault's contents.
 - **Title known** → `memex_find_note(query="title fragment")` for title lookups.
   Returns note IDs and match scores.
-- **Content / document lookup** → call `memex_recall` AND `memex_retrieve_notes`
+- **Content / document lookup** → call `memex_memory_search` AND `memex_note_search`
   in the same assistant message. Recall returns distilled memory units;
   retrieve_notes returns source documents. Use both only when the query
   genuinely benefits — a simple title lookup doesn't.
@@ -152,15 +152,15 @@ Match the tool to the query type:
   MUST start with `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
   Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
-    - `memex_retain` for a NEW note (or to fully overwrite an existing one).
+    - `memex_add_note` for a NEW note (or to fully overwrite an existing one).
       Pass a fresh note_key for a one-off capture.
-    - `memex_append(note_key=..., delta=...)` to ADD progress to an existing
+    - `memex_append_note(note_key=..., delta=...)` to ADD progress to an existing
       note (the running session note, an ongoing reflection, a meeting log).
       Send only the new content — the server reads the existing body and
-      concatenates atomically. Prefer this over re-`memex_retain`-ing the
+      concatenates atomically. Prefer this over re-`memex_add_note`-ing the
       whole body each turn.
 - **Templates for structured captures** → `memex_list_templates` to see slugs,
-  `memex_get_template(slug)` for the markdown scaffold, then `memex_retain(...,
+  `memex_get_template(slug)` for the markdown scaffold, then `memex_add_note(...,
   template=slug)` so the note is tagged for filtering. Prefer a template for
   ADRs, retros, technical briefs, RFCs, or any note with clear sections."""
 
@@ -189,10 +189,10 @@ def format_briefing_block(
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '
-        '`memex_append(note_key="...", delta="...")` with this key to add '
+        '`memex_append_note(note_key="...", delta="...")` with this key to add '
         'meaningful progress to the running session note — only the delta '
         'goes over the wire and the server concatenates atomically. '
-        'Use `memex_retain(note_key="...")` only for the FIRST capture or to '
+        'Use `memex_add_note(note_key="...")` only for the FIRST capture or to '
         'fully replace the body; otherwise prefer append.'
     )
 

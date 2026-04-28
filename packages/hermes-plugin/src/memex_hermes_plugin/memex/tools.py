@@ -2,10 +2,10 @@
 
 Seven tools are exposed (in ``hybrid`` and ``tools`` memory modes):
 
-- ``memex_recall`` — memory-unit search (TEMPR)
-- ``memex_retrieve_notes`` — whole-note search
+- ``memex_memory_search`` — memory-unit search (TEMPR)
+- ``memex_note_search`` — whole-note search
 - ``memex_survey`` — broad query decomposition
-- ``memex_retain`` — explicit ingest (supports session-note append)
+- ``memex_add_note`` — explicit ingest (supports session-note append)
 - ``memex_list_entities`` — entity-graph search
 - ``memex_get_entity_mentions`` — source facts for an entity
 - ``memex_get_entity_cooccurrences`` — related entities
@@ -199,7 +199,7 @@ def _resolve_vault_ids(
 # --- Vault-scoped (Stream 1) ---
 
 RECALL_SCHEMA: dict[str, Any] = {
-    'name': 'memex_recall',
+    'name': 'memex_memory_search',
     'description': (
         'Search memory units — individual facts, observations, and events '
         'extracted from stored notes. Uses TEMPR: temporal + entity + '
@@ -250,7 +250,7 @@ RECALL_SCHEMA: dict[str, Any] = {
 }
 
 RETRIEVE_NOTES_SCHEMA: dict[str, Any] = {
-    'name': 'memex_retrieve_notes',
+    'name': 'memex_note_search',
     'description': (
         'Search whole notes ranked by relevance. Returns note metadata plus '
         'section summaries (topic + key points). Returns source documents, '
@@ -303,11 +303,11 @@ SURVEY_SCHEMA: dict[str, Any] = {
 }
 
 RETAIN_SCHEMA: dict[str, Any] = {
-    'name': 'memex_retain',
+    'name': 'memex_add_note',
     'description': (
         'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
         'If note_key matches an existing note the content is upserted. For appending '
-        'NEW content to a session note (or any existing note) prefer memex_append — '
+        'NEW content to a session note (or any existing note) prefer memex_append_note — '
         'it sends only the delta and is atomic, avoiding the full-body re-send. '
         'For structured captures (ADRs, retros, technical briefs, RFCs), call '
         'memex_list_templates first and pass the chosen slug as `template` for '
@@ -358,7 +358,7 @@ RETAIN_SCHEMA: dict[str, Any] = {
                 'description': (
                     'Stable key for upsert — passing an existing key REPLACES '
                     "the note's body. To extend an existing note (e.g. the "
-                    'running session note), use `memex_append` instead, which '
+                    'running session note), use `memex_append_note` instead, which '
                     'sends only the delta. Omit for a fresh note.'
                 ),
             },
@@ -377,11 +377,11 @@ RETAIN_SCHEMA: dict[str, Any] = {
 }
 
 APPEND_SCHEMA: dict[str, Any] = {
-    'name': 'memex_append',
+    'name': 'memex_append_note',
     'description': (
         'Atomically append new content to an existing note. Send ONLY the delta '
         '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_retain when continuing an in-progress note '
+        'this in preference to memex_add_note when continuing an in-progress note '
         '(e.g. the running session note): the round-trip cost is the delta size, '
         'not the cumulative body, and concurrent agents on the same note serialise '
         'cleanly. Identify the note by note_key (preferred) or note_id.'
@@ -553,7 +553,7 @@ FIND_NOTE_SCHEMA: dict[str, Any] = {
     'description': (
         'Fuzzy title search for notes. Returns note IDs, titles, and similarity '
         'scores. Use when you know (part of) the title; for content search use '
-        'memex_retrieve_notes.'
+        'memex_note_search.'
     ),
     'parameters': {
         'type': 'object',
@@ -633,7 +633,7 @@ GET_NOTES_METADATA_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_notes_metadata',
     'description': (
         'Batch-fetch metadata (title, tags, token count, has_assets) for 1+ '
-        'notes. Use after memex_recall to filter results before reading.'
+        'notes. Use after memex_memory_search to filter results before reading.'
     ),
     'parameters': {
         'type': 'object',
@@ -957,7 +957,7 @@ GET_TEMPLATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_template',
     'description': (
         'Fetch a markdown scaffold to follow when writing a structured note. '
-        'Call this BEFORE memex_retain for ADRs, retros, technical briefs, RFCs, '
+        'Call this BEFORE memex_add_note for ADRs, retros, technical briefs, RFCs, '
         'or any note with clear sections. Use memex_list_templates to discover slugs.'
     ),
     'parameters': {
@@ -977,7 +977,7 @@ LIST_TEMPLATES_SCHEMA: dict[str, Any] = {
     'description': (
         'List note templates (built-in + user-registered). Call this when about to '
         'capture structured content — pick a slug, fetch the body with '
-        'memex_get_template, then pass `template=slug` to memex_retain.'
+        'memex_get_template, then pass `template=slug` to memex_add_note.'
     ),
     'parameters': {
         'type': 'object',
@@ -1151,8 +1151,8 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
         'Write a namespaced operational pointer to the KV store — a '
         'preference, project binding, or convention. Generates a semantic '
         'embedding for fuzzy lookup. NOT for facts learned from content; '
-        'those become memory units when you `memex_retain` (or '
-        '`memex_append`) a note. Key must start with global:, user:, '
+        'those become memory units when you `memex_add_note` (or '
+        '`memex_append_note`) a note. Key must start with global:, user:, '
         'project:, or app:. Examples: "global:lang:python:version", '
         '"user:work:employer", "project:github.com/user/repo:vault", '
         '"app:claude-code:theme".'
@@ -1474,7 +1474,7 @@ def handle_recall(
             timeout=60.0,
         )
     except Exception as e:
-        logger.warning('memex_recall failed: %s', e)
+        logger.warning('memex_memory_search failed: %s', e)
         return tool_error(f'Recall failed: {e}')
 
     items = [_serialize_memory_unit(u) for u in (results or [])]
@@ -1505,7 +1505,7 @@ def handle_retrieve_notes(
             timeout=60.0,
         )
     except Exception as e:
-        logger.warning('memex_retrieve_notes failed: %s', e)
+        logger.warning('memex_note_search failed: %s', e)
         return tool_error(f'Note search failed: {e}')
 
     items = [_serialize_note_result(r) for r in (results or [])]
@@ -1600,7 +1600,7 @@ def handle_retain(
     try:
         result = run_sync(api.ingest(dto, background=True), timeout=30.0)
     except Exception as e:
-        logger.warning('memex_retain failed: %s', e)
+        logger.warning('memex_add_note failed: %s', e)
         return tool_error(f'Retain failed: {e}')
 
     return json.dumps(
@@ -1667,7 +1667,7 @@ def handle_append(
     try:
         response = run_sync(api.append_to_note(request), timeout=60.0)
     except Exception as e:
-        logger.warning('memex_append failed: %s', e)
+        logger.warning('memex_append_note failed: %s', e)
         return tool_error(f'Append failed: {e}')
 
     return json.dumps(
@@ -2622,7 +2622,7 @@ def handle_list_templates(
             'results': results,
             'next': (
                 'memex_get_template(slug) → write content following the structure → '
-                'memex_retain(..., template=slug) so the note is tagged for filtering.'
+                'memex_add_note(..., template=slug) so the note is tagged for filtering.'
             ),
         }
     )
@@ -3015,11 +3015,11 @@ class _AssetCacheHandler(Protocol):
 
 HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     # --- Vault-scoped (Stream 1) ---
-    'memex_recall': handle_recall,
-    'memex_retrieve_notes': handle_retrieve_notes,
+    'memex_memory_search': handle_recall,
+    'memex_note_search': handle_retrieve_notes,
     'memex_survey': handle_survey,
-    'memex_retain': handle_retain,
-    'memex_append': handle_append,
+    'memex_add_note': handle_retain,
+    'memex_append_note': handle_append,
     'memex_list_entities': handle_list_entities,
     'memex_get_entity_mentions': handle_get_entity_mentions,
     'memex_get_entity_cooccurrences': handle_get_entity_cooccurrences,
