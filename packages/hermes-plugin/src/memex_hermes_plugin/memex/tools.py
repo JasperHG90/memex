@@ -883,7 +883,7 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
         'Set note lifecycle status: active, superseded, appended, or archived. '
         '**Cascading side-effect:** marking a note `superseded` flags every '
         'memory unit extracted from it as stale. Prefer letting contradiction '
-        'detection auto-supersede facts via a new retained note; reach for '
+        'detection auto-supersede facts via a new ingested note; reach for '
         'this tool only for explicit archival or when an immediate state '
         'change is required. Optionally link to the replacing/parent note via '
         'linked_note_id.'

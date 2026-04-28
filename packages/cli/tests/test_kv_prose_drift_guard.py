@@ -137,11 +137,20 @@ def test_storage_layer_terminology_is_consistent_in_mcp_instructions():
     """MCP instructions must teach the three-layer storage model up front."""
     text = _read('packages/mcp/src/memex_mcp/server.py')
     assert 'STORAGE MODEL' in text
-    # Storage model section must contain the three layers and append-only.
+    # Scope to the STORAGE MODEL section so an unrelated ``**KV store**`` /
+    # ``**Notes**`` heading appearing elsewhere in the file (e.g. a future
+    # KV tool docstring) cannot satisfy the markers on its own. The section
+    # ends at the next top-level marker (``ROUTING``).
+    section_start = text.index('STORAGE MODEL')
+    assert 'ROUTING' in text[section_start:], (
+        "'ROUTING' marker missing after STORAGE MODEL — section boundary drifted"
+    )
+    section_end = text.index('ROUTING', section_start)
+    section = text[section_start:section_end]
     for marker in (
         '**Notes**',
         '**Memory units**',
         '**KV store**',
         'Append-only',
     ):
-        assert marker in text, f'{marker!r} missing from MCP storage model'
+        assert marker in section, f'{marker!r} missing from MCP storage model section'

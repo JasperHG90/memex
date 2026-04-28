@@ -110,7 +110,7 @@ synthesises **observations** about entities, bundled into versioned
 per-entity **mental models** with trend tracking
 (new/strengthening/stable/weakening/stale). Trends live on observations,
 not on memory units. Reflection output is read-only — surface it via
-recall."""
+search."""
 
 
 _ROUTING_GUIDE = """### How to use Memex tools

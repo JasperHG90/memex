@@ -82,15 +82,17 @@ def test_get_tool_schemas_at_registration_time(loaded_provider):
     )
     schemas = loaded_provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
-    assert names == {
+    # Stream-1 baseline must always be exposed pre-init; later streams add more.
+    assert {
         'memex_memory_search',
         'memex_note_search',
         'memex_survey',
         'memex_add_note',
+        'memex_append_note',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
-    }, f'Pre-init schemas must cover the full tool set — got {names!r}'
+    } <= names, f'Pre-init schemas must cover the Stream-1 baseline — got {names!r}'
 
 
 @pytest.mark.asyncio
