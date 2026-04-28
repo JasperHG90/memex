@@ -126,8 +126,8 @@ Match the tool to the query type:
 - **Title known** → `memex_find_note(query="title fragment")` for title lookups.
   Returns note IDs and match scores.
 - **Content / document lookup** → call `memex_memory_search` AND `memex_note_search`
-  in the same assistant message. Recall returns distilled memory units;
-  retrieve_notes returns source documents. Use both only when the query
+  in the same assistant message. memory_search returns distilled memory
+  units; note_search returns source documents. Use both only when the query
   genuinely benefits — a simple title lookup doesn't.
 - **Broad / panoramic** ("what do you know about X?", "overview of X") →
   start with `memex_get_vault_summary(vault_id="...")` — it's cheap and
