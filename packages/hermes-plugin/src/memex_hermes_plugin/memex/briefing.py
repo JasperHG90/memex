@@ -100,7 +100,7 @@ Three layers:
   records typed links and lowers an older unit's confidence when a new
   note conflicts with it. Note supersession cascades to stale on its
   memory units. Don't try to edit, replace, or delete memory units — to
-  record a change, retain a new note.
+  record a change, add a new note via `memex_add_note`.
 - **KV store** — namespaced operational state (preferences, project
   bindings, conventions). Mutable upsert by exact key; entries support
   TTL.

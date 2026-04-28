@@ -242,9 +242,9 @@ RECALL_SCHEMA: dict[str, Any] = {
                 'description': (
                     'Include stale memory units — facts whose supporting '
                     'evidence has decayed over time. Distinct from superseded '
-                    'units (those replaced by a newer note); recall does not '
-                    'currently expose superseded filtering at the tool level '
-                    '(default: false).'
+                    'units (those replaced by a newer note); this tool does '
+                    'not currently expose superseded filtering at the tool '
+                    'level (default: false).'
                 ),
             },
         },
