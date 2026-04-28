@@ -16,7 +16,12 @@ console = Console()
 
 app = typer.Typer(
     name='kv',
-    help='Key-value fact store (lightweight structured memory).',
+    help=(
+        'Key-value store for namespaced operational state — preferences, '
+        'project bindings, conventions. Not for facts learned from content; '
+        'use `memex note add` for that (extraction turns content into memory '
+        'units).'
+    ),
     no_args_is_help=True,
 )
 
@@ -25,7 +30,10 @@ app = typer.Typer(
 @async_command
 async def kv_write(
     ctx: typer.Context,
-    value: Annotated[str, typer.Argument(help='The fact/value to store.')],
+    value: Annotated[
+        str,
+        typer.Argument(help="The pointer's value (preference, binding, or convention)."),
+    ],
     key: Annotated[
         str,
         typer.Option(
@@ -40,7 +48,7 @@ async def kv_write(
     ] = None,
 ):
     """
-    Write a fact to the KV store. Key must be namespace-prefixed.
+    Write an operational pointer to the KV store. Key must be namespace-prefixed.
     """
     config: MemexConfig = ctx.obj
 
@@ -65,7 +73,7 @@ async def kv_get(
     ] = False,
 ):
     """
-    Get a fact by exact key.
+    Get a KV entry by exact key.
     """
     config: MemexConfig = ctx.obj
 
@@ -103,7 +111,7 @@ async def kv_search(
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    Fuzzy search facts by semantic similarity.
+    Fuzzy search KV entries by semantic similarity.
     """
     config: MemexConfig = ctx.obj
 
@@ -153,7 +161,7 @@ async def kv_list(
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    List all facts in the KV store.
+    List KV entries (preferences, project bindings, conventions).
     """
     config: MemexConfig = ctx.obj
 
@@ -194,7 +202,7 @@ async def kv_delete(
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
-    Delete a fact by key.
+    Delete a KV entry by key.
     """
     config: MemexConfig = ctx.obj
 

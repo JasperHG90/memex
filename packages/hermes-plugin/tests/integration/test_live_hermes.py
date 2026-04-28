@@ -46,17 +46,19 @@ def test_initialize_resolves_vault_and_fetches_real_briefing(
     assert initialized_provider._session_note_key in block
 
 
-def test_get_tool_schemas_exposes_7_tools(initialized_provider):
+def test_get_tool_schemas_exposes_stream_1_tools(initialized_provider):
+    """The 8 Stream-1 tools must always be exposed (others are mode-dependent)."""
     names = {s['name'] for s in initialized_provider.get_tool_schemas()}
-    assert names == {
-        'memex_recall',
-        'memex_retrieve_notes',
+    assert {
+        'memex_memory_search',
+        'memex_note_search',
         'memex_survey',
-        'memex_retain',
+        'memex_add_note',
+        'memex_append_note',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
-    }
+    } <= names
 
 
 def test_get_tool_schemas_at_registration_time(loaded_provider):
@@ -80,23 +82,25 @@ def test_get_tool_schemas_at_registration_time(loaded_provider):
     )
     schemas = loaded_provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
-    assert names == {
-        'memex_recall',
-        'memex_retrieve_notes',
+    # Stream-1 baseline must always be exposed pre-init; later streams add more.
+    assert {
+        'memex_memory_search',
+        'memex_note_search',
         'memex_survey',
-        'memex_retain',
+        'memex_add_note',
+        'memex_append_note',
         'memex_list_entities',
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
-    }, f'Pre-init schemas must cover the full tool set — got {names!r}'
+    } <= names, f'Pre-init schemas must cover the Stream-1 baseline — got {names!r}'
 
 
 @pytest.mark.asyncio
-async def test_retain_roundtrip_via_real_server(initialized_provider, live_api, live_vault: UUID):
-    """memex_retain → note lands in Postgres; verified by listing server-side."""
+async def test_add_note_roundtrip_via_real_server(initialized_provider, live_api, live_vault: UUID):
+    """memex_add_note → note lands in Postgres; verified by listing server-side."""
     marker = f'integration-marker-{UUID(int=0).hex}'
     result = initialized_provider.handle_tool_call(
-        'memex_retain',
+        'memex_add_note',
         {
             'name': 'integration-note',
             'description': 'integration test capture',
@@ -168,9 +172,9 @@ def test_list_entities_on_empty_graph_returns_empty(initialized_provider):
     assert data['results'] == []
 
 
-def test_recall_with_no_matches_returns_empty(initialized_provider):
+def test_memory_search_with_no_matches_returns_empty(initialized_provider):
     result = initialized_provider.handle_tool_call(
-        'memex_recall', {'query': 'zyxwvutsrq-no-match-hermes-integration'}
+        'memex_memory_search', {'query': 'zyxwvutsrq-no-match-hermes-integration'}
     )
     data = json.loads(result)
     assert 'error' not in data

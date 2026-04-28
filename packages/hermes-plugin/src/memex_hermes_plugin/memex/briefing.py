@@ -88,25 +88,53 @@ class BriefingCache:
             self._ready.clear()
 
 
+_STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
+
+Three layers:
+
+- **Notes** — source markdown documents. `note_key` upsert creates new
+  versions; old versions stay queryable. Use `memex_append_note` to extend an
+  existing note instead of re-sending the whole body.
+- **Memory units** — atomic facts/events extracted from notes at ingestion.
+  **Append-only.** Contradiction detection runs at extraction time: it
+  records typed links and lowers an older unit's confidence when a new
+  note conflicts with it. Note supersession cascades to stale on its
+  memory units. Don't try to edit, replace, or delete memory units — to
+  record a change, add a new note via `memex_add_note`.
+- **KV store** — namespaced operational state (preferences, project
+  bindings, conventions). Mutable upsert by exact key; entries support
+  TTL.
+
+Reflection is a separate background loop that reads memory units and
+synthesises **observations** about entities, bundled into versioned
+per-entity **mental models** with trend tracking
+(new/strengthening/stable/weakening/stale). Trends live on observations,
+not on memory units. Reflection output is read-only — surface it via
+search."""
+
+
 _ROUTING_GUIDE = """### How to use Memex tools
 
 Match the tool to the query type:
 
-- **Title known** → `memex_find_note(query="title fragment")` for title lookups.
-  Returns note IDs and match scores.
 - **Vault scoping** — pass `vault_ids=["my-vault", "rituals"]` or `vault_ids=["*"]`
   for all vaults. Omit to use the session-bound vault. Do NOT use `tags` for
   vault filtering — `tags` filters note metadata (e.g. "meeting", "bug").
 - **Vault discovery** → `memex_list_vaults()` to enumerate available vaults;
   `memex_get_vault_summary(vault_id="...")` for a precomputed narrative view
   of a vault's contents.
-- **Content / document lookup** → call `memex_recall` AND `memex_retrieve_notes`
-  in the same assistant message. Recall returns distilled facts; retrieve_notes
-  returns source documents. Use both only when the query genuinely benefits —
-  a simple title lookup doesn't.
+- **Title known** → `memex_find_note(query="title fragment")` for title lookups.
+  Returns note IDs and match scores.
+- **Content / document lookup** → call `memex_memory_search` AND `memex_note_search`
+  in the same assistant message. memory_search returns distilled memory
+  units; note_search returns source documents. Use both only when the query
+  genuinely benefits — a simple title lookup doesn't.
 - **Broad / panoramic** ("what do you know about X?", "overview of X") →
-  `memex_survey(query)` as a single call. The server decomposes into
-  sub-questions and fans out in parallel.
+  start with `memex_get_vault_summary(vault_id="...")` — it's cheap and
+  precomputed, and often answers the question on its own. Escalate to
+  `memex_survey(query)` only if the summary is too coarse: survey
+  decomposes into sub-questions and fans out in parallel, which is more
+  thorough but much more expensive.
 - **Relationships / entities** → `memex_list_entities` first, then
   `memex_get_entity_mentions` and/or `memex_get_entity_cooccurrences` with the
   returned entity_id. The latter two are safe to call in parallel if both are
@@ -118,20 +146,21 @@ Match the tool to the query type:
   links (temporal / semantic / causal / contradiction) between memory units;
   `memex_get_lineage(entity_type=..., entity_id=...)` for the provenance chain
   (note ↔ memory_unit ↔ observation ↔ mental_model).
-- **KV store** → persist facts and preferences across sessions with
-  `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)`
-  / `memex_kv_list()`. Keys MUST start with a namespace: `global:`, `user:`,
-  `project:<id>:`, or `app:<id>:`. Deletion is CLI-only (use `memex kv delete`).
+- **KV store** → namespaced operational state — preferences, project
+  bindings, conventions — via `memex_kv_write(value, key)` /
+  `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys
+  MUST start with `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
+  Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
-    - `memex_retain` for a NEW note (or to fully overwrite an existing one).
+    - `memex_add_note` for a NEW note (or to fully overwrite an existing one).
       Pass a fresh note_key for a one-off capture.
-    - `memex_append(note_key=..., delta=...)` to ADD progress to an existing
+    - `memex_append_note(note_key=..., delta=...)` to ADD progress to an existing
       note (the running session note, an ongoing reflection, a meeting log).
       Send only the new content — the server reads the existing body and
-      concatenates atomically. Prefer this over re-`memex_retain`-ing the
+      concatenates atomically. Prefer this over re-`memex_add_note`-ing the
       whole body each turn.
 - **Templates for structured captures** → `memex_list_templates` to see slugs,
-  `memex_get_template(slug)` for the markdown scaffold, then `memex_retain(...,
+  `memex_get_template(slug)` for the markdown scaffold, then `memex_add_note(...,
   template=slug)` so the note is tagged for filtering. Prefer a template for
   ADRs, retros, technical briefs, RFCs, or any note with clear sections."""
 
@@ -156,12 +185,14 @@ def format_briefing_block(
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
+    lines.append('\n' + _STORAGE_MODEL_PRIMER)
+
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '
-        '`memex_append(note_key="...", delta="...")` with this key to add '
+        '`memex_append_note(note_key="...", delta="...")` with this key to add '
         'meaningful progress to the running session note — only the delta '
         'goes over the wire and the server concatenates atomically. '
-        'Use `memex_retain(note_key="...")` only for the FIRST capture or to '
+        'Use `memex_add_note(note_key="...")` only for the FIRST capture or to '
         'fully replace the body; otherwise prefer append.'
     )
 

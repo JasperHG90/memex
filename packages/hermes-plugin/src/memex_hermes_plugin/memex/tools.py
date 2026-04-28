@@ -1,13 +1,16 @@
 """Memex tool schemas and handlers for Hermes.
 
-Seven tools are exposed (in ``hybrid`` and ``tools`` memory modes):
+Eight Stream-1 tools are exposed (in ``hybrid`` and ``tools`` memory modes);
+additional surfaces (note lifecycle, templates, assets, KV) bring the full
+schema count to ~36. Tool names mirror the MCP server.
 
-- ``memex_recall`` — memory-unit search (TEMPR)
-- ``memex_retrieve_notes`` — whole-note search
+- ``memex_memory_search`` — memory-unit search (TEMPR)
+- ``memex_note_search`` — whole-note search
 - ``memex_survey`` — broad query decomposition
-- ``memex_retain`` — explicit ingest (supports session-note append)
+- ``memex_add_note`` — explicit ingest (NEW note or full overwrite)
+- ``memex_append_note`` — atomic delta-append to an existing note
 - ``memex_list_entities`` — entity-graph search
-- ``memex_get_entity_mentions`` — source facts for an entity
+- ``memex_get_entity_mentions`` — source memory units for an entity
 - ``memex_get_entity_cooccurrences`` — related entities
 
 Tool descriptions describe *what the tool does*, not *when to combine it with
@@ -199,7 +202,7 @@ def _resolve_vault_ids(
 # --- Vault-scoped (Stream 1) ---
 
 RECALL_SCHEMA: dict[str, Any] = {
-    'name': 'memex_recall',
+    'name': 'memex_memory_search',
     'description': (
         'Search memory units — individual facts, observations, and events '
         'extracted from stored notes. Uses TEMPR: temporal + entity + '
@@ -236,7 +239,13 @@ RECALL_SCHEMA: dict[str, Any] = {
             },
             'include_stale': {
                 'type': 'boolean',
-                'description': 'Include stale/lower-confidence memory units (default: false).',
+                'description': (
+                    'Include stale memory units — facts whose supporting '
+                    'evidence has decayed over time. Distinct from superseded '
+                    'units (those replaced by a newer note); this tool does '
+                    'not currently expose superseded filtering at the tool '
+                    'level (default: false).'
+                ),
             },
         },
         'required': ['query'],
@@ -244,7 +253,7 @@ RECALL_SCHEMA: dict[str, Any] = {
 }
 
 RETRIEVE_NOTES_SCHEMA: dict[str, Any] = {
-    'name': 'memex_retrieve_notes',
+    'name': 'memex_note_search',
     'description': (
         'Search whole notes ranked by relevance. Returns note metadata plus '
         'section summaries (topic + key points). Returns source documents, '
@@ -297,11 +306,11 @@ SURVEY_SCHEMA: dict[str, Any] = {
 }
 
 RETAIN_SCHEMA: dict[str, Any] = {
-    'name': 'memex_retain',
+    'name': 'memex_add_note',
     'description': (
         'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
         'If note_key matches an existing note the content is upserted. For appending '
-        'NEW content to a session note (or any existing note) prefer memex_append — '
+        'NEW content to a session note (or any existing note) prefer memex_append_note — '
         'it sends only the delta and is atomic, avoiding the full-body re-send. '
         'For structured captures (ADRs, retros, technical briefs, RFCs), call '
         'memex_list_templates first and pass the chosen slug as `template` for '
@@ -350,8 +359,10 @@ RETAIN_SCHEMA: dict[str, Any] = {
             'note_key': {
                 'type': 'string',
                 'description': (
-                    'Stable key for upsert. Use the session note key to append to the '
-                    'running session note. Omit for a fresh note.'
+                    'Stable key for upsert — passing an existing key REPLACES '
+                    "the note's body. To extend an existing note (e.g. the "
+                    'running session note), use `memex_append_note` instead, which '
+                    'sends only the delta. Omit for a fresh note.'
                 ),
             },
             'template': {
@@ -369,11 +380,11 @@ RETAIN_SCHEMA: dict[str, Any] = {
 }
 
 APPEND_SCHEMA: dict[str, Any] = {
-    'name': 'memex_append',
+    'name': 'memex_append_note',
     'description': (
         'Atomically append new content to an existing note. Send ONLY the delta '
         '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_retain when continuing an in-progress note '
+        'this in preference to memex_add_note when continuing an in-progress note '
         '(e.g. the running session note): the round-trip cost is the delta size, '
         'not the cumulative body, and concurrent agents on the same note serialise '
         'cleanly. Identify the note by note_key (preferred) or note_id.'
@@ -545,7 +556,7 @@ FIND_NOTE_SCHEMA: dict[str, Any] = {
     'description': (
         'Fuzzy title search for notes. Returns note IDs, titles, and similarity '
         'scores. Use when you know (part of) the title; for content search use '
-        'memex_retrieve_notes.'
+        'memex_note_search.'
     ),
     'parameters': {
         'type': 'object',
@@ -625,7 +636,7 @@ GET_NOTES_METADATA_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_notes_metadata',
     'description': (
         'Batch-fetch metadata (title, tags, token count, has_assets) for 1+ '
-        'notes. Use after memex_recall to filter results before reading.'
+        'notes. Use after memex_memory_search to filter results before reading.'
     ),
     'parameters': {
         'type': 'object',
@@ -825,7 +836,8 @@ GET_MEMORY_LINKS_SCHEMA: dict[str, Any] = {
 GET_LINEAGE_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_lineage',
     'description': (
-        'Trace provenance between documents and facts. '
+        'Trace provenance between notes, memory units, observations, and '
+        'mental models. '
         'Upstream: mental_model → observation → memory_unit → note. '
         'Downstream: note → memory_unit → observation → mental_model.'
     ),
@@ -869,9 +881,12 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
         'Set note lifecycle status: active, superseded, appended, or archived. '
-        'Use to supersede an outdated note, mark it as appended, or archive it. '
-        'When superseded, all memory units are marked stale. Optionally link to '
-        'the replacing/parent note via linked_note_id.'
+        '**Cascading side-effect:** marking a note `superseded` flags every '
+        'memory unit extracted from it as stale. Prefer letting contradiction '
+        'detection auto-supersede facts via a new ingested note; reach for '
+        'this tool only for explicit archival or when an immediate state '
+        'change is required. Optionally link to the replacing/parent note via '
+        'linked_note_id.'
     ),
     'parameters': {
         'type': 'object',
@@ -897,9 +912,13 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
 UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
     'name': 'memex_update_user_notes',
     'description': (
-        'Update user_notes on an existing note and reprocess into the memory graph. '
-        'Pass null or omit user_notes to delete all user annotations. Old user_notes '
-        'memory units are deleted and new ones extracted.'
+        'Update the `user_notes` field on an existing note and reprocess it '
+        'into the memory graph. Pass null or omit `user_notes` to clear the '
+        "field. Note: this is one of the few surfaces where a note's extracted "
+        'memory units are deleted rather than superseded — old `user_notes` '
+        'memory units are removed and new ones are extracted from the new '
+        'text. Use sparingly; for content that should remain auditable, '
+        'retain a new note instead.'
     ),
     'parameters': {
         'type': 'object',
@@ -911,7 +930,7 @@ UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
             'user_notes': {
                 'type': 'string',
                 'nullable': True,
-                'description': 'New user_notes text, or null to delete all annotations.',
+                'description': ('New `user_notes` text, or null to clear the field.'),
             },
         },
         'required': ['note_id'],
@@ -941,7 +960,7 @@ GET_TEMPLATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_template',
     'description': (
         'Fetch a markdown scaffold to follow when writing a structured note. '
-        'Call this BEFORE memex_retain for ADRs, retros, technical briefs, RFCs, '
+        'Call this BEFORE memex_add_note for ADRs, retros, technical briefs, RFCs, '
         'or any note with clear sections. Use memex_list_templates to discover slugs.'
     ),
     'parameters': {
@@ -961,7 +980,7 @@ LIST_TEMPLATES_SCHEMA: dict[str, Any] = {
     'description': (
         'List note templates (built-in + user-registered). Call this when about to '
         'capture structured content — pick a slug, fetch the body with '
-        'memex_get_template, then pass `template=slug` to memex_retain.'
+        'memex_get_template, then pass `template=slug` to memex_add_note.'
     ),
     'parameters': {
         'type': 'object',
@@ -1132,8 +1151,11 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 KV_WRITE_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_write',
     'description': (
-        'Write a fact or preference to the KV store with semantic embedding '
-        'for later fuzzy search. Key must start with global:, user:, '
+        'Write a namespaced operational pointer to the KV store — a '
+        'preference, project binding, or convention. Generates a semantic '
+        'embedding for fuzzy lookup. NOT for facts learned from content; '
+        'those become memory units when you `memex_add_note` (or '
+        '`memex_append_note`) a note. Key must start with global:, user:, '
         'project:, or app:. Examples: "global:lang:python:version", '
         '"user:work:employer", "project:github.com/user/repo:vault", '
         '"app:claude-code:theme".'
@@ -1143,7 +1165,7 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
         'properties': {
             'value': {
                 'type': 'string',
-                'description': 'The fact or preference text to store.',
+                'description': ("The pointer's value (preference, binding, or convention)."),
             },
             'key': {
                 'type': 'string',
@@ -1455,7 +1477,7 @@ def handle_recall(
             timeout=60.0,
         )
     except Exception as e:
-        logger.warning('memex_recall failed: %s', e)
+        logger.warning('memex_memory_search failed: %s', e)
         return tool_error(f'Recall failed: {e}')
 
     items = [_serialize_memory_unit(u) for u in (results or [])]
@@ -1486,7 +1508,7 @@ def handle_retrieve_notes(
             timeout=60.0,
         )
     except Exception as e:
-        logger.warning('memex_retrieve_notes failed: %s', e)
+        logger.warning('memex_note_search failed: %s', e)
         return tool_error(f'Note search failed: {e}')
 
     items = [_serialize_note_result(r) for r in (results or [])]
@@ -1581,7 +1603,7 @@ def handle_retain(
     try:
         result = run_sync(api.ingest(dto, background=True), timeout=30.0)
     except Exception as e:
-        logger.warning('memex_retain failed: %s', e)
+        logger.warning('memex_add_note failed: %s', e)
         return tool_error(f'Retain failed: {e}')
 
     return json.dumps(
@@ -1648,7 +1670,7 @@ def handle_append(
     try:
         response = run_sync(api.append_to_note(request), timeout=60.0)
     except Exception as e:
-        logger.warning('memex_append failed: %s', e)
+        logger.warning('memex_append_note failed: %s', e)
         return tool_error(f'Append failed: {e}')
 
     return json.dumps(
@@ -2603,7 +2625,7 @@ def handle_list_templates(
             'results': results,
             'next': (
                 'memex_get_template(slug) → write content following the structure → '
-                'memex_retain(..., template=slug) so the note is tagged for filtering.'
+                'memex_add_note(..., template=slug) so the note is tagged for filtering.'
             ),
         }
     )
@@ -2994,13 +3016,19 @@ class _AssetCacheHandler(Protocol):
     ) -> str: ...
 
 
+# TODO(rename): handler functions still carry the old verb names
+# (``handle_recall``, ``handle_retrieve_notes``, ``handle_retain``,
+# ``handle_append``) while the tool names mirror MCP (``memex_memory_search``,
+# ``memex_note_search``, ``memex_add_note``, ``memex_append_note``). Renaming
+# the handlers is internal-only churn, deferred to a separate cleanup so this
+# diff stays scoped to the agent-facing rename.
 HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     # --- Vault-scoped (Stream 1) ---
-    'memex_recall': handle_recall,
-    'memex_retrieve_notes': handle_retrieve_notes,
+    'memex_memory_search': handle_recall,
+    'memex_note_search': handle_retrieve_notes,
     'memex_survey': handle_survey,
-    'memex_retain': handle_retain,
-    'memex_append': handle_append,
+    'memex_add_note': handle_retain,
+    'memex_append_note': handle_append,
     'memex_list_entities': handle_list_entities,
     'memex_get_entity_mentions': handle_get_entity_mentions,
     'memex_get_entity_cooccurrences': handle_get_entity_cooccurrences,

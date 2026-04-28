@@ -124,7 +124,7 @@ This ensures that when a newer note corrects or updates an older one, retrieval 
 
 ## Design Principles
 
-**Stable identity, in-place updates**: Each note has a stable `note_id` derived deterministically from its `note_key + vault_id`. Existing notes are updated in two ways, both keeping the same `note_id`: **append** (`memex_append_note(note_key=...)` — adds a delta to the body) or **overwrite** (`memex_retain` / `memex_add_note` with the same `note_key` — re-ingests the full body). Both run incremental block-diff extraction so only changed chunks invoke the LLM. Audit trails (`note_appends` for append, `audit_events` for every mutation) are genuinely append-only — every change leaves a row, preserving full history without rewriting note rows.
+**Stable identity, in-place updates**: Each note has a stable `note_id` derived deterministically from its `note_key + vault_id`. Existing notes are updated in two ways, both keeping the same `note_id`: **append** (`memex_append_note(note_key=...)` — adds a delta to the body) or **overwrite** (`memex_add_note` with the same `note_key` — re-ingests the full body). Both run incremental block-diff extraction so only changed chunks invoke the LLM. Audit trails (`note_appends` for append, `audit_events` for every mutation) are genuinely append-only — every change leaves a row, preserving full history without rewriting note rows.
 
 **Distributed reflection**: The reflection queue uses PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming, allowing multiple workers to process reflection tasks concurrently without conflicts.
 

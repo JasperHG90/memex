@@ -5,7 +5,7 @@ from __future__ import annotations
 # Template used for the per-session transcript note ingested on exit.
 HERMES_SESSION_TEMPLATE = 'hermes-session'
 
-# Template used for explicit ``memex_retain`` captures with no other template.
+# Template used for explicit ``memex_add_note`` captures with no other template.
 HERMES_USER_NOTE_TEMPLATE = 'hermes-user-note'
 
 # Template for future ``memex_retro`` structured postmortems (v2).
