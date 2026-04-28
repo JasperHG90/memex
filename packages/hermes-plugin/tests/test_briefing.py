@@ -212,6 +212,18 @@ def test_storage_model_primer_names_three_layers():
 def test_storage_model_primer_states_append_only_invariant():
     """Memory units are append-only; the primer must say so and forbid mutation."""
     assert 'Append-only' in _STORAGE_MODEL_PRIMER or 'append-only' in _STORAGE_MODEL_PRIMER
+    # The verbs must appear inside an explicit prohibition. A revert that
+    # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
+    # would still satisfy a bare "verb in primer" check yet leak the
+    # OrangeHermes regression — so require a negation phrase too.
+    negation_phrases = (
+        "Don't try to edit, replace, or delete",
+        'Do NOT try to edit, replace, or delete',
+        'Do not try to edit, replace, or delete',
+    )
+    assert any(p in _STORAGE_MODEL_PRIMER for p in negation_phrases), (
+        f'primer must contain an explicit prohibition like {negation_phrases[0]!r}'
+    )
     for verb in ('edit', 'replace', 'delete'):
         assert verb in _STORAGE_MODEL_PRIMER, f'{verb!r} missing from primer'
 

@@ -284,7 +284,7 @@ IF storing/retrieving namespaced operational pointers (preferences, conventions,
   - `memex_kv_get(key)` — exact key lookup
   - `memex_kv_search(query)` — fuzzy semantic search over KV entries
   - `memex_kv_list()` — list KV entries
-  When the user states a preference or convention (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
+  When the user states a preference, convention, or binding (e.g. "always use uv", "my role is Staff Engineer", "this repo uses the `tidybit` vault"), proactively store it via `memex_kv_write` (e.g. under `project:github.com/user/repo:vault`).
   Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
 
 RESPONSE FORMAT — MANDATORY for every response:

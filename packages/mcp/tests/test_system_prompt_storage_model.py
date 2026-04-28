@@ -32,7 +32,11 @@ def _storage_model_section(text: str) -> str:
     means common words like ``edit`` / ``replace`` / ``delete`` legitimately
     appearing elsewhere in the prompt cannot satisfy the check.
     """
+    # Guard the slice so a renamed/removed marker fails with a clear message
+    # rather than an opaque ValueError from .index().
+    assert 'STORAGE MODEL' in text, "'STORAGE MODEL' marker missing from instructions"
     start = text.index('STORAGE MODEL')
+    assert 'ROUTING' in text[start:], "'ROUTING' marker missing after STORAGE MODEL"
     # The block ends at the next blank line followed by a top-level marker
     # (``RULE:``, ``ROUTING``, etc.). Take a generous window — the section is
     # ~20 lines.
@@ -57,6 +61,18 @@ def test_storage_model_states_append_only_invariant():
     text = _instructions()
     section = _storage_model_section(text)
     assert 'Append-only' in section or 'append-only' in section
+    # The verbs must appear inside an explicit prohibition. A revert that
+    # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
+    # would still satisfy a bare "verb in section" check yet leak the
+    # OrangeHermes regression — so require a negation phrase too.
+    negation_phrases = (
+        'Do NOT try to edit, replace, or delete',
+        "Don't try to edit, replace, or delete",
+        'Do not try to edit, replace, or delete',
+    )
+    assert any(p in section for p in negation_phrases), (
+        f'STORAGE MODEL must contain an explicit prohibition like {negation_phrases[0]!r}'
+    )
     # Explicitly forbid edit/replace/delete on memory units. Scope to the
     # storage-model section so unrelated routing bullets ("Do NOT attempt
     # to delete KV entries", etc.) cannot satisfy the check on their own.

@@ -63,6 +63,11 @@ def _kv_section(text: str, start_marker: str) -> str:
     contrastive non-KV context elsewhere in the file (e.g. a memory-unit
     description that says "this is NOT a fact store").
     """
+    # Guard the slice with a clear failure message so a renamed/removed
+    # marker fails with "marker drifted" rather than an opaque ValueError.
+    assert start_marker in text, (
+        f'{start_marker!r} not found in source — KV section start marker drifted'
+    )
     return text[text.index(start_marker) :]
 
 
