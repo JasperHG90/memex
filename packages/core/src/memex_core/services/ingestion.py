@@ -434,11 +434,11 @@ ingested_at: {now}
                 # the full body.
                 if has_stored_text:
                     try:
-                        from memex_core.metrics import NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL
+                        from memex_core.metrics import NOTE_ADD_OVERLAPS_EXISTING_TOTAL
 
-                        NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL.labels(surface='ingest_api').inc()
+                        NOTE_ADD_OVERLAPS_EXISTING_TOTAL.labels(surface='ingest_api').inc()
                     except Exception:  # pragma: no cover — metrics never block ingest
-                        logger.debug('NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL increment failed')
+                        logger.debug('NOTE_ADD_OVERLAPS_EXISTING_TOTAL increment failed')
 
         # 3. Open Transaction
         # Staging txn_id must be unique per in-flight transaction, not derived from

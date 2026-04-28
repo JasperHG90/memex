@@ -1448,7 +1448,7 @@ def _serialize_kv_entry(entry: Any) -> dict[str, Any]:
 # --- Vault-scoped (Stream 1) ---
 
 
-def handle_recall(
+def handle_memory_search(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
@@ -1484,7 +1484,7 @@ def handle_recall(
     return json.dumps({'count': len(items), 'results': items})
 
 
-def handle_retrieve_notes(
+def handle_note_search(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     try:
@@ -1570,7 +1570,7 @@ def handle_survey(
     )
 
 
-def handle_retain(
+def handle_add_note(
     api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
@@ -1615,7 +1615,7 @@ def handle_retain(
     )
 
 
-def handle_append(
+def handle_append_note(
     api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
@@ -3016,19 +3016,13 @@ class _AssetCacheHandler(Protocol):
     ) -> str: ...
 
 
-# TODO(rename): handler functions still carry the old verb names
-# (``handle_recall``, ``handle_retrieve_notes``, ``handle_retain``,
-# ``handle_append``) while the tool names mirror MCP (``memex_memory_search``,
-# ``memex_note_search``, ``memex_add_note``, ``memex_append_note``). Renaming
-# the handlers is internal-only churn, deferred to a separate cleanup so this
-# diff stays scoped to the agent-facing rename.
 HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     # --- Vault-scoped (Stream 1) ---
-    'memex_memory_search': handle_recall,
-    'memex_note_search': handle_retrieve_notes,
+    'memex_memory_search': handle_memory_search,
+    'memex_note_search': handle_note_search,
     'memex_survey': handle_survey,
-    'memex_add_note': handle_retain,
-    'memex_append_note': handle_append,
+    'memex_add_note': handle_add_note,
+    'memex_append_note': handle_append_note,
     'memex_list_entities': handle_list_entities,
     'memex_get_entity_mentions': handle_get_entity_mentions,
     'memex_get_entity_cooccurrences': handle_get_entity_cooccurrences,

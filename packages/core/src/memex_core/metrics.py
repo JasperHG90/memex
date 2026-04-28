@@ -102,14 +102,10 @@ NOTE_APPEND_DURATION_SECONDS = Histogram(
 )
 
 # Tracks ingestions whose note_key resolves to an existing non-empty note. Lets
-# us see how many callers should migrate to memex_append_note before deprecating
-# the retain-as-overwrite path. NOT an error counter; informational only.
-# TODO(rename): the counter name still reads ``memex_retain_*`` even though all
-# tool surfaces now use ``memex_add_note`` / ``memex_append_note``. Renaming a
-# Prometheus counter is a breaking change for any consumer dashboards, so it's
-# tracked here as a follow-up rather than landed alongside the tool rename.
-NOTE_RETAIN_OVERLAPS_EXISTING_TOTAL = Counter(
-    'memex_retain_with_existing_note_key_total',
+# us see how many callers should migrate to memex_append_note. NOT an error
+# counter; informational only.
+NOTE_ADD_OVERLAPS_EXISTING_TOTAL = Counter(
+    'memex_add_note_with_existing_note_key_total',
     'Ingestions that re-used an existing non-empty note (candidate for memex_append_note).',
     # The label is set by the caller path. Today only ingestion.py emits
     # ``surface='ingest_api'``; ``mcp_add_note`` and ``hermes_add_note`` are
