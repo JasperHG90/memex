@@ -1,13 +1,16 @@
 """Memex tool schemas and handlers for Hermes.
 
-Seven tools are exposed (in ``hybrid`` and ``tools`` memory modes):
+Eight Stream-1 tools are exposed (in ``hybrid`` and ``tools`` memory modes);
+additional surfaces (note lifecycle, templates, assets, KV) bring the full
+schema count to ~36. Tool names mirror the MCP server.
 
 - ``memex_memory_search`` — memory-unit search (TEMPR)
 - ``memex_note_search`` — whole-note search
 - ``memex_survey`` — broad query decomposition
-- ``memex_add_note`` — explicit ingest (supports session-note append)
+- ``memex_add_note`` — explicit ingest (NEW note or full overwrite)
+- ``memex_append_note`` — atomic delta-append to an existing note
 - ``memex_list_entities`` — entity-graph search
-- ``memex_get_entity_mentions`` — source facts for an entity
+- ``memex_get_entity_mentions`` — source memory units for an entity
 - ``memex_get_entity_cooccurrences`` — related entities
 
 Tool descriptions describe *what the tool does*, not *when to combine it with
