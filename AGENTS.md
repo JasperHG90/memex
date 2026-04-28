@@ -60,7 +60,7 @@ Python monorepo managed by `uv` with 8 packages.
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
 | `packages/firefox-extension` | — | TypeScript/WebExtension for saving pages to Memex |
 | `packages/claude-code-plugin` | — | Claude Code plugin: `/remember` and `/recall` skills, session hooks, MCP server config |
-| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — 7 tools (recall, retrieve_notes, survey, retain, list_entities, get_entity_mentions, get_entity_cooccurrences), session briefings, per-project vault binding |
+| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — primary tools (recall, retrieve_notes, survey, retain, append, list_entities, get_entity_mentions, get_entity_cooccurrences) plus note lifecycle, templates, assets, and KV surfaces (~36 schemas total). Session briefings include a storage-model primer (notes / memory units / KV) and per-project vault binding |
 
 ### Dependency graph
 

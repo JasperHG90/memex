@@ -236,7 +236,13 @@ RECALL_SCHEMA: dict[str, Any] = {
             },
             'include_stale': {
                 'type': 'boolean',
-                'description': 'Include stale/lower-confidence memory units (default: false).',
+                'description': (
+                    'Include stale memory units — facts whose supporting '
+                    'evidence has decayed over time. Distinct from superseded '
+                    'units (those replaced by a newer note); recall does not '
+                    'currently expose superseded filtering at the tool level '
+                    '(default: false).'
+                ),
             },
         },
         'required': ['query'],
@@ -350,8 +356,10 @@ RETAIN_SCHEMA: dict[str, Any] = {
             'note_key': {
                 'type': 'string',
                 'description': (
-                    'Stable key for upsert. Use the session note key to append to the '
-                    'running session note. Omit for a fresh note.'
+                    'Stable key for upsert — passing an existing key REPLACES '
+                    "the note's body. To extend an existing note (e.g. the "
+                    'running session note), use `memex_append` instead, which '
+                    'sends only the delta. Omit for a fresh note.'
                 ),
             },
             'template': {
@@ -825,7 +833,8 @@ GET_MEMORY_LINKS_SCHEMA: dict[str, Any] = {
 GET_LINEAGE_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_lineage',
     'description': (
-        'Trace provenance between documents and facts. '
+        'Trace provenance between notes, memory units, observations, and '
+        'mental models. '
         'Upstream: mental_model → observation → memory_unit → note. '
         'Downstream: note → memory_unit → observation → mental_model.'
     ),
@@ -869,9 +878,12 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
         'Set note lifecycle status: active, superseded, appended, or archived. '
-        'Use to supersede an outdated note, mark it as appended, or archive it. '
-        'When superseded, all memory units are marked stale. Optionally link to '
-        'the replacing/parent note via linked_note_id.'
+        '**Cascading side-effect:** marking a note `superseded` flags every '
+        'memory unit extracted from it as stale. Prefer letting contradiction '
+        'detection auto-supersede facts via a new retained note; reach for '
+        'this tool only for explicit archival or when an immediate state '
+        'change is required. Optionally link to the replacing/parent note via '
+        'linked_note_id.'
     ),
     'parameters': {
         'type': 'object',
@@ -897,9 +909,13 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
 UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
     'name': 'memex_update_user_notes',
     'description': (
-        'Update user_notes on an existing note and reprocess into the memory graph. '
-        'Pass null or omit user_notes to delete all user annotations. Old user_notes '
-        'memory units are deleted and new ones extracted.'
+        'Update the `user_notes` field on an existing note and reprocess it '
+        'into the memory graph. Pass null or omit `user_notes` to clear the '
+        "field. Note: this is one of the few surfaces where a note's extracted "
+        'memory units are deleted rather than superseded — old `user_notes` '
+        'memory units are removed and new ones are extracted from the new '
+        'text. Use sparingly; for content that should remain auditable, '
+        'retain a new note instead.'
     ),
     'parameters': {
         'type': 'object',
@@ -911,7 +927,7 @@ UPDATE_USER_NOTES_SCHEMA: dict[str, Any] = {
             'user_notes': {
                 'type': 'string',
                 'nullable': True,
-                'description': 'New user_notes text, or null to delete all annotations.',
+                'description': ('New `user_notes` text, or null to clear the field.'),
             },
         },
         'required': ['note_id'],
@@ -1132,8 +1148,11 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 KV_WRITE_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_write',
     'description': (
-        'Write a fact or preference to the KV store with semantic embedding '
-        'for later fuzzy search. Key must start with global:, user:, '
+        'Write a namespaced operational pointer to the KV store — a '
+        'preference, project binding, or convention. Generates a semantic '
+        'embedding for fuzzy lookup. NOT for facts learned from content; '
+        'those become memory units when you `memex_retain` (or '
+        '`memex_append`) a note. Key must start with global:, user:, '
         'project:, or app:. Examples: "global:lang:python:version", '
         '"user:work:employer", "project:github.com/user/repo:vault", '
         '"app:claude-code:theme".'
@@ -1143,7 +1162,7 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
         'properties': {
             'value': {
                 'type': 'string',
-                'description': 'The fact or preference text to store.',
+                'description': ("The pointer's value (preference, binding, or convention)."),
             },
             'key': {
                 'type': 'string',
