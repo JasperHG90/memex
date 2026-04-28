@@ -710,7 +710,7 @@ def test_note_search_schema_declares_vault_ids():
 
 
 def test_note_search_uses_bound_vault_by_default(config, vault_id):
-    """AC-013: ``handle_retrieve_notes`` mirrors memory_search — default is bound vault."""
+    """AC-013: ``handle_note_search`` mirrors memory_search — default is bound vault."""
     api = Mock()
     api.search_notes = AsyncMock(return_value=[])
     dispatch(
@@ -724,7 +724,7 @@ def test_note_search_uses_bound_vault_by_default(config, vault_id):
 
 
 def test_note_search_resolves_vault_names(config, vault_id):
-    """AC-013: ``handle_retrieve_notes`` resolves names via the helper."""
+    """AC-013: ``handle_note_search`` resolves names via the helper."""
     api = Mock()
     resolved = uuid4()
     api.resolve_vault_identifier = AsyncMock(return_value=resolved)
@@ -3334,7 +3334,7 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
 
 
 # ---------------------------------------------------------------------------
-# memex_append_note (handle_append) — issue #56
+# memex_append_note (handle_append_note) — issue #56
 # ---------------------------------------------------------------------------
 
 
@@ -3357,7 +3357,7 @@ def test_append_note_schema_is_registered():
 
 
 def test_append_note_dispatches_with_note_key(config, vault_id):
-    """handle_append builds a NoteAppendRequest and forwards it to the API."""
+    """handle_append_note builds a NoteAppendRequest and forwards it to the API."""
     api = Mock()
     note_id = uuid4()
     append_id = uuid4()
@@ -3478,7 +3478,7 @@ def test_append_note_missing_identifier_returns_error(config, vault_id):
 
 
 def test_append_note_api_failure_returns_error(config, vault_id):
-    """If the API raises (e.g. 409 conflict), handle_append returns a tool_error."""
+    """If the API raises (e.g. 409 conflict), handle_append_note returns a tool_error."""
     api = Mock()
     api.append_to_note = AsyncMock(
         side_effect=httpx.HTTPStatusError(
