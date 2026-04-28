@@ -90,25 +90,27 @@ class BriefingCache:
 
 _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
 
-Three layers, distinct purposes:
+Three layers:
 
-- **Notes** — source documents (markdown). New versions create new entries via
-  `note_key` upsert; old versions remain queryable. Append progress with
-  `memex_append`, never by re-sending the whole body.
-- **Memory units** — atomic facts/observations/events extracted from notes.
-  **Append-only.** Memex maintains them via reflection (trend-based staleness)
-  and contradiction detection (auto-supersession with confidence adjustment).
-  You cannot edit, replace, or delete memory units. To record that something
-  has changed, retain a new note with the new state — Memex links the old and
-  new automatically.
-- **KV store** — namespaced operational state: preferences, project bindings,
-  conventions. Mutable upsert by exact key. **Not** a place for facts learned
-  from content — those become memory units when you `memex_retain` (or
-  `memex_append`) a note.
+- **Notes** — source markdown documents. `note_key` upsert creates new
+  versions; old versions stay queryable. Use `memex_append` to extend an
+  existing note instead of re-sending the whole body.
+- **Memory units** — atomic facts/events extracted from notes at ingestion.
+  **Append-only.** Contradiction detection runs at extraction time: it
+  records typed links and lowers an older unit's confidence when a new
+  note conflicts with it. Note supersession cascades to stale on its
+  memory units. Don't try to edit, replace, or delete memory units — to
+  record a change, retain a new note.
+- **KV store** — namespaced operational state (preferences, project
+  bindings, conventions). Mutable upsert by exact key; entries support
+  TTL.
 
-Don't try to mark facts resolved or stale by hand. Reflection and contradiction
-detection handle supersession; the right action is always to retain (or append
-to) a note that records the current state."""
+Reflection is a separate background loop that reads memory units and
+synthesises **observations** about entities, bundled into versioned
+per-entity **mental models** with trend tracking
+(new/strengthening/stable/weakening/stale). Trends live on observations,
+not on memory units. Reflection output is read-only — surface it via
+recall."""
 
 
 _ROUTING_GUIDE = """### How to use Memex tools
@@ -128,8 +130,11 @@ Match the tool to the query type:
   retrieve_notes returns source documents. Use both only when the query
   genuinely benefits — a simple title lookup doesn't.
 - **Broad / panoramic** ("what do you know about X?", "overview of X") →
-  `memex_survey(query)` as a single call. The server decomposes into
-  sub-questions and fans out in parallel.
+  start with `memex_get_vault_summary(vault_id="...")` — it's cheap and
+  precomputed, and often answers the question on its own. Escalate to
+  `memex_survey(query)` only if the summary is too coarse: survey
+  decomposes into sub-questions and fans out in parallel, which is more
+  thorough but much more expensive.
 - **Relationships / entities** → `memex_list_entities` first, then
   `memex_get_entity_mentions` and/or `memex_get_entity_cooccurrences` with the
   returned entity_id. The latter two are safe to call in parallel if both are
@@ -141,12 +146,11 @@ Match the tool to the query type:
   links (temporal / semantic / causal / contradiction) between memory units;
   `memex_get_lineage(entity_type=..., entity_id=...)` for the provenance chain
   (note ↔ memory_unit ↔ observation ↔ mental_model).
-- **KV store** → persist namespaced operational state — preferences, project
-  bindings, conventions — with `memex_kv_write(value, key)` /
-  `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys MUST
-  start with a namespace: `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
-  KV is NOT for content learned from notes — use `memex_retain` /
-  `memex_append` for that. Deletion is CLI-only (use `memex kv delete`).
+- **KV store** → namespaced operational state — preferences, project
+  bindings, conventions — via `memex_kv_write(value, key)` /
+  `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys
+  MUST start with `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
+  Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
     - `memex_retain` for a NEW note (or to fully overwrite an existing one).
       Pass a fresh note_key for a one-off capture.

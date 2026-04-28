@@ -228,21 +228,25 @@ VAULT DEFAULTS — vault parameters are optional. Writes default to the active v
 reads default to search vaults (from .memex.yaml or global config). Only pass
 vault_id/vault_ids to override.
 
-STORAGE MODEL — three layers, distinct purposes:
-- **Notes**: source documents (markdown). New versions create new entries via
-  `note_key`; old versions remain queryable. Append progress with
-  `memex_append_note`, never by re-sending the whole body.
-- **Memory units**: extracted facts/observations/events. **Append-only.**
-  Reflection tracks trend-based staleness; contradiction detection
-  auto-supersedes via new notes. Do NOT try to edit, replace, or delete
-  memory units — to record a change, ingest a new note via `memex_add_note`
-  (or `memex_append_note` to extend an existing one).
-- **KV store**: namespaced operational state — preferences, project bindings,
-  conventions. Mutable upsert by exact key. NOT for content learned from
-  notes; use note ingestion for that.
+STORAGE MODEL — three layers:
+- **Notes**: source markdown documents. `note_key` upsert creates new
+  versions; old versions stay queryable. Use `memex_append_note` to
+  extend an existing note instead of re-sending the whole body.
+- **Memory units**: facts/events extracted from notes at ingestion.
+  **Append-only.** Contradiction detection runs at extraction time —
+  it records typed links and lowers an older unit's confidence when a
+  new note conflicts with it; note supersession cascades to stale on
+  its memory units. Do NOT try to edit, replace, or delete memory
+  units — to record a change, ingest a new note via `memex_add_note`.
+- **KV store**: namespaced operational state (preferences, project
+  bindings, conventions). Mutable upsert by exact key; entries support
+  TTL.
 
-RULE: never mark memory units stale, resolved, or superseded by hand. The
-system handles it.
+Reflection is a separate background loop that reads memory units and
+synthesises observations about entities, bundled into versioned per-entity
+mental models with trend tracking (new/strengthening/stable/weakening/stale).
+Trends live on observations, not on memory units. Reflection output is
+read-only — surface it via search.
 
 ROUTING — select retrieval strategy by query type:
 
@@ -268,7 +272,10 @@ IF query asks about specific content, topics, or document lookup:
   4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resources` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
 
 IF query is broad (e.g. "explain X and how it fits the architecture", "what do you know about X?"):
-  → `memex_survey(query)` — auto-decomposes into sub-questions, parallel search, grouped results.
+  → Start with `memex_get_vault_summary(vault_id)` — cheap, precomputed, often answers on its own.
+  → Escalate to `memex_survey(query)` only if the summary is too coarse — survey auto-decomposes
+    into sub-questions, runs parallel retrievals, and returns grouped results, but is much
+    more expensive than the summary.
   For manual control, use ENTITY EXPLORATION and SEARCH in parallel instead.
 
 IF storing/retrieving namespaced operational pointers (preferences, conventions, project bindings):
@@ -278,7 +285,6 @@ IF storing/retrieving namespaced operational pointers (preferences, conventions,
   - `memex_kv_search(query)` — fuzzy semantic search over KV entries
   - `memex_kv_list()` — list KV entries
   When the user states a preference or convention (e.g. "always use uv", "my role is Staff Engineer"), proactively store it via `memex_kv_write`.
-  KV is NOT for facts learned from content (events, observations, claims) — use `memex_add_note` for those; extraction will turn them into memory units.
   Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
 
 RESPONSE FORMAT — MANDATORY for every response:

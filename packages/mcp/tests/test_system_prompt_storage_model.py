@@ -25,6 +25,21 @@ def _instructions() -> str:
     return text
 
 
+def _storage_model_section(text: str) -> str:
+    """Return the STORAGE MODEL paragraph block.
+
+    Scoping invariant assertions to this block (not the whole instructions)
+    means common words like ``edit`` / ``replace`` / ``delete`` legitimately
+    appearing elsewhere in the prompt cannot satisfy the check.
+    """
+    start = text.index('STORAGE MODEL')
+    # The block ends at the next blank line followed by a top-level marker
+    # (``RULE:``, ``ROUTING``, etc.). Take a generous window — the section is
+    # ~20 lines.
+    end = text.index('ROUTING', start)
+    return text[start:end]
+
+
 def test_instructions_contain_storage_model_primer():
     text = _instructions()
     assert 'STORAGE MODEL' in text
@@ -32,22 +47,32 @@ def test_instructions_contain_storage_model_primer():
 
 def test_storage_model_names_three_layers():
     text = _instructions()
-    assert '**Notes**' in text
-    assert '**Memory units**' in text
-    assert '**KV store**' in text
+    section = _storage_model_section(text)
+    assert '**Notes**' in section
+    assert '**Memory units**' in section
+    assert '**KV store**' in section
 
 
 def test_storage_model_states_append_only_invariant():
     text = _instructions()
-    assert 'Append-only' in text or 'append-only' in text
-    # Explicitly forbid edit/replace/delete on memory units.
+    section = _storage_model_section(text)
+    assert 'Append-only' in section or 'append-only' in section
+    # Explicitly forbid edit/replace/delete on memory units. Scope to the
+    # storage-model section so unrelated routing bullets ("Do NOT attempt
+    # to delete KV entries", etc.) cannot satisfy the check on their own.
     for forbidden_action in ('edit', 'replace', 'delete'):
-        assert forbidden_action in text
+        assert forbidden_action in section, (
+            f'{forbidden_action!r} missing from STORAGE MODEL section'
+        )
 
 
-def test_storage_model_warns_against_manual_supersession():
+def test_storage_model_describes_reflection_as_read_only():
+    """The storage-model section must teach that reflection's output is read-only."""
     text = _instructions()
-    assert 'never mark memory units stale' in text or 'never mark' in text
+    section = _storage_model_section(text)
+    assert 'reflection' in section.lower()
+    assert 'observations' in section.lower()
+    assert 'read-only' in section
 
 
 def test_kv_routing_no_longer_calls_kv_a_fact_store():
@@ -58,22 +83,14 @@ def test_kv_routing_no_longer_calls_kv_a_fact_store():
     said 'storing/retrieving structured facts ... → KV STORE'.
     """
     text = _instructions()
-    # KV bullet must not invite agents to store *learned* facts in KV.
-    assert 'storing/retrieving structured facts' not in text
-    assert 'store a user fact or preference' not in text
-    assert 'fuzzy semantic search over stored facts' not in text
-    assert 'list all stored facts' not in text
-
-
-def test_kv_routing_redirects_learned_facts_to_notes():
-    """The KV routing block must explicitly route learned content to notes."""
-    text = _instructions()
-    # Find the KV STORE block, scope assertions to it.
+    # Scope to the KV routing block (the IF/THEN bullet) so a contrastive
+    # mention elsewhere can't satisfy the assertions.
     kv_idx = text.index('→ KV STORE')
-    # Look at the next ~600 chars (covers the full bullet block).
-    kv_block = text[kv_idx : kv_idx + 800]
-    assert 'NOT for facts learned from content' in kv_block
-    assert 'memex_add_note' in kv_block
+    kv_block = text[kv_idx : kv_idx + 1200]
+    assert 'storing/retrieving structured facts' not in kv_block
+    assert 'store a user fact or preference' not in kv_block
+    assert 'fuzzy semantic search over stored facts' not in kv_block
+    assert 'list all stored facts' not in kv_block
 
 
 def test_entity_mentions_routing_uses_memory_units_term():

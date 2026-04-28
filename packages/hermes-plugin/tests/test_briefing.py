@@ -210,22 +210,18 @@ def test_storage_model_primer_names_three_layers():
 
 
 def test_storage_model_primer_states_append_only_invariant():
-    """Memory units are append-only; the primer must say so."""
+    """Memory units are append-only; the primer must say so and forbid mutation."""
     assert 'Append-only' in _STORAGE_MODEL_PRIMER or 'append-only' in _STORAGE_MODEL_PRIMER
-    # And explicitly forbid edit/delete on memory units.
-    assert 'cannot edit' in _STORAGE_MODEL_PRIMER
+    for verb in ('edit', 'replace', 'delete'):
+        assert verb in _STORAGE_MODEL_PRIMER, f'{verb!r} missing from primer'
 
 
-def test_storage_model_primer_warns_against_manual_invalidation():
-    """The primer must explicitly tell agents not to mark facts resolved/stale by hand."""
-    assert "Don't try to mark facts resolved or stale" in _STORAGE_MODEL_PRIMER
-
-
-def test_storage_model_primer_routes_kv_away_from_learned_facts():
-    """The primer must route 'facts learned from content' away from KV toward retain/append."""
-    assert 'KV' in _STORAGE_MODEL_PRIMER
-    # KV bullet must say it is NOT for learned facts.
-    assert 'Not' in _STORAGE_MODEL_PRIMER and 'learned' in _STORAGE_MODEL_PRIMER
+def test_storage_model_primer_describes_reflection_as_read_only():
+    """The primer must teach that reflection's output is read-only — observations and
+    mental models are produced by reflection, not written by the agent."""
+    assert 'reflection' in _STORAGE_MODEL_PRIMER.lower()
+    assert 'observations' in _STORAGE_MODEL_PRIMER.lower()
+    assert 'read-only' in _STORAGE_MODEL_PRIMER
 
 
 def test_storage_model_primer_renders_in_formatted_block():
@@ -265,5 +261,3 @@ def test_kv_bullet_no_longer_persists_facts():
     next_bullet = _ROUTING_GUIDE.find('\n- **', kv_idx)
     kv_bullet = _ROUTING_GUIDE[kv_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[kv_idx:]
     assert 'persist facts' not in kv_bullet
-    # Bullet must still route the agent toward retain/append for learned content.
-    assert 'memex_retain' in kv_bullet or 'memex_append' in kv_bullet
