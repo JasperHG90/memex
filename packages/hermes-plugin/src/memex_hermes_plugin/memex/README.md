@@ -40,7 +40,7 @@ vault summaries), templates, assets, and the KV store
 
 The plugin injects a storage-model primer (notes / memory units / KV — what
 each is for, what supersession looks like) and routing guidance into the
-system prompt — when to pair recall with retrieve_notes, when to use
+system prompt — when to pair `memex_memory_search` with `memex_note_search`, when to use
 survey, how to chain entity tools.
 
 ## Memory modes

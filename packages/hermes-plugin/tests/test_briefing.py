@@ -221,11 +221,12 @@ def test_storage_model_primer_states_append_only_invariant():
         'Do NOT try to edit, replace, or delete',
         'Do not try to edit, replace, or delete',
     )
+    # The negation phrase already names ``edit``, ``replace``, and ``delete`` —
+    # checking the verbs separately would only hide a regression that splits
+    # the prohibition into one sentence per verb.
     assert any(p in _STORAGE_MODEL_PRIMER for p in negation_phrases), (
         f'primer must contain an explicit prohibition like {negation_phrases[0]!r}'
     )
-    for verb in ('edit', 'replace', 'delete'):
-        assert verb in _STORAGE_MODEL_PRIMER, f'{verb!r} missing from primer'
 
 
 def test_storage_model_primer_describes_reflection_as_read_only():

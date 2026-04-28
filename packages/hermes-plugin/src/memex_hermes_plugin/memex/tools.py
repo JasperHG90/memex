@@ -3016,6 +3016,12 @@ class _AssetCacheHandler(Protocol):
     ) -> str: ...
 
 
+# TODO(rename): handler functions still carry the old verb names
+# (``handle_recall``, ``handle_retrieve_notes``, ``handle_retain``,
+# ``handle_append``) while the tool names mirror MCP (``memex_memory_search``,
+# ``memex_note_search``, ``memex_add_note``, ``memex_append_note``). Renaming
+# the handlers is internal-only churn, deferred to a separate cleanup so this
+# diff stays scoped to the agent-facing rename.
 HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     # --- Vault-scoped (Stream 1) ---
     'memex_memory_search': handle_recall,

@@ -70,16 +70,12 @@ def test_storage_model_states_append_only_invariant():
         "Don't try to edit, replace, or delete",
         'Do not try to edit, replace, or delete',
     )
+    # The negation phrase already names ``edit``, ``replace``, and ``delete`` —
+    # checking the verbs separately would only hide a regression that splits
+    # the prohibition into one sentence per verb.
     assert any(p in section for p in negation_phrases), (
         f'STORAGE MODEL must contain an explicit prohibition like {negation_phrases[0]!r}'
     )
-    # Explicitly forbid edit/replace/delete on memory units. Scope to the
-    # storage-model section so unrelated routing bullets ("Do NOT attempt
-    # to delete KV entries", etc.) cannot satisfy the check on their own.
-    for forbidden_action in ('edit', 'replace', 'delete'):
-        assert forbidden_action in section, (
-            f'{forbidden_action!r} missing from STORAGE MODEL section'
-        )
 
 
 def test_storage_model_describes_reflection_as_read_only():
