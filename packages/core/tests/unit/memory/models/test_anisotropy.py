@@ -182,3 +182,25 @@ class TestAnisotropyCorrectorGroup:
         group = AnisotropyCorrectorGroup(names=['test'], window_size=64, min_samples=5)
         c = group.get('test')
         assert c.window_size == 64
+
+
+class TestAnisotropyCorrectorDisabled:
+    """window_size=0 disables anisotropy correction (passthrough)."""
+
+    def test_disabled_returns_raw_unchanged(self):
+        c = AnisotropyCorrector(window_size=0)
+        assert c.normalize(0.85) == 0.85
+        assert c.normalize(0.10) == 0.10
+        assert c.normalize(0.99) == 0.99
+
+    def test_disabled_no_state_accumulation(self):
+        c = AnisotropyCorrector(window_size=0)
+        for _ in range(100):
+            c.normalize(0.85)
+        assert c.count == 0
+
+    def test_negative_window_size_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match='window_size must be >= 0'):
+            AnisotropyCorrector(window_size=-1)

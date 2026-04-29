@@ -21,16 +21,13 @@ import structlog
 
 logger = structlog.get_logger('memex.core.memory.models.anisotropy')
 
-# Default window size — balances responsiveness (short windows track distribution
-# shifts) with stability (long windows resist noise).  1024 matches D-MEM §4.1.
 DEFAULT_WINDOW_SIZE = 1024
 
-# Epsilon to prevent division by zero when σ ≈ 0.
 DEFAULT_EPSILON = 1e-8
 
 
 class AnisotropyCorrector:
-    """Sliding-window Z-score → sigmoid normalizer for cosine similarity scores.
+    """Sliding-window Z-score -> sigmoid normalizer for cosine similarity scores.
 
     Usage::
 
@@ -41,6 +38,9 @@ class AnisotropyCorrector:
     Cold-start: returns the raw score unchanged until the window has at least
     ``min_samples`` observations (default 32), at which point Z-score
     normalization kicks in.
+
+    Set ``window_size=0`` to disable anisotropy correction (normalize returns
+    the raw score unchanged for all inputs).
     """
 
     def __init__(
@@ -49,15 +49,19 @@ class AnisotropyCorrector:
         epsilon: float = DEFAULT_EPSILON,
         min_samples: int = 32,
     ) -> None:
+        if window_size < 0:
+            raise ValueError(f'window_size must be >= 0, got {window_size}')
         self._window_size = window_size
         self._epsilon = epsilon
         self._min_samples = min_samples
-        self._window: deque[float] = deque(maxlen=window_size)
+        self._disabled = window_size == 0
+        # deque(maxlen=0) crashes, so use maxlen=1 as a no-op buffer when
+        # disabled — normalize() returns early before appending anyway.
+        self._window: deque[float] = deque(maxlen=max(1, window_size))
         self._lock = Lock()
-        # Running stats (Welford-like for numerical stability)
         self._count: int = 0
         self._mean: float = 0.0
-        self._m2: float = 0.0  # sum of squared deviations from mean
+        self._m2: float = 0.0
 
     @property
     def window_size(self) -> int:
@@ -101,12 +105,17 @@ class AnisotropyCorrector:
         self._mean -= delta / self._count
         delta2 = value - self._mean
         self._m2 -= delta * delta2
+        # Clamp floating-point drift
+        self._m2 = max(0.0, self._m2)
 
     def normalize(self, raw_similarity: float) -> float:
-        """Normalize a raw cosine similarity score using Z-score → sigmoid.
+        """Normalize a raw cosine similarity score using Z-score -> sigmoid.
 
         If fewer than ``min_samples`` observations have been seen, returns
         the raw score unchanged (cold-start passthrough).
+
+        If ``window_size=0`` was passed at init, returns the raw score unchanged
+        for all inputs (disabled mode).
 
         Args:
             raw_similarity: Cosine similarity in [-1, 1] (typically [0, 1]).
@@ -114,6 +123,9 @@ class AnisotropyCorrector:
         Returns:
             Normalized similarity in (0, 1).
         """
+        if self._disabled:
+            return raw_similarity
+
         with self._lock:
             if len(self._window) == self._window_size:
                 evicted = self._window[0]
@@ -184,5 +196,6 @@ class AnisotropyCorrectorGroup:
 
     def reset(self) -> None:
         """Reset all correctors."""
-        for c in self._correctors.values():
-            c.reset()
+        with self._lock:
+            for c in self._correctors.values():
+                c.reset()
