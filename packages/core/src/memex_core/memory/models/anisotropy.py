@@ -115,17 +115,14 @@ class AnisotropyCorrector:
             Normalized similarity in (0, 1).
         """
         with self._lock:
-            self._window.append(raw_similarity)
-            self._update_stats_add(raw_similarity)
-
-            # If the deque was full, the oldest value was auto-evicted.
-            # We need to remove it from running stats.
-            # The deque maxlen handles eviction, but we track count separately.
-            # If count > window_size, a value was evicted before we added.
-            if self._count > self._window_size:
-                # This case means our running stats overshot. We can't
-                # know which value was evicted, so recalculate from scratch.
-                self._recompute_stats()
+            if len(self._window) == self._window_size:
+                evicted = self._window[0]
+                self._window.append(raw_similarity)
+                self._update_stats_add(raw_similarity)
+                self._update_stats_remove(evicted)
+            else:
+                self._window.append(raw_similarity)
+                self._update_stats_add(raw_similarity)
 
             if self._count < self._min_samples:
                 return raw_similarity
@@ -137,14 +134,6 @@ class AnisotropyCorrector:
             # centered at 0.5 (neutral) with steepness controlled by the
             # natural scale of Z-scores.
             return 1.0 / (1.0 + math.exp(-z_score))
-
-    def _recompute_stats(self) -> None:
-        """Recompute running stats from scratch when evicted values are lost."""
-        self._count = 0
-        self._mean = 0.0
-        self._m2 = 0.0
-        for val in self._window:
-            self._update_stats_add(val)
 
     def reset(self) -> None:
         """Clear all state."""
@@ -174,6 +163,7 @@ class AnisotropyCorrectorGroup:
         self._window_size = window_size
         self._epsilon = epsilon
         self._min_samples = min_samples
+        self._lock = Lock()
         for name in names or []:
             self._correctors[name] = AnisotropyCorrector(
                 window_size=window_size,
@@ -183,12 +173,13 @@ class AnisotropyCorrectorGroup:
 
     def get(self, name: str) -> AnisotropyCorrector:
         """Get or create a corrector for the given site name."""
-        if name not in self._correctors:
-            self._correctors[name] = AnisotropyCorrector(
-                window_size=self._window_size,
-                epsilon=self._epsilon,
-                min_samples=self._min_samples,
-            )
+        with self._lock:
+            if name not in self._correctors:
+                self._correctors[name] = AnisotropyCorrector(
+                    window_size=self._window_size,
+                    epsilon=self._epsilon,
+                    min_samples=self._min_samples,
+                )
         return self._correctors[name]
 
     def reset(self) -> None:
