@@ -722,6 +722,21 @@ class RetrievalConfig(BaseModel):
         default=0.7,
         description='Weight for semantic seed entities (lower than NER weight of 1.0).',
     )
+    exploration_epsilon: float = Field(
+        default=0.05,
+        description='Probability of injecting exploration units (low-MW memories) into '
+        'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
+        'Prevents rich-get-richer dynamics per Memory Worth §5.3.',
+    )
+    exploration_max_injections: int = Field(
+        default=2,
+        description='Maximum number of exploration units to inject per retrieval call.',
+    )
+    exploration_low_mw_threshold: int = Field(
+        default=5,
+        description='Units with (success_co_count + failure_co_count) below this '
+        'threshold are eligible for exploration injection.',
+    )
     link_expansion_causal_threshold: float = Field(
         default=0.3,
         description='Minimum weight for causal links in link-expansion graph strategy.',

@@ -1407,6 +1407,7 @@ def _build_memory_unit_model(
         'success_co_count': getattr(res, 'success_co_count', 0),
         'failure_co_count': getattr(res, 'failure_co_count', 0),
         'is_deprioritized': getattr(res, 'is_deprioritized', False),
+        'exploration': bool(unit_metadata.get('exploration', False)),
     }
 
     links_raw = unit_metadata.get('links', [])
