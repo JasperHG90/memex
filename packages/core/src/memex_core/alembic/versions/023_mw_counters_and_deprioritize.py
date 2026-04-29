@@ -27,7 +27,8 @@ def _column_exists(conn, table: str, column: str) -> bool:
         sa.text(
             'SELECT EXISTS ('
             '  SELECT 1 FROM information_schema.columns'
-            '  WHERE table_name = :table AND column_name = :column'
+            '  WHERE table_schema = current_schema()'
+            '    AND table_name = :table AND column_name = :column'
             ')'
         ),
         {'table': table, 'column': column},

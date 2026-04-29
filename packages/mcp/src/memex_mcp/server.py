@@ -3426,6 +3426,8 @@ async def memex_record_outcome(
         BeforeValidator(_coerce_float),
         Field(
             default=1.0,
+            ge=0.0,
+            le=1.0,
             description='Weight for this outcome signal (0.0-1.0). Default 1.0.',
         ),
     ] = 1.0,
