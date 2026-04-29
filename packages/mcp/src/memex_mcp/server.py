@@ -143,6 +143,16 @@ def _coerce_int(v: Any) -> Any:
     return v
 
 
+def _coerce_float(v: Any) -> Any:
+    """Coerce a stringified float back to a float."""
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return v
+
+
 def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     """Validate vault_ids is a real list, not a stringified JSON array."""
     if isinstance(vault_ids, str):
@@ -3237,6 +3247,26 @@ async def memex_survey(
         BeforeValidator(_coerce_int),
         Field(description='Max token budget for all results. Truncates when exceeded.'),
     ] = None,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None, description='Only results before this ISO 8601 date (e.g. 2025-12-31).'
+        ),
+    ] = None,
+    reference_date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'ISO-8601 timestamp. Relative dates in the query (e.g. "last week") '
+                'resolve against this instead of now(). Use for historical queries.'
+            ),
+        ),
+    ] = None,
 ) -> McpSurveyResult:
     """Survey a broad topic — decompose, parallel search, grouped results."""
     try:
@@ -3245,11 +3275,22 @@ async def memex_survey(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
+        from datetime import datetime as _dt, timezone as _tz
+
+        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
+        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
+        ref_dt = (
+            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
+        )
+
         result = await api.survey(
             query=query,
             vault_ids=resolved_vids,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after_dt,
+            before=before_dt,
+            reference_date=ref_dt,
         )
 
         topics = [
@@ -3328,6 +3369,77 @@ async def memex_get_vault_summary(
     except Exception as e:
         logger.error(f'Get vault summary failed: {e}', exc_info=True)
         raise ToolError(f'Get vault summary failed: {e}')
+
+
+@mcp.tool(
+    name='memex_record_outcome',
+    description=(
+        'Record whether previously retrieved memory units contributed '
+        'to a successful outcome. Call this after you have actually used retrieved memories '
+        'to perform a task or answer a question.\n\n'
+        'Call generously. Silence provides no learning signal.'
+    ),
+    tags={'write'},
+    annotations={'readOnlyHint': False},
+)
+async def memex_record_outcome(
+    ctx: Context,
+    unit_ids: Annotated[
+        list[str],
+        BeforeValidator(_coerce_list),
+        Field(
+            description=(
+                'UUIDs of memory units you actually used — not all retrieved units, '
+                'only the ones that were load-bearing in your reasoning.'
+            ),
+        ),
+    ],
+    success: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            description='True if the task succeeded using these memories, false if they were misleading.'
+        ),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
+    outcome_confidence: Annotated[
+        float,
+        BeforeValidator(_coerce_float),
+        Field(
+            default=1.0,
+            description='Weight for this outcome signal (0.0-1.0). Default 1.0.',
+        ),
+    ] = 1.0,
+    reason: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Optional free-text reason for the outcome (logged, not stored on units).',
+        ),
+    ] = None,
+) -> dict:
+    """Record an outcome for memory units to train Memory Worth scoring."""
+    try:
+        api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
+        resolved_vid = await _resolve_vault_id(api, vault_id)
+
+        return await api.record_outcome(
+            unit_ids=unit_ids,
+            success=success,
+            vault_id=str(resolved_vid),
+            outcome_confidence=outcome_confidence,
+            reason=reason,
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Record outcome failed: {e}', exc_info=True)
+        raise ToolError(f'Record outcome failed: {e}')
 
 
 def entrypoint():

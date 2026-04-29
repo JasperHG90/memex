@@ -241,6 +241,9 @@ class SearchService:
         vault_ids: list[UUID] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> SurveyResponse:
         """
         Broad topic survey: decompose into sub-questions, parallel search,
@@ -262,6 +265,9 @@ class SearchService:
                 query=sub_query,
                 limit=limit_per_query,
                 vault_ids=vault_ids,
+                after=after,
+                before=before,
+                reference_date=reference_date,
             )
             async with self.metastore.session() as session:
                 units, _ = await self.memory.recall(session, request)
