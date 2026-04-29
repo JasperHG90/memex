@@ -1087,8 +1087,11 @@ class RetrievalEngine:
         * **temporal proximity boost** -- scaled by
           ``RetrievalConfig.reranking_temporal_alpha`` (uses ``unit.temporal_proximity``
           when available)
+        * **Memory Worth boost** -- scaled by
+          ``RetrievalConfig.reranking_mw_alpha`` (Beta-Bernoulli posterior mean;
+          cold-start mw_boost = 1.0, neutral)
 
-        Set both alphas to 0 to disable boosts (backward compatible).
+        Set any alpha to 0 to disable that boost (backward compatible).
         """
         if not self.reranker or not results:
             return results
@@ -1118,10 +1121,14 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency and temporal proximity boosts
+            # Apply multiplicative recency, temporal proximity, and MW boosts
+            from memex_core.metrics import MW_BOOST_OBSERVED
+            from memex_core.services.outcomes import compute_mw_boost
+
             now = datetime.now(timezone.utc)
             recency_alpha = self.retrieval_config.reranking_recency_alpha
             temporal_alpha = self.retrieval_config.reranking_temporal_alpha
+            mw_alpha = self.retrieval_config.reranking_mw_alpha
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1140,7 +1147,15 @@ class RetrievalEngine:
                     temporal = 0.5  # neutral
                 temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)
 
-                boosted_scores.append(ce_score * recency_boost * temporal_boost)
+                # Memory Worth boost (additive-marginal composition)
+                mw_boost = compute_mw_boost(
+                    success_co_count=unit.success_co_count,
+                    failure_co_count=unit.failure_co_count,
+                    mw_alpha=mw_alpha,
+                )
+                MW_BOOST_OBSERVED.observe(mw_boost)
+
+                boosted_scores.append(ce_score * recency_boost * temporal_boost * mw_boost)
 
             scored_results = []
             for unit, boosted, raw_score in zip(results, boosted_scores, scores):

@@ -1,4 +1,4 @@
-"""Tests for cross-encoder recency and temporal proximity boosts (T6)."""
+"""Tests for cross-encoder recency, temporal proximity, and MW boosts."""
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
@@ -14,6 +14,8 @@ from memex_core.memory.sql_models import MemoryUnit
 def _make_unit(
     event_date: datetime | None = None,
     temporal_proximity: float | None = None,
+    success_co_count: int = 0,
+    failure_co_count: int = 0,
     text: str = 'test fact',
 ) -> MemoryUnit:
     """Create a minimal MemoryUnit for reranking tests."""
@@ -25,6 +27,8 @@ def _make_unit(
         vault_id=uuid4(),
         note_id=uuid4(),
         embedding=[],
+        success_co_count=success_co_count,
+        failure_co_count=failure_co_count,
     )
     if temporal_proximity is not None:
         object.__setattr__(unit, 'temporal_proximity', temporal_proximity)
@@ -35,6 +39,7 @@ def _make_engine(
     scores: list[float],
     recency_alpha: float = 0.2,
     temporal_alpha: float = 0.2,
+    mw_alpha: float = 0.3,
 ) -> RetrievalEngine:
     """Create engine with mock reranker returning given raw scores."""
     reranker = MagicMock()
@@ -42,6 +47,7 @@ def _make_engine(
     config = RetrievalConfig(
         reranking_recency_alpha=recency_alpha,
         reranking_temporal_alpha=temporal_alpha,
+        reranking_mw_alpha=mw_alpha,
     )
     return RetrievalEngine(
         embedder=MagicMock(),
@@ -194,12 +200,87 @@ class TestAlphaZeroDisablesBoosts:
         assert result[1] is unit_b
 
 
+class TestMwBoost:
+    """Tests for Memory Worth boost in reranking composition."""
+
+    @pytest.mark.asyncio
+    async def test_cold_start_mw_is_neutral(self) -> None:
+        """Units with 0/0 counters (cold-start) get mw_boost=1.0, no rank change."""
+        unit = _make_unit(success_co_count=0, failure_co_count=0)
+        engine = _make_engine([0.0], mw_alpha=0.3)
+        result = await engine._rerank_results('query', [unit])
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_high_mw_unit_ranks_above_low_mw(self) -> None:
+        """A unit with high MW should rank above low MW with same CE score."""
+        now = datetime.now(timezone.utc)
+        # Both units same recency/temporal (neutral), same CE score
+        # But different MW: 9/1 vs 1/9
+        unit_high_mw = _make_unit(
+            event_date=now,
+            success_co_count=9,
+            failure_co_count=1,
+            text='high MW',
+        )
+        unit_low_mw = _make_unit(
+            event_date=now,
+            success_co_count=1,
+            failure_co_count=9,
+            text='low MW',
+        )
+
+        # Same CE score for both
+        engine = _make_engine([0.0, 0.0], mw_alpha=0.3)
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_high_mw
+        assert result[1] is unit_low_mw
+
+    @pytest.mark.asyncio
+    async def test_mw_alpha_zero_means_no_mw_influence(self) -> None:
+        """With mw_alpha=0, MW counters have no effect on ranking."""
+        now = datetime.now(timezone.utc)
+        unit_high_mw = _make_unit(
+            event_date=now,
+            success_co_count=10,
+            failure_co_count=0,
+            text='high MW',
+        )
+        unit_low_mw = _make_unit(
+            event_date=now,
+            success_co_count=0,
+            failure_co_count=10,
+            text='low MW',
+        )
+
+        # High CE for low-MW unit to make it rank first without MW influence
+        engine = _make_engine([0.5, 2.0], mw_alpha=0.0)
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_low_mw
+
+    @pytest.mark.asyncio
+    async def test_mw_composes_multiplicatively(self) -> None:
+        """MW boost composes multiplicatively with recency and temporal."""
+        now = datetime.now(timezone.utc)
+        # Unit with all three boosts high
+        unit = _make_unit(
+            event_date=now,
+            temporal_proximity=1.0,
+            success_co_count=9,
+            failure_co_count=1,
+        )
+        engine = _make_engine([0.0], recency_alpha=0.2, temporal_alpha=0.2, mw_alpha=0.3)
+
+        result = await engine._rerank_results('query', [unit])
+        assert len(result) == 1
+
+
 class TestCombinedBoosts:
-    """Tests for combined recency * temporal * CE interaction."""
+    """Tests for combined recency * temporal * MW * CE interaction."""
 
     @pytest.mark.asyncio
     async def test_combined_formula(self) -> None:
-        """Verify boosted = ce_score * recency_boost * temporal_boost."""
+        """Verify boosted = ce_score * recency_boost * temporal_boost * mw_boost."""
         now = datetime.now(timezone.utc)
         unit = _make_unit(event_date=now, temporal_proximity=1.0)
         # CE raw score = 0 -> sigmoid = 0.5
@@ -207,7 +288,8 @@ class TestCombinedBoosts:
 
         # recency = 1.0, recency_boost = 1 + 0.2*(1.0 - 0.5) = 1.1
         # temporal = 1.0, temporal_boost = 1 + 0.2*(1.0 - 0.5) = 1.1
-        # boosted = 0.5 * 1.1 * 1.1 = 0.605
+        # mw_boost = 1.0 (cold-start 0/0 -> neutral)
+        # boosted = 0.5 * 1.1 * 1.1 * 1.0 = 0.605
         result = await engine._rerank_results('query', [unit])
         assert len(result) == 1
 
@@ -225,9 +307,9 @@ class TestCombinedBoosts:
         # sigmoid(0.5) ~= 0.622, sigmoid(0.3) ~= 0.574
         # Old recency: max(0.1, 1-350/365)=0.041 -> clamped 0.1
         #   boost = 1 + 0.2*(0.1-0.5) = 0.92
-        #   boosted = 0.622 * 0.92 * 1.0 = 0.572
+        #   boosted = 0.622 * 0.92 * 1.0 * 1.0 = 0.572
         # New recency: 1.0 -> boost = 1 + 0.2*(1.0-0.5) = 1.1
-        #   boosted = 0.574 * 1.1 * 1.0 = 0.631
+        #   boosted = 0.574 * 1.1 * 1.0 * 1.0 = 0.631
         # New should beat Old despite lower CE score
         engine = _make_engine([0.5, 0.3], recency_alpha=0.2, temporal_alpha=0.0)
 
@@ -324,9 +406,9 @@ class TestExtremeAlphaValues:
         # sigmoid(3.0) ~= 0.953, sigmoid(0.0) = 0.5
         # With alpha=1.0:
         #   old recency ~ 0.1, boost = 1 + 1.0*(0.1 - 0.5) = 0.6
-        #   boosted_old = 0.953 * 0.6 = 0.572
+        #   boosted_old = 0.953 * 0.6 * 1.0 * 1.0 = 0.572
         #   new recency = 1.0, boost = 1 + 1.0*(1.0 - 0.5) = 1.5
-        #   boosted_new = 0.5 * 1.5 = 0.75
+        #   boosted_new = 0.5 * 1.5 * 1.0 * 1.0 = 0.75
         # New beats old despite much lower CE score
         engine = _make_engine([3.0, 0.0], recency_alpha=1.0, temporal_alpha=0.0)
 

@@ -697,6 +697,11 @@ class RetrievalConfig(BaseModel):
         description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
         '0 = no boost (backward compatible).',
     )
+    reranking_mw_alpha: float = Field(
+        default=0.3,
+        description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
+        '0 = no MW influence. Default 0.3 matches recency/temporal magnitude.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',
