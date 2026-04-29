@@ -1340,6 +1340,8 @@ def compute_staleness(
     if event_date is not None and isinstance(event_date, _dt):
         if event_date.tzinfo is None:
             event_date = event_date.replace(tzinfo=_tz.utc)
+        else:
+            event_date = event_date.astimezone(_tz.utc)
         age_days = (now - event_date).days
 
         if age_days > 30:
