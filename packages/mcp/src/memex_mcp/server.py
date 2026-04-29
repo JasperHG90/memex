@@ -1404,6 +1404,9 @@ def _build_memory_unit_model(
         'virtual': is_virtual,
         'mental_model_id': mental_model_id_uuid,
         'evidence_ids': evidence_ids,
+        'success_co_count': getattr(res, 'success_co_count', 0),
+        'failure_co_count': getattr(res, 'failure_co_count', 0),
+        'is_deprioritized': getattr(res, 'is_deprioritized', False),
     }
 
     links_raw = unit_metadata.get('links', [])
@@ -1502,6 +1505,18 @@ async def memex_memory_search(
         BeforeValidator(_coerce_bool),
         Field(default=False, description='Include superseded (low-confidence) memory units.'),
     ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=False,
+            description=(
+                'Include deprioritized memories in results. '
+                'Default (false) returns only active, non-deprioritized memories. '
+                'Set to true for "remember when..." queries or explicit recall of past discussions.'
+            ),
+        ),
+    ] = False,
     after: Annotated[
         str | None,
         Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
@@ -1581,6 +1596,7 @@ async def memex_memory_search(
             token_budget=token_budget,
             strategies=strategies,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             after=after_dt,
             before=before_dt,
             tags=tags,

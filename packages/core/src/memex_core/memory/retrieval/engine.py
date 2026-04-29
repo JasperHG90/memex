@@ -327,6 +327,9 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Pass include_deprioritized flag to strategies (default: exclude)
+        filters['include_deprioritized'] = request.include_deprioritized
+
         # Thread source_context filter for context-scoped retrieval
         if request.source_context:
             filters['source_context'] = request.source_context
