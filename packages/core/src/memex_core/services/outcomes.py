@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlmodel import select
+from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.metrics import OUTCOME_RECORDED_TOTAL, MW_SCORE_DISTRIBUTION
@@ -81,8 +81,7 @@ class OutcomeService:
             success: True if the units contributed to a successful outcome.
             vault_id: Vault scope for the outcome.
             outcome_confidence: Weight for this outcome signal (0.0–1.0).
-                Currently recorded but not used in counter arithmetic (v1
-                uses integer increments; fractional weighting is F36).
+                # TODO(F36): fractional counter weighting; v1 uses integer increments
             reason: Optional free-text reason (logged, not stored on units).
 
         Returns:
@@ -108,67 +107,81 @@ class OutcomeService:
                 log.warning('outcome.invalid_unit_id', unit_id=uid_str)
                 continue
 
+        # Validate vault_id
+        try:
+            vault_uuid = UUID(vault_id)
+        except ValueError:
+            raise ValueError(f'Invalid vault_id: {vault_id}')
+
         if not parsed_ids:
             log.warning('outcome.no_valid_ids')
             return {'units_updated': 0, 'entities_updated': 0, 'models_updated': 0}
 
-        # Increment counters on MemoryUnit rows
-        result = await session.exec(
-            select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == UUID(vault_id))
+        # Atomic increment on MemoryUnit rows (SQL-level, no race condition)
+        stmt = (
+            update(MU)
+            .where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
+            .values({counter_field: MU.__table__.c[counter_field] + 1})
         )
-        units = result.all()
+        result = await session.exec(stmt)
+        units_updated = result.rowcount  # type: ignore[union-attr]
+        await session.commit()
 
-        for unit in units:
-            current = getattr(unit, counter_field)
-            setattr(unit, counter_field, current + 1)
-
-            # Record MW score histogram observation
+        # Observe MW scores after commit
+        refreshed = await session.exec(
+            select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
+        )
+        for unit in refreshed.all():
             mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
             MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id)).observe(mw_score)
 
-        await session.commit()
+        # Propagate to UnitEntity rows (atomic increment)
+        from memex_core.memory.sql_models import UnitEntity as UE
 
-        # Propagate to UnitEntity rows
-        entity_count = 0
-        for unit in units:
-            for ue in unit.unit_entities:
-                current = getattr(ue, counter_field)
-                setattr(ue, counter_field, current + 1)
-                entity_count += 1
+        entity_stmt = (
+            update(UE)
+            .where(
+                UE.unit_id.in_(parsed_ids),
+                UE.vault_id == vault_uuid,
+            )
+            .values({counter_field: UE.__table__.c[counter_field] + 1})
+        )
+        entity_result = await session.exec(entity_stmt)
+        entity_count = entity_result.rowcount  # type: ignore[union-attr]
 
-        # Propagate to MentalModel rows
+        # Propagate to MentalModel rows (atomic increment)
         from memex_core.memory.sql_models import MentalModel as MM
 
-        model_count = 0
-        if units:
-            all_entity_ids = list({ue.entity_id for unit in units for ue in unit.unit_entities})
-            if all_entity_ids:
-                models_result = await session.exec(
-                    select(MM).where(
-                        MM.entity_id.in_(all_entity_ids),
-                        MM.vault_id == UUID(vault_id),
+        model_stmt = (
+            update(MM)
+            .where(
+                MM.entity_id.in_(
+                    select(UE.entity_id).where(
+                        UE.unit_id.in_(parsed_ids), UE.vault_id == vault_uuid
                     )
-                )
-                for model in models_result.all():
-                    current = getattr(model, counter_field)
-                    setattr(model, counter_field, current + 1)
-                    model_count += 1
+                ),
+                MM.vault_id == vault_uuid,
+            )
+            .values({counter_field: MM.__table__.c[counter_field] + 1})
+        )
+        model_result = await session.exec(model_stmt)
+        model_count = model_result.rowcount  # type: ignore[union-attr]
 
         await session.commit()
 
         OUTCOME_RECORDED_TOTAL.labels(
             vault_id=str(vault_id), outcome='success' if success else 'failure'
-        ).inc(len(units))
+        ).inc(units_updated)
 
         log.info(
             'outcome.recorded',
-            units_updated=len(units),
+            units_updated=units_updated,
             entities_updated=entity_count,
             models_updated=model_count,
         )
 
         return {
-            'units_updated': len(units),
+            'units_updated': units_updated,
             'entities_updated': entity_count,
             'models_updated': model_count,
         }
