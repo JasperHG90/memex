@@ -447,7 +447,7 @@ class RetrievalEngine:
         # 6. Hydrate Objects
         t0 = _t()
         final_results = await self._hydrate_results(session, fused_items)
-        self._hydrated_candidates = final_results
+        hydrated_candidates = list(final_results)
         t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
@@ -511,11 +511,10 @@ class RetrievalEngine:
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
 
-            hydrated = getattr(self, '_hydrated_candidates', None)
-            if hydrated:
+            if hydrated_candidates:
                 final_results = inject_exploration_units(
                     final_results,
-                    hydrated,
+                    hydrated_candidates,
                     epsilon=self.retrieval_config.exploration_epsilon,
                     max_injections=self.retrieval_config.exploration_max_injections,
                     low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
