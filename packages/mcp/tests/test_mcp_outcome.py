@@ -80,9 +80,7 @@ async def test_mcp_record_outcome_with_reason(mock_api, mcp_client):
     assert data['units_updated'] == 1
     # Verify reason was forwarded
     call_kwargs = mock_api.record_outcome.call_args
-    assert call_kwargs.kwargs.get('reason') == 'User confirmed this was helpful' or (
-        len(call_kwargs.args) > 0  # positional
-    )
+    assert call_kwargs.kwargs.get('reason') == 'User confirmed this was helpful'
 
 
 @pytest.mark.asyncio

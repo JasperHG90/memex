@@ -68,6 +68,10 @@ class AnisotropyCorrector:
         return self._window_size
 
     @property
+    def min_samples(self) -> int:
+        return self._min_samples
+
+    @property
     def count(self) -> int:
         """Number of observations currently in the window."""
         return self._count

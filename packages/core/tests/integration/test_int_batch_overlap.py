@@ -298,25 +298,15 @@ async def test_int_single_note_bg_overlap_returns_409(api, metastore, init_globa
 @pytest.mark.asyncio
 async def test_int_409_overlap_emits_audit_log(api, metastore, init_global_vault, overlap_notes):
     """F19: the 409 path must emit an `ingestion.overlap_rejected` audit
-    event. The event records the existing job_id and the request path so
-    operators have a queryable trail of duplicate submissions.
-
-    The production path uses fire-and-forget (asyncio.create_task), but the
-    test verifies the audit event by directly awaiting the persist call,
-    since create_task may not flush on the ASGITransport event loop in time.
+    event. Validates the production code path by mocking audit_event at the
+    module level — the real route handler calls _overlap_to_409 which calls
+    audit_event; we intercept that call and assert the arguments.
     """
 
     from memex_core.server import app
-    from memex_core.memory.sql_models import AuditLog
 
     await api.initialize()
     app.state.api = api
-    # AuditService is wired in lifespan; tests bypass lifespan, so wire it
-    # directly here matching the production shape.
-    from memex_core.services.audit import AuditService
-
-    audit_svc = AuditService(metastore)
-    app.state.audit_service = audit_svc
 
     payload = {
         'notes': [
@@ -333,42 +323,18 @@ async def test_int_409_overlap_emits_audit_log(api, metastore, init_global_vault
         async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
             first = await ac.post('/api/v1/ingestions/batch', json=payload)
             assert first.status_code == 202, first.text
+            first_job_id = first.json()['job_id']
 
-            second = await ac.post('/api/v1/ingestions/batch', json=payload)
-            assert second.status_code == 409, second.text
+            with patch('memex_core.server.ingestion.audit_event') as mock_audit:
+                second = await ac.post('/api/v1/ingestions/batch', json=payload)
+                assert second.status_code == 409, second.text
 
-    # Verify the audit event by directly writing it (the production code path
-    # uses fire-and-forget via asyncio.create_task, which may not flush in test;
-    # write explicitly to validate the schema and content).
-    first_job_id = first.json()['job_id']
-    entry = AuditLog(
-        action='ingestion.overlap_rejected',
-        resource_type='batch_job',
-        resource_id=first_job_id,
-        details={
-            'existing_status': 'pending',
-            'overlapping_keys_count': len(overlap_notes),
-            'path': '/api/v1/ingestions/batch',
-        },
-    )
-    await audit_svc._persist(entry)
-
-    entries = await audit_svc.query(action='ingestion.overlap_rejected', limit=10)
-    assert entries, 'F19: expected an `ingestion.overlap_rejected` audit entry'
-
-    raw = entries[0]
-    from memex_core.memory.sql_models import AuditLog as _AuditLogModel
-
-    if hasattr(raw, _AuditLogModel.__name__):
-        entry = getattr(raw, _AuditLogModel.__name__)
-    elif isinstance(raw, tuple):
-        entry = raw[0]
-    else:
-        entry = raw
-    assert entry.action == 'ingestion.overlap_rejected'
-    assert entry.resource_type == 'batch_job'
-    assert entry.resource_id == first_job_id
-    assert entry.details.get('path') == '/api/v1/ingestions/batch'
+    mock_audit.assert_called_once()
+    call_kwargs = mock_audit.call_args.kwargs
+    assert call_kwargs['action'] == 'ingestion.overlap_rejected'
+    assert call_kwargs['resource_type'] == 'batch_job'
+    assert call_kwargs['resource_id'] == first_job_id
+    assert call_kwargs.get('path') == '/api/v1/ingestions/batch'
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,7 @@ class TestAnisotropyIntegration:
         engine = RetrievalEngine(embedder=embedder, retrieval_config=config)
 
         assert engine._anisotropy.window_size == 256
-        assert engine._anisotropy._min_samples == 16
+        assert engine._anisotropy.min_samples == 16
 
     async def test_anisotropy_disabled_mode(self, embedder):
         config = RetrievalConfig(anisotropy_window_size=0)
@@ -70,4 +70,4 @@ class TestAnisotropyIntegration:
         engine = RetrievalEngine(embedder=embedder)
 
         assert engine._anisotropy.window_size == 1024
-        assert engine._anisotropy._min_samples == 32
+        assert engine._anisotropy.min_samples == 32
