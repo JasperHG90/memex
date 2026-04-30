@@ -1,28 +1,33 @@
 """Integration tests for F1c MW boost composition at the reranker.
 
-Verifies that Memory Worth boost is composed into retrieval scoring via
-the additive-marginal formula: mw_boost = 1.0 + mw_alpha * (mw_score - 0.5).
-Cold-start units (0/0) get mw_boost=1.0 (neutral).
+These tests exercise the full retrieval pipeline (embedder + reranker + MW
+composition + MMR) against a real Postgres + pgvector. Formula tests for
+``compute_mw_score`` / ``compute_mw_boost`` live in
+``packages/core/tests/unit/services/test_outcomes.py``.
+
+The MW composition only fires through the reranker code path
+(``engine.py:_rerank_results``); fixtures construct ``RetrievalEngine`` with
+a real reranker so the load-bearing assertion — that high-MW units rank
+above low-MW units with identical text — actually runs through the boost
+line at ``engine.py:1180``.
 """
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.sql_models import (
-    Entity,
-    MemoryUnit,
-    Note,
-    UnitEntity,
-)
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_common.types import FactTypes
-from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.models.embedding import get_embedding_model
-from memex_core.services.outcomes import compute_mw_score, compute_mw_boost
+from memex_core.memory.models.reranking import get_reranking_model
+from memex_core.memory.retrieval.engine import RetrievalEngine
+from memex_core.memory.retrieval.models import RetrievalRequest
+from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
 
 
 @pytest.mark.integration
@@ -31,127 +36,269 @@ class TestMwBoostComposition:
     async def embedder(self):
         return await get_embedding_model()
 
-    @pytest_asyncio.fixture
-    async def engine_instance(self, embedder):
-        return RetrievalEngine(embedder=embedder)
+    @pytest_asyncio.fixture(scope='class')
+    async def reranker(self):
+        return await get_reranking_model()
 
     @pytest_asyncio.fixture
-    async def seeded_units(self, session: AsyncSession):
-        """Create two units with identical embeddings but different MW counters."""
-        vault_id = GLOBAL_VAULT_ID
-        note_id = uuid4()
-        high_success_id = uuid4()
-        high_failure_id = uuid4()
-        entity_id = uuid4()
+    async def engine_instance(self, embedder, reranker):
+        return RetrievalEngine(embedder=embedder, reranker=reranker)
 
-        emb = [0.1] * 384
-        note = Note(id=note_id, original_text='Test note', vault_id=vault_id)
-
-        # High-success unit
-        high_success = MemoryUnit(
-            id=high_success_id,
-            note_id=note_id,
-            text='Well-established fact about deployment',
-            fact_type=FactTypes.WORLD,
-            embedding=emb,
-            vault_id=vault_id,
-            event_date=datetime.now(timezone.utc),
-            success_co_count=10,
-            failure_co_count=0,
-        )
-        # High-failure unit
-        high_failure = MemoryUnit(
-            id=high_failure_id,
-            note_id=note_id,
-            text='Disproven claim about deployment',
-            fact_type=FactTypes.WORLD,
-            embedding=emb,
-            vault_id=vault_id,
-            event_date=datetime.now(timezone.utc),
-            success_co_count=0,
-            failure_co_count=10,
-        )
-        entity = Entity(id=entity_id, canonical_name='Deploy')
-        ue1 = UnitEntity(unit_id=high_success_id, entity_id=entity_id, vault_id=vault_id)
-        ue2 = UnitEntity(unit_id=high_failure_id, entity_id=entity_id, vault_id=vault_id)
-
-        session.add(note)
-        session.add(high_success)
-        session.add(high_failure)
-        session.add(entity)
-        session.add(ue1)
-        session.add(ue2)
-        await session.commit()
-
-        return {
-            'high_success_id': high_success_id,
-            'high_failure_id': high_failure_id,
-        }
-
-    async def test_mw_boost_neutral_for_cold_start(self, session: AsyncSession, engine_instance):
-        """Cold-start units (0/0) get mw_boost=1.0 — no rank penalty."""
-        note_id = uuid4()
+    async def _seed_unit(
+        self,
+        session: AsyncSession,
+        *,
+        note_id: UUID,
+        entity_id: UUID,
+        text: str,
+        embedding: list[float],
+        success: int,
+        failure: int,
+    ) -> UUID:
         unit_id = uuid4()
-        emb = [0.1] * 384
-        note = Note(id=note_id, original_text='Cold start', vault_id=GLOBAL_VAULT_ID)
         unit = MemoryUnit(
             id=unit_id,
             note_id=note_id,
-            text='New fact never retrieved before',
+            text=text,
             fact_type=FactTypes.WORLD,
-            embedding=emb,
+            embedding=embedding,
             vault_id=GLOBAL_VAULT_ID,
             event_date=datetime.now(timezone.utc),
-            success_co_count=0,
-            failure_co_count=0,
+            success_co_count=success,
+            failure_co_count=failure,
         )
-        session.add(note)
+        ue = UnitEntity(unit_id=unit_id, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)
         session.add(unit)
+        session.add(ue)
+        return unit_id
+
+    async def test_high_mw_ranks_above_low_mw_with_same_content(
+        self, session: AsyncSession, engine_instance, embedder
+    ):
+        """Two units with identical text + embedding rank purely by MW.
+
+        Same query → same ce_score; same event_date → same recency boost;
+        the MW boost at ``engine.py:1180`` is the only differentiator.
+        """
+        text = 'Kubernetes deployments use rolling update strategy by default.'
+        emb = embedder.encode([text])[0].tolist()
+
+        note = Note(id=uuid4(), original_text='F1c rank test', vault_id=GLOBAL_VAULT_ID)
+        entity = Entity(id=uuid4(), canonical_name='Kubernetes')
+        session.add(note)
+        session.add(entity)
+        await session.flush()
+
+        high_success_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=entity.id,
+            text=text,
+            embedding=emb,
+            success=20,
+            failure=0,
+        )
+        high_failure_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=entity.id,
+            text=text,
+            embedding=emb,
+            success=0,
+            failure=20,
+        )
         await session.commit()
 
-        mw_boost = compute_mw_boost(0, 0)
-        assert mw_boost == 1.0
-
-    async def test_mw_boost_upweights_high_success(
-        self, session: AsyncSession, engine_instance, seeded_units
-    ):
-        mw_score = compute_mw_score(10, 0)
-        mw_boost = compute_mw_boost(10, 0)
-        assert mw_boost > 1.0
-        assert mw_score > 0.5
-
-    async def test_mw_boost_downweights_high_failure(
-        self, session: AsyncSession, engine_instance, seeded_units
-    ):
-        mw_score = compute_mw_score(0, 10)
-        mw_boost = compute_mw_boost(0, 10)
-        assert mw_boost < 1.0
-        assert mw_score < 0.5
-
-    async def test_mw_boost_composition_formula(self):
-        """Verify the exact additive-marginal formula."""
-        for s, f in [(5, 3), (0, 0), (10, 0), (0, 10), (50, 50)]:
-            mw_score = compute_mw_score(s, f)
-            mw_boost = compute_mw_boost(s, f, mw_alpha=0.3)
-            expected = 1.0 + 0.3 * (mw_score - 0.5)
-            assert abs(mw_boost - expected) < 1e-10, f'Formula mismatch for ({s},{f})'
-
-    async def test_mw_boost_observability(self, session: AsyncSession, seeded_units):
-        """Verify MW score computation from DB-backed counters."""
-        from memex_core.services.outcomes import OutcomeService
-
-        svc = OutcomeService()
-        # Record outcomes and verify score changes
-        await svc.record_outcome(
+        results, _ = await engine_instance.retrieve(
             session,
-            unit_ids=[str(seeded_units['high_success_id'])],
-            success=True,
-            vault_id=str(GLOBAL_VAULT_ID),
+            RetrievalRequest(query='kubernetes rolling update', limit=5),
         )
 
-        session.expire_all()
-        unit = await session.get(MemoryUnit, seeded_units['high_success_id'])
-        assert unit is not None
-        assert unit.success_co_count == 11  # was 10, now 11
-        mw_score = compute_mw_score(11, 0)
-        assert mw_score > compute_mw_score(10, 0)  # Score increases with more success
+        result_ids = [r.id for r in results]
+        assert high_success_id in result_ids, 'high-success unit missing from results'
+        assert high_failure_id in result_ids, 'high-failure unit missing from results'
+        assert result_ids.index(high_success_id) < result_ids.index(high_failure_id), (
+            f'F1c regression: high-MW unit must rank above high-failure peer when '
+            f'ce_score is equal. Got order: {result_ids}'
+        )
+
+    async def test_cold_start_unit_neutral_relative_to_high_mw(
+        self, session: AsyncSession, engine_instance, embedder
+    ):
+        """Cold-start (0/0) gets ``mw_boost = 1.0`` — sits between high-success
+        and high-failure units with the same ce_score."""
+        text = 'Postgres logical replication propagates row changes.'
+        emb = embedder.encode([text])[0].tolist()
+
+        note = Note(id=uuid4(), original_text='F1c cold start test', vault_id=GLOBAL_VAULT_ID)
+        entity = Entity(id=uuid4(), canonical_name='Postgres')
+        session.add(note)
+        session.add(entity)
+        await session.flush()
+
+        high_success_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=entity.id,
+            text=text,
+            embedding=emb,
+            success=20,
+            failure=0,
+        )
+        cold_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=entity.id,
+            text=text,
+            embedding=emb,
+            success=0,
+            failure=0,
+        )
+        high_failure_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=entity.id,
+            text=text,
+            embedding=emb,
+            success=0,
+            failure=20,
+        )
+        await session.commit()
+
+        results, _ = await engine_instance.retrieve(
+            session,
+            RetrievalRequest(query='postgres logical replication', limit=5),
+        )
+        result_ids = [r.id for r in results]
+        for uid in (high_success_id, cold_id, high_failure_id):
+            assert uid in result_ids, f'unit {uid} missing from results'
+
+        idx_success = result_ids.index(high_success_id)
+        idx_cold = result_ids.index(cold_id)
+        idx_failure = result_ids.index(high_failure_id)
+        assert idx_success < idx_cold < idx_failure, (
+            f'F1c cold-start neutrality: expected order [success, cold, failure]; '
+            f'got idx_success={idx_success} idx_cold={idx_cold} idx_failure={idx_failure}'
+        )
+
+    async def test_mmr_diversity_applies_after_mw_composition(
+        self, session: AsyncSession, engine_instance, embedder
+    ):
+        """MMR runs strictly downstream of MW composition.
+
+        Seed two near-duplicate high-MW units in cluster A and one isolated
+        unit in cluster B. With MMR active and limit=2, the result list
+        should NOT contain both A duplicates — MMR penalty must drop the
+        second one even though both have the highest MW boost.
+        """
+        cluster_a_text_1 = 'GraphQL resolvers run sequentially per field.'
+        cluster_a_text_2 = 'GraphQL field resolvers execute one after another.'
+        cluster_b_text = 'gRPC streams use HTTP/2 multiplexing.'
+
+        emb_a1 = embedder.encode([cluster_a_text_1])[0].tolist()
+        emb_a2 = embedder.encode([cluster_a_text_2])[0].tolist()
+        emb_b = embedder.encode([cluster_b_text])[0].tolist()
+
+        note = Note(id=uuid4(), original_text='F1c MMR test', vault_id=GLOBAL_VAULT_ID)
+        ent_a = Entity(id=uuid4(), canonical_name='GraphQL')
+        ent_b = Entity(id=uuid4(), canonical_name='gRPC')
+        session.add(note)
+        session.add(ent_a)
+        session.add(ent_b)
+        await session.flush()
+
+        a1_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=ent_a.id,
+            text=cluster_a_text_1,
+            embedding=emb_a1,
+            success=20,
+            failure=0,
+        )
+        a2_id = await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=ent_a.id,
+            text=cluster_a_text_2,
+            embedding=emb_a2,
+            success=20,
+            failure=0,
+        )
+        await self._seed_unit(
+            session,
+            note_id=note.id,
+            entity_id=ent_b.id,
+            text=cluster_b_text,
+            embedding=emb_b,
+            success=0,
+            failure=0,
+        )
+        await session.commit()
+
+        # First confirm all 3 units are retrievable — otherwise the MMR
+        # invariant has nothing to diversify between.
+        all_results, _ = await engine_instance.retrieve(
+            session,
+            RetrievalRequest(query='request handling protocols', limit=10),
+        )
+        all_ids = {r.id for r in all_results}
+        if not (a1_id in all_ids and a2_id in all_ids):
+            pytest.skip('A duplicates not both in candidate set — MMR test inconclusive')
+
+        results, _ = await engine_instance.retrieve(
+            session,
+            RetrievalRequest(
+                query='request handling protocols',
+                limit=2,
+                mmr_lambda=0.3,
+            ),
+        )
+        assert len(results) == 2, f'expected 2 results with limit=2, got {len(results)}'
+        result_ids = {r.id for r in results}
+        if a1_id in result_ids and a2_id in result_ids:
+            pytest.fail(
+                f'MMR diversity violated: both near-duplicate A units returned for '
+                f'limit=2 with mmr_lambda=0.3. Result ids: {[str(i) for i in result_ids]}'
+            )
+
+    async def test_mw_boost_observed_metric_emitted_during_retrieve(
+        self, session: AsyncSession, engine_instance, embedder
+    ):
+        """``MW_BOOST_OBSERVED`` histogram receives one observation per
+        scored unit per retrieve call when the reranker path is active."""
+        from memex_core.metrics import MW_BOOST_OBSERVED
+
+        text = 'Vault-scoped policies enforce per-tenant isolation.'
+        emb = embedder.encode([text])[0].tolist()
+
+        note = Note(id=uuid4(), original_text='F1c metrics test', vault_id=GLOBAL_VAULT_ID)
+        entity = Entity(id=uuid4(), canonical_name='Vault')
+        session.add(note)
+        session.add(entity)
+        await session.flush()
+
+        for s, f in [(5, 0), (0, 5), (0, 0)]:
+            await self._seed_unit(
+                session,
+                note_id=note.id,
+                entity_id=entity.id,
+                text=text,
+                embedding=emb,
+                success=s,
+                failure=f,
+            )
+        await session.commit()
+
+        before = MW_BOOST_OBSERVED._sum.get()
+        results, _ = await engine_instance.retrieve(
+            session,
+            RetrievalRequest(query='vault policies tenant isolation', limit=10),
+        )
+        after = MW_BOOST_OBSERVED._sum.get()
+
+        assert len(results) > 0, 'retrieve returned no results — boost path not exercised'
+        assert after > before, (
+            f'MW_BOOST_OBSERVED histogram should receive samples during retrieve; '
+            f'before={before} after={after}'
+        )

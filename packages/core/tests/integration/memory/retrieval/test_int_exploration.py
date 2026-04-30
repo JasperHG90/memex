@@ -1,185 +1,204 @@
-"""Integration tests for F33 exploration floor — epsilon-greedy injection through the engine pipeline.
+"""Integration tests for F33 ε-greedy exploration injection through the engine.
 
-Verifies that exploration units are injected after MMR when epsilon > 0,
-that only low-MW units are eligible, and that injection is disabled when epsilon=0.
+Verifies that exploration units actually surface in ``engine.retrieve()``
+results when ``exploration_epsilon > 0`` and that no exploration units are
+injected when disabled. Pure-function tests for ``inject_exploration_units``
+live alongside ``packages/core/tests/unit/memory/retrieval/`` (formula-level
+behavior) — these tests run through the full pipeline.
 """
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.sql_models import (
-    Entity,
-    MemoryUnit,
-    Note,
-    UnitEntity,
-)
 from memex_common.config import GLOBAL_VAULT_ID, RetrievalConfig
 from memex_common.types import FactTypes
+from memex_core.memory.models.embedding import get_embedding_model
+from memex_core.memory.models.reranking import get_reranking_model
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
-from memex_core.memory.models.embedding import get_embedding_model
+from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
 
 
 @pytest.mark.integration
-class TestExplorationFloor:
+class TestExplorationInjection:
     @pytest_asyncio.fixture(scope='class')
     async def embedder(self):
         return await get_embedding_model()
 
-    @pytest_asyncio.fixture
-    async def seeded_low_mw_units(self, session: AsyncSession):
-        """Create units with low MW counts that are exploration-eligible."""
-        vault_id = GLOBAL_VAULT_ID
-        note_id = uuid4()
-        entity_id = uuid4()
+    @pytest_asyncio.fixture(scope='class')
+    async def reranker(self):
+        return await get_reranking_model()
 
-        emb = [0.1] * 384
-        note = Note(id=note_id, original_text='Exploration test', vault_id=vault_id)
-        entity = Entity(id=entity_id, canonical_name='Test')
-
-        # Regular unit (already retrieved, has outcomes)
-        regular_id = uuid4()
-        regular = MemoryUnit(
-            id=regular_id,
-            note_id=note_id,
-            text='Well-known fact about Python',
-            fact_type=FactTypes.WORLD,
-            embedding=emb,
-            vault_id=vault_id,
-            event_date=datetime.now(timezone.utc),
-            success_co_count=10,
-            failure_co_count=2,
-        )
-        # Cold-start unit (eligible for exploration)
-        cold_id = uuid4()
-        cold = MemoryUnit(
-            id=cold_id,
-            note_id=note_id,
-            text='New fact about Python that has never been retrieved',
-            fact_type=FactTypes.WORLD,
-            embedding=emb,
-            vault_id=vault_id,
-            event_date=datetime.now(timezone.utc),
-            success_co_count=0,
-            failure_co_count=0,
-        )
-        # Low-MW unit (also eligible — total < 5)
-        low_mw_id = uuid4()
-        low_mw = MemoryUnit(
-            id=low_mw_id,
-            note_id=note_id,
-            text='Rarely seen fact about Python',
-            fact_type=FactTypes.WORLD,
-            embedding=emb,
-            vault_id=vault_id,
-            event_date=datetime.now(timezone.utc),
-            success_co_count=2,
-            failure_co_count=1,
-        )
-
-        ue_reg = UnitEntity(unit_id=regular_id, entity_id=entity_id, vault_id=vault_id)
-        ue_cold = UnitEntity(unit_id=cold_id, entity_id=entity_id, vault_id=vault_id)
-        ue_low = UnitEntity(unit_id=low_mw_id, entity_id=entity_id, vault_id=vault_id)
-
+    async def _seed_units(
+        self,
+        session: AsyncSession,
+        embedder,
+        *,
+        warm_count: int = 1,
+        cold_count: int = 5,
+        topic: str = 'Python',
+    ) -> dict[str, list[UUID]]:
+        """Seed warm (high-MW) and cold (zero-MW) units sharing a topic."""
+        note = Note(id=uuid4(), original_text='F33 corpus', vault_id=GLOBAL_VAULT_ID)
+        entity = Entity(id=uuid4(), canonical_name=topic)
         session.add(note)
         session.add(entity)
-        session.add(regular)
-        session.add(cold)
-        session.add(low_mw)
-        session.add(ue_reg)
-        session.add(ue_cold)
-        session.add(ue_low)
+        await session.flush()
+
+        warm_ids: list[UUID] = []
+        cold_ids: list[UUID] = []
+
+        for i in range(warm_count):
+            text = f'Well-established fact {i} about {topic} runtime behavior.'
+            uid = uuid4()
+            session.add(
+                MemoryUnit(
+                    id=uid,
+                    note_id=note.id,
+                    text=text,
+                    fact_type=FactTypes.WORLD,
+                    embedding=embedder.encode([text])[0].tolist(),
+                    vault_id=GLOBAL_VAULT_ID,
+                    event_date=datetime.now(timezone.utc),
+                    success_co_count=10,
+                    failure_co_count=2,
+                )
+            )
+            session.add(UnitEntity(unit_id=uid, entity_id=entity.id, vault_id=GLOBAL_VAULT_ID))
+            warm_ids.append(uid)
+
+        for i in range(cold_count):
+            text = f'Newly observed detail {i} about {topic} edge cases.'
+            uid = uuid4()
+            session.add(
+                MemoryUnit(
+                    id=uid,
+                    note_id=note.id,
+                    text=text,
+                    fact_type=FactTypes.WORLD,
+                    embedding=embedder.encode([text])[0].tolist(),
+                    vault_id=GLOBAL_VAULT_ID,
+                    event_date=datetime.now(timezone.utc),
+                    success_co_count=0,
+                    failure_co_count=0,
+                )
+            )
+            session.add(UnitEntity(unit_id=uid, entity_id=entity.id, vault_id=GLOBAL_VAULT_ID))
+            cold_ids.append(uid)
+
         await session.commit()
+        return {'warm': warm_ids, 'cold': cold_ids}
 
-        return {
-            'regular_id': regular_id,
-            'cold_id': cold_id,
-            'low_mw_id': low_mw_id,
-        }
-
-    async def test_exploration_injection_in_retrieval_pipeline(
-        self, session: AsyncSession, embedder, seeded_low_mw_units
+    async def test_exploration_injects_cold_start_unit_when_epsilon_one(
+        self, session: AsyncSession, embedder, reranker
     ):
-        """Test exploration injection by calling inject_exploration_units directly.
-
-        Integration through the full engine pipeline is non-deterministic (depends on
-        whether candidates are already in results). Direct function call with
-        epsilon=1.0 verifies the full injection logic against real DB objects.
-        """
-        from memex_core.memory.retrieval.exploration import inject_exploration_units
-
-        # Create results list with only the high-MW unit
-        regular_unit = await session.get(MemoryUnit, seeded_low_mw_units['regular_id'])
-        assert regular_unit is not None
-
-        # Get all candidates
-        cold_unit = await session.get(MemoryUnit, seeded_low_mw_units['cold_id'])
-        low_mw_unit = await session.get(MemoryUnit, seeded_low_mw_units['low_mw_id'])
-        assert cold_unit is not None
-        assert low_mw_unit is not None
-
-        all_candidates = [regular_unit, cold_unit, low_mw_unit]
-        results = [regular_unit]  # Only the high-MW unit in results
-
-        injected = inject_exploration_units(
-            results,
-            all_candidates,
-            epsilon=1.0,
-            max_injections=2,
-            low_mw_threshold=5,
-        )
-
-        exploration_units = [u for u in injected if u.unit_metadata.get('exploration', False)]
-        assert len(exploration_units) >= 1
-        for u in exploration_units:
-            assert (u.success_co_count + u.failure_co_count) < 5
-
-    async def test_exploration_disabled_when_epsilon_zero(
-        self, session: AsyncSession, embedder, seeded_low_mw_units
-    ):
-        config = RetrievalConfig(exploration_epsilon=0.0)
-        engine = RetrievalEngine(embedder=embedder, retrieval_config=config)
-
-        request = RetrievalRequest(query='Python', limit=20, vault_ids=[GLOBAL_VAULT_ID])
-        results, _ = await engine.retrieve(session, request)
-
-        exploration_units = [u for u in results if u.unit_metadata.get('exploration', False)]
-        assert len(exploration_units) == 0
-
-    async def test_exploration_units_are_low_mw_only(
-        self, session: AsyncSession, embedder, seeded_low_mw_units
-    ):
+        """Positive control: with ε=1.0 and ≥3 cold-start candidates that the
+        retrieval pipeline returns, at least one result must carry the
+        ``exploration: true`` metadata flag."""
         config = RetrievalConfig(
             exploration_epsilon=1.0,
             exploration_max_injections=2,
             exploration_low_mw_threshold=5,
         )
-        engine = RetrievalEngine(embedder=embedder, retrieval_config=config)
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
 
-        request = RetrievalRequest(query='Python', limit=20, vault_ids=[GLOBAL_VAULT_ID])
-        results, _ = await engine.retrieve(session, request)
+        seeded = await self._seed_units(
+            session, embedder, warm_count=1, cold_count=5, topic='Python'
+        )
 
-        for u in results:
-            if u.unit_metadata.get('exploration', False):
-                total_outcomes = u.success_co_count + u.failure_co_count
-                assert total_outcomes < 5
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='Python runtime details', limit=2),
+        )
 
-    async def test_exploration_max_injections_respected(
-        self, session: AsyncSession, embedder, seeded_low_mw_units
+        # Positive control — without retrieval results, the injection point
+        # is short-circuited, making any "no exploration" assertion vacuous.
+        assert len(results) > 0, 'retrieve returned no results — exploration cannot fire'
+
+        exploration_units = [u for u in results if u.unit_metadata.get('exploration', False)]
+        assert len(exploration_units) >= 1, (
+            f'F33 regression: ε=1.0 with {len(seeded["cold"])} cold-start candidates '
+            f'must inject at least one exploration unit. results={[str(r.id) for r in results]}'
+        )
+        for u in exploration_units:
+            total = u.success_co_count + u.failure_co_count
+            assert total < 5, f'exploration unit must have low MW total; got {total} for {u.id}'
+
+    async def test_exploration_disabled_when_epsilon_zero(
+        self, session: AsyncSession, embedder, reranker
     ):
+        """ε=0 → no injection. Positive control on ``len(results) > 0``
+        prevents the assertion from passing vacuously."""
+        config = RetrievalConfig(exploration_epsilon=0.0)
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
+
+        await self._seed_units(session, embedder, warm_count=1, cold_count=5, topic='Postgres')
+
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='Postgres edge cases', limit=5),
+        )
+
+        assert len(results) > 0, 'retrieve returned no results — assertion would be vacuous'
+        exploration_units = [u for u in results if u.unit_metadata.get('exploration', False)]
+        assert exploration_units == [], (
+            f'ε=0 must inject no exploration units; got {len(exploration_units)}'
+        )
+
+    async def test_exploration_max_injections_caps_count(
+        self, session: AsyncSession, embedder, reranker
+    ):
+        """``max_injections=1`` must cap exploration units at 1 even when ε=1
+        and many cold-start candidates are eligible."""
         config = RetrievalConfig(
             exploration_epsilon=1.0,
             exploration_max_injections=1,
             exploration_low_mw_threshold=5,
         )
-        engine = RetrievalEngine(embedder=embedder, retrieval_config=config)
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
 
-        request = RetrievalRequest(query='Python', limit=20, vault_ids=[GLOBAL_VAULT_ID])
-        results, _ = await engine.retrieve(session, request)
+        await self._seed_units(session, embedder, warm_count=1, cold_count=5, topic='Redis')
 
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='Redis details', limit=2),
+        )
+
+        assert len(results) > 0
         exploration_units = [u for u in results if u.unit_metadata.get('exploration', False)]
-        assert len(exploration_units) <= 1
+        assert len(exploration_units) <= 1, (
+            f'max_injections=1 violated; got {len(exploration_units)} exploration units'
+        )
+
+    async def test_exploration_skips_high_mw_units(self, session: AsyncSession, embedder, reranker):
+        """Eligibility is gated by ``low_mw_threshold`` — high-MW units must
+        never carry the ``exploration`` flag even with ε=1.0."""
+        config = RetrievalConfig(
+            exploration_epsilon=1.0,
+            exploration_max_injections=3,
+            exploration_low_mw_threshold=5,
+        )
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
+
+        seeded = await self._seed_units(
+            session, embedder, warm_count=3, cold_count=2, topic='Kafka'
+        )
+
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='Kafka behavior', limit=10),
+        )
+
+        assert len(results) > 0
+        warm_set = set(seeded['warm'])
+        for u in results:
+            if u.id in warm_set and u.unit_metadata.get('exploration', False):
+                pytest.fail(
+                    f'high-MW unit {u.id} (success+failure >= 5) wrongly flagged as exploration'
+                )
