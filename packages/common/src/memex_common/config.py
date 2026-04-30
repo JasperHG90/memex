@@ -710,6 +710,16 @@ class RetrievalConfig(BaseModel):
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',
     )
+    anisotropy_window_size: int = Field(
+        default=1024,
+        description='Sliding window size for Z-score anisotropy correction. '
+        '1024 matches D-MEM §4.1. Set to 0 to disable.',
+    )
+    anisotropy_min_samples: int = Field(
+        default=32,
+        description='Minimum observations before anisotropy correction activates. '
+        'Below this threshold, raw similarity scores pass through unchanged.',
+    )
     graph_semantic_seeding: bool = Field(
         default=True,
         description='Enable semantic seeding for graph retrieval strategies.',
