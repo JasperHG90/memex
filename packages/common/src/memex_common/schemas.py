@@ -52,6 +52,34 @@ class EntityType(str, Enum):
     MISC = 'Misc'
 
 
+class IntentClass(str, Enum):
+    """Lifecycle class for a memory unit, set at write time (F25).
+
+    permanent — identity / preferences / facts that should never decay.
+    durable   — project decisions, multi-week relevance (default).
+    ephemeral — task context, days-to-weeks relevance only.
+    """
+
+    PERMANENT = 'permanent'
+    DURABLE = 'durable'
+    EPHEMERAL = 'ephemeral'
+
+
+class RiskClass(str, Enum):
+    """Content sensitivity, set at write time (F25 — subsumes F26).
+
+    none      — public-safe content (default).
+    sensitive — flagged for linter review; still retrievable in default scope.
+    private   — excluded from default retrieval; surfaced only on explicit query.
+    safety    — refused at ingestion (Memex will not persist).
+    """
+
+    NONE = 'none'
+    SENSITIVE = 'sensitive'
+    PRIVATE = 'private'
+    SAFETY = 'safety'
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 
@@ -329,6 +357,15 @@ class MemoryUnitBase(VaultMixin):
         default='active',
         description='Content status: active or stale.',
         examples=['active', 'stale'],
+    )
+
+    intent_class: IntentClass = Field(
+        default=IntentClass.DURABLE,
+        description='Lifecycle class set at write time (permanent | durable | ephemeral).',
+    )
+    risk_class: RiskClass = Field(
+        default=RiskClass.NONE,
+        description='Content sensitivity set at write time (none | sensitive | private | safety).',
     )
 
     mentioned_at: dt.datetime | None = Field(
