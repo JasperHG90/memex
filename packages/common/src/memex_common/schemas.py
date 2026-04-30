@@ -309,8 +309,12 @@ class ReflectionRequest(VaultMixin):
     """
 
     entity_id: UUID = Field(description='The UUID of the entity to reflect upon.')
-    limit_recent_memories: int = Field(
-        default=20, description='Number of recent memories to consider.'
+    limit_recent_memories: int | None = Field(
+        default=20,
+        description=(
+            'Number of recent memories to consider. None means no per-request cap '
+            "(F5 'full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS=1000."
+        ),
     )
 
 
