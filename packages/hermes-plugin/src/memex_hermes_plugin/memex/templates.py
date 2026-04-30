@@ -16,3 +16,26 @@ __all__ = [
     'HERMES_SESSION_TEMPLATE',
     'HERMES_USER_NOTE_TEMPLATE',
 ]
+
+
+# ============================================================
+# Tier A — Prompt-fragment templates
+# F4:  WS-quick-wins  (deprioritize/restore disclosure)
+# F5:  WS-quick-wins  (summarize_node prompt)
+# F8:  WS-linter      (get_lint_flags discoverability)
+# F9:  WS-locks       (reconsolidate/consolidate disclosure)
+# F20: WS-revisit     (memory_review prompt)
+# F32: WS-diagnostics (diagnostics_summary disclosure)
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F20 --- (filled by WS-revisit)
+
+# --- F32 --- (filled by WS-diagnostics)

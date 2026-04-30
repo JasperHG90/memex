@@ -130,6 +130,22 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     async def run_kv_ttl_cleanup():
         await periodic_kv_ttl_cleanup_task(api)
 
+    # ============================================================
+    # Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)
+    # F6 lint task:                WS-linter
+    # F20 revisit seed task:       WS-revisit
+    # F32 diagnostics refresh:     WS-diagnostics
+    # F38 consolidation tick:      WS-quick-wins
+    # ============================================================
+
+    # --- F6 lint ---       (filled by WS-linter)
+
+    # --- F20 revisit ---   (filled by WS-revisit)
+
+    # --- F32 diagnostics --- (filled by WS-diagnostics)
+
+    # --- F38 consolidation --- (filled by WS-quick-wins)
+
     # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
     sa_url = make_url(config.server.meta_store.instance.connection_string)
     dsn = sa_url.set(drivername='postgresql').render_as_string(hide_password=False)

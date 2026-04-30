@@ -24,3 +24,16 @@ You have been invoked via the `/recall` slash command.
    - Summarize the findings in a clear, readable format.
    - Include source Note IDs so the user can drill deeper with `memex_read_note`.
    - If no results are found, tell the user and suggest alternative queries.
+
+<!--
+Tier A — /recall verb extensions
+F8:  WS-linter      (get_lint_flags surfacing)
+F20: WS-revisit     (get_due_for_review surfacing)
+F32: WS-diagnostics (get_diagnostics_summary surfacing)
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F20 --- (filled by WS-revisit)
+
+# --- F32 --- (filled by WS-diagnostics)
+-->
