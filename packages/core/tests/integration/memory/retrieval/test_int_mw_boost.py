@@ -149,6 +149,7 @@ class TestMwBoostComposition:
             vault_id=str(GLOBAL_VAULT_ID),
         )
 
+        session.expire_all()
         unit = await session.get(MemoryUnit, seeded_units['high_success_id'])
         assert unit is not None
         assert unit.success_co_count == 11  # was 10, now 11

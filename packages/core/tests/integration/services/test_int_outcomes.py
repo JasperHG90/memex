@@ -90,6 +90,7 @@ class TestOutcomeService:
         )
 
         assert result['units_updated'] == 1
+        session.expire_all()
         unit = await session.get(MemoryUnit, seeded_data['unit_id'])
         assert unit is not None
         assert unit.success_co_count == 1
@@ -107,6 +108,7 @@ class TestOutcomeService:
         )
 
         assert result['units_updated'] == 1
+        session.expire_all()
         unit = await session.get(MemoryUnit, seeded_data['unit_id'])
         assert unit is not None
         assert unit.failure_co_count == 1
@@ -142,6 +144,7 @@ class TestOutcomeService:
             vault_id=seeded_data['vault_id'],
         )
 
+        session.expire_all()
         model = await session.get(MentalModel, seeded_data['model_id'])
         assert model is not None
         assert model.success_co_count == 1
@@ -158,6 +161,7 @@ class TestOutcomeService:
 
         assert result['units_updated'] == 0
         # Verify real unit was not affected
+        session.expire_all()
         unit = await session.get(MemoryUnit, seeded_data['unit_id'])
         assert unit is not None
         assert unit.success_co_count == 0
@@ -187,6 +191,7 @@ class TestOutcomeService:
             vault_id=seeded_data['vault_id'],
         )
 
+        session.expire_all()
         unit = await session.get(MemoryUnit, seeded_data['unit_id'])
         assert unit is not None
         assert unit.success_co_count == 3
@@ -195,7 +200,7 @@ class TestOutcomeService:
         mw_score = compute_mw_score(3, 1)
         mw_boost = compute_mw_boost(3, 1)
 
-        assert mw_score == (3 + 1) / (3 + 1 + 2)  # 4/6 = 0.6667
+        assert mw_score == pytest.approx((3 + 1) / (3 + 1 + 2))  # 4/6 = 0.6667
         assert mw_boost == pytest.approx(1.0 + 0.3 * (mw_score - 0.5))
         assert mw_boost > 1.0  # More successes -> boost
 
@@ -230,6 +235,7 @@ class TestOutcomeService:
 
         assert result['units_updated'] == 2
 
+        session.expire_all()
         u1 = await session.get(MemoryUnit, seeded_data['unit_id'])
         u2 = await session.get(MemoryUnit, unit2_id)
         assert u1 is not None and u1.success_co_count == 1
