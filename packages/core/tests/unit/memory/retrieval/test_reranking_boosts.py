@@ -262,30 +262,24 @@ class TestMwBoost:
     async def test_mw_composes_multiplicatively(self) -> None:
         """MW boost composes multiplicatively with recency and temporal."""
         now = datetime.now(timezone.utc)
-        # Unit with all three boosts high
-        unit = _make_unit(
+        # Two identical units except MW counters — high MW should outrank low MW
+        unit_high_mw = _make_unit(
             event_date=now,
             temporal_proximity=1.0,
             success_co_count=9,
             failure_co_count=1,
         )
-        engine = _make_engine([0.0], recency_alpha=0.2, temporal_alpha=0.2, mw_alpha=0.3)
+        unit_low_mw = _make_unit(
+            event_date=now,
+            temporal_proximity=1.0,
+            success_co_count=0,
+            failure_co_count=10,
+            text='low MW',
+        )
+        engine = _make_engine([0.0, 0.0], recency_alpha=0.2, temporal_alpha=0.2, mw_alpha=0.3)
 
-        result = await engine._rerank_results('query', [unit])
-        assert len(result) == 1
-
-        # With all boosts high, boosted score exceeds CE-only score:
-        # ce_score = sigmoid(0) = 0.5
-        # recency = 1.0 → boost = 1 + 0.2*(1.0-0.5) = 1.1
-        # temporal = 1.0 → boost = 1 + 0.2*(1.0-0.5) = 1.1
-        # MW: (9+1)/(9+1+2) = 0.833 → boost = 1 + 0.3*(0.833-0.5) = 1.1
-        # boosted = 0.5 * 1.1 * 1.1 * 1.1 ≈ 0.6655
-        # vs CE-only: 0.5
-        # So boosted > 0.5 proves multiplicative composition
-        from memex_core.services.outcomes import compute_mw_boost
-
-        mw_boost = compute_mw_boost(9, 1, mw_alpha=0.3)
-        assert mw_boost > 1.0  # MW alone boosts above neutral
+        result = await engine._rerank_results('query', [unit_high_mw, unit_low_mw])
+        assert result[0] is unit_high_mw  # high MW unit ranks first
 
 
 class TestCombinedBoosts:
