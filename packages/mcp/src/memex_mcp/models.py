@@ -134,6 +134,8 @@ class McpMemoryUnitBase(BaseModel):
     success_co_count: int = 0
     failure_co_count: int = 0
     is_deprioritized: bool = False
+    intent_class: str = 'durable'
+    risk_class: str = 'none'
     exploration: bool = False
 
     @field_validator('tags', mode='before')

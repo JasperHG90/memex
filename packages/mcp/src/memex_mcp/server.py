@@ -1422,6 +1422,8 @@ def _build_memory_unit_model(
         'success_co_count': getattr(res, 'success_co_count', 0),
         'failure_co_count': getattr(res, 'failure_co_count', 0),
         'is_deprioritized': getattr(res, 'is_deprioritized', False),
+        'intent_class': getattr(res, 'intent_class', 'durable'),
+        'risk_class': getattr(res, 'risk_class', 'none'),
         'exploration': bool(unit_metadata.get('exploration', False)),
     }
 

@@ -137,6 +137,17 @@ async def view_memory(
         console.print(f'[bold cyan]Memory Unit[/bold cyan] [dim]{unit.id}[/dim]')
         console.print(f'[dim]Type:[/dim] {unit.fact_type}')
         console.print(f'[dim]Status:[/dim] {unit.status}')
+        intent = getattr(unit, 'intent_class', None)
+        risk = getattr(unit, 'risk_class', None)
+        if intent or risk:
+            parts = []
+            if intent:
+                parts.append(f'intent={intent}')
+            if risk and risk != 'none':
+                parts.append(f'[yellow]risk={risk}[/yellow]')
+            elif risk:
+                parts.append(f'risk={risk}')
+            console.print(f'[dim]Classifier:[/dim] {" · ".join(parts)}')
         if unit.note_id:
             console.print(f'[dim]Note ID:[/dim] {unit.note_id}')
         if unit.mentioned_at:
