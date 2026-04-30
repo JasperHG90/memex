@@ -335,6 +335,9 @@ class RetrievalEngine:
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
 
+        # Pass include_deprioritized flag to strategies (default: exclude)
+        filters['include_deprioritized'] = request.include_deprioritized
+
         # Thread source_context filter for context-scoped retrieval
         if request.source_context:
             filters['source_context'] = request.source_context
@@ -452,6 +455,7 @@ class RetrievalEngine:
         # 6. Hydrate Objects
         t0 = _t()
         final_results = await self._hydrate_results(session, fused_items)
+        hydrated_candidates = list(final_results)
         t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
@@ -510,6 +514,19 @@ class RetrievalEngine:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
+
+        # 9b. Exploration floor: ε-greedy injection of low-MW units (F33)
+        if final_results and self.retrieval_config.exploration_epsilon > 0:
+            from memex_core.memory.retrieval.exploration import inject_exploration_units
+
+            if hydrated_candidates:
+                final_results = inject_exploration_units(
+                    final_results,
+                    hydrated_candidates,
+                    epsilon=self.retrieval_config.exploration_epsilon,
+                    max_injections=self.retrieval_config.exploration_max_injections,
+                    low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
+                )
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()

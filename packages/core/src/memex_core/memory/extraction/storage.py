@@ -70,7 +70,6 @@ async def insert_facts_batch(
             'mentioned_at': fact.mentioned_at,
             'context': fact.context,
             'fact_type': fact.fact_type,
-            'access_count': 0,
             'unit_metadata': metadata_merged,
             'note_id': UUID(effective_doc_id) if effective_doc_id else None,
             'chunk_id': UUID(fact.chunk_id) if fact.chunk_id else None,

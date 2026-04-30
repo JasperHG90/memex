@@ -112,3 +112,20 @@ NOTE_ADD_OVERLAPS_EXISTING_TOTAL = Counter(
     # documented future surfaces (no code currently emits them).
     ['surface'],
 )
+
+# ---------------------------------------------------------------------------
+# Memory Worth (MW) outcome metrics (F1a)
+# ---------------------------------------------------------------------------
+
+OUTCOME_RECORDED_TOTAL = Counter(
+    'memex_outcome_recorded_total',
+    'Total outcome recordings by vault and outcome type.',
+    ['vault_id', 'outcome'],
+)
+
+MW_SCORE_DISTRIBUTION = Histogram(
+    'memex_mw_score',
+    'Distribution of MW scores observed during outcome recording.',
+    ['vault_id'],
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)

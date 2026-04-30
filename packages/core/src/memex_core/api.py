@@ -62,6 +62,7 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.notes import NoteService
+from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
@@ -470,6 +471,7 @@ class MemexAPI:
             doc_search=self._doc_search,
             vaults=self._vaults,
         )
+        self._outcomes = OutcomeService()
         self.vault_summary = VaultSummaryService(
             metastore=self.metastore,
             lm=self.lm,
@@ -943,6 +945,7 @@ class MemexAPI:
         strategies: list[str] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
+        include_deprioritized: bool = False,
         debug: bool = False,
         after: datetime | None = None,
         before: datetime | None = None,
@@ -960,6 +963,7 @@ class MemexAPI:
             strategies=strategies,
             include_stale=include_stale,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             debug=debug,
             after=after,
             before=before,
@@ -1018,6 +1022,9 @@ class MemexAPI:
         vault_ids: list[UUID | str] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        reference_date: datetime | None = None,
     ) -> SurveyResponse:
         """Broad topic survey. Delegates to SearchService."""
         # Resolve vault identifiers to UUIDs
@@ -1038,6 +1045,9 @@ class MemexAPI:
             vault_ids=resolved,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after,
+            before=before,
+            reference_date=reference_date,
         )
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
@@ -1055,6 +1065,25 @@ class MemexAPI:
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
+
+    async def record_outcome(
+        self,
+        unit_ids: list[str],
+        success: bool,
+        vault_id: str,
+        outcome_confidence: float = 1.0,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an outcome for memory units. Delegates to OutcomeService."""
+        async with self.metastore.session() as session:
+            return await self._outcomes.record_outcome(
+                session=session,
+                unit_ids=unit_ids,
+                success=success,
+                vault_id=vault_id,
+                outcome_confidence=outcome_confidence,
+                reason=reason,
+            )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""

@@ -410,6 +410,21 @@ class MemoryUnitDTO(MemoryUnitBase):
         description='Units that supersede this one.',
     )
 
+    success_co_count: int = Field(
+        default=0,
+        description='MW success co-occurrence counter.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        description='MW failure co-occurrence counter.',
+    )
+
+    is_deprioritized: bool = Field(
+        default=False,
+        description='Whether this unit has been deprioritized (non-destructive retrieval downweight).',
+    )
+
     @property
     def enriched_text(self) -> str:
         """Text with date metadata for LLM consumption."""
