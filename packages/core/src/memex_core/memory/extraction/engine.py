@@ -224,21 +224,41 @@ class ExtractionEngine:
     async def _classify_and_filter(
         self,
         processed_facts: list[ProcessedFact],
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> list[ProcessedFact]:
         """F25 — classify intent + risk, then drop facts marked safety.
 
-        No-op when ``intent_risk_classifier_enabled`` is False (default). When
-        enabled, runs classification under the existing extraction semaphore
-        (so the LLM concurrency budget is shared with fact extraction).
+        If overrides are supplied the explicit values win and the classifier
+        is bypassed for those dimensions. When both overrides are set the
+        classifier is skipped entirely. The safety filter still runs so an
+        override of ``risk_class='safety'`` is honored.
         """
-        if not processed_facts or self._classifier_predictor is None:
+        if not processed_facts:
             return processed_facts
-        await classify_facts(
-            processed_facts,
-            lm=self.lm,
-            semaphore=self.semaphore,
-            predictor=self._classifier_predictor,
-        )
+
+        if intent_override:
+            for f in processed_facts:
+                f.intent_class = intent_override
+        if risk_override:
+            for f in processed_facts:
+                f.risk_class = risk_override
+
+        skip_classifier = bool(intent_override and risk_override)
+        if not skip_classifier and self._classifier_predictor is not None:
+            await classify_facts(
+                processed_facts,
+                lm=self.lm,
+                semaphore=self.semaphore,
+                predictor=self._classifier_predictor,
+            )
+            if intent_override:
+                for f in processed_facts:
+                    f.intent_class = intent_override
+            if risk_override:
+                for f in processed_facts:
+                    f.risk_class = risk_override
+
         return filter_safety_blocked(processed_facts)
 
     async def extract_and_persist(
@@ -249,6 +269,8 @@ class ExtractionEngine:
         note_id: str | None = None,
         is_first_batch: bool = True,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """
         Main entry point: Extract facts from content and persist them to memory.
@@ -288,6 +310,8 @@ class ExtractionEngine:
                             existing_blocks=existing_blocks,
                             vault_id=vault_id,
                             content_fingerprint=content_fingerprint,
+                            intent_override=intent_override,
+                            risk_override=risk_override,
                         )
                     return await self._extract_incremental(
                         session=session,
@@ -297,6 +321,8 @@ class ExtractionEngine:
                         existing_blocks=existing_blocks,
                         vault_id=vault_id,
                         content_fingerprint=content_fingerprint,
+                        intent_override=intent_override,
+                        risk_override=risk_override,
                     )
 
             # --- Strategy dispatch ---
@@ -309,6 +335,8 @@ class ExtractionEngine:
                     is_first_batch=is_first_batch,
                     vault_id=vault_id,
                     content_fingerprint=content_fingerprint,
+                    intent_override=intent_override,
+                    risk_override=risk_override,
                 )
 
             # --- Full extraction path (simple strategy or no page_index LM) ---
@@ -383,7 +411,9 @@ class ExtractionEngine:
                     if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                         pf.chunk_id = chunk_map[ef.chunk_index]
 
-            processed_facts = await self._classify_and_filter(processed_facts)
+            processed_facts = await self._classify_and_filter(
+                processed_facts, intent_override=intent_override, risk_override=risk_override
+            )
             if not processed_facts:
                 return [], set()
 
@@ -412,6 +442,8 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Incremental extraction: diff blocks, extract only changed content.
 
@@ -633,7 +665,11 @@ class ExtractionEngine:
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
 
-                    final_processed = await self._classify_and_filter(final_processed)
+                    final_processed = await self._classify_and_filter(
+                        final_processed,
+                        intent_override=intent_override,
+                        risk_override=risk_override,
+                    )
                     if not final_processed:
                         return [], set()
 
@@ -699,6 +735,8 @@ class ExtractionEngine:
         existing_blocks: list[dict[str, object]],
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Incremental page-index extraction with node-level change detection.
 
@@ -940,7 +978,11 @@ class ExtractionEngine:
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-                        final_processed = await self._classify_and_filter(final_processed)
+                        final_processed = await self._classify_and_filter(
+                            final_processed,
+                            intent_override=intent_override,
+                            risk_override=risk_override,
+                        )
 
                     if final_processed:
                         unit_ids = await storage.insert_facts_batch(
@@ -1005,6 +1047,8 @@ class ExtractionEngine:
         is_first_batch: bool,
         vault_id: UUID,
         content_fingerprint: str | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Page-index extraction path: hierarchical TOC → nodes → blocks → facts.
 
@@ -1234,7 +1278,9 @@ class ExtractionEngine:
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-        final_processed = await self._classify_and_filter(final_processed)
+        final_processed = await self._classify_and_filter(
+            final_processed, intent_override=intent_override, risk_override=risk_override
+        )
         if not final_processed:
             return [], set()
 
@@ -1675,6 +1721,8 @@ class ExtractionEngine:
         processed_facts: list[ProcessedFact],
         note_id: str,
         vault_id: UUID,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> tuple[list[str], set[UUID]]:
         """Persist pre-processed user_notes facts into the DB.
 
@@ -1698,7 +1746,9 @@ class ExtractionEngine:
         for pf in final_processed:
             pf.note_id = note_id
 
-        final_processed = await self._classify_and_filter(final_processed)
+        final_processed = await self._classify_and_filter(
+            final_processed, intent_override=intent_override, risk_override=risk_override
+        )
         if not final_processed:
             return [], set()
 

@@ -652,6 +652,23 @@ class NoteCreateDTO(BaseModel):
         'the content to Markdown before ingestion using FileContentProcessor.',
         examples=['report.pdf', 'slides.pptx', 'meeting-notes.md'],
     )
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description=(
+            'Optional intent override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier when set. Use "ephemeral" for transient '
+            'context, "durable" for default-lived facts, "permanent" for enduring '
+            'preferences/conventions.'
+        ),
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description=(
+            'Optional risk override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier. Set "safety" to refuse persistence; '
+            '"sensitive"/"private" for restricted handling; "none" for default.'
+        ),
+    )
 
     @property
     def content_decoded(self) -> bytes:
