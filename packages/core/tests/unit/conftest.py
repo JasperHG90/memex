@@ -206,6 +206,13 @@ def mock_config():
     config.server.memory.extraction.model.model = 'test-model'
     config.server.logging.level = 'WARNING'
     config.server.logging.json_output = False
+    # F5: real ints so TokenBucketRateLimiter validation passes; disabled
+    # so unit tests don't get throttled across iterations.
+    rate_cfg = config.server.memory.reflection.summarize_node_rate_limit
+    rate_cfg.enabled = False
+    rate_cfg.per_entity_per_seconds = 60
+    rate_cfg.burst = 1
+    rate_cfg.max_keys = 1000
     return config
 
 
