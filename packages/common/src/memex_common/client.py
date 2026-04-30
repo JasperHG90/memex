@@ -512,6 +512,34 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    # --- Diagnostics (F32) ---
+    async def get_diagnostics_summary(self, vault_id: UUID | str) -> dict[str, Any]:
+        """Fetch the F32 diagnostics summary for a vault."""
+        return await self._get(f'diagnostics/summary/{vault_id}')
+
+    async def get_diagnostics_retrieval(
+        self, vault_id: UUID | str, top_n: int = 50
+    ) -> dict[str, Any]:
+        """Fetch the F32 retrieval heatmap (top-N entities by outcome volume)."""
+        return await self._get(f'diagnostics/retrieval/{vault_id}', params={'top_n': top_n})
+
+    async def get_diagnostics_manifold(
+        self,
+        vault_id: UUID | str,
+        force_refresh: bool = False,
+    ) -> tuple[int, dict[str, Any]]:
+        """Fetch the F32 UMAP manifold. Returns (status_code, payload).
+
+        200 → warm cache hit (payload is the manifold).
+        202 → cold compute kicked off (payload contains task_id).
+        501 → umap-learn not installed.
+        """
+        params = {'force_refresh': 'true'} if force_refresh else None
+        response = await self.client.get(f'diagnostics/manifold/{vault_id}', params=params)
+        if response.status_code == 501:
+            response.raise_for_status()
+        return response.status_code, response.json()
+
     # --- Stats & Overview ---
     async def get_stats_counts(
         self,
