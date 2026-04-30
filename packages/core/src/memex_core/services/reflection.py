@@ -171,7 +171,17 @@ class ReflectionService:
             vault_id=effective_vault,
             limit_recent_memories=limit_recent,
         )
-        return await self.reflect(request)
+        result = await self.reflect(request)
+        audit_event(
+            self._audit_service,
+            'memory_summarize_node',
+            'entity',
+            str(entity_id),
+            scope=scope,
+            vault_id=str(effective_vault),
+            observation_count=len(result.new_observations),
+        )
+        return result
 
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """
