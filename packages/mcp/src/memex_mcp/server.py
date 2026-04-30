@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 from uuid import UUID
+from datetime import datetime
 import mimetypes
 
 import aiofiles
@@ -153,7 +154,7 @@ def _coerce_float(v: Any) -> Any:
     return v
 
 
-def _to_utc_datetime(dt: Any) -> Any:
+def _to_utc_datetime(dt: datetime | None) -> datetime | None:
     """Convert a parsed datetime to UTC.
 
     Naive datetimes get UTC assigned. Aware datetimes are converted to UTC.
@@ -1338,10 +1339,7 @@ def compute_staleness(
         return Staleness.STALE
 
     if event_date is not None and isinstance(event_date, _dt):
-        if event_date.tzinfo is None:
-            event_date = event_date.replace(tzinfo=_tz.utc)
-        else:
-            event_date = event_date.astimezone(_tz.utc)
+        event_date = _to_utc_datetime(event_date)
         age_days = (now - event_date).days
 
         if age_days > 30:
@@ -3305,13 +3303,11 @@ async def memex_survey(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
-        )
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         result = await api.survey(
             query=query,
