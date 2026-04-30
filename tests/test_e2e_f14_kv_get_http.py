@@ -97,3 +97,55 @@ def test_kv_get_returns_404_when_missing(client: TestClient) -> None:
         params={'key': f'procedure:run_tests:does-not-exist-{uuid4().hex[:8]}'},
     )
     assert response.status_code == 404
+
+
+def test_kv_procedure_observations_route_returns_list(
+    client: TestClient,
+) -> None:
+    """``GET /api/v1/kv/procedure-observations`` returns a JSON list.
+
+    Endpoint contract is exercised here (route + auth + response_model). The
+    rich ranking semantics (mw_score ordering, limit cap, cross-vault
+    isolation, context filter) are covered by the integration tests in
+    ``test_int_f14_top_outcomes.py`` — those exercise the SQL path, this
+    one locks the wire shape.
+    """
+    from memex_common.config import GLOBAL_VAULT_ID
+
+    response = client.get(
+        '/api/v1/kv/procedure-observations',
+        params={'vault_id': str(GLOBAL_VAULT_ID), 'limit': 5},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body, list)
+
+
+def test_kv_procedure_observations_rejects_invalid_limit(
+    client: TestClient,
+) -> None:
+    """``limit`` must be 1-20."""
+    from memex_common.config import GLOBAL_VAULT_ID
+
+    response = client.get(
+        '/api/v1/kv/procedure-observations',
+        params={'vault_id': str(GLOBAL_VAULT_ID), 'limit': 0},
+    )
+    assert response.status_code == 422
+
+    response = client.get(
+        '/api/v1/kv/procedure-observations',
+        params={'vault_id': str(GLOBAL_VAULT_ID), 'limit': 21},
+    )
+    assert response.status_code == 422
+
+
+def test_kv_procedure_observations_rejects_invalid_vault_id(
+    client: TestClient,
+) -> None:
+    """Non-UUID ``vault_id`` returns a 4xx (ValueError → handled error)."""
+    response = client.get(
+        '/api/v1/kv/procedure-observations',
+        params={'vault_id': 'not-a-uuid', 'limit': 5},
+    )
+    assert response.status_code in (400, 422)
