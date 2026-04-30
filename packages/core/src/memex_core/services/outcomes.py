@@ -125,15 +125,6 @@ class OutcomeService:
         )
         result = await session.exec(stmt)
         units_updated = result.rowcount  # type: ignore[union-attr]
-        await session.commit()
-
-        # Observe MW scores after commit
-        refreshed = await session.exec(
-            select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
-        )
-        for unit in refreshed.all():
-            mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
-            MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id)).observe(mw_score)
 
         # Propagate to UnitEntity rows (atomic increment)
         from memex_core.memory.sql_models import UnitEntity as UE
@@ -167,7 +158,17 @@ class OutcomeService:
         model_result = await session.exec(model_stmt)
         model_count = model_result.rowcount  # type: ignore[union-attr]
 
+        # Single commit for all three counter updates — preserves co-occurrence
+        # invariant across MemoryUnit, UnitEntity, and MentalModel tables.
         await session.commit()
+
+        # Observe MW scores post-commit (read-only, no commit needed)
+        refreshed = await session.exec(
+            select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
+        )
+        for unit in refreshed.all():
+            mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
+            MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id)).observe(mw_score)
 
         OUTCOME_RECORDED_TOTAL.labels(
             vault_id=str(vault_id), outcome='success' if success else 'failure'
