@@ -1144,13 +1144,22 @@ class MemexAPI:
 
     async def record_outcome(
         self,
-        unit_ids: list[str],
-        success: bool,
-        vault_id: str,
+        unit_ids: list[str] | None = None,
+        success: bool = False,
+        vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,
+        *,
+        target_type: str = 'memory_unit',
+        kv_key: str | None = None,
     ) -> dict[str, Any]:
-        """Record an outcome for memory units. Delegates to OutcomeService."""
+        """Record an outcome. Delegates to OutcomeService.
+
+        For ``target_type='kv_key'`` (F14), increments the vault-scoped
+        success/failure counters on ``procedure_outcomes`` for ``kv_key``
+        instead of memory units. See
+        :meth:`OutcomeService.record_outcome` for the full contract.
+        """
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
@@ -1159,6 +1168,8 @@ class MemexAPI:
                 vault_id=vault_id,
                 outcome_confidence=outcome_confidence,
                 reason=reason,
+                target_type=target_type,
+                kv_key=kv_key,
             )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
