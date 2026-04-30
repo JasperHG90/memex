@@ -25,6 +25,24 @@ You have been invoked via the `/recall` slash command.
    - Include source Note IDs so the user can drill deeper with `memex_read_note`.
    - If no results are found, tell the user and suggest alternative queries.
 
+4. **Recall a learned procedure** (F14) — when the user asks "how do I
+   X?", "what's our procedure for Y?", or you are about to perform a
+   recurring task (writing a PR, running the test matrix), check the
+   `procedure:` KV namespace BEFORE other surfaces:
+   - First scan `memex_kv_list(namespaces=["procedure"])` for matching
+     `procedure:<verb>:<context-tag>` keys.
+   - Read with `memex_kv_get(key)` for the active value, or
+     `memex_kv_get(key, include_history=true)` to also see the capped
+     5-version history (useful when the active value looks stale).
+   - After ACTUALLY using a procedure to perform the action, close the
+     loop with
+     `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`
+     so the procedure's Memory Worth counters stay calibrated.
+
+   Procedure recall is shape-different from note recall: it returns an
+   instruction to execute, not a fact to remember. Reach for it whenever
+   the user query is "how-to" rather than "what".
+
 <!--
 Tier A — /recall verb extensions
 F8:  WS-linter      (get_lint_flags surfacing)
@@ -36,7 +54,7 @@ F32: WS-diagnostics (get_diagnostics_summary surfacing)
 # --- F20 --- (filled by WS-revisit)
 
 # --- F32 --- (filled by WS-diagnostics)
-4. **Vault diagnostics** (when the user asks "how is this vault doing?",
+5. **Vault diagnostics** (when the user asks "how is this vault doing?",
    "what's in vault X?", "check vault health", or wants visualisation):
    call `memex_get_diagnostics_summary(vault_id=...)` to surface unit
    counts by status (active / stale / deprioritized), pending lint counts
@@ -44,4 +62,8 @@ F32: WS-diagnostics (get_diagnostics_summary surfacing)
    avg MW score, and top retrieved entities. For full JSON or visual
    plots, point the user to the CLI: `memex diagnostics manifold |
    retrieval | summary --vault X`.
+-->
+
+<!--
+F14: WS-quick-wins  (procedure: KV recall — see step 4 above)
 -->
