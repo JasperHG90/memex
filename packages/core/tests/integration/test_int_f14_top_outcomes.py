@@ -49,6 +49,7 @@ async def _seed_outcome(
         for _ in range(successes):
             await outcomes.record_outcome(
                 session=session,
+                unit_ids=None,
                 target_type='kv_key',
                 kv_key=key,
                 success=True,
@@ -57,6 +58,7 @@ async def _seed_outcome(
         for _ in range(failures):
             await outcomes.record_outcome(
                 session=session,
+                unit_ids=None,
                 target_type='kv_key',
                 kv_key=key,
                 success=False,
