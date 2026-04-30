@@ -1,0 +1,1803 @@
+{
+  "generation": {
+    "desired_retention": 0.9,
+    "deterministic_now_iso": "2026-01-01T12:00:00+00:00",
+    "enable_fuzzing": false,
+    "gap_days_between_reviews": 1.0,
+    "learning_steps": [],
+    "maximum_interval": 36500,
+    "note": "learning_steps and relearning_steps are intentionally empty: F20 spec (RFC-014 \u00a7\"FSRS implementation\") goes straight to FSRS stability scheduling on first review and skips the Anki Learning/Relearning short-term-steps UX flow. Setting these to () forces py-fsrs to use the FSRS init/update formulas for all qualities.",
+    "numpy_version": "2.4.1",
+    "py_fsrs_version": "4.1.2",
+    "python_version": "3.12.12 (main, Oct 28 2025, 12:12:53) [Clang 20.1.4 ]",
+    "relearning_steps": [],
+    "weights": [
+      0.40255,
+      1.18385,
+      3.173,
+      15.69105,
+      7.1949,
+      0.5345,
+      1.4604,
+      0.0046,
+      1.54575,
+      0.1192,
+      1.01925,
+      1.9395,
+      0.11,
+      0.29605,
+      2.2698,
+      0.2315,
+      2.9898,
+      0.51655,
+      0.6621
+    ]
+  },
+  "schema_version": 1,
+  "sequences": [
+    {
+      "case_id": "first_again",
+      "qualities": [
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        }
+      ]
+    },
+    {
+      "case_id": "first_hard",
+      "qualities": [
+        "Hard"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        }
+      ]
+    },
+    {
+      "case_id": "first_good",
+      "qualities": [
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        }
+      ]
+    },
+    {
+      "case_id": "first_easy",
+      "qualities": [
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        }
+      ]
+    },
+    {
+      "case_id": "again_again",
+      "qualities": [
+        "Again",
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 8.082797017759107,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 0.2859484522668335,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "again_good",
+      "qualities": [
+        "Again",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.176636167311107,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 3.496227050157062,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "hard_good",
+      "qualities": [
+        "Hard",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.473291771547592,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-08T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 5.349565045335362,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "good_good",
+      "qualities": [
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "good_easy",
+      "qualities": [
+        "Good",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 4.510985606964673,
+          "interval_days": 32,
+          "next_review_at_iso": "2026-02-06T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 32.4040696254505,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "easy_easy",
+      "qualities": [
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "good_again",
+      "qualities": [
+        "Good",
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.796932579932991,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 1.120206848321928,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "easy_again",
+      "qualities": [
+        "Easy",
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.4132618481800785,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-21T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 2.8285258371173922,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "hard_hard_hard",
+      "qualities": [
+        "Hard",
+        "Hard",
+        "Hard"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.040501547390819,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-05T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 2.1482130329951366,
+          "step_index": 1
+        },
+        {
+          "difficulty": 7.500966847928992,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-09T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-06T12:00:00+00:00",
+          "stability": 3.363672586286755,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "good_good_good",
+      "qualities": [
+        "Good",
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        },
+        {
+          "difficulty": 5.263544986114632,
+          "interval_days": 42,
+          "next_review_at_iso": "2026-03-02T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-19T12:00:00+00:00",
+          "stability": 42.45255199211578,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "easy_easy_easy",
+      "qualities": [
+        "Easy",
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 1318,
+          "next_review_at_iso": "2030-02-03T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-06-26T12:00:00+00:00",
+          "stability": 1317.9606416266856,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "again_again_good",
+      "qualities": [
+        "Again",
+        "Again",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 8.082797017759107,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 0.2859484522668335,
+          "step_index": 1
+        },
+        {
+          "difficulty": 8.060448858788522,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-07T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 2.466604281693168,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "good_good_again",
+      "qualities": [
+        "Good",
+        "Good",
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        },
+        {
+          "difficulty": 6.790567694566929,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-21T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-19T12:00:00+00:00",
+          "stability": 2.4333572507639643,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "good_again_good",
+      "qualities": [
+        "Good",
+        "Again",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.796932579932991,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 1.120206848321928,
+          "step_index": 1
+        },
+        {
+          "difficulty": 6.780499397376408,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-12T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-07T12:00:00+00:00",
+          "stability": 4.99234186362627,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "easy_again_easy",
+      "qualities": [
+        "Easy",
+        "Again",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.4132618481800785,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-21T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 2.8285258371173922,
+          "step_index": 1
+        },
+        {
+          "difficulty": 4.662342503890448,
+          "interval_days": 31,
+          "next_review_at_iso": "2026-02-22T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-22T12:00:00+00:00",
+          "stability": 31.359283785555345,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "hard_good_easy_good",
+      "qualities": [
+        "Hard",
+        "Good",
+        "Easy",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.473291771547592,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-08T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 5.349565045335362,
+          "step_index": 1
+        },
+        {
+          "difficulty": 5.888712577239973,
+          "interval_days": 38,
+          "next_review_at_iso": "2026-02-16T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-09T12:00:00+00:00",
+          "stability": 38.41680653757748,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.876457206695777,
+          "interval_days": 103,
+          "next_review_at_iso": "2026-05-31T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-02-17T12:00:00+00:00",
+          "stability": 103.27561180163453,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "again_hard_good_easy",
+      "qualities": [
+        "Again",
+        "Hard",
+        "Good",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.629716592535107,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 1.11873623711136,
+          "step_index": 1
+        },
+        {
+          "difficulty": 7.609452603520554,
+          "interval_days": 4,
+          "next_review_at_iso": "2026-01-09T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 4.22347845958984,
+          "step_index": 2
+        },
+        {
+          "difficulty": 7.203160039644732,
+          "interval_days": 25,
+          "next_review_at_iso": "2026-02-04T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-10T12:00:00+00:00",
+          "stability": 25.322896516526026,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "good_good_good_good",
+      "qualities": [
+        "Good",
+        "Good",
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        },
+        {
+          "difficulty": 5.263544986114632,
+          "interval_days": 42,
+          "next_review_at_iso": "2026-03-02T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-19T12:00:00+00:00",
+          "stability": 42.45255199211578,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.254165386489613,
+          "interval_days": 122,
+          "next_review_at_iso": "2026-07-03T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-03-03T12:00:00+00:00",
+          "stability": 121.77838162083209,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "easy_easy_easy_easy",
+      "qualities": [
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 1318,
+          "next_review_at_iso": "2030-02-03T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-06-26T12:00:00+00:00",
+          "stability": 1317.9606416266856,
+          "step_index": 2
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 9749,
+          "next_review_at_iso": "2056-10-14T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2030-02-04T12:00:00+00:00",
+          "stability": 9748.826926678636,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "mixed_5",
+      "qualities": [
+        "Good",
+        "Easy",
+        "Hard",
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 4.510985606964673,
+          "interval_days": 32,
+          "next_review_at_iso": "2026-02-06T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 32.4040696254505,
+          "step_index": 1
+        },
+        {
+          "difficulty": 5.391654702610264,
+          "interval_days": 49,
+          "next_review_at_iso": "2026-03-28T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-02-07T12:00:00+00:00",
+          "stability": 48.8587375397333,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.381685798289365,
+          "interval_days": 137,
+          "next_review_at_iso": "2026-08-13T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-03-29T12:00:00+00:00",
+          "stability": 137.44678225756482,
+          "step_index": 3
+        },
+        {
+          "difficulty": 5.371762750928342,
+          "interval_days": 354,
+          "next_review_at_iso": "2027-08-03T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-08-14T12:00:00+00:00",
+          "stability": 354.39477380664675,
+          "step_index": 4
+        }
+      ]
+    },
+    {
+      "case_id": "mixed_5b",
+      "qualities": [
+        "Hard",
+        "Hard",
+        "Good",
+        "Easy",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.040501547390819,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-05T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 2.1482130329951366,
+          "step_index": 1
+        },
+        {
+          "difficulty": 7.022947947583929,
+          "interval_days": 7,
+          "next_review_at_iso": "2026-01-13T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-06T12:00:00+00:00",
+          "stability": 7.398578273995646,
+          "step_index": 2
+        },
+        {
+          "difficulty": 6.524620932337415,
+          "interval_days": 45,
+          "next_review_at_iso": "2026-02-28T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-14T12:00:00+00:00",
+          "stability": 44.81544445410197,
+          "step_index": 3
+        },
+        {
+          "difficulty": 6.509440383359771,
+          "interval_days": 111,
+          "next_review_at_iso": "2026-06-20T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-03-01T12:00:00+00:00",
+          "stability": 110.50492125752342,
+          "step_index": 4
+        }
+      ]
+    },
+    {
+      "case_id": "lapse_recover",
+      "qualities": [
+        "Good",
+        "Good",
+        "Again",
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        },
+        {
+          "difficulty": 6.790567694566929,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-21T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-19T12:00:00+00:00",
+          "stability": 2.4333572507639643,
+          "step_index": 2
+        },
+        {
+          "difficulty": 6.774163790483029,
+          "interval_days": 8,
+          "next_review_at_iso": "2026-01-30T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-22T12:00:00+00:00",
+          "stability": 8.020526645836359,
+          "step_index": 3
+        },
+        {
+          "difficulty": 6.7578353443579156,
+          "interval_days": 23,
+          "next_review_at_iso": "2026-02-23T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-31T12:00:00+00:00",
+          "stability": 22.777212409281965,
+          "step_index": 4
+        }
+      ]
+    },
+    {
+      "case_id": "long_easy_chain",
+      "qualities": [
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 1318,
+          "next_review_at_iso": "2030-02-03T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-06-26T12:00:00+00:00",
+          "stability": 1317.9606416266856,
+          "step_index": 2
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 9749,
+          "next_review_at_iso": "2056-10-14T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2030-02-04T12:00:00+00:00",
+          "stability": 9748.826926678636,
+          "step_index": 3
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2156-09-21T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2056-10-15T12:00:00+00:00",
+          "stability": 58847.58328833226,
+          "step_index": 4
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2256-08-29T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2156-09-22T12:00:00+00:00",
+          "stability": 213139.9132160659,
+          "step_index": 5
+        }
+      ]
+    },
+    {
+      "case_id": "long_good_chain",
+      "qualities": [
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        },
+        {
+          "difficulty": 5.263544986114632,
+          "interval_days": 42,
+          "next_review_at_iso": "2026-03-02T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-19T12:00:00+00:00",
+          "stability": 42.45255199211578,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.254165386489613,
+          "interval_days": 122,
+          "next_review_at_iso": "2026-07-03T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-03-03T12:00:00+00:00",
+          "stability": 121.77838162083209,
+          "step_index": 3
+        },
+        {
+          "difficulty": 5.244828933022869,
+          "interval_days": 322,
+          "next_review_at_iso": "2027-05-22T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-07-04T12:00:00+00:00",
+          "stability": 322.2865280305577,
+          "step_index": 4
+        },
+        {
+          "difficulty": 5.2355354272420715,
+          "interval_days": 792,
+          "next_review_at_iso": "2029-07-23T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2027-05-23T12:00:00+00:00",
+          "stability": 792.2819492771838,
+          "step_index": 5
+        }
+      ]
+    },
+    {
+      "case_id": "long_hard_chain",
+      "qualities": [
+        "Hard",
+        "Hard",
+        "Hard",
+        "Hard",
+        "Hard",
+        "Hard"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.040501547390819,
+          "interval_days": 2,
+          "next_review_at_iso": "2026-01-05T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 2.1482130329951366,
+          "step_index": 1
+        },
+        {
+          "difficulty": 7.500966847928992,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-09T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-06T12:00:00+00:00",
+          "stability": 3.363672586286755,
+          "step_index": 2
+        },
+        {
+          "difficulty": 7.884939542230092,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-15T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-10T12:00:00+00:00",
+          "stability": 4.748846484700497,
+          "step_index": 3
+        },
+        {
+          "difficulty": 8.205126600400446,
+          "interval_days": 7,
+          "next_review_at_iso": "2026-01-23T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-16T12:00:00+00:00",
+          "stability": 6.511254832423207,
+          "step_index": 4
+        },
+        {
+          "difficulty": 8.472124107622648,
+          "interval_days": 9,
+          "next_review_at_iso": "2026-02-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-24T12:00:00+00:00",
+          "stability": 8.548654750323209,
+          "step_index": 5
+        }
+      ]
+    },
+    {
+      "case_id": "long_again_chain",
+      "qualities": [
+        "Again",
+        "Again",
+        "Again",
+        "Again"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 8.082797017759107,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 0.2859484522668335,
+          "step_index": 1
+        },
+        {
+          "difficulty": 8.679783030429052,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 0.20312139449459088,
+          "step_index": 2
+        },
+        {
+          "difficulty": 9.08117225935453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-08T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-07T12:00:00+00:00",
+          "stability": 0.14428579897654745,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "mixed_long",
+      "qualities": [
+        "Good",
+        "Easy",
+        "Good",
+        "Hard",
+        "Good",
+        "Easy",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 4.510985606964673,
+          "interval_days": 32,
+          "next_review_at_iso": "2026-02-06T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 32.4040696254505,
+          "step_index": 1
+        },
+        {
+          "difficulty": 4.505067780483744,
+          "interval_days": 103,
+          "next_review_at_iso": "2026-05-21T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-02-07T12:00:00+00:00",
+          "stability": 103.48254873682329,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.386719946884625,
+          "interval_days": 149,
+          "next_review_at_iso": "2026-10-18T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-05-22T12:00:00+00:00",
+          "stability": 148.73898331468556,
+          "step_index": 3
+        },
+        {
+          "difficulty": 5.376773742440064,
+          "interval_days": 382,
+          "next_review_at_iso": "2027-11-05T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-10-19T12:00:00+00:00",
+          "stability": 382.02920439368626,
+          "step_index": 4
+        },
+        {
+          "difficulty": 4.620128675840565,
+          "interval_days": 1977,
+          "next_review_at_iso": "2033-04-05T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2027-11-06T12:00:00+00:00",
+          "stability": 1977.326322026377,
+          "step_index": 5
+        },
+        {
+          "difficulty": 4.613708791242807,
+          "interval_days": 4548,
+          "next_review_at_iso": "2045-09-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2033-04-06T12:00:00+00:00",
+          "stability": 4547.975973731388,
+          "step_index": 6
+        }
+      ]
+    },
+    {
+      "case_id": "recovery_chain",
+      "qualities": [
+        "Again",
+        "Good",
+        "Good",
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 7.1949,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 0.40255,
+          "step_index": 0
+        },
+        {
+          "difficulty": 7.176636167311107,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 3.496227050157062,
+          "step_index": 1
+        },
+        {
+          "difficulty": 7.158456348252584,
+          "interval_days": 10,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-07T12:00:00+00:00",
+          "stability": 10.03323614887456,
+          "step_index": 2
+        },
+        {
+          "difficulty": 6.681393343761012,
+          "interval_days": 58,
+          "next_review_at_iso": "2026-03-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 57.88457414279012,
+          "step_index": 3
+        },
+        {
+          "difficulty": 6.129469498109501,
+          "interval_days": 294,
+          "next_review_at_iso": "2027-01-06T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-03-18T12:00:00+00:00",
+          "stability": 293.82962562946085,
+          "step_index": 4
+        }
+      ]
+    },
+    {
+      "case_id": "hard_recovery",
+      "qualities": [
+        "Hard",
+        "Good",
+        "Good",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 6.488305268471453,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-02T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 1.18385,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.473291771547592,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-08T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-03T12:00:00+00:00",
+          "stability": 5.349565045335362,
+          "step_index": 1
+        },
+        {
+          "difficulty": 6.458347336709581,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-25T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-09T12:00:00+00:00",
+          "stability": 16.409582936914102,
+          "step_index": 2
+        },
+        {
+          "difficulty": 5.871423058100517,
+          "interval_days": 99,
+          "next_review_at_iso": "2026-05-05T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-26T12:00:00+00:00",
+          "stability": 99.35795569311944,
+          "step_index": 3
+        }
+      ]
+    },
+    {
+      "case_id": "easy_then_hard",
+      "qualities": [
+        "Easy",
+        "Easy",
+        "Hard"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        },
+        {
+          "difficulty": 3.40630027911925,
+          "interval_days": 248,
+          "next_review_at_iso": "2027-03-01T12:00:00+00:00",
+          "quality": "Hard",
+          "review_at_iso": "2026-06-26T12:00:00+00:00",
+          "stability": 247.6192120110576,
+          "step_index": 2
+        }
+      ]
+    },
+    {
+      "case_id": "alternating",
+      "qualities": [
+        "Good",
+        "Again",
+        "Good",
+        "Again",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 6.796932579932991,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-06T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 1.120206848321928,
+          "step_index": 1
+        },
+        {
+          "difficulty": 6.780499397376408,
+          "interval_days": 5,
+          "next_review_at_iso": "2026-01-12T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-07T12:00:00+00:00",
+          "stability": 4.99234186362627,
+          "step_index": 2
+        },
+        {
+          "difficulty": 7.804170827491399,
+          "interval_days": 1,
+          "next_review_at_iso": "2026-01-14T12:00:00+00:00",
+          "quality": "Again",
+          "review_at_iso": "2026-01-13T12:00:00+00:00",
+          "stability": 1.431779316831764,
+          "step_index": 3
+        },
+        {
+          "difficulty": 7.783104348996047,
+          "interval_days": 4,
+          "next_review_at_iso": "2026-01-19T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-15T12:00:00+00:00",
+          "stability": 4.3968163730283445,
+          "step_index": 4
+        }
+      ]
+    },
+    {
+      "case_id": "edge_clock_skew_now_before_last",
+      "description": "now < last_review (clock skew); algorithm should not crash; elapsed_days clamps to 0.",
+      "note": "Tested by harness, not py-fsrs (py-fsrs accepts only forward time on review_card). Provenance: harness assertion only.",
+      "qualities": [
+        "Good",
+        "Good"
+      ],
+      "steps": [
+        {
+          "difficulty": 5.282434422319005,
+          "interval_days": 3,
+          "next_review_at_iso": "2026-01-04T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 3.173,
+          "step_index": 0
+        },
+        {
+          "difficulty": 5.272967931287446,
+          "interval_days": 13,
+          "next_review_at_iso": "2026-01-18T12:00:00+00:00",
+          "quality": "Good",
+          "review_at_iso": "2026-01-05T12:00:00+00:00",
+          "stability": 12.949931442053146,
+          "step_index": 1
+        }
+      ]
+    },
+    {
+      "case_id": "edge_max_interval_cap",
+      "description": "After many Easy reviews, interval should saturate at maximum_interval=36500.",
+      "note": "Drives full sequence through py-fsrs and harness; both should cap at maximum_interval.",
+      "qualities": [
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy",
+        "Easy"
+      ],
+      "steps": [
+        {
+          "difficulty": 3.2245015893713678,
+          "interval_days": 16,
+          "next_review_at_iso": "2026-01-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-01T12:00:00+00:00",
+          "stability": 15.69105,
+          "step_index": 0
+        },
+        {
+          "difficulty": 2.1301214599670124,
+          "interval_days": 158,
+          "next_review_at_iso": "2026-06-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-01-18T12:00:00+00:00",
+          "stability": 157.78705417615282,
+          "step_index": 1
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 1318,
+          "next_review_at_iso": "2030-02-03T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2026-06-26T12:00:00+00:00",
+          "stability": 1317.9606416266856,
+          "step_index": 2
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 9749,
+          "next_review_at_iso": "2056-10-14T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2030-02-04T12:00:00+00:00",
+          "stability": 9748.826926678636,
+          "step_index": 3
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2156-09-21T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2056-10-15T12:00:00+00:00",
+          "stability": 58847.58328833226,
+          "step_index": 4
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2256-08-29T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2156-09-22T12:00:00+00:00",
+          "stability": 213139.9132160659,
+          "step_index": 5
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2356-08-06T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2256-08-30T12:00:00+00:00",
+          "stability": 352158.7167722069,
+          "step_index": 6
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2456-07-13T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2356-08-07T12:00:00+00:00",
+          "stability": 484111.49387192057,
+          "step_index": 7
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2556-06-20T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2456-07-14T12:00:00+00:00",
+          "stability": 611564.4607117247,
+          "step_index": 8
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2656-05-28T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2556-06-21T12:00:00+00:00",
+          "stability": 735739.9814794108,
+          "step_index": 9
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2756-05-05T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2656-05-29T12:00:00+00:00",
+          "stability": 857350.2520765287,
+          "step_index": 10
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2856-04-11T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2756-05-06T12:00:00+00:00",
+          "stability": 976860.1306890062,
+          "step_index": 11
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "2956-03-19T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2856-04-12T12:00:00+00:00",
+          "stability": 1094596.1599437695,
+          "step_index": 12
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3056-02-25T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "2956-03-20T12:00:00+00:00",
+          "stability": 1210799.8660069096,
+          "step_index": 13
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3156-02-02T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3056-02-26T12:00:00+00:00",
+          "stability": 1325656.8676222095,
+          "step_index": 14
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3256-01-09T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3156-02-03T12:00:00+00:00",
+          "stability": 1439314.1019245845,
+          "step_index": 15
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3355-12-17T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3256-01-10T12:00:00+00:00",
+          "stability": 1551890.6594332524,
+          "step_index": 16
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3455-11-24T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3355-12-18T12:00:00+00:00",
+          "stability": 1663484.9347821926,
+          "step_index": 17
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3555-11-01T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3455-11-25T12:00:00+00:00",
+          "stability": 1774179.5331148333,
+          "step_index": 18
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3655-10-08T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3555-11-02T12:00:00+00:00",
+          "stability": 1884044.7465293896,
+          "step_index": 19
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3755-09-15T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3655-10-09T12:00:00+00:00",
+          "stability": 1993141.084823866,
+          "step_index": 20
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3855-08-23T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3755-09-16T12:00:00+00:00",
+          "stability": 2101521.160776598,
+          "step_index": 21
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "3955-07-31T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3855-08-24T12:00:00+00:00",
+          "stability": 2209231.1228287574,
+          "step_index": 22
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4055-07-07T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "3955-08-01T12:00:00+00:00",
+          "stability": 2316311.762897387,
+          "step_index": 23
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4155-06-14T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4055-07-08T12:00:00+00:00",
+          "stability": 2422799.386179736,
+          "step_index": 24
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4255-05-22T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4155-06-15T12:00:00+00:00",
+          "stability": 2528726.503407584,
+          "step_index": 25
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4355-04-29T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4255-05-23T12:00:00+00:00",
+          "stability": 2634122.3885076423,
+          "step_index": 26
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4455-04-05T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4355-04-30T12:00:00+00:00",
+          "stability": 2739013.532753559,
+          "step_index": 27
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4555-03-13T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4455-04-06T12:00:00+00:00",
+          "stability": 2843424.0182780516,
+          "step_index": 28
+        },
+        {
+          "difficulty": 1.0,
+          "interval_days": 36500,
+          "next_review_at_iso": "4655-02-18T12:00:00+00:00",
+          "quality": "Easy",
+          "review_at_iso": "4555-03-14T12:00:00+00:00",
+          "stability": 2947375.8280200087,
+          "step_index": 29
+        }
+      ]
+    }
+  ],
+  "vectors_sha256": "21c56ee3419b630b19d09d50b2f40b4d08ff5effe7f0a0351bb4b7ddcbc27b8c"
+}
