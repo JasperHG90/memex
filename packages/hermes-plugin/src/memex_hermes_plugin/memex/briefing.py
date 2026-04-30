@@ -149,7 +149,13 @@ Match the tool to the query type:
 - **KV store** → namespaced operational state — preferences, project
   bindings, conventions — via `memex_kv_write(value, key)` /
   `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys
-  MUST start with `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
+  MUST start with `global:`, `user:`, `project:<id>:`, `app:<id>:`, or
+  `procedure:<verb>:<context-tag>` (RFC-007). The `procedure:` namespace is
+  for compact, learned how-tos owned by the agent — write it for a
+  procedure that worked, then `memex_kv_get(key, include_history=true)` to
+  see prior versions. Pair every procedure call with
+  `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` so
+  the procedure's MW counters reflect whether it actually worked.
   Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
     - `memex_add_note` for a NEW note (or to fully overwrite an existing one).
@@ -195,13 +201,15 @@ def format_briefing_block(
     session_note_key: str,
     kv_instructions_if_no_vault: bool,
     diagnostics_summary: dict[str, Any] | None = None,
+    procedural_observations: list[dict[str, Any]] | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
     Includes vault/project metadata, the session note key, routing guidance
     for tool selection, the fetched briefing markdown, and (optionally) the
-    F32 diagnostics summary block. If no vault is resolved, appends guidance
-    on how to bind one via the KV store.
+    F32 diagnostics summary block and F14 procedural-observations block. If
+    no vault is resolved, appends guidance on how to bind one via the KV
+    store.
     """
     lines = ['## Memex Memory']
     if vault_id:
@@ -231,6 +239,9 @@ def format_briefing_block(
 
     lines.append('\n' + _ROUTING_GUIDE)
 
+    if procedural_observations:
+        lines.append('\n' + _render_procedural_block(procedural_observations))
+
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
 
@@ -254,7 +265,44 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 
 # --- F6 ---  (filled by WS-linter)
 
+
 # --- F14 --- (filled by WS-quick-wins)
+def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
+    """Render the F14 procedural-observations block.
+
+    ``observations`` is a list of ``{kv_key, success_co_count,
+    failure_co_count, last_outcome_at}`` dicts (typically the top-N rows
+    from ``procedure_outcomes`` for the active vault, sorted by
+    ``last_outcome_at`` desc). The rendered block exposes each procedure's
+    MW counters and an actionability cue per RFC-007 §155-185 — the agent
+    is told to pair every procedure call with ``memex_record_outcome`` so
+    the counters stay calibrated.
+    """
+    lines = ['### Learned procedures (recent)']
+    if not observations:
+        lines.append(
+            '- No procedure keys recorded yet. When you discover a how-to that '
+            'works, write it to a `procedure:<verb>:<context-tag>` key (e.g. '
+            '`procedure:write_pr:commit-style`) and record the outcome.'
+        )
+        return '\n'.join(lines)
+
+    for obs in observations[:5]:
+        key = obs.get('kv_key', '?')
+        succ = int(obs.get('success_co_count', 0))
+        fail = int(obs.get('failure_co_count', 0))
+        last = obs.get('last_outcome_at')
+        last_str = f' · last: {last}' if last else ''
+        lines.append(f'- `{key}` — {succ} success / {fail} failure{last_str}')
+
+    lines.append(
+        'Read the active value with `memex_kv_get(key)`; pair every use with '
+        '`memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` '
+        'so the counters reflect what actually worked. Use '
+        '`memex_kv_get(key, include_history=true)` to see prior versions.'
+    )
+    return '\n'.join(lines)
+
 
 # --- F20 --- (filled by WS-revisit)
 
