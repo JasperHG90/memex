@@ -3627,6 +3627,74 @@ async def memex_memory_restore(
 
 # --- F5 ---  (filled by WS-quick-wins)
 
+from memex_mcp._f5_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_memory_summarize_node',
+    description=MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=120.0,
+)
+async def memex_memory_summarize_node(
+    ctx: Context,
+    entity_id: Annotated[str, Field(description='Entity UUID to reflect on.')],
+    scope: Annotated[
+        str,
+        Field(
+            description=(
+                "'incremental' (default — only new evidence) or 'full' "
+                '(re-evaluate all evidence; capped at MAX_FULL_SCOPE_UNITS=1000).'
+            ),
+        ),
+    ] = 'incremental',
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID; defaults to the global vault when None.'),
+    ] = None,
+) -> dict[str, Any]:
+    """Synchronously consolidate memories on an entity into its mental model."""
+    from memex_common.client import RateLimitExceeded
+
+    try:
+        api = get_api(ctx)
+        try:
+            entity_uuid = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid entity UUID: {entity_id}')
+        vault_uuid: UUID | None
+        if vault_id is None:
+            vault_uuid = None
+        else:
+            try:
+                vault_uuid = UUID(vault_id)
+            except ValueError:
+                raise ToolError(f'Invalid vault UUID: {vault_id}')
+        if scope not in ('incremental', 'full'):
+            raise ToolError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        try:
+            result = await api.summarize_node(entity_uuid, scope=scope, vault_id=vault_uuid)
+        except RateLimitExceeded as exc:
+            return {
+                'error': 'rate_limit_exceeded',
+                'entity_id': entity_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        return {
+            'entity_id': str(result.entity_id),
+            'observation_count': len(result.new_observations),
+            'status': result.status,
+            'scope': scope,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_summarize_node failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_summarize_node failed: {e}')
+
+
 # --- F8 ---  (filled by WS-linter)
 
 # --- F9 ---  (filled by WS-locks)
