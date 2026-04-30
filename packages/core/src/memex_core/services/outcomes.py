@@ -83,6 +83,7 @@ class OutcomeService:
             outcome_confidence: Weight for this outcome signal (0.0–1.0).
                 Currently recorded but not used in counter arithmetic (v1
                 uses integer increments; fractional weighting is F36).
+                # TODO(F36): fractional counter weighting
             reason: Optional free-text reason (logged, not stored on units).
 
         Returns:
