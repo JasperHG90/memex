@@ -21,7 +21,7 @@ import pytest
 import pytest_asyncio
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_common.config import GLOBAL_VAULT_ID
+from memex_common.config import GLOBAL_VAULT_ID, RetrievalConfig
 from memex_common.types import FactTypes
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.models.reranking import get_reranking_model
@@ -42,7 +42,14 @@ class TestMwBoostComposition:
 
     @pytest_asyncio.fixture
     async def engine_instance(self, embedder, reranker):
-        return RetrievalEngine(embedder=embedder, reranker=reranker)
+        # exploration_epsilon=0 keeps the result count deterministic so the
+        # MMR-diversity assertion isn't flaked by ε-greedy injection.
+        # token_budget=0 disables packing-mode so MMR honors `request.limit`.
+        return RetrievalEngine(
+            embedder=embedder,
+            reranker=reranker,
+            retrieval_config=RetrievalConfig(exploration_epsilon=0.0, token_budget=0),
+        )
 
     async def _seed_unit(
         self,
