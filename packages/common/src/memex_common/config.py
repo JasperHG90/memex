@@ -710,6 +710,16 @@ class RetrievalConfig(BaseModel):
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',
     )
+    anisotropy_window_size: int = Field(
+        default=1024,
+        description='Sliding window size for Z-score anisotropy correction. '
+        '1024 matches D-MEM §4.1. Set to 0 to disable.',
+    )
+    anisotropy_min_samples: int = Field(
+        default=32,
+        description='Minimum observations before anisotropy correction activates. '
+        'Below this threshold, raw similarity scores pass through unchanged.',
+    )
     graph_semantic_seeding: bool = Field(
         default=True,
         description='Enable semantic seeding for graph retrieval strategies.',
@@ -721,6 +731,21 @@ class RetrievalConfig(BaseModel):
     graph_semantic_seed_weight: float = Field(
         default=0.7,
         description='Weight for semantic seed entities (lower than NER weight of 1.0).',
+    )
+    exploration_epsilon: float = Field(
+        default=0.05,
+        description='Probability of injecting exploration units (low-MW memories) into '
+        'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
+        'Prevents rich-get-richer dynamics per Memory Worth §5.3.',
+    )
+    exploration_max_injections: int = Field(
+        default=2,
+        description='Maximum number of exploration units to inject per retrieval call.',
+    )
+    exploration_low_mw_threshold: int = Field(
+        default=5,
+        description='Units with (success_co_count + failure_co_count) below this '
+        'threshold are eligible for exploration injection.',
     )
     link_expansion_causal_threshold: float = Field(
         default=0.3,
