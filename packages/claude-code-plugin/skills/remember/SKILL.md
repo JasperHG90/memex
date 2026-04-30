@@ -52,6 +52,26 @@ that contaminates retrieval, prefer the **NON-DESTRUCTIVE** verb:
   it removes the unit from the entity graph and is irreversible. Prefer
   deprioritize unless the unit MUST leave the graph entirely.
 
+## Synchronously consolidating mid-conversation (summarize_node vs reflect)
+
+When you notice mid-conversation that retrieved facts about a topic are
+conflicting, incomplete, or scattered, you can ask Memex to consolidate them
+into a coherent mental model **before continuing**:
+
+- `memex_memory_summarize_node(entity_id, scope)` triggers reflection
+  **synchronously**. `scope='incremental'` (default) consolidates only new
+  evidence; `scope='full'` re-evaluates all evidence on the entity (capped
+  at the most-recent 1000 units). The tool returns the updated mental model
+  in the same turn, so you can act on it immediately.
+- Background `reflect` (the existing scheduler-driven path) is the **default**:
+  it runs asynchronously when leader-elected and is the cheaper option.
+
+`summarize_node` is rate-limited to **1 call per (entity, vault) per 60
+seconds**. If you hit the limit, the response includes `retry_after_seconds`;
+do not retry-loop. Reach for `summarize_node` only when an in-session reason
+exists (a contradiction signal, a user-driven question that depends on the
+consolidated view); otherwise let background reflection do its work.
+
 <!--
 Tier A — /remember verb extensions
 F4:  WS-quick-wins  (memory_deprioritize/restore disclosure)
