@@ -1480,6 +1480,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fsrs"
+version = "4.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/2c/743d86f3142fe9968c3dcd39c0b9bf0c853c5581c0f298a03ff4266cd596/fsrs-4.1.2.tar.gz", hash = "sha256:3e2a7cf3887956db69a7ed0d288293ffbcb032bdcd5adc704043ef91b97f4ffd", size = 15485, upload-time = "2024-12-29T23:42:14.764Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/59/ac8bcc71dfd373f1411450e3a60a55ac6e2191a1adfeb016a8bbada43c9c/fsrs-4.1.2-py3-none-any.whl", hash = "sha256:aba706419d6d4b6eeaa849e5a45164dd7eadfe681f25968feee08fdeca7ddab8", size = 10942, upload-time = "2024-12-29T23:42:13.71Z" },
+]
+
+[[package]]
 name = "fsspec"
 version = "2026.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2940,6 +2949,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "fsrs" },
     { name = "gcsfs" },
     { name = "hypothesis" },
     { name = "ipykernel" },
@@ -2981,6 +2991,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "fsrs", specifier = ">=4.0.0,<5.0.0" },
     { name = "gcsfs", specifier = ">=2024.6.0" },
     { name = "hypothesis", specifier = ">=6.151.9" },
     { name = "ipykernel", specifier = ">=6.29.5" },
