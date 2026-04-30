@@ -1,4 +1,27 @@
-"""Key-value store service — CRUD and semantic search for KV entries."""
+"""Key-value store service — CRUD and semantic search for KV entries.
+
+KV namespaces
+-------------
+
+Keys must start with one of the valid namespace prefixes:
+
+- ``global:`` — vault-default operational state
+- ``user:`` — per-user preferences
+- ``project:`` — per-project bindings
+- ``app:`` — per-application configuration
+- ``procedure:`` — procedural observations (F14)
+
+The ``procedure:<verb>:<context-tag>`` namespace is special: writes use
+last-writer-wins on the active value with a ``version`` increment, and
+superseded values are appended to a capped (5-entry) history kept inside
+the same KV row's JSON envelope (NO schema change to ``kv_entries``).
+The agent owns the procedure (the verb — ``write_pr``, ``run_tests``);
+Memex stores observations about how to ADAPT it to specific contexts
+(the context-tag — ``commit-style``, ``python-monorepo``).
+
+See :func:`validate_procedure_key` for the strict format check on
+procedure keys (RFC-007).
+"""
 
 from __future__ import annotations
 
@@ -17,7 +40,27 @@ logger = logging.getLogger('memex.core.services.kv')
 
 _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
-VALID_NAMESPACES = ('global', 'user', 'project', 'app')
+VALID_NAMESPACES = ('global', 'user', 'project', 'app', 'procedure')
+
+PROCEDURE_KEY_RE = re.compile(r'^procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$')
+
+
+def validate_procedure_key(key: str) -> None:
+    """Validate a ``procedure:<verb>:<context-tag>`` KV key.
+
+    Raises :class:`ValueError` if the key does not match the strict
+    namespace format. The regex only permits lowercase letters, digits,
+    hyphens, and underscores in segments, with a leading lowercase letter
+    on each of the verb and context-tag segments. Exactly two colons.
+
+    See RFC-007 §53-61 for the contract.
+    """
+    if not PROCEDURE_KEY_RE.match(key):
+        raise ValueError(
+            f'Invalid procedure key: {key!r}. '
+            'Expected procedure:<verb>:<context-tag> with each segment '
+            'matching [a-z][a-z0-9_-]*.'
+        )
 
 
 def _pattern_to_prefix(pattern: str) -> str | None:
