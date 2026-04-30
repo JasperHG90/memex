@@ -37,3 +37,22 @@ You have been invoked via the `/remember` slash command.
 
 5. **Confirm to the user.**
    After calling the tool, briefly confirm what was saved and mention the title.
+
+<!--
+Tier A — /remember verb extensions
+F4:  WS-quick-wins  (memory_deprioritize/restore disclosure)
+F5:  WS-quick-wins  (memory_summarize_node disclosure)
+F9:  WS-locks       (memory_reconsolidate, memory_consolidate disclosure)
+F14: WS-quick-wins  (procedural KV capture surfacing)
+F20: WS-revisit     (memory_review disclosure)
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F14 --- (filled by WS-quick-wins)
+
+# --- F20 --- (filled by WS-revisit)
+-->

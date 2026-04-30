@@ -3173,3 +3173,26 @@ __all__ = [
     'KV_SEARCH_SCHEMA',
     'KV_WRITE_SCHEMA',
 ]
+
+
+# ============================================================
+# Tier A — Hermes sync wrappers
+# F4:  WS-quick-wins  (handle_memory_deprioritize, handle_memory_restore)
+# F5:  WS-quick-wins  (handle_memory_summarize_node)
+# F8:  WS-linter      (handle_get_lint_flags)
+# F9:  WS-locks       (handle_memory_reconsolidate, handle_memory_consolidate)
+# F20: WS-revisit     (handle_get_due_for_review, handle_memory_review)
+# F32: WS-diagnostics (handle_get_diagnostics_summary)
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F20 --- (filled by WS-revisit)
+
+# --- F32 --- (filled by WS-diagnostics)

@@ -39,8 +39,14 @@ def sync_url(asyncpg_url: str) -> str:
     return urlunparse(parsed._replace(scheme=scheme))
 
 
-async def alembic_upgrade(db_url: str, target: str = 'head') -> None:
-    """Run ``alembic upgrade <target>`` against ``db_url``."""
+async def alembic_upgrade(db_url: str, target: str = '024_intent_risk_classifier') -> None:
+    """Run ``alembic upgrade <target>`` against ``db_url``.
+
+    Default pinned to ``024_intent_risk_classifier`` (Wave 1 head). Tier A
+    seed PR introduced revisions 025-029 as NIE stubs; each Tier A feature
+    test (``test_int_alembic_NNN.py``) bumps its own target when the matching
+    stub body lands.
+    """
     cfg = alembic_cfg_for(db_url)
     await asyncio.to_thread(command.upgrade, cfg, target)
 

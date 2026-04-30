@@ -3537,3 +3537,26 @@ def entrypoint():
 
 if __name__ == '__main__':
     entrypoint()
+
+
+# ============================================================
+# Tier A — Tool registry (peer-reviewed conventions)
+# F4 (deprioritize, restore):       WS-quick-wins
+# F5 (summarize_node):              WS-quick-wins
+# F8 (get_lint_flags):              WS-linter
+# F9 (reconsolidate, consolidate):  WS-locks
+# F20 (get_due_for_review, review): WS-revisit
+# F32 (get_diagnostics_summary):    WS-diagnostics
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F20 --- (filled by WS-revisit)
+
+# --- F32 --- (filled by WS-diagnostics)

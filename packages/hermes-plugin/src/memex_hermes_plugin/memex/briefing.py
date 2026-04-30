@@ -215,3 +215,20 @@ def format_briefing_block(
 
 
 __all__ = ['BriefingCache', 'format_briefing_block']
+
+
+# ============================================================
+# Tier A — Briefing blocks
+# F6:  pending lint count                 (WS-linter)
+# F14: procedural observations            (WS-quick-wins)
+# F20: N memories due for review          (WS-revisit)
+# F32: diagnostic summary                 (WS-diagnostics)
+# ============================================================
+
+# --- F6 ---  (filled by WS-linter)
+
+# --- F14 --- (filled by WS-quick-wins)
+
+# --- F20 --- (filled by WS-revisit)
+
+# --- F32 --- (filled by WS-diagnostics)
