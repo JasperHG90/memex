@@ -5,6 +5,9 @@ the Claude Code plugin. F32 is surfaced via /recall (vault diagnostics is a
 read action). This test asserts that at least one SKILL.md mentions the verb
 ``memex_get_diagnostics_summary`` together with at least one of the documented
 diagnostic keywords (cluster count, MW score, top entities).
+
+The negative-grep test below codifies the architectural rule that
+diagnostics is a *read* action (recall), not a capture action (remember).
 """
 
 from __future__ import annotations
@@ -39,4 +42,18 @@ def test_rule_text_describes_verb():
     assert has_context, (
         'memex_get_diagnostics_summary mentioned but no diagnostic keyword '
         '(cluster count / MW score / top entities) appears alongside it.'
+    )
+
+
+def test_remember_skill_does_not_contain_diagnostics_verb():
+    """Diagnostics is a read action; belongs in recall/SKILL.md, NOT remember/SKILL.md.
+
+    Codifies the architectural call so future refactors can't silently un-make it.
+    """
+    skill_path = _PACKAGES_DIR / 'claude-code-plugin' / 'skills' / 'remember' / 'SKILL.md'
+    assert skill_path.exists(), f'SKILL.md not found at {skill_path}'
+    text = skill_path.read_text()
+    assert 'memex_get_diagnostics_summary' not in text, (
+        'Diagnostics verb leaked into remember/SKILL.md — it is a read action, '
+        'belongs in recall only. Move it back.'
     )
