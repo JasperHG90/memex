@@ -59,6 +59,11 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     add_temporal_offsets,
     process_embeddings,
 )
+from memex_core.memory.extraction.classifier import (
+    ClassifyMemoryUnit,
+    classify_facts,
+    filter_safety_blocked,
+)
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.processing.titles import resolve_title_from_page_index
@@ -212,6 +217,29 @@ class ExtractionEngine:
         )
         self.semaphore = asyncio.Semaphore(config.max_concurrency)
         self.page_index_lm = page_index_lm
+        self._classifier_predictor: dspy.Module | None = (
+            dspy.Predict(ClassifyMemoryUnit) if config.intent_risk_classifier_enabled else None
+        )
+
+    async def _classify_and_filter(
+        self,
+        processed_facts: list[ProcessedFact],
+    ) -> list[ProcessedFact]:
+        """F25 — classify intent + risk, then drop facts marked safety.
+
+        No-op when ``intent_risk_classifier_enabled`` is False (default). When
+        enabled, runs classification under the existing extraction semaphore
+        (so the LLM concurrency budget is shared with fact extraction).
+        """
+        if not processed_facts or self._classifier_predictor is None:
+            return processed_facts
+        await classify_facts(
+            processed_facts,
+            lm=self.lm,
+            semaphore=self.semaphore,
+            predictor=self._classifier_predictor,
+        )
+        return filter_safety_blocked(processed_facts)
 
     async def extract_and_persist(
         self,
@@ -354,6 +382,10 @@ class ExtractionEngine:
                     pf.note_id = effective_doc_id
                     if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                         pf.chunk_id = chunk_map[ef.chunk_index]
+
+            processed_facts = await self._classify_and_filter(processed_facts)
+            if not processed_facts:
+                return [], set()
 
             unit_ids = await storage.insert_facts_batch(
                 session, processed_facts, note_id=effective_doc_id
@@ -600,6 +632,10 @@ class ExtractionEngine:
                         pf.note_id = note_id
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
+
+                    final_processed = await self._classify_and_filter(final_processed)
+                    if not final_processed:
+                        return [], set()
 
                     unit_ids = await storage.insert_facts_batch(
                         session, final_processed, note_id=note_id
@@ -904,6 +940,9 @@ class ExtractionEngine:
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
+                        final_processed = await self._classify_and_filter(final_processed)
+
+                    if final_processed:
                         unit_ids = await storage.insert_facts_batch(
                             session, final_processed, note_id=note_id
                         )
@@ -1194,6 +1233,10 @@ class ExtractionEngine:
             pf.note_id = effective_doc_id
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
+
+        final_processed = await self._classify_and_filter(final_processed)
+        if not final_processed:
+            return [], set()
 
         unit_ids = await storage.insert_facts_batch(
             session, final_processed, note_id=effective_doc_id
@@ -1654,6 +1697,10 @@ class ExtractionEngine:
 
         for pf in final_processed:
             pf.note_id = note_id
+
+        final_processed = await self._classify_and_filter(final_processed)
+        if not final_processed:
+            return [], set()
 
         unit_ids = await storage.insert_facts_batch(session, final_processed, note_id=note_id)
 

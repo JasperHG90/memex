@@ -584,6 +584,13 @@ class ExtractionConfig(BaseModel):
         'least one in-flight gauge is > 0. None (default) disables it.',
     )
 
+    intent_risk_classifier_enabled: bool = Field(
+        default=False,
+        description='F25: enable write-time intent + risk classifier. When True, every '
+        'extracted fact is classified by an LLM call before persistence. Costs LLM tokens '
+        'per ingest — opt in once classifier accuracy + cost are validated for the deployment.',
+    )
+
     @property
     def active_strategy(self) -> ExtractionStrategy:
         """Return the active extraction strategy name."""
