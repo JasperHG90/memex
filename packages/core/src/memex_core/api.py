@@ -1144,8 +1144,8 @@ class MemexAPI:
 
     async def record_outcome(
         self,
-        unit_ids: list[str] | None = None,
-        success: bool = False,
+        unit_ids: list[str] | None,
+        success: bool,
         vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,

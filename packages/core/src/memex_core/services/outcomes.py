@@ -63,8 +63,8 @@ class OutcomeService:
     async def record_outcome(
         self,
         session: AsyncSession,
-        unit_ids: list[str] | None = None,
-        success: bool = False,
+        unit_ids: list[str] | None,
+        success: bool,
         vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,
@@ -86,11 +86,19 @@ class OutcomeService:
           is upserted; ``last_outcome_at`` is set to ``now()``. Requires
           keyword-only ``kv_key`` (must be a ``procedure:<verb>:<tag>``
           key per RFC-007 §53-61) plus ``success`` and ``vault_id``.
+          ``unit_ids`` MUST be ``None`` or empty for kv_key mode —
+          mixing modes is an error (silent counter divergence otherwise).
+
+        Both ``unit_ids`` and ``success`` are required (no defaults) so a
+        caller cannot accidentally invoke ``record_outcome(session)`` and
+        silently record a FAILURE outcome — the exact MW-signal-quality
+        pathology F1 is built to detect.
 
         Args:
             session: Active async DB session.
-            unit_ids: UUIDs of memory units (memory_unit mode only).
-            success: True if outcome was successful.
+            unit_ids: UUIDs of memory units (memory_unit mode only). Pass
+                ``None`` or ``[]`` for kv_key mode.
+            success: True if outcome was successful. Required — no default.
             vault_id: Vault scope for the outcome.
             outcome_confidence: Weight for this outcome signal (0.0–1.0).
                 Currently recorded but not used in counter arithmetic (v1
@@ -108,6 +116,11 @@ class OutcomeService:
             failure_co_count, last_outcome_at}``.
         """
         if target_type == 'kv_key':
+            if unit_ids:
+                raise ValueError(
+                    'kv_key mode does not accept unit_ids; pass unit_ids only '
+                    'with target_type="memory_unit"'
+                )
             return await self._record_outcome_kv_key(
                 session=session,
                 kv_key=kv_key,

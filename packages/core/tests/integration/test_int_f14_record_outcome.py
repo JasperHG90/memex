@@ -52,6 +52,7 @@ async def test_kv_key_mode_inserts_and_increments_counter(
     async with kv.metastore.session() as session:
         first = await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
@@ -64,6 +65,7 @@ async def test_kv_key_mode_inserts_and_increments_counter(
     async with kv.metastore.session() as session:
         second = await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
@@ -84,6 +86,7 @@ async def test_kv_key_mode_failure_increments_failure_only(
     async with kv.metastore.session() as session:
         a = await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
@@ -92,6 +95,7 @@ async def test_kv_key_mode_failure_increments_failure_only(
     async with kv.metastore.session() as session:
         b = await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=False,
@@ -122,6 +126,7 @@ async def test_cross_vault_isolation_for_kv_key_outcomes(
     async with metastore.session() as session:
         await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
@@ -129,6 +134,7 @@ async def test_cross_vault_isolation_for_kv_key_outcomes(
         )
         await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
@@ -136,6 +142,7 @@ async def test_cross_vault_isolation_for_kv_key_outcomes(
         )
         await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=False,
@@ -168,6 +175,7 @@ async def test_kv_key_mode_rejects_non_procedure_keys(
         with pytest.raises(ValueError, match='Invalid procedure key'):
             await outcomes.record_outcome(
                 session=session,
+                unit_ids=None,
                 target_type='kv_key',
                 kv_key='global:not-a-procedure',
                 success=True,
@@ -176,13 +184,8 @@ async def test_kv_key_mode_rejects_non_procedure_keys(
 
 
 @pytest.mark.asyncio
-async def test_memory_unit_positional_path_unchanged(outcomes: OutcomeService, metastore) -> None:
-    """The default ``target_type='memory_unit'`` path still works positionally.
-
-    Regression guard: F14 added a keyword-only ``target_type``/``kv_key``;
-    existing callers passing only positional args must continue to land on
-    the memory_unit path.
-    """
+async def test_memory_unit_path_works(outcomes: OutcomeService, metastore) -> None:
+    """The default ``target_type='memory_unit'`` path increments unit counters."""
     unit_id = uuid4()
     async with metastore.session() as session:
         await session.execute(
@@ -214,15 +217,101 @@ async def test_memory_unit_positional_path_unchanged(outcomes: OutcomeService, m
 
 
 @pytest.mark.asyncio
+async def test_memory_unit_path_positional_call_signature(
+    outcomes: OutcomeService, metastore
+) -> None:
+    """Positional-shape lock: ``record_outcome(session, unit_ids, success, vault_id)``.
+
+    The contract specifies that ``unit_ids`` and ``success`` remain
+    POSITIONAL and required. This test calls with literal positional
+    arguments — if a future refactor inserts a ``*,`` kw-only barrier
+    between ``unit_ids`` and ``success``, this test will fail with
+    TypeError, defeating the silent regression that broke the F1
+    MW-signal-quality contract.
+
+    Also asserts that the new kv_key path's ``procedure_outcomes`` table
+    is EMPTY after a memory_unit-mode call — proves the new path does NOT
+    leak side-effects into the memory_unit path.
+    """
+    unit_id = uuid4()
+    async with metastore.session() as session:
+        await session.execute(
+            text(
+                'INSERT INTO memory_units (id, vault_id, text, '
+                'fact_type, status, confidence, event_date) '
+                "VALUES (:id, :vid, 'fact-content', 'world', 'active', 0.9, now())"
+            ),
+            {'id': unit_id, 'vid': GLOBAL_VAULT_ID},
+        )
+        await session.commit()
+
+    async with metastore.session() as session:
+        # Literal positional call — the load-bearing assertion.
+        result = await outcomes.record_outcome(session, [str(unit_id)], True, str(GLOBAL_VAULT_ID))
+    assert result['units_updated'] == 1
+
+    async with metastore.session() as session:
+        proc_count = (
+            await session.execute(text('SELECT COUNT(*) FROM procedure_outcomes'))
+        ).scalar()
+    assert proc_count == 0, (
+        f'memory_unit path must not write to procedure_outcomes; got {proc_count} rows'
+    )
+
+
+@pytest.mark.asyncio
 async def test_unknown_target_type_raises(outcomes: OutcomeService, metastore) -> None:
     """Unknown ``target_type`` rejects with ValueError."""
     async with metastore.session() as session:
         with pytest.raises(ValueError, match='target_type must be'):
             await outcomes.record_outcome(
                 session=session,
+                unit_ids=None,
+                success=True,
                 target_type='entity',  # not supported
                 vault_id=str(GLOBAL_VAULT_ID),
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'kwargs, expected_match',
+    [
+        # Path 1: kv_key mode without kv_key argument
+        ({'target_type': 'kv_key'}, "requires 'kv_key'"),
+        # Path 2: kv_key mode with non-empty unit_ids (silent mode-mixing)
+        (
+            {
+                'target_type': 'kv_key',
+                'kv_key': 'procedure:run_tests:tag-x',
+                'unit_ids': [str(uuid4())],
+            },
+            'does not accept unit_ids',
+        ),
+    ],
+)
+async def test_record_outcome_kv_path_validation(
+    outcomes: OutcomeService, metastore, kwargs: dict, expected_match: str
+) -> None:
+    """Both kv_key error paths surface as ValueError with diagnostic messages.
+
+    - kv_key mode WITHOUT kv_key → ValueError ('requires kv_key')
+    - kv_key mode WITH non-empty unit_ids → ValueError ('does not accept unit_ids')
+
+    The second is the load-bearing one: silent mode-mixing means the
+    caller assumes ``unit_ids`` got incremented while only the kv-key
+    counter actually moved — exact silent-divergence pathology QA caught
+    in the v2 contract.
+    """
+    base = {
+        'unit_ids': None,
+        'success': True,
+        'vault_id': str(GLOBAL_VAULT_ID),
+    }
+    base.update(kwargs)
+    async with metastore.session() as session:
+        with pytest.raises(ValueError, match=expected_match):
+            await outcomes.record_outcome(session=session, **base)
 
 
 @pytest.mark.asyncio
@@ -236,6 +325,7 @@ async def test_kv_key_outcome_persists_through_kv_entry(
     async with metastore.session() as session:
         await outcomes.record_outcome(
             session=session,
+            unit_ids=None,
             target_type='kv_key',
             kv_key=key,
             success=True,
