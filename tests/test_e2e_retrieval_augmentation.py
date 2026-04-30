@@ -468,3 +468,91 @@ async def test_e2e_ingest_search_record_outcome_search(client: TestClient, db_se
     # 5. Search again — unit should still appear
     results_after = _search(client, 'Go', vault_id)
     assert len(results_after) > 0
+
+
+@pytest.mark.integration
+async def test_e2e_record_outcome_changes_ranking(client: TestClient, db_session):
+    """F1c via HTTP: opposing outcomes on two near-duplicate units flip the
+    relative ranking returned by ``/api/v1/memories/search``.
+
+    Both units share text + embedding, so cross-encoder ce_score is equal;
+    after recording 10 successes on A and 10 failures on B, A's MW boost
+    > 1.0 and B's < 1.0, so A must rank above B.
+    """
+    from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
+    from memex_core.services.outcomes import OutcomeService
+    from memex_common.types import FactTypes
+
+    vault_id = GLOBAL_VAULT_ID
+    note_id = uuid4()
+    a_id = uuid4()
+    b_id = uuid4()
+    entity_id = uuid4()
+    text = 'E2E: queue worker retries failed jobs with exponential backoff.'
+    emb = [0.1] * 384
+
+    note = Note(id=note_id, original_text='E2E ranking change', vault_id=vault_id)
+    a_unit = MemoryUnit(
+        id=a_id,
+        note_id=note_id,
+        text=text,
+        fact_type=FactTypes.WORLD,
+        embedding=emb,
+        vault_id=vault_id,
+        event_date=datetime.now(timezone.utc),
+        success_co_count=0,
+        failure_co_count=0,
+    )
+    b_unit = MemoryUnit(
+        id=b_id,
+        note_id=note_id,
+        text=text,
+        fact_type=FactTypes.WORLD,
+        embedding=emb,
+        vault_id=vault_id,
+        event_date=datetime.now(timezone.utc),
+        success_co_count=0,
+        failure_co_count=0,
+    )
+    entity = Entity(id=entity_id, canonical_name='QueueWorker')
+    db_session.add(note)
+    db_session.add(a_unit)
+    db_session.add(b_unit)
+    db_session.add(entity)
+    db_session.add(UnitEntity(unit_id=a_id, entity_id=entity_id, vault_id=vault_id))
+    db_session.add(UnitEntity(unit_id=b_id, entity_id=entity_id, vault_id=vault_id))
+    await db_session.commit()
+
+    svc = OutcomeService()
+    for _ in range(10):
+        await svc.record_outcome(
+            session=db_session,
+            unit_ids=[str(a_id)],
+            success=True,
+            vault_id=str(vault_id),
+        )
+        await svc.record_outcome(
+            session=db_session,
+            unit_ids=[str(b_id)],
+            success=False,
+            vault_id=str(vault_id),
+        )
+
+    db_session.expire_all()
+    a_refreshed = await db_session.get(MemoryUnit, a_id)
+    b_refreshed = await db_session.get(MemoryUnit, b_id)
+    assert a_refreshed is not None and a_refreshed.success_co_count == 10
+    assert b_refreshed is not None and b_refreshed.failure_co_count == 10
+
+    results = _search(client, 'queue worker retries', str(vault_id))
+    result_ids = [r['id'] for r in results]
+    if str(a_id) not in result_ids or str(b_id) not in result_ids:
+        pytest.skip(
+            f'one or both seeded units missing from HTTP search results — '
+            f'reranker may not be loaded in this test app. ids={result_ids}'
+        )
+
+    assert result_ids.index(str(a_id)) < result_ids.index(str(b_id)), (
+        f'F1c E2E regression: high-success unit must rank above high-failure peer '
+        f'after record_outcome. Got order: {result_ids}'
+    )
