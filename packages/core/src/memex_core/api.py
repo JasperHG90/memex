@@ -1456,9 +1456,14 @@ class MemexAPI:
             key=key, value=value, embedding=embedding, ttl_seconds=ttl_seconds
         )
 
-    async def kv_get(self, key: str) -> Any | None:
-        """Get a KV entry by key. Delegates to KVService."""
-        return await self._kv.get(key=key)
+    async def kv_get(self, key: str, *, include_history: bool = False) -> Any | None:
+        """Get a KV entry by key. Delegates to KVService.
+
+        For ``procedure:`` keys (RFC-007), ``include_history=True`` swaps the
+        returned entry's ``value`` field from the unwrapped active string to
+        a dict ``{value, version, history}``. Default behavior is unchanged.
+        """
+        return await self._kv.get(key=key, include_history=include_history)
 
     async def kv_search(
         self,

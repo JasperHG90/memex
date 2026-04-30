@@ -7,7 +7,13 @@ from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
 from memex_core.server.auth import require_delete, require_read, require_write
-from memex_common.schemas import KVEntryDTO, KVPutRequest, KVSearchRequest
+from memex_common.schemas import (
+    KVEntryDTO,
+    KVProcedureEntryDTO,
+    KVProcedureValueDTO,
+    KVPutRequest,
+    KVSearchRequest,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api
@@ -58,16 +64,42 @@ async def kv_put(
         raise _handle_error(e, 'Failed to put KV entry')
 
 
-@router.get('/kv/get', response_model=KVEntryDTO, dependencies=[Depends(require_read)])
+@router.get(
+    '/kv/get',
+    response_model=KVEntryDTO | KVProcedureEntryDTO,
+    dependencies=[Depends(require_read)],
+)
 async def kv_get(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to look up'),
+    include_history: bool = Query(
+        False,
+        description=(
+            'For procedure: keys, return the full envelope (value, version, history) '
+            'instead of just the active value. Ignored for non-procedure keys.'
+        ),
+    ),
 ):
-    """Get a key-value entry by key."""
+    """Get a key-value entry by key.
+
+    For ``procedure:`` keys (RFC-007), the default response contains only
+    the active value (back-compat — same shape as any other KV entry). Pass
+    ``include_history=true`` to expose the structured envelope as
+    :class:`KVProcedureEntryDTO`.
+    """
     try:
-        entry = await api.kv_get(key=key)
+        entry = await api.kv_get(key=key, include_history=include_history)
         if entry is None:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
+        if include_history and key.startswith('procedure:') and isinstance(entry.value, dict):
+            return KVProcedureEntryDTO(
+                id=entry.id,
+                key=entry.key,
+                value=KVProcedureValueDTO.model_validate(entry.value),
+                expires_at=entry.expires_at,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
         return KVEntryDTO.model_validate(entry, from_attributes=True)
     except HTTPException:
         raise
