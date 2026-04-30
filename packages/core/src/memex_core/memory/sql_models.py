@@ -1565,7 +1565,12 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
     )
 
     vault_id: UUID = Field(
-        sa_column=Column(SA_UUID(), nullable=False, index=True),
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=False,
+            index=True,
+        ),
         description='Vault that owns this counter row (Wave 0 invariant: NOT NULL).',
     )
 

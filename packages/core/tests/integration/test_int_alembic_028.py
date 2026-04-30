@@ -243,6 +243,10 @@ async def test_fk_cascade_on_kv_entry_delete_clears_counter_row(fresh_db_url: st
         vault_id = uuid4()
         async with engine.begin() as conn:
             await conn.execute(
+                text("INSERT INTO vaults (id, name, description) VALUES (:id, :name, '')"),
+                {'id': vault_id, 'name': f'v-{vault_id.hex[:8]}'},
+            )
+            await conn.execute(
                 text('INSERT INTO kv_entries (key, value) VALUES (:k, :v)'),
                 {'k': kv_key, 'v': '{}'},
             )

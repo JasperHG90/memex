@@ -86,6 +86,12 @@ def upgrade() -> None:
             ),
             sa.UniqueConstraint('vault_id', 'kv_key', name='uq_procedure_outcomes_vault_key'),
             sa.ForeignKeyConstraint(
+                ['vault_id'],
+                ['vaults.id'],
+                ondelete='CASCADE',
+                name='fk_procedure_outcomes_vault_id',
+            ),
+            sa.ForeignKeyConstraint(
                 ['kv_key'],
                 ['kv_entries.key'],
                 ondelete='CASCADE',
