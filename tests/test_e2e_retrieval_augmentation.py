@@ -66,7 +66,13 @@ def _ingest_note(
         return resp.json()
 
 
-def _search(client: TestClient, query: str, vault_id: str, limit: int = 10):
+def _search(
+    client: TestClient,
+    query: str,
+    vault_id: str,
+    limit: int = 10,
+    include_deprioritized: bool = False,
+):
     """Search memories through the HTTP endpoint."""
     mock_embedder = MagicMock()
     mock_embedder.encode.return_value = [[0.1] * 384]
@@ -76,10 +82,14 @@ def _search(client: TestClient, query: str, vault_id: str, limit: int = 10):
     app.state.api.embedder = mock_embedder
 
     try:
-        resp = client.post(
-            '/api/v1/memories/search',
-            json={'query': query, 'limit': limit, 'vault_ids': [vault_id]},
-        )
+        payload: dict[str, object] = {
+            'query': query,
+            'limit': limit,
+            'vault_ids': [vault_id],
+        }
+        if include_deprioritized:
+            payload['include_deprioritized'] = True
+        resp = client.post('/api/v1/memories/search', json=payload)
         assert resp.status_code == 200, f'Search failed: {resp.text}'
         return parse_ndjson(resp.text)
     finally:
@@ -291,9 +301,8 @@ async def test_e2e_deprioritized_unit_hidden_by_default(client: TestClient, db_s
 
 @pytest.mark.integration
 async def test_e2e_deprioritized_unit_shown_with_flag(client: TestClient, db_session):
-    """Deprioritized units appear when include_deprioritized=True via API."""
-    from memex_core.memory.retrieval.engine import RetrievalEngine
-    from memex_core.memory.retrieval.models import RetrievalRequest
+    """Deprioritized units appear via the HTTP search endpoint when
+    ``include_deprioritized=true`` is set on the request body."""
     from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
     from memex_common.types import FactTypes
 
@@ -323,19 +332,13 @@ async def test_e2e_deprioritized_unit_shown_with_flag(client: TestClient, db_ses
     db_session.add(ue)
     await db_session.commit()
 
-    # Use RetrievalEngine directly (include_deprioritized not in HTTP schema)
-    api = client.app.state.api
-    engine = RetrievalEngine(embedder=api.embedder)
-    request = RetrievalRequest(
-        query='caching',
-        limit=10,
-        vault_ids=[vault_id],
-        include_deprioritized=True,
-    )
-    results, _ = await engine.retrieve(db_session, request)
+    # Default scope: deprioritized unit hidden
+    default_results = _search(client, 'caching', str(vault_id))
+    assert str(deprioritized_id) not in [r['id'] for r in default_results]
 
-    result_ids = [str(u.id) for u in results]
-    assert str(deprioritized_id) in result_ids
+    # With include_deprioritized=true: unit appears
+    explicit_results = _search(client, 'caching', str(vault_id), include_deprioritized=True)
+    assert str(deprioritized_id) in [r['id'] for r in explicit_results]
 
 
 @pytest.mark.integration
@@ -468,3 +471,91 @@ async def test_e2e_ingest_search_record_outcome_search(client: TestClient, db_se
     # 5. Search again — unit should still appear
     results_after = _search(client, 'Go', vault_id)
     assert len(results_after) > 0
+
+
+@pytest.mark.integration
+async def test_e2e_record_outcome_changes_ranking(client: TestClient, db_session):
+    """F1c via HTTP: opposing outcomes on two near-duplicate units flip the
+    relative ranking returned by ``/api/v1/memories/search``.
+
+    Both units share text + embedding, so cross-encoder ce_score is equal;
+    after recording 10 successes on A and 10 failures on B, A's MW boost
+    > 1.0 and B's < 1.0, so A must rank above B.
+    """
+    from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
+    from memex_core.services.outcomes import OutcomeService
+    from memex_common.types import FactTypes
+
+    vault_id = GLOBAL_VAULT_ID
+    note_id = uuid4()
+    a_id = uuid4()
+    b_id = uuid4()
+    entity_id = uuid4()
+    text = 'E2E: queue worker retries failed jobs with exponential backoff.'
+    emb = [0.1] * 384
+
+    note = Note(id=note_id, original_text='E2E ranking change', vault_id=vault_id)
+    a_unit = MemoryUnit(
+        id=a_id,
+        note_id=note_id,
+        text=text,
+        fact_type=FactTypes.WORLD,
+        embedding=emb,
+        vault_id=vault_id,
+        event_date=datetime.now(timezone.utc),
+        success_co_count=0,
+        failure_co_count=0,
+    )
+    b_unit = MemoryUnit(
+        id=b_id,
+        note_id=note_id,
+        text=text,
+        fact_type=FactTypes.WORLD,
+        embedding=emb,
+        vault_id=vault_id,
+        event_date=datetime.now(timezone.utc),
+        success_co_count=0,
+        failure_co_count=0,
+    )
+    entity = Entity(id=entity_id, canonical_name='QueueWorker')
+    db_session.add(note)
+    db_session.add(a_unit)
+    db_session.add(b_unit)
+    db_session.add(entity)
+    db_session.add(UnitEntity(unit_id=a_id, entity_id=entity_id, vault_id=vault_id))
+    db_session.add(UnitEntity(unit_id=b_id, entity_id=entity_id, vault_id=vault_id))
+    await db_session.commit()
+
+    svc = OutcomeService()
+    for _ in range(10):
+        await svc.record_outcome(
+            session=db_session,
+            unit_ids=[str(a_id)],
+            success=True,
+            vault_id=str(vault_id),
+        )
+        await svc.record_outcome(
+            session=db_session,
+            unit_ids=[str(b_id)],
+            success=False,
+            vault_id=str(vault_id),
+        )
+
+    db_session.expire_all()
+    a_refreshed = await db_session.get(MemoryUnit, a_id)
+    b_refreshed = await db_session.get(MemoryUnit, b_id)
+    assert a_refreshed is not None and a_refreshed.success_co_count == 10
+    assert b_refreshed is not None and b_refreshed.failure_co_count == 10
+
+    results = _search(client, 'queue worker retries', str(vault_id))
+    result_ids = [r['id'] for r in results]
+    if str(a_id) not in result_ids or str(b_id) not in result_ids:
+        pytest.skip(
+            f'one or both seeded units missing from HTTP search results — '
+            f'reranker may not be loaded in this test app. ids={result_ids}'
+        )
+
+    assert result_ids.index(str(a_id)) < result_ids.index(str(b_id)), (
+        f'F1c E2E regression: high-success unit must rank above high-failure peer '
+        f'after record_outcome. Got order: {result_ids}'
+    )

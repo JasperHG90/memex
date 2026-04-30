@@ -167,13 +167,22 @@ class RetrievalEngine:
         )
         self._session_factory = session_factory
 
-        # Anisotropy corrector for cosine similarity normalization
-        from memex_core.memory.models.anisotropy import AnisotropyCorrector
-
-        self._anisotropy = AnisotropyCorrector(
-            window_size=self.retrieval_config.anisotropy_window_size,
-            min_samples=self.retrieval_config.anisotropy_min_samples,
+        # Anisotropy corrector — shared across retrieval / contradiction /
+        # extraction-dedup since they observe the same embedding manifold.
+        # Disabled mode keeps a private instance so the singleton stays
+        # untainted for other callers.
+        from memex_core.memory.models.anisotropy import (
+            AnisotropyCorrector,
+            get_shared_corrector,
         )
+
+        if self.retrieval_config.anisotropy_window_size == 0:
+            self._anisotropy = AnisotropyCorrector(window_size=0)
+        else:
+            self._anisotropy = get_shared_corrector(
+                window_size=self.retrieval_config.anisotropy_window_size,
+                min_samples=self.retrieval_config.anisotropy_min_samples,
+            )
 
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
@@ -272,6 +281,8 @@ class RetrievalEngine:
         token_budget = request.token_budget
         if token_budget is None and self.retrieval_config:
             token_budget = self.retrieval_config.token_budget
+        if token_budget is not None and token_budget <= 0:
+            token_budget = None
 
         effective_limit = request.limit
         if token_budget is not None and effective_limit < 50:
@@ -590,7 +601,12 @@ class RetrievalEngine:
 
         if token_budget is not None:
             return (final_results, resonance_context)
-        return (final_results[: request.limit], resonance_context)
+
+        # Retain exploration-injected units past the limit slice (F33).
+        # Without this, the post-MMR slice would strip the appended ε-greedy
+        # units before they ever reach the caller.
+        injected_count = sum(1 for u in final_results if u.unit_metadata.get('exploration', False))
+        return (final_results[: request.limit + injected_count], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int

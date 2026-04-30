@@ -277,6 +277,10 @@ class RetrievalRequest(BaseModel):
         default=False,
         description='Whether to include superseded (low-confidence) memory units in results.',
     )
+    include_deprioritized: bool = Field(
+        default=False,
+        description='Whether to include deprioritized memory units in results.',
+    )
     debug: bool = Field(
         default=False,
         description=(
