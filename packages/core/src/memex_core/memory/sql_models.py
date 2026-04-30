@@ -1362,7 +1362,7 @@ class KVEntry(SQLModel, table=True):  # type: ignore
     Function: Provides simple, named storage for configuration, preferences,
     and structured data that doesn't fit the note/memory model.
     Key Features:
-        - Keys must start with a namespace prefix: global:, user:, project:, or app:.
+        - Keys must start with a namespace prefix: global:, user:, project:, app:, or procedure:.
         - Unique constraint on key.
         - btree index with text_pattern_ops for efficient prefix queries.
         - Optional embedding for semantic search over values.
@@ -1544,4 +1544,75 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
             ondelete='CASCADE',
         ),
         Index('idx_note_appends_note_id_applied_at', 'note_id', 'applied_at'),
+    )
+
+
+class ProcedureOutcome(SQLModel, table=True):  # type: ignore
+    """Per-(vault, procedure_kv_key) MW success/failure counter row.
+
+    Counters increment via :class:`memex_core.services.outcome.OutcomeService`
+    (target_type='kv_key'). The active value/version/history live in the
+    JSON envelope at ``kv_entries.value`` for the corresponding ``procedure:``
+    key — this table holds counters only. FK ON DELETE CASCADE removes
+    counter rows when the parent KVEntry is deleted.
+    """
+
+    __tablename__ = 'procedure_outcomes'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the counter row.',
+    )
+
+    vault_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False, index=True),
+        description='Vault that owns this counter row (Wave 0 invariant: NOT NULL).',
+    )
+
+    kv_key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The procedure KV key these counters belong to.',
+    )
+
+    success_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Cumulative success outcomes recorded against this key.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Cumulative failure outcomes recorded against this key.',
+    )
+
+    last_outcome_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Timestamp of the most recent recorded outcome.',
+    )
+
+    created_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
+        description='Timestamp when the counter row was created.',
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description='Timestamp when the counter row was last updated.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'kv_key', name='uq_procedure_outcomes_vault_key'),
+        ForeignKeyConstraint(
+            ['kv_key'],
+            ['kv_entries.key'],
+            ondelete='CASCADE',
+            name='fk_procedure_outcomes_kv_key',
+        ),
+        Index('idx_procedure_outcomes_vault_key', 'vault_id', 'kv_key'),
     )
