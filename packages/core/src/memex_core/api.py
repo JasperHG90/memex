@@ -66,6 +66,7 @@ from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
+from memex_core.services.units import UnitsService
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
@@ -495,6 +496,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._units = UnitsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -529,6 +535,7 @@ class MemexAPI:
             self._ingestion,
             self._search,
             self._lineage,
+            self._units,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -939,6 +946,36 @@ class MemexAPI:
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit. Delegates to StatsService."""
         return await self._stats.delete_memory_unit(unit_id)
+
+    async def deprioritize_memory_unit(
+        self,
+        unit_id: UUID,
+        reason: str,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService."""
+        return await self._units.set_unit_deprioritized(
+            unit_id,
+            reason,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
+
+    async def restore_memory_unit(
+        self,
+        unit_id: UUID,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Restore a deprioritized memory unit. Delegates to UnitsService."""
+        return await self._units.restore_unit(
+            unit_id,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""

@@ -70,6 +70,16 @@ CIRCUIT_BREAKER_REJECTIONS_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
+# Audit-log metrics (cross-cutting; populated by AuditService._persist)
+# ---------------------------------------------------------------------------
+
+MEMEX_AUDIT_LOG_TOTAL = Counter(
+    'memex_audit_log_total',
+    'Audit log entries written, by action.',
+    ['action'],
+)
+
+# ---------------------------------------------------------------------------
 # Extraction-pipeline in-flight gauges (wedge diagnostics)
 # ---------------------------------------------------------------------------
 

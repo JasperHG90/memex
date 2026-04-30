@@ -38,6 +38,20 @@ You have been invoked via the `/remember` slash command.
 5. **Confirm to the user.**
    After calling the tool, briefly confirm what was saved and mention the title.
 
+## Curating memory after the fact (deprioritize vs archive)
+
+When a previously-saved memory turns out to be misleading, outdated, or noise
+that contaminates retrieval, prefer the **NON-DESTRUCTIVE** verb:
+
+- `memex_memory_deprioritize(unit_id, reason)` lowers the unit's retrieval
+  rank without removing it from the entity graph. The unit remains accessible
+  via `include_deprioritized=true` retrieval. Use the `reason` field liberally
+  ("user confirmed issue fixed", "superseded by v2.3 release") — it is logged
+  to `audit_logs` as the audit trail. Reversible via `memex_memory_restore`.
+- Archive (CLI-only, `memex memory delete`) is the **DESTRUCTIVE** counterpart:
+  it removes the unit from the entity graph and is irreversible. Prefer
+  deprioritize unless the unit MUST leave the graph entirely.
+
 <!--
 Tier A — /remember verb extensions
 F4:  WS-quick-wins  (memory_deprioritize/restore disclosure)
@@ -46,7 +60,7 @@ F9:  WS-locks       (memory_reconsolidate, memory_consolidate disclosure)
 F14: WS-quick-wins  (procedural KV capture surfacing)
 F20: WS-revisit     (memory_review disclosure)
 
-# --- F4 ---  (filled by WS-quick-wins)
+# --- F4 ---  (filled by WS-quick-wins — see "Curating memory after the fact" section above)
 
 # --- F5 ---  (filled by WS-quick-wins)
 

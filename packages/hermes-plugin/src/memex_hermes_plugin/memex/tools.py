@@ -97,6 +97,8 @@ class MemexAPIProtocol(Protocol):
     async def get_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_links(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Vaults
     async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -1304,6 +1306,7 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     KV_GET_SCHEMA,
     KV_SEARCH_SCHEMA,
     KV_LIST_SCHEMA,
+    # --- Tier A schemas appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 ]
 
 
@@ -3100,6 +3103,7 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     'memex_kv_get': handle_kv_get,
     'memex_kv_search': handle_kv_search,
     'memex_kv_list': handle_kv_list,
+    # --- Tier A handlers appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 }
 
 
@@ -3172,6 +3176,9 @@ __all__ = [
     'KV_LIST_SCHEMA',
     'KV_SEARCH_SCHEMA',
     'KV_WRITE_SCHEMA',
+    # --- F4 (WS-quick-wins) ---
+    'MEMORY_DEPRIORITIZE_SCHEMA',
+    'MEMORY_RESTORE_SCHEMA',
 ]
 
 
@@ -3186,6 +3193,109 @@ __all__ = [
 # ============================================================
 
 # --- F4 ---  (filled by WS-quick-wins)
+
+MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_deprioritize',
+    'description': (
+        "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE). "
+        'Use when a memory is misleading, outdated, or noise that contaminates retrieval. '
+        'Companion to memex_memory_restore. Contrast with archive (destructive) — '
+        'prefer deprioritize unless the unit must leave the entity graph entirely.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+            'reason': {
+                'type': 'string',
+                'description': (
+                    'Brief text explanation logged to audit_logs (e.g., '
+                    "'user confirmed issue fixed', 'superseded by v2.3 release')."
+                ),
+            },
+        },
+        'required': ['unit_id', 'reason'],
+    },
+}
+
+MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_restore',
+    'description': (
+        'Restore a previously-deprioritized memory unit. Flips is_deprioritized '
+        'back to false; the unit re-enters default-scope retrieval. Writes an '
+        'audit_logs row.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+
+
+def handle_memory_deprioritize(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+        reason = _require(args, 'reason')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    try:
+        result = run_sync(api.deprioritize_memory_unit(uuid_obj, reason=reason), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_memory_deprioritize failed: %s', e)
+        return tool_error(f'Deprioritize failed: {e}')
+    return json.dumps(
+        {
+            'unit_id': str(getattr(result, 'id', uuid_obj)),
+            'is_deprioritized': True,
+            'reason': reason,
+        }
+    )
+
+
+def handle_memory_restore(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    try:
+        result = run_sync(api.restore_memory_unit(uuid_obj), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_memory_restore failed: %s', e)
+        return tool_error(f'Restore failed: {e}')
+    return json.dumps({'unit_id': str(getattr(result, 'id', uuid_obj)), 'is_deprioritized': False})
+
+
+HANDLERS['memex_memory_deprioritize'] = handle_memory_deprioritize
+HANDLERS['memex_memory_restore'] = handle_memory_restore
+ALL_SCHEMAS.extend([MEMORY_DEPRIORITIZE_SCHEMA, MEMORY_RESTORE_SCHEMA])
+
 
 # --- F5 ---  (filled by WS-quick-wins)
 

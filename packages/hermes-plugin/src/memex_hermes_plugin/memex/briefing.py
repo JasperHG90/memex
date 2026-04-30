@@ -162,7 +162,17 @@ Match the tool to the query type:
 - **Templates for structured captures** → `memex_list_templates` to see slugs,
   `memex_get_template(slug)` for the markdown scaffold, then `memex_add_note(...,
   template=slug)` so the note is tagged for filtering. Prefer a template for
-  ADRs, retros, technical briefs, RFCs, or any note with clear sections."""
+  ADRs, retros, technical briefs, RFCs, or any note with clear sections.
+- **Curating memory** — when a memory unit turns out to be misleading, outdated,
+  or noise that contaminates retrieval:
+    - `memex_memory_deprioritize(unit_id, reason=...)` is the NON-DESTRUCTIVE
+      verb. The unit stays on the entity graph and remains recallable via
+      `include_deprioritized=true`; only its retrieval rank drops. Pair with
+      `memex_record_outcome(success=false, ...)` when the agent itself
+      discovered the unit was wrong. Reversible via `memex_memory_restore`.
+    - Archive (CLI-only) is the DESTRUCTIVE counterpart — it removes the unit
+      from the entity graph and is irreversible. Prefer deprioritize unless
+      the unit MUST leave the graph entirely (e.g. PII the user wants gone)."""
 
 
 def format_briefing_block(

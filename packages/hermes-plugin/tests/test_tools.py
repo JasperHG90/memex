@@ -168,12 +168,17 @@ def test_all_schemas_have_required_fields():
         'memex_kv_search',
         'memex_kv_list',
     }
+    tier_a_quick_wins = {
+        'memex_memory_deprioritize',
+        'memex_memory_restore',
+    }
     expected = (
         stream_1_baseline
         | stream_2_read_discovery
         | stream_3_entities_memory_lineage
         | stream_4_lifecycle_templates
         | stream_5_assets_kv
+        | tier_a_quick_wins
     )
     assert names == expected
     for s in ALL_SCHEMAS:

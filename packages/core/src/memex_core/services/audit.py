@@ -69,8 +69,14 @@ class AuditService:
                 await session.commit()
         except (SQLAlchemyError, OSError, RuntimeError):
             logger.exception('Failed to write audit log entry: action=%s', entry.action)
+            return
         except Exception:
             logger.exception('Unexpected error writing audit log entry: action=%s', entry.action)
+            return
+
+        from memex_core.metrics import MEMEX_AUDIT_LOG_TOTAL
+
+        MEMEX_AUDIT_LOG_TOTAL.labels(action=entry.action).inc()
 
     # ------------------------------------------------------------------
     # Read (query)
