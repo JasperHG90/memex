@@ -46,8 +46,15 @@ def test_initialize_resolves_vault_and_fetches_real_briefing(
     assert initialized_provider._session_note_key in block
 
 
-def test_get_tool_schemas_exposes_stream_1_tools(initialized_provider):
-    """The 8 Stream-1 tools must always be exposed (others are mode-dependent)."""
+def test_get_tool_schemas_exposes_stream_1_and_diagnostics_tools(initialized_provider):
+    """The 8 Stream-1 tools + F32 diagnostics verb must always be exposed.
+
+    The diagnostics-verb assertion guards against the v0.1.13-regression
+    pattern: a future refactor could move schema registration to a place
+    that imports correctly but is never picked up by Hermes' loader. The
+    boot+discovery path is the only assertion that verifies registration
+    is *reachable* through ``_tool_to_provider`` dispatch.
+    """
     names = {s['name'] for s in initialized_provider.get_tool_schemas()}
     assert {
         'memex_memory_search',
@@ -59,6 +66,7 @@ def test_get_tool_schemas_exposes_stream_1_tools(initialized_provider):
         'memex_get_entity_mentions',
         'memex_get_entity_cooccurrences',
     } <= names
+    assert 'memex_get_diagnostics_summary' in names
 
 
 def test_get_tool_schemas_at_registration_time(loaded_provider):
