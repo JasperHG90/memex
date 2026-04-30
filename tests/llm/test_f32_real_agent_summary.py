@@ -25,7 +25,8 @@ def test_real_agent_reads_summary():
     import dspy
 
     # Match the project's conventional integration-test model (gemini-3-flash-preview).
-    lm = dspy.LM('gemini/gemini-3-flash-preview', timeout=30.0)
+    # 120s matches F4 T6's verb-disambig timeout; 30s flaked on cold Gemini connections.
+    lm = dspy.LM('gemini/gemini-3-flash-preview', timeout=120.0)
     dspy.configure(lm=lm)
 
     tool_catalog = (
