@@ -271,6 +271,11 @@ class TestPdfIngestionWithRealLLM:
 
         LLM date should take priority over PDF metadata creationDate.
         """
+        import os
+
+        if not os.environ.get('GOOGLE_API_KEY'):
+            pytest.skip('GOOGLE_API_KEY not set')
+
         import dspy
 
         pdf_path = tmp_path / f'tmp_{uuid4().hex[:8]}.pdf'
