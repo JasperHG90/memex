@@ -13,12 +13,20 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from testcontainers.postgres import PostgresContainer
 from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
-from memex_common.config import MemexConfig
+from memex_common.config import MemexConfig, ServerConfig
 
 postgres = PostgresContainer('pgvector/pgvector:pg18-trixie')
 
 
 from unittest.mock import patch, AsyncMock, MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _configure_offload_semaphores():
+    from memex_core.memory.retrieval._offload import configure_offload_semaphores
+
+    configure_offload_semaphores(ServerConfig())
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -29,16 +37,6 @@ def reset_circuit_breaker():
     get_circuit_breaker().reset()
     yield
     get_circuit_breaker().reset()
-
-
-@pytest.fixture(autouse=True)
-def _configure_offload_semaphores():
-    """Configure sync-offload semaphores so engine.retrieve() works in integration tests."""
-    from memex_common.config import ServerConfig
-    from memex_core.memory.retrieval._offload import configure_offload_semaphores
-
-    configure_offload_semaphores(ServerConfig())
-    yield
 
 
 @pytest.fixture
