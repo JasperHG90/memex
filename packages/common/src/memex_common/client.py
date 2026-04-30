@@ -35,8 +35,10 @@ from memex_common.schemas import (
     IngestResponse,
     EntityDTO,
     KVEntryDTO,
+    KVProcedureEntryDTO,
     KVPutRequest,
     KVSearchRequest,
+    ProcedureOutcomeDTO,
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
@@ -980,16 +982,47 @@ class RemoteMemexAPI:
     async def kv_get(
         self,
         key: str,
-    ) -> KVEntryDTO | None:
-        """Get a KV entry by exact key. Returns None if not found."""
-        params: dict[str, Any] = {'key': key}
+        *,
+        include_history: bool = False,
+    ) -> KVEntryDTO | KVProcedureEntryDTO | None:
+        """Get a KV entry by exact key. Returns None if not found.
+
+        For ``procedure:`` keys, ``include_history=True`` returns a
+        :class:`KVProcedureEntryDTO` whose ``value`` field is the
+        structured envelope ({value, version, history}).
+        """
+        params: dict[str, Any] = {'key': key, 'include_history': include_history}
         try:
             result = await self._get('kv/get', params=params)
+            if (
+                include_history
+                and key.startswith('procedure:')
+                and isinstance(result.get('value'), dict)
+            ):
+                return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
             raise
+
+    async def list_top_procedure_outcomes(
+        self,
+        vault_id: str,
+        *,
+        context: str | None = None,
+        limit: int = 5,
+    ) -> list[ProcedureOutcomeDTO]:
+        """F14 — fetch top procedure outcomes for ``vault_id`` (RFC-007 §155-185).
+
+        Rows ranked by Memory Worth score
+        ``(s+1)/(s+f+2)`` descending; tie-broken by ``last_outcome_at``.
+        """
+        params: dict[str, Any] = {'vault_id': vault_id, 'limit': limit}
+        if context is not None:
+            params['context'] = context
+        result = await self._get('kv/procedure-observations', params=params)
+        return [ProcedureOutcomeDTO(**r) for r in result]
 
     async def kv_search(
         self,
