@@ -581,6 +581,18 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Whether this unit has been deprioritized (non-destructive retrieval downweight).',
     )
 
+    intent_class: str = Field(
+        default='durable',
+        sa_column=Column(Text, nullable=False, server_default='durable'),
+        description='Lifecycle class set at write time: permanent | durable | ephemeral.',
+    )
+
+    risk_class: str = Field(
+        default='none',
+        sa_column=Column(Text, nullable=False, server_default='none'),
+        description='Content sensitivity set at write time: none | sensitive | private | safety.',
+    )
+
     confidence: float = Field(
         default=1.0,
         sa_column=Column(Float, nullable=False, server_default='1.0'),
@@ -646,6 +658,14 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         ),
         CheckConstraint("fact_type IN ('world', 'event', 'observation')"),
         CheckConstraint("status IN ('active', 'stale')", name='memory_units_status_check'),
+        CheckConstraint(
+            "intent_class IN ('permanent', 'durable', 'ephemeral')",
+            name='ck_memory_units_intent_class',
+        ),
+        CheckConstraint(
+            "risk_class IN ('none', 'sensitive', 'private', 'safety')",
+            name='ck_memory_units_risk_class',
+        ),
         CheckConstraint(
             'confidence >= 0.0 AND confidence <= 1.0',
             name='memory_units_confidence_check',
