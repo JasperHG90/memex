@@ -64,6 +64,7 @@ class SearchService:
         strategies: list[str] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
+        include_deprioritized: bool = False,
         debug: bool = False,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
@@ -99,6 +100,7 @@ class SearchService:
             strategies=strategies,
             include_stale=include_stale,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             debug=debug,
             after=after,
             before=before,
@@ -241,6 +243,9 @@ class SearchService:
         vault_ids: list[UUID] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> SurveyResponse:
         """
         Broad topic survey: decompose into sub-questions, parallel search,
@@ -262,6 +267,9 @@ class SearchService:
                 query=sub_query,
                 limit=limit_per_query,
                 vault_ids=vault_ids,
+                after=after,
+                before=before,
+                reference_date=reference_date,
             )
             async with self.metastore.session() as session:
                 units, _ = await self.memory.recall(session, request)

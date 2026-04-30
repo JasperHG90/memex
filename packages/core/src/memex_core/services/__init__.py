@@ -10,6 +10,7 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.notes import NoteService
+from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
@@ -22,6 +23,7 @@ __all__ = [
     'KVService',
     'LineageService',
     'NoteService',
+    'OutcomeService',
     'ReflectionService',
     'SearchService',
     'StatsService',

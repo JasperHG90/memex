@@ -131,6 +131,10 @@ class McpMemoryUnitBase(BaseModel):
     virtual: bool = False
     mental_model_id: UUID | None = None
     evidence_ids: list[UUID] = Field(default_factory=list)
+    success_co_count: int = 0
+    failure_co_count: int = 0
+    is_deprioritized: bool = False
+    exploration: bool = False
 
     @field_validator('tags', mode='before')
     @classmethod
