@@ -1210,13 +1210,28 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
 
 KV_GET_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_get',
-    'description': 'Get a KV entry by exact key. Returns null if not found.',
+    'description': (
+        'Get a KV entry by exact key. Returns null if not found. For '
+        'procedure: keys (RFC-007), the default response value is the '
+        'unwrapped active procedure text. Pass include_history=true to '
+        'receive the structured envelope ({value, version, history}) so '
+        'you can review prior versions.'
+    ),
     'parameters': {
         'type': 'object',
         'properties': {
             'key': {
                 'type': 'string',
                 'description': 'Exact key to look up.',
+            },
+            'include_history': {
+                'type': 'boolean',
+                'description': (
+                    'For procedure: keys (RFC-007), return the full '
+                    'envelope (value, version, capped history of 5 prior '
+                    'versions) instead of just the active value. Ignored '
+                    'for non-procedure keys.'
+                ),
             },
         },
         'required': ['key'],

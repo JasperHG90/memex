@@ -151,11 +151,13 @@ Match the tool to the query type:
   `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys
   MUST start with `global:`, `user:`, `project:<id>:`, `app:<id>:`, or
   `procedure:<verb>:<context-tag>` (RFC-007). The `procedure:` namespace is
-  for compact, learned how-tos owned by the agent — write it for a
-  procedure that worked, then `memex_kv_get(key, include_history=true)` to
-  see prior versions. Pair every procedure call with
-  `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` so
-  the procedure's MW counters reflect whether it actually worked.
+  for compact, learned how-tos owned by the agent — write a procedure that
+  worked using `memex_kv_write`, then read the active value with
+  `memex_kv_get(key)` or pass `include_history=true` to inspect the
+  envelope (active value + version + capped 5-version history). Memex
+  tracks per-procedure success/failure counters server-side
+  (procedure_outcomes table); on the MCP surface those counters are
+  updated via `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`.
   Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
     - `memex_add_note` for a NEW note (or to fully overwrite an existing one).

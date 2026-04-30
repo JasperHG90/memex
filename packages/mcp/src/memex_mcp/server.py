@@ -3163,7 +3163,12 @@ async def memex_kv_write(
 
 @mcp.tool(
     name='memex_kv_get',
-    description='Get a KV entry by exact key.',
+    description=(
+        'Get a KV entry by exact key. For procedure: keys (RFC-007), the '
+        'default response value is the unwrapped active procedure text. Pass '
+        'include_history=true to receive the structured envelope '
+        '({value, version, history}) so you can review prior versions.'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -3171,15 +3176,30 @@ async def memex_kv_write(
 async def memex_kv_get(
     ctx: Context,
     key: Annotated[str, Field(description='Exact key to look up.')],
+    include_history: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=False,
+            description=(
+                'For procedure: keys (RFC-007), return the full envelope '
+                '(value, version, capped history of 5 prior versions) instead '
+                'of just the active value. Ignored for non-procedure keys.'
+            ),
+        ),
+    ] = False,
 ) -> McpKVEntry | None:
     """Exact key lookup in the KV store."""
     try:
         api = get_api(ctx)
-        entry = await api.kv_get(key=key)
+        entry = await api.kv_get(key=key, include_history=include_history)
 
         if entry is None:
             return None
 
+        # When include_history=True for procedure keys, entry.value is a dict;
+        # for everything else it is the unwrapped string. McpKVEntry.value is
+        # typed loosely so both shapes flow through.
         return McpKVEntry(
             key=entry.key,
             value=entry.value,
@@ -3448,9 +3468,12 @@ async def memex_get_vault_summary(
 @mcp.tool(
     name='memex_record_outcome',
     description=(
-        'Record whether previously retrieved memory units contributed '
-        'to a successful outcome. Call this after you have actually used retrieved memories '
-        'to perform a task or answer a question.\n\n'
+        'Record whether previously retrieved memories or a stored procedure '
+        'contributed to a successful outcome. Default mode increments MW '
+        'counters on memory units (target_type="memory_unit", '
+        'unit_ids=[...]); set target_type="kv_key" with kv_key='
+        '"procedure:<verb>:<context-tag>" to score a stored procedure. Call '
+        'after you actually used the retrieved memory or the procedure.\n\n'
         'Call generously. Silence provides no learning signal.'
     ),
     tags={'write'},
@@ -3458,16 +3481,6 @@ async def memex_get_vault_summary(
 )
 async def memex_record_outcome(
     ctx: Context,
-    unit_ids: Annotated[
-        list[str],
-        BeforeValidator(_coerce_list),
-        Field(
-            description=(
-                'UUIDs of memory units you actually used — not all retrieved units, '
-                'only the ones that were load-bearing in your reasoning.'
-            ),
-        ),
-    ],
     success: Annotated[
         bool,
         BeforeValidator(_coerce_bool),
@@ -3475,6 +3488,18 @@ async def memex_record_outcome(
             description='True if the task succeeded using these memories, false if they were misleading.'
         ),
     ],
+    unit_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'memory_unit mode only. UUIDs of memory units you actually used — '
+                'not all retrieved units, only the ones that were load-bearing '
+                'in your reasoning. Required when target_type="memory_unit".'
+            ),
+        ),
+    ] = None,
     vault_id: Annotated[
         str | None,
         Field(description='Vault UUID or name. Omit to use config defaults.'),
@@ -3496,8 +3521,31 @@ async def memex_record_outcome(
             description='Optional free-text reason for the outcome (logged, not stored on units).',
         ),
     ] = None,
+    target_type: Annotated[
+        str,
+        Field(
+            default='memory_unit',
+            description=(
+                'What the outcome scores. "memory_unit" (default) increments '
+                'MW counters on memory units in unit_ids. "kv_key" (F14) '
+                'increments vault-scoped counters on the procedure_outcomes '
+                'row for kv_key.'
+            ),
+        ),
+    ] = 'memory_unit',
+    kv_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>, '
+                'RFC-007) whose MW counters should be incremented. '
+                'Required when target_type="kv_key".'
+            ),
+        ),
+    ] = None,
 ) -> dict:
-    """Record an outcome for memory units to train Memory Worth scoring."""
+    """Record an outcome for memory units or a procedure key to train MW scoring."""
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)
@@ -3509,6 +3557,8 @@ async def memex_record_outcome(
             vault_id=str(resolved_vid),
             outcome_confidence=outcome_confidence,
             reason=reason,
+            target_type=target_type,
+            kv_key=kv_key,
         )
 
     except ToolError:
