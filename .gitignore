@@ -199,4 +199,26 @@ recordings/cli/.casts/
 # Test artifacts from mocked cache_dir paths
 MagicMock/
 
-.dev-team-artifacts
+# Dev-team artifacts: per-team. Sibling teams' dirs and transient state are ignored;
+# this team's permanent artifacts (POCs, RFCs, requirements, ADRs, reports, research,
+# conventions, ac-traceability) are tracked because they are referenced by acceptance
+# criteria and the final design doc. Enumerate siblings here instead of using a parent
+# .dev-team-artifacts/ exclude — git does not evaluate child re-includes when a parent
+# directory is excluded by a non-negated rule.
+.dev-team-artifacts/dev-contradiction-relations/
+.dev-team-artifacts/dev-doc-drift/
+.dev-team-artifacts/dev-hermes-mcp-parity/
+.dev-team-artifacts/dev-memex-features/
+.dev-team-artifacts/dev-remove-page-index/
+.dev-team-artifacts/dev-session-briefing/
+.dev-team-artifacts/dev-vault-fixes/
+.dev-team-artifacts/extraction-wedge-fix/
+.dev-team-artifacts/memex-poc-planning/
+.dev-team-artifacts/.active-team
+.dev-team-artifacts/.DS_Store
+.dev-team-artifacts/dev-tier-a-cognitive-memory/dashboard.html
+.dev-team-artifacts/dev-tier-a-cognitive-memory/events.jsonl
+.dev-team-artifacts/dev-tier-a-cognitive-memory/.lock
+.dev-team-artifacts/dev-tier-a-cognitive-memory/state.json
+.dev-team-artifacts/dev-tier-a-cognitive-memory/progress.md
+.dev-team-artifacts/dev-tier-a-cognitive-memory/.DS_Store
