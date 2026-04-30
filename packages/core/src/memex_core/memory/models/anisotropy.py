@@ -192,7 +192,7 @@ class AnisotropyCorrectorGroup:
                     epsilon=self._epsilon,
                     min_samples=self._min_samples,
                 )
-        return self._correctors[name]
+            return self._correctors[name]
 
     def reset(self) -> None:
         """Reset all correctors."""
