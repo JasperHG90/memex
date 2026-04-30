@@ -91,6 +91,22 @@ async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: KV TTL cleanup failed: {e}', exc_info=True)
 
 
+async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
+    """F32: weekly UMAP manifold refresh per vault under leader lock."""
+    async with background_session('bg-sched-diagnostics-refresh'):
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                try:
+                    await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)
+                except Exception as e:
+                    logger.warning(
+                        f'Scheduler: Manifold compute failed for vault {vault.name}: {e}'
+                    )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -143,6 +159,9 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     # --- F20 revisit ---   (filled by WS-revisit)
 
     # --- F32 diagnostics --- (filled by WS-diagnostics)
+    @clock.task(trigger=Every(seconds=7 * 86400))
+    async def run_diagnostics_refresh():
+        await periodic_diagnostics_refresh_task(api)
 
     # --- F38 consolidation --- (filled by WS-quick-wins)
 
