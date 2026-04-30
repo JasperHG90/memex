@@ -585,10 +585,12 @@ class ExtractionConfig(BaseModel):
     )
 
     intent_risk_classifier_enabled: bool = Field(
-        default=False,
+        default=True,
         description='F25: enable write-time intent + risk classifier. When True, every '
-        'extracted fact is classified by an LLM call before persistence. Costs LLM tokens '
-        'per ingest — opt in once classifier accuracy + cost are validated for the deployment.',
+        'extracted fact is classified by an LLM call before persistence (intent ∈ '
+        '{permanent, durable, ephemeral}; risk ∈ {none, sensitive, private, safety}; '
+        'safety-class facts are dropped at write time). Set False to disable the LLM '
+        'call entirely (all facts default to durable/none).',
     )
 
     @property

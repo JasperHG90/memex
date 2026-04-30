@@ -211,7 +211,12 @@ async def ingest_note(
             author=request.author,
             template=request.template,
         )
-        result = await api.ingest(note, vault_id=request.vault_id)
+        result = await api.ingest(
+            note,
+            vault_id=request.vault_id,
+            intent_override=request.intent_class.value if request.intent_class else None,
+            risk_override=request.risk_class.value if request.risk_class else None,
+        )
         return IngestResponse(**result)
 
     except HTTPException:

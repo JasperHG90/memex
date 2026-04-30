@@ -449,6 +449,20 @@ async def search_memory(
         ),
     ] = None,
     expand: Annotated[bool, typer.Option('--expand', help='Enable query expansion.')] = False,
+    intent: Annotated[
+        str | None,
+        typer.Option(
+            '--intent',
+            help='Filter by intent class (permanent | durable | ephemeral).',
+        ),
+    ] = None,
+    risk: Annotated[
+        str | None,
+        typer.Option(
+            '--risk',
+            help='Filter by risk class (none | sensitive | private | safety).',
+        ),
+    ] = None,
 ):
     """
     Search for memories.
@@ -497,6 +511,26 @@ async def search_memory(
             )
         except Exception as e:
             handle_api_error(e)
+
+        if intent:
+            allowed_intents = {'permanent', 'durable', 'ephemeral'}
+            wanted = intent.lower()
+            if wanted not in allowed_intents:
+                console.print(
+                    f'[red]Invalid --intent {intent!r}. Allowed: {sorted(allowed_intents)}[/red]'
+                )
+                return
+            results = [u for u in results if getattr(u, 'intent_class', 'durable') == wanted]
+
+        if risk:
+            allowed_risks = {'none', 'sensitive', 'private', 'safety'}
+            wanted_risk = risk.lower()
+            if wanted_risk not in allowed_risks:
+                console.print(
+                    f'[red]Invalid --risk {risk!r}. Allowed: {sorted(allowed_risks)}[/red]'
+                )
+                return
+            results = [u for u in results if getattr(u, 'risk_class', 'none') == wanted_risk]
 
         if not results:
             console.print('[yellow]No results found.[/yellow]')

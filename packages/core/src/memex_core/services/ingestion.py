@@ -387,6 +387,8 @@ ingested_at: {now}
         note: Any,
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> dict[str, Any]:
         """
         Transactional ingestion of a note into Memex.
@@ -496,6 +498,8 @@ ingested_at: {now}
                 note_id=note_uuid,
                 reflect_after=False,
                 agent_name='user',
+                intent_override=intent_override,
+                risk_override=risk_override,
             )
             result['note_id'] = note_uuid
             result['status'] = 'success'
@@ -1097,6 +1101,16 @@ ingested_at: {now}
                     note_id=str(note_uuid),
                     reflect_after=False,
                     agent_name='user',
+                    intent_override=(
+                        note_dto.intent_class.value
+                        if getattr(note_dto, 'intent_class', None) is not None
+                        else None
+                    ),
+                    risk_override=(
+                        note_dto.risk_class.value
+                        if getattr(note_dto, 'risk_class', None) is not None
+                        else None
+                    ),
                 )
                 _coro = retain_result.pop('contradiction_task', None)
                 if _coro is not None:

@@ -360,7 +360,15 @@ async def test_ingest_batch_internal_preserves_user_notes(api):
     # Track what content is passed to memory.retain()
     captured_contents = []
 
-    async def capturing_retain(session, contents, note_id, reflect_after=True, agent_name=None):
+    async def capturing_retain(
+        session,
+        contents,
+        note_id,
+        reflect_after=True,
+        agent_name=None,
+        intent_override=None,
+        risk_override=None,
+    ):
         captured_contents.extend(contents)
         return {'status': 'success'}
 
@@ -441,7 +449,15 @@ async def test_ingest_batch_internal_no_user_notes_unchanged(api):
 
     captured_contents = []
 
-    async def capturing_retain(session, contents, note_id, reflect_after=True, agent_name=None):
+    async def capturing_retain(
+        session,
+        contents,
+        note_id,
+        reflect_after=True,
+        agent_name=None,
+        intent_override=None,
+        risk_override=None,
+    ):
         captured_contents.extend(contents)
         return {'status': 'success'}
 

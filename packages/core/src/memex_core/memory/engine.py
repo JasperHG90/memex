@@ -175,6 +175,8 @@ class MemoryEngine:
         note_id: str | None = None,
         reflect_after: bool = True,
         agent_name: str = 'memex_agent',
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> dict[str, Any]:
         """
         Ingest and persist content into memory.
@@ -206,6 +208,8 @@ class MemoryEngine:
             contents=contents,
             agent_name=agent_name,
             note_id=note_id,
+            intent_override=intent_override,
+            risk_override=risk_override,
         )
 
         logger.info(f'Retained {len(unit_ids)} units. Touched {len(touched_entities)} entities.')

@@ -1062,6 +1062,29 @@ async def memex_add_note(
             description='Template slug used to create this note (e.g. "general_note").',
         ),
     ] = None,
+    intent_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional intent override applied to all extracted facts: '
+                '"permanent" (enduring user preferences/conventions), "durable" '
+                '(default), or "ephemeral" (transient context — drains MW faster). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional risk override: "none" (default), "private" (PII/secrets), '
+                '"sensitive" (restricted topic), "safety" (refuse persistence). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -1108,6 +1131,27 @@ async def memex_add_note(
 
         effective_note_key = note_key if note_key else f'mcp:add_note:{title}'
 
+        from memex_common.schemas import IntentClass as _IntentClass, RiskClass as _RiskClass
+
+        parsed_intent: _IntentClass | None = None
+        if intent_class:
+            try:
+                parsed_intent = _IntentClass(intent_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid intent_class={intent_class!r}. '
+                    f'Allowed: {[c.value for c in _IntentClass]}'
+                )
+
+        parsed_risk: _RiskClass | None = None
+        if risk_class:
+            try:
+                parsed_risk = _RiskClass(risk_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid risk_class={risk_class!r}. Allowed: {[c.value for c in _RiskClass]}'
+                )
+
         note = NoteCreateDTO(
             name=title,
             description=description,
@@ -1119,6 +1163,8 @@ async def memex_add_note(
             user_notes=user_notes,
             author=author,
             template=template,
+            intent_class=parsed_intent,
+            risk_class=parsed_risk,
         )
 
         result = await api.ingest(note, background=background)

@@ -34,6 +34,8 @@ def _make_search_result(note_id=None, unit_id=None):
     mock.occurred_end = None
     mock.mentioned_at = None
     mock.citations = []
+    mock.intent_class = 'durable'
+    mock.risk_class = 'none'
     return mock
 
 
