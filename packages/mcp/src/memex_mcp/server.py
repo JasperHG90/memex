@@ -3559,4 +3559,34 @@ if __name__ == '__main__':
 
 # --- F20 --- (filled by WS-revisit)
 
+
 # --- F32 --- (filled by WS-diagnostics)
+@mcp.tool(
+    name='memex_get_diagnostics_summary',
+    description=(
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
+        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces F32 manifold '
+        'status without waiting on compute.'
+    ),
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_diagnostics_summary(
+    ctx: Context,
+    vault_id: Annotated[
+        str,
+        Field(description='Vault UUID or name.'),
+    ],
+) -> dict[str, Any]:
+    """Return the F32 diagnostics summary for a vault."""
+    try:
+        api = get_api(ctx)
+        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        return await api.get_diagnostics_summary(resolved_vault_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Diagnostics summary failed: {e}', exc_info=True)
+        raise ToolError(f'Diagnostics summary failed: {e}')

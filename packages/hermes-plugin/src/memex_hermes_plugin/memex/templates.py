@@ -39,3 +39,10 @@ __all__ = [
 # --- F20 --- (filled by WS-revisit)
 
 # --- F32 --- (filled by WS-diagnostics)
+DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
+    'Diagnostics: call `memex_get_diagnostics_summary(vault_id=...)` to inspect '
+    "a vault's health — unit counts by status (active/stale/deprioritized), "
+    'pending lint counts by type, cluster_count (null when manifold cache is '
+    'cold), avg MW score, and top retrieved entities. Synchronous; surfaces '
+    'F32 manifold status without waiting on UMAP compute.'
+)

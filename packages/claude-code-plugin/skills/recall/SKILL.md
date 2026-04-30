@@ -36,4 +36,12 @@ F32: WS-diagnostics (get_diagnostics_summary surfacing)
 # --- F20 --- (filled by WS-revisit)
 
 # --- F32 --- (filled by WS-diagnostics)
+4. **Vault diagnostics** (when the user asks "how is this vault doing?",
+   "what's in vault X?", "check vault health", or wants visualisation):
+   call `memex_get_diagnostics_summary(vault_id=...)` to surface unit
+   counts by status (active / stale / deprioritized), pending lint counts
+   by type, cluster_count (null when the UMAP manifold cache is cold),
+   avg MW score, and top retrieved entities. For full JSON or visual
+   plots, point the user to the CLI: `memex diagnostics manifold |
+   retrieval | summary --vault X`.
 -->

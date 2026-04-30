@@ -114,6 +114,9 @@ class MemexAPIProtocol(Protocol):
     async def kv_list(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_search(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    # F32 — Diagnostics
+    async def get_diagnostics_summary(self, *args: Any, **kwargs: Any) -> Any: ...
+
 
 # ---------------------------------------------------------------------------
 # Vault resolution helpers (Stream 1)
@@ -1260,6 +1263,28 @@ KV_LIST_SCHEMA: dict[str, Any] = {
     },
 }
 
+# --- F32 — Diagnostics ---
+
+GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_diagnostics_summary',
+    'description': (
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
+        'and top-5 retrieved entities. Synchronous — surfaces F32 manifold status without '
+        'waiting on UMAP compute.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
 
 ALL_SCHEMAS: list[dict[str, Any]] = [
     # --- Vault-scoped (Stream 1) ---
@@ -1304,6 +1329,8 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     KV_GET_SCHEMA,
     KV_SEARCH_SCHEMA,
     KV_LIST_SCHEMA,
+    # --- F32 diagnostics ---
+    GET_DIAGNOSTICS_SUMMARY_SCHEMA,
 ]
 
 
@@ -3172,6 +3199,8 @@ __all__ = [
     'KV_LIST_SCHEMA',
     'KV_SEARCH_SCHEMA',
     'KV_WRITE_SCHEMA',
+    # --- F32 diagnostics ---
+    'GET_DIAGNOSTICS_SUMMARY_SCHEMA',
 ]
 
 
@@ -3195,4 +3224,30 @@ __all__ = [
 
 # --- F20 --- (filled by WS-revisit)
 
+
 # --- F32 --- (filled by WS-diagnostics)
+def handle_get_diagnostics_summary(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.get_diagnostics_summary."""
+    raw = args.get('vault_id')
+    if not raw and vault_id is None:
+        return tool_error('No vault specified and no session-bound vault.')
+
+    try:
+        if raw:
+            target = run_sync(api.resolve_vault_identifier(raw), timeout=10.0)
+        else:
+            target = vault_id
+        summary = run_sync(api.get_diagnostics_summary(target), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_get_diagnostics_summary failed: %s', e)
+        return tool_error(f'Diagnostics summary failed: {e}')
+
+    return json.dumps(summary)
+
+
+HANDLERS['memex_get_diagnostics_summary'] = handle_get_diagnostics_summary
