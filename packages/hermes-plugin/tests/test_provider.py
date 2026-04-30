@@ -75,7 +75,7 @@ def test_get_tool_schemas_respects_memory_mode(tmp_path: Path, monkeypatch: pyte
 
 
 def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
-    """Hybrid mode exposes exactly the 38 Memex tools (AC-086 + AC-008 + Tier A F4)."""
+    """Hybrid mode exposes exactly the 39 Memex tools (AC-086 + AC-008 + Tier A F4 + F5)."""
     provider, *_ = provider_with_stubbed_api
     schemas = provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
@@ -121,9 +121,10 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_kv_get',
         'memex_kv_search',
         'memex_kv_list',
-        # Tier A WS-quick-wins (F4)
+        # Tier A WS-quick-wins (F4 + F5)
         'memex_memory_deprioritize',
         'memex_memory_restore',
+        'memex_memory_summarize_node',
     }
     assert names == expected
 
@@ -139,7 +140,7 @@ class TestGetToolSchemasBeforeInitialize:
     def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
         pre-init. After Stream 6 + asset disk-handoff + memex_append_note +
-        Tier A F4 we register exactly 38 tools, and the assertion is strict
+        Tier A F4 + F5 we register exactly 39 tools, and the assertion is strict
         equality.
         """
         p = MemexMemoryProvider()
@@ -188,9 +189,10 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_kv_get',
             'memex_kv_search',
             'memex_kv_list',
-            # Tier A WS-quick-wins (F4)
+            # Tier A WS-quick-wins (F4 + F5)
             'memex_memory_deprioritize',
             'memex_memory_restore',
+            'memex_memory_summarize_node',
         }
         assert names == expected
 
@@ -205,9 +207,9 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 38-tool set (Stream 1-5 baseline + Tier A F4 verbs).
+        # Pre-init: full 39-tool set (Stream 1-5 baseline + Tier A F4 + F5 verbs).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 38
+        assert len(p.get_tool_schemas()) == 39
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))
