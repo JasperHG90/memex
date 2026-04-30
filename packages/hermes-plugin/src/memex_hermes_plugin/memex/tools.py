@@ -99,6 +99,7 @@ class MemexAPIProtocol(Protocol):
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
     async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Vaults
     async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -3327,6 +3328,103 @@ ALL_SCHEMAS.extend([MEMORY_DEPRIORITIZE_SCHEMA, MEMORY_RESTORE_SCHEMA])
 
 
 # --- F5 ---  (filled by WS-quick-wins)
+
+MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_summarize_node',
+    'description': (
+        'Trigger reflection synchronously on an entity to consolidate scattered or '
+        'conflicting memories into a coherent mental model BEFORE continuing. '
+        'Synchronous in-session counterpart to background reflect (queued, scheduler-driven). '
+        'Rate-limited per (entity, vault); on rejection the response carries '
+        "'retry_after_seconds' — do not retry-loop. Use sparingly; reflection is LLM-intensive."
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reflect on.',
+            },
+            'scope': {
+                'type': 'string',
+                'enum': ['incremental', 'full'],
+                'description': (
+                    "'incremental' (default — only new evidence) or 'full' "
+                    '(re-evaluate all evidence; capped at 1000 most-recent units).'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID; defaults to the global vault when omitted.',
+            },
+        },
+        'required': ['entity_id'],
+    },
+}
+
+
+def handle_memory_summarize_node(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    from memex_common.client import RateLimitExceeded
+
+    try:
+        raw_entity_id = _require(args, 'entity_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity_id))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity_id}')
+
+    scope = args.get('scope', 'incremental')
+    if scope not in ('incremental', 'full'):
+        return tool_error(f"scope must be 'incremental' or 'full', got {scope!r}")
+
+    raw_vault = args.get('vault_id')
+    target_vault: UUID | None
+    if raw_vault is None:
+        target_vault = vault_id
+    else:
+        try:
+            target_vault = UUID(str(raw_vault))
+        except ValueError:
+            return tool_error(f'Invalid vault UUID: {raw_vault}')
+
+    try:
+        result = run_sync(
+            api.summarize_node(entity_uuid, scope=scope, vault_id=target_vault),
+            timeout=120.0,
+        )
+    except RateLimitExceeded as exc:
+        return json.dumps(
+            {
+                'error': 'rate_limit_exceeded',
+                'entity_id': str(entity_uuid),
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        )
+    except Exception as e:
+        logger.warning('memex_memory_summarize_node failed: %s', e)
+        return tool_error(f'summarize_node failed: {e}')
+
+    return json.dumps(
+        {
+            'entity_id': str(getattr(result, 'entity_id', entity_uuid)),
+            'observation_count': len(getattr(result, 'new_observations', []) or []),
+            'status': getattr(result, 'status', 'completed'),
+            'scope': scope,
+        }
+    )
+
+
+HANDLERS['memex_memory_summarize_node'] = handle_memory_summarize_node
+ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
+
 
 # --- F8 ---  (filled by WS-linter)
 
