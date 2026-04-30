@@ -67,6 +67,7 @@ gcs = ["gcsfs>=2024.6.0"]
 cloud = ["s3fs>=2024.6.0", "gcsfs>=2024.6.0"]
 gpu = ["onnxruntime-gpu==1.23.0"]
 dev-server = ["uvicorn>=0.40.0"]
+diagnostics = ["umap-learn>=0.5,<1.0"]
 tracing = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",

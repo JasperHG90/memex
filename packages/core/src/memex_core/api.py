@@ -59,6 +59,7 @@ from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
+from memex_core.services.diagnostics import DiagnosticsService
 from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
@@ -497,6 +498,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._diagnostics = DiagnosticsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -540,6 +546,10 @@ class MemexAPI:
         resolve note identifiers prior to invoking a higher-level facade
         (e.g. for vault-access auth checks)."""
         return self._notes
+
+    @property
+    def diagnostics(self) -> DiagnosticsService:
+        return self._diagnostics
 
     @property
     def embedder(self) -> EmbeddingsModel:
