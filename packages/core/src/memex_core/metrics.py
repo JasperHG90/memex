@@ -135,3 +135,31 @@ MW_BOOST_OBSERVED = Histogram(
     'MW boost factors applied during reranking. Neutral is 1.0 (cold-start).',
     buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
 )
+
+# ---------------------------------------------------------------------------
+# Write-time classifier metrics (F25)
+# ---------------------------------------------------------------------------
+
+CLASSIFIER_CALLS_TOTAL = Counter(
+    'memex_classifier_calls_total',
+    'Write-time classifier calls by status (success | error | fallback).',
+    ['status'],
+)
+
+CLASSIFIER_INTENT_DISTRIBUTION = Counter(
+    'memex_classifier_intent_total',
+    'Distribution of intent classifications produced by the write-time classifier.',
+    ['intent_class'],
+)
+
+CLASSIFIER_RISK_DISTRIBUTION = Counter(
+    'memex_classifier_risk_total',
+    'Distribution of risk classifications produced by the write-time classifier.',
+    ['risk_class'],
+)
+
+CLASSIFIER_BLOCKED_TOTAL = Counter(
+    'memex_classifier_blocked_total',
+    'Facts refused at ingestion because the classifier flagged risk_class=safety.',
+    ['vault_id'],
+)
