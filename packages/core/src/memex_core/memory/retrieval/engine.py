@@ -167,6 +167,14 @@ class RetrievalEngine:
         )
         self._session_factory = session_factory
 
+        # Anisotropy corrector for cosine similarity normalization
+        from memex_core.memory.models.anisotropy import AnisotropyCorrector
+
+        self._anisotropy = AnisotropyCorrector(
+            window_size=self.retrieval_config.anisotropy_window_size,
+            min_samples=self.retrieval_config.anisotropy_min_samples,
+        )
+
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
         self.candidate_pool_size = self.retrieval_config.candidate_pool_size
@@ -1154,11 +1162,14 @@ class RetrievalEngine:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
             return results
 
-    @staticmethod
     async def _compute_pairwise_cosine(
-        session: AsyncSession, unit_ids: list[UUID]
+        self, session: AsyncSession, unit_ids: list[UUID]
     ) -> dict[tuple[UUID, UUID], float]:
-        """Compute pairwise cosine similarity for a set of memory units via SQL."""
+        """Compute pairwise cosine similarity for a set of memory units via SQL.
+
+        Raw cosine similarities are normalized through the anisotropy corrector
+        (Z-score → sigmoid) to counteract embedding anisotropy.
+        """
         from sqlalchemy import text
 
         if len(unit_ids) < 2:
@@ -1181,9 +1192,11 @@ class RetrievalEngine:
         result = await conn.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
         matrix: dict[tuple[UUID, UUID], float] = {}
         for row in result:
+            raw_sim = float(row.similarity)
+            corrected = self._anisotropy.normalize(raw_sim)
             key = (row.id_a, row.id_b)
-            matrix[key] = float(row.similarity)
-            matrix[(row.id_b, row.id_a)] = float(row.similarity)
+            matrix[key] = corrected
+            matrix[(row.id_b, row.id_a)] = corrected
         return matrix
 
     @staticmethod

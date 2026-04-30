@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 from uuid import UUID
+from datetime import datetime
 import mimetypes
 
 import aiofiles
@@ -141,6 +142,21 @@ def _coerce_int(v: Any) -> Any:
         except ValueError:
             pass
     return v
+
+
+def _to_utc_datetime(dt: datetime | None) -> datetime | None:
+    """Convert a parsed datetime to UTC.
+
+    Naive datetimes get UTC assigned. Aware datetimes are converted to UTC.
+    Avoids ``.replace(tzinfo=)`` which silently overwrites existing timezones.
+    """
+    from datetime import timezone as _tz2
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_tz2.utc)
+    return dt.astimezone(_tz2.utc)
 
 
 def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
@@ -1313,8 +1329,7 @@ def compute_staleness(
         return Staleness.STALE
 
     if event_date is not None and isinstance(event_date, _dt):
-        if event_date.tzinfo is None:
-            event_date = event_date.replace(tzinfo=_tz.utc)
+        event_date = _to_utc_datetime(event_date)
         age_days = (now - event_date).days
 
         if age_days > 30:
@@ -1556,13 +1571,11 @@ async def memex_memory_search(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
-        )
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         results = await api.search(
             query=query,
@@ -1763,13 +1776,11 @@ async def memex_note_search(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
-        )
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         search_limit = limit * 3 if has_assets else limit
         results = await api.search_notes(
