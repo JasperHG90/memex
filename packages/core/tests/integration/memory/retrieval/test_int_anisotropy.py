@@ -40,6 +40,16 @@ class TestAnisotropyIntegration:
     async def reranker(self):
         return await get_reranking_model()
 
+    @pytest.fixture(autouse=True)
+    def _reset_shared_corrector(self):
+        """Each test starts with a fresh shared corrector so per-test
+        configs (window_size etc.) take effect."""
+        from memex_core.memory.models.anisotropy import reset_shared_corrector_for_testing
+
+        reset_shared_corrector_for_testing()
+        yield
+        reset_shared_corrector_for_testing()
+
     async def _seed_corpus(
         self,
         session: AsyncSession,

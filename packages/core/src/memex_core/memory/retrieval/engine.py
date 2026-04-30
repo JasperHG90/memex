@@ -167,13 +167,22 @@ class RetrievalEngine:
         )
         self._session_factory = session_factory
 
-        # Anisotropy corrector for cosine similarity normalization
-        from memex_core.memory.models.anisotropy import AnisotropyCorrector
-
-        self._anisotropy = AnisotropyCorrector(
-            window_size=self.retrieval_config.anisotropy_window_size,
-            min_samples=self.retrieval_config.anisotropy_min_samples,
+        # Anisotropy corrector — shared across retrieval / contradiction /
+        # extraction-dedup since they observe the same embedding manifold.
+        # Disabled mode keeps a private instance so the singleton stays
+        # untainted for other callers.
+        from memex_core.memory.models.anisotropy import (
+            AnisotropyCorrector,
+            get_shared_corrector,
         )
+
+        if self.retrieval_config.anisotropy_window_size == 0:
+            self._anisotropy = AnisotropyCorrector(window_size=0)
+        else:
+            self._anisotropy = get_shared_corrector(
+                window_size=self.retrieval_config.anisotropy_window_size,
+                min_samples=self.retrieval_config.anisotropy_min_samples,
+            )
 
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k

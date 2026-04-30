@@ -47,6 +47,7 @@ async def search_memories(
             strategies=request.strategies,
             include_stale=request.include_stale,
             include_superseded=request.include_superseded,
+            include_deprioritized=request.include_deprioritized,
             debug=request.debug,
             after=request.after,
             before=request.before,

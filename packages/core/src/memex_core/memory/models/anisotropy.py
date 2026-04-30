@@ -160,6 +160,53 @@ class AnisotropyCorrector:
             self._m2 = 0.0
 
 
+_shared_corrector: AnisotropyCorrector | None = None
+_shared_lock = Lock()
+
+
+def get_shared_corrector(
+    *,
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    min_samples: int = 32,
+    epsilon: float = DEFAULT_EPSILON,
+) -> AnisotropyCorrector:
+    """Return the process-wide shared corrector.
+
+    The same embedding model produces the same anisotropy regardless of which
+    subsystem (retrieval, contradiction, extraction-dedup) is computing the
+    cosine similarity. A single shared sliding window therefore amortizes
+    warmup across all callers.
+
+    First caller wins on the constructor params — subsequent calls receive
+    the existing instance regardless of any window/min_samples/epsilon
+    overrides. To rebuild with different params (tests, reconfiguration),
+    call ``reset_shared_corrector_for_testing()`` first.
+
+    Pass ``window_size=0`` only on the FIRST call to install a disabled
+    corrector for the rest of the process.
+    """
+    global _shared_corrector
+    with _shared_lock:
+        if _shared_corrector is None:
+            _shared_corrector = AnisotropyCorrector(
+                window_size=window_size,
+                min_samples=min_samples,
+                epsilon=epsilon,
+            )
+        return _shared_corrector
+
+
+def reset_shared_corrector_for_testing() -> None:
+    """Clear the singleton so the next ``get_shared_corrector`` rebuilds it.
+
+    For tests that need to control the corrector's window/min_samples or
+    inspect a fresh state. Production code should never call this.
+    """
+    global _shared_corrector
+    with _shared_lock:
+        _shared_corrector = None
+
+
 class AnisotropyCorrectorGroup:
     """A collection of named ``AnisotropyCorrector`` instances.
 

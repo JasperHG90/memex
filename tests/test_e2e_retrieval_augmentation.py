@@ -66,7 +66,13 @@ def _ingest_note(
         return resp.json()
 
 
-def _search(client: TestClient, query: str, vault_id: str, limit: int = 10):
+def _search(
+    client: TestClient,
+    query: str,
+    vault_id: str,
+    limit: int = 10,
+    include_deprioritized: bool = False,
+):
     """Search memories through the HTTP endpoint."""
     mock_embedder = MagicMock()
     mock_embedder.encode.return_value = [[0.1] * 384]
@@ -76,10 +82,14 @@ def _search(client: TestClient, query: str, vault_id: str, limit: int = 10):
     app.state.api.embedder = mock_embedder
 
     try:
-        resp = client.post(
-            '/api/v1/memories/search',
-            json={'query': query, 'limit': limit, 'vault_ids': [vault_id]},
-        )
+        payload: dict[str, object] = {
+            'query': query,
+            'limit': limit,
+            'vault_ids': [vault_id],
+        }
+        if include_deprioritized:
+            payload['include_deprioritized'] = True
+        resp = client.post('/api/v1/memories/search', json=payload)
         assert resp.status_code == 200, f'Search failed: {resp.text}'
         return parse_ndjson(resp.text)
     finally:
@@ -291,9 +301,8 @@ async def test_e2e_deprioritized_unit_hidden_by_default(client: TestClient, db_s
 
 @pytest.mark.integration
 async def test_e2e_deprioritized_unit_shown_with_flag(client: TestClient, db_session):
-    """Deprioritized units appear when include_deprioritized=True via API."""
-    from memex_core.memory.retrieval.engine import RetrievalEngine
-    from memex_core.memory.retrieval.models import RetrievalRequest
+    """Deprioritized units appear via the HTTP search endpoint when
+    ``include_deprioritized=true`` is set on the request body."""
     from memex_core.memory.sql_models import Entity, MemoryUnit, Note, UnitEntity
     from memex_common.types import FactTypes
 
@@ -323,19 +332,13 @@ async def test_e2e_deprioritized_unit_shown_with_flag(client: TestClient, db_ses
     db_session.add(ue)
     await db_session.commit()
 
-    # Use RetrievalEngine directly (include_deprioritized not in HTTP schema)
-    api = client.app.state.api
-    engine = RetrievalEngine(embedder=api.embedder)
-    request = RetrievalRequest(
-        query='caching',
-        limit=10,
-        vault_ids=[vault_id],
-        include_deprioritized=True,
-    )
-    results, _ = await engine.retrieve(db_session, request)
+    # Default scope: deprioritized unit hidden
+    default_results = _search(client, 'caching', str(vault_id))
+    assert str(deprioritized_id) not in [r['id'] for r in default_results]
 
-    result_ids = [str(u.id) for u in results]
-    assert str(deprioritized_id) in result_ids
+    # With include_deprioritized=true: unit appears
+    explicit_results = _search(client, 'caching', str(vault_id), include_deprioritized=True)
+    assert str(deprioritized_id) in [r['id'] for r in explicit_results]
 
 
 @pytest.mark.integration
