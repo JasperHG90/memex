@@ -75,6 +75,8 @@ async def insert_facts_batch(
             'chunk_id': UUID(fact.chunk_id) if fact.chunk_id else None,
             'vault_id': fact.vault_id if fact.vault_id else GLOBAL_VAULT_ID,
             'status': ContentStatus.ACTIVE,
+            'intent_class': fact.intent_class,
+            'risk_class': fact.risk_class,
         }
         if fact.chunk_id:
             logger.debug(f'Linking fact to chunk_id: {fact.chunk_id}')

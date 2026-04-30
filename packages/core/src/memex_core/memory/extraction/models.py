@@ -607,6 +607,15 @@ class ProcessedFact(SQLModel):
         default_factory=list, description='Tags for categorization or filtering.'
     )
 
+    intent_class: str = Field(
+        default='durable',
+        description='Write-time lifecycle class (permanent | durable | ephemeral).',
+    )
+    risk_class: str = Field(
+        default='none',
+        description='Write-time risk class (none | sensitive | private | safety).',
+    )
+
     @field_validator('occurred_start', 'occurred_end', 'mentioned_at')
     @classmethod
     def ensure_timezone(cls, v: dt.datetime | None) -> dt.datetime | None:
