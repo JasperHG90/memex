@@ -281,6 +281,8 @@ class RetrievalEngine:
         token_budget = request.token_budget
         if token_budget is None and self.retrieval_config:
             token_budget = self.retrieval_config.token_budget
+        if token_budget is not None and token_budget <= 0:
+            token_budget = None
 
         effective_limit = request.limit
         if token_budget is not None and effective_limit < 50:
@@ -599,7 +601,12 @@ class RetrievalEngine:
 
         if token_budget is not None:
             return (final_results, resonance_context)
-        return (final_results[: request.limit], resonance_context)
+
+        # Retain exploration-injected units past the limit slice (F33).
+        # Without this, the post-MMR slice would strip the appended ε-greedy
+        # units before they ever reach the caller.
+        injected_count = sum(1 for u in final_results if u.unit_metadata.get('exploration', False))
+        return (final_results[: request.limit + injected_count], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int

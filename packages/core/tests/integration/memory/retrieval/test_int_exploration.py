@@ -98,13 +98,21 @@ class TestExplorationInjection:
     async def test_exploration_injects_cold_start_unit_when_epsilon_one(
         self, session: AsyncSession, embedder, reranker
     ):
-        """Positive control: with ε=1.0 and ≥3 cold-start candidates that the
-        retrieval pipeline returns, at least one result must carry the
-        ``exploration: true`` metadata flag."""
+        """Positive control: with ε=1.0 and cold-start candidates outside the
+        MMR-limited result set, at least one result must carry the
+        ``exploration: true`` metadata flag.
+
+        MMR (``mmr_lambda``) enforces ``request.limit``, leaving the rest of
+        the hydrated candidate pool eligible for exploration injection.
+        """
+        # token_budget=0 disables packing-mode so MMR honors `request.limit`,
+        # leaving cold-start candidates outside the result set for ε-greedy
+        # injection to surface.
         config = RetrievalConfig(
             exploration_epsilon=1.0,
             exploration_max_injections=2,
             exploration_low_mw_threshold=5,
+            token_budget=0,
         )
         engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
 
@@ -114,7 +122,7 @@ class TestExplorationInjection:
 
         results, _ = await engine.retrieve(
             session,
-            RetrievalRequest(query='Python runtime details', limit=2),
+            RetrievalRequest(query='Python runtime details', limit=2, mmr_lambda=0.5),
         )
 
         # Positive control — without retrieval results, the injection point
@@ -160,6 +168,7 @@ class TestExplorationInjection:
             exploration_epsilon=1.0,
             exploration_max_injections=1,
             exploration_low_mw_threshold=5,
+            token_budget=0,
         )
         engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
 
@@ -167,7 +176,7 @@ class TestExplorationInjection:
 
         results, _ = await engine.retrieve(
             session,
-            RetrievalRequest(query='Redis details', limit=2),
+            RetrievalRequest(query='Redis details', limit=2, mmr_lambda=0.5),
         )
 
         assert len(results) > 0
