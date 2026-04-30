@@ -1512,6 +1512,18 @@ class MemexAPI:
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
         )
 
+    async def list_top_procedure_outcomes(
+        self,
+        vault_id: str | UUID,
+        *,
+        context: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """F14 — Top procedure outcomes for a vault, ranked by MW score."""
+        return await self._kv.list_top_procedure_outcomes(
+            vault_id=vault_id, context=context, limit=limit
+        )
+
     async def kv_delete(self, key: str) -> bool:
         """Delete a KV entry. Delegates to KVService."""
         return await self._kv.delete(key=key)

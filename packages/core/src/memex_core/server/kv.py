@@ -13,6 +13,7 @@ from memex_common.schemas import (
     KVProcedureValueDTO,
     KVPutRequest,
     KVSearchRequest,
+    ProcedureOutcomeDTO,
 )
 
 from memex_core.api import MemexAPI
@@ -179,3 +180,52 @@ async def kv_list(
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list KV entries')
+
+
+@router.get(
+    '/kv/procedure-observations',
+    response_model=list[ProcedureOutcomeDTO],
+    dependencies=[Depends(require_read)],
+)
+async def kv_procedure_observations(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: Annotated[str, Query(description='Vault UUID to scope observations to.')],
+    context: Annotated[
+        str | None,
+        Query(
+            description=(
+                'Optional substring filter on the procedure key '
+                "context-tag (the third segment after 'procedure:<verb>:'). "
+                'Case-insensitive.'
+            ),
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=20,
+            description='Max observations to return (1-20, default 5).',
+        ),
+    ] = 5,
+):
+    """F14 — Top procedure outcomes ranked by Memory Worth (RFC-007 §155-185).
+
+    Drives the F14 procedural-observations briefing block. Rows are ordered
+    by ``mw_score = (success + 1) / (success + failure + 2)`` descending,
+    tie-broken by ``last_outcome_at`` descending.
+    """
+    from uuid import UUID
+
+    try:
+        UUID(vault_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f'Invalid vault_id: {vault_id}')
+
+    try:
+        rows = await api.list_top_procedure_outcomes(
+            vault_id=vault_id, context=context, limit=limit
+        )
+        return [ProcedureOutcomeDTO.model_validate(r) for r in rows]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to list procedure observations')

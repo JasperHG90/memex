@@ -1171,6 +1171,24 @@ class KVProcedureEntryDTO(BaseModel):
     updated_at: dt.datetime
 
 
+class ProcedureOutcomeDTO(BaseModel):
+    """One row of the F14 procedure-observations briefing surface.
+
+    Returned by ``MemexAPI.list_top_procedure_outcomes`` and the
+    ``GET /api/v1/kv/procedure-observations`` endpoint. Each row exposes
+    the procedure KV key, success/failure MW counters, the
+    Beta-Bernoulli posterior-mean Memory Worth score
+    (``memex_core.services.outcomes.compute_mw_score``), and the
+    ``last_outcome_at`` timestamp.
+    """
+
+    kv_key: str
+    success_co_count: int
+    failure_co_count: int
+    mw_score: float
+    last_outcome_at: dt.datetime | None = None
+
+
 class KVPutRequest(BaseModel):
     """Request to create or update a key-value entry."""
 
