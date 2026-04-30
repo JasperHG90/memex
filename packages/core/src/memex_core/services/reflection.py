@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import dspy
 
+from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.config import MemexConfig
 from memex_core.context import background_session
 from memex_core.memory.engine import MemoryEngine
@@ -21,9 +22,15 @@ from memex_core.memory.reflect.queue_service import ReflectionQueueService
 from memex_core.memory.sql_models import Observation
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.services.audit import AuditService, audit_event
+from memex_core.services.rate_limit import (
+    TokenBucketRateLimiter,
+)
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.reflection')
+
+
+SummarizeScope = Literal['incremental', 'full']
 
 
 class ReflectionService:
@@ -53,6 +60,13 @@ class ReflectionService:
         self.queue_service = queue_service
         self.embedding_model = embedding_model
         self._reflection_lock = asyncio.Lock()
+        rate_limit_cfg = config.server.memory.reflection.summarize_node_rate_limit
+        self._summarize_node_limiter = TokenBucketRateLimiter(
+            per_seconds=rate_limit_cfg.per_entity_per_seconds,
+            burst=rate_limit_cfg.burst,
+            max_keys=rate_limit_cfg.max_keys,
+            enabled=rate_limit_cfg.enabled,
+        )
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
         """Run reflection in the background, ensuring serialization via lock."""
@@ -128,6 +142,36 @@ class ReflectionService:
                 new_observations=[Observation(**o) for o in mental_model.observations],
                 updated_model=mental_model,
             )
+
+    async def summarize_node(
+        self,
+        entity_id: UUID,
+        *,
+        scope: SummarizeScope = 'incremental',
+        vault_id: UUID | None = None,
+    ) -> ReflectionResult:
+        """F5: synchronous on-demand reflection for a single entity.
+
+        Wraps :meth:`reflect` with a per-(entity_id, vault_id) token-bucket
+        rate limit. ``scope='incremental'`` (default) honours the standard
+        20-unit window; ``scope='full'`` re-evaluates all evidence on the
+        entity (capped at MAX_FULL_SCOPE_UNITS by the engine).
+
+        Raises ``RateLimitExceededError`` (with ``retry_after_seconds``) if
+        the bucket is empty for this (entity, vault) key. The exception is a
+        service-layer signal — surface translation to MCP/HTTP belongs to
+        the calling layer.
+        """
+        effective_vault = vault_id or GLOBAL_VAULT_ID
+        self._summarize_node_limiter.acquire((entity_id, effective_vault))
+
+        limit_recent = None if scope == 'full' else 20
+        request = ReflectionRequest(
+            entity_id=entity_id,
+            vault_id=effective_vault,
+            limit_recent_memories=limit_recent,
+        )
+        return await self.reflect(request)
 
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """
