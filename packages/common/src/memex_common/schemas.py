@@ -1146,6 +1146,31 @@ class KVEntryDTO(BaseModel):
     updated_at: dt.datetime
 
 
+class KVProcedureValueDTO(BaseModel):
+    """Procedure-key value envelope returned when ``include_history=True``."""
+
+    value: str
+    version: int
+    history: list[dict[str, Any]]
+
+
+class KVProcedureEntryDTO(BaseModel):
+    """DTO for a ``procedure:`` KV entry with full envelope visible.
+
+    Returned by the kv_get endpoint when ``include_history=true``. The
+    ``value`` field is the structured envelope (active value + version +
+    capped history). For non-procedure keys callers should use
+    :class:`KVEntryDTO` (default endpoint shape).
+    """
+
+    id: UUID
+    key: str
+    value: KVProcedureValueDTO
+    expires_at: dt.datetime | None = None
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
 class KVPutRequest(BaseModel):
     """Request to create or update a key-value entry."""
 
