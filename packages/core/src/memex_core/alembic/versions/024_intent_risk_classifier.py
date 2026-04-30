@@ -3,8 +3,6 @@
 - Add intent_class TEXT column (permanent | durable | ephemeral), default 'durable'
 - Add risk_class TEXT column (none | sensitive | private | safety), default 'none'
 - CHECK constraints enforce enum values at the DB level
-- Partial index on risk_class='private' to keep default-scope queries fast
-  (private units are the small set; default queries hit the large complement)
 
 Revision ID: 024_intent_risk_classifier
 Revises: 023_mw_counters_and_deprioritize
@@ -97,20 +95,9 @@ def upgrade() -> None:
             "risk_class IN ('none', 'sensitive', 'private', 'safety')",
         )
 
-    if not _index_exists(conn, 'idx_memory_units_risk_class_private'):
-        op.create_index(
-            'idx_memory_units_risk_class_private',
-            'memory_units',
-            ['risk_class'],
-            postgresql_where=sa.text("risk_class = 'private'"),
-        )
-
 
 def downgrade() -> None:
     conn = op.get_bind()
-
-    if _index_exists(conn, 'idx_memory_units_risk_class_private'):
-        op.drop_index('idx_memory_units_risk_class_private', table_name='memory_units')
 
     if _constraint_exists(conn, 'ck_memory_units_risk_class'):
         op.drop_constraint('ck_memory_units_risk_class', 'memory_units', type_='check')
