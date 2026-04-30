@@ -50,6 +50,13 @@ from memex_core.memory.formatting import format_for_embedding
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
+# F5: hard ceiling on per-entity recent-memory fetch when ReflectionRequest
+# carries limit_recent_memories=None (scope='full'). Caps per-call LLM cost
+# so a busy entity with thousands of units cannot saturate the prompt budget
+# on a single agent-triggered reflection. The rate limit guards call
+# *frequency*; this constant guards per-call *size*.
+MAX_FULL_SCOPE_UNITS = 1000
+
 
 def get_reflection_engine(
     session: AsyncSession,
@@ -145,7 +152,22 @@ class ReflectionEngine:
             # 1.1 Batch Load Data for this Vault (Serial DB Access)
             models_map = await self._batch_get_or_create_models(entity_ids, vault_id=vault_id)
             entities_map = await self._batch_get_entities(entity_ids)
-            memories_map = await self._batch_fetch_recent_memories(entity_ids, vault_id=vault_id)
+            # F5 mixed-limit batch semantics: a single SQL fetch sized to the
+            # most-permissive limit in the batch (or unbounded → MAX_FULL_SCOPE_UNITS
+            # ceiling) so per-request slicing in _process_entity_reflection yields
+            # correct semantics without multiple roundtrips.
+            batch_limit = (
+                None
+                if any(r.limit_recent_memories is None for r in v_requests)
+                else max(
+                    r.limit_recent_memories
+                    for r in v_requests
+                    if r.limit_recent_memories is not None
+                )
+            )
+            memories_map = await self._batch_fetch_recent_memories(
+                entity_ids, vault_id=vault_id, limit_per_entity=batch_limit
+            )
 
             # 1.2 Concurrent Processing for this Vault
             results = await asyncio.gather(
@@ -190,11 +212,20 @@ class ReflectionEngine:
         async with sem:
             try:
                 entity = entities_map.get(eid)
+                # F5 per-request slice: memories_map carries the batch's
+                # most-permissive fetch; honour each request's own limit here.
+                # None means unbounded (already capped at MAX_FULL_SCOPE_UNITS by SQL).
+                fetched = memories_map.get(eid, [])
+                recent_memories = (
+                    fetched
+                    if req.limit_recent_memories is None
+                    else fetched[: req.limit_recent_memories]
+                )
                 return await self._reflect_entity_internal(
                     entity_id=eid,
                     mental_model=models_map[eid],
                     entity=entity,
-                    recent_memories=memories_map.get(eid, []),
+                    recent_memories=recent_memories,
                     db_lock=db_lock,
                     vault_id=req.vault_id,
                 )
@@ -494,12 +525,18 @@ class ReflectionEngine:
         self,
         entity_ids: list[UUID],
         vault_id: UUID = GLOBAL_VAULT_ID,
-        limit_per_entity: int = 20,
+        limit_per_entity: int | None = 20,
     ) -> dict[UUID, list[MemoryUnit]]:
         """
         Fetch recent memories for multiple entities in one go using Window Function.
         Vault scoping follows "Fall-through" logic: (vault_id == active OR vault_id == Global).
+
+        ``limit_per_entity=None`` requests an unbounded fetch ('full' scope from F5);
+        the engine still applies ``MAX_FULL_SCOPE_UNITS`` as a hard ceiling so per-call
+        LLM cost stays bounded.
         """
+
+        effective_limit = MAX_FULL_SCOPE_UNITS if limit_per_entity is None else limit_per_entity
 
         # 1. Base query for units associated with these entities
         subq_base = (
@@ -528,7 +565,7 @@ class ReflectionEngine:
         query = (
             select(MemoryUnit, subq.c.entity_id)
             .join(subq, col(subq.c.unit_id) == col(MemoryUnit.id))
-            .where(subq.c.rn <= limit_per_entity)
+            .where(subq.c.rn <= effective_limit)
             .options(defer(MemoryUnit.embedding))  # type: ignore
         )
 

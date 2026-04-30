@@ -172,7 +172,19 @@ Match the tool to the query type:
       discovered the unit was wrong. Reversible via `memex_memory_restore`.
     - Archive (CLI-only) is the DESTRUCTIVE counterpart — it removes the unit
       from the entity graph and is irreversible. Prefer deprioritize unless
-      the unit MUST leave the graph entirely (e.g. PII the user wants gone)."""
+      the unit MUST leave the graph entirely (e.g. PII the user wants gone).
+- **Synchronously consolidating mid-conversation** — when retrieved facts about
+  a topic are conflicting, incomplete, or scattered, you can ask Memex to
+  consolidate them BEFORE continuing:
+    - `memex_memory_summarize_node(entity_id, scope='incremental'|'full')` is
+      the SYNCHRONOUS counterpart to background `reflect`. `'incremental'`
+      (default) consolidates only new evidence; `'full'` re-evaluates all
+      evidence (capped at the most-recent 1000 units). Returns the updated
+      mental model in the same turn so the agent can act on it.
+    - Background `reflect` (scheduler-driven) is the cheaper default. Reach
+      for `summarize_node` only with an in-session reason.
+    - Rate-limited per (entity, vault). On rejection the response includes
+      `retry_after_seconds`; do NOT retry-loop."""
 
 
 def format_briefing_block(

@@ -1121,6 +1121,27 @@ class MemexAPI:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
 
+    async def summarize_node(
+        self,
+        entity_id: UUID,
+        *,
+        scope: str = 'incremental',
+        vault_id: UUID | None = None,
+    ) -> ReflectionResult:
+        """F5: synchronous on-demand reflection (rate-limited per entity, vault).
+
+        Delegates to :meth:`ReflectionService.summarize_node`. Surfaces a
+        ``RateLimitExceededError`` upward; surface adapters (MCP/Hermes/HTTP)
+        translate to their own envelope.
+        """
+        from memex_core.services.reflection import SummarizeScope
+
+        if scope not in ('incremental', 'full'):
+            raise ValueError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        return await self._reflection.summarize_node(
+            entity_id, scope=cast(SummarizeScope, scope), vault_id=vault_id
+        )
+
     async def record_outcome(
         self,
         unit_ids: list[str],
