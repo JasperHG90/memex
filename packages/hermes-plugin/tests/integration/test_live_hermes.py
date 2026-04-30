@@ -46,14 +46,16 @@ def test_initialize_resolves_vault_and_fetches_real_briefing(
     assert initialized_provider._session_note_key in block
 
 
-def test_get_tool_schemas_exposes_stream_1_and_diagnostics_tools(initialized_provider):
-    """The 8 Stream-1 tools + F32 diagnostics verb must always be exposed.
+def test_get_tool_schemas_exposes_stream_1_and_post_seed_tools(initialized_provider):
+    """The 8 Stream-1 tools + every post-seed MCP verb must always be exposed.
 
-    The diagnostics-verb assertion guards against the v0.1.13-regression
-    pattern: a future refactor could move schema registration to a place
-    that imports correctly but is never picked up by Hermes' loader. The
-    boot+discovery path is the only assertion that verifies registration
-    is *reachable* through ``_tool_to_provider`` dispatch.
+    Standing AC-X-10 three-surface-parity canary: every new MCP verb must
+    appear here as part of its ship's TC matrix. Guards against the
+    v0.1.13-regression pattern where a refactor could move schema
+    registration to a place that imports correctly but is never picked up
+    by Hermes' loader. The boot+discovery path is the only assertion that
+    verifies registration is *reachable* through ``_tool_to_provider``
+    dispatch.
     """
     names = {s['name'] for s in initialized_provider.get_tool_schemas()}
     assert {
@@ -67,6 +69,9 @@ def test_get_tool_schemas_exposes_stream_1_and_diagnostics_tools(initialized_pro
         'memex_get_entity_cooccurrences',
     } <= names
     assert 'memex_get_diagnostics_summary' in names
+    assert (
+        'memex_memory_summarize_node' in names
+    )  # F5 — new MCP verb, must be reachable through dispatch
 
 
 def test_get_tool_schemas_at_registration_time(loaded_provider):
