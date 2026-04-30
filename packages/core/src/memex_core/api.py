@@ -687,9 +687,17 @@ class MemexAPI:
         note: NoteInput,
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> dict[str, Any]:
         """Ingest a note. Delegates to IngestionService."""
-        return await self._ingestion.ingest(note, vault_id=vault_id, event_date=event_date)
+        return await self._ingestion.ingest(
+            note,
+            vault_id=vault_id,
+            event_date=event_date,
+            intent_override=intent_override,
+            risk_override=risk_override,
+        )
 
     async def ingest_batch_internal(
         self,

@@ -374,6 +374,26 @@ RETAIN_SCHEMA: dict[str, Any] = {
                     'briefs, RFCs. Omit to use the default hermes-user-note tag.'
                 ),
             },
+            'intent_class': {
+                'type': 'string',
+                'enum': ['permanent', 'durable', 'ephemeral'],
+                'description': (
+                    'Intent override for all extracted facts. "permanent" = enduring '
+                    'preferences/conventions (kept indefinitely); "durable" (default) '
+                    '= load-bearing facts; "ephemeral" = transient context (decays '
+                    'faster). Omit to let the write-time classifier decide.'
+                ),
+            },
+            'risk_class': {
+                'type': 'string',
+                'enum': ['none', 'private', 'sensitive', 'safety'],
+                'description': (
+                    'Risk override for all extracted facts. "none" (default); '
+                    '"private" = PII/secrets; "sensitive" = restricted topic; '
+                    '"safety" = refuse persistence entirely. Omit to let the '
+                    'write-time classifier decide.'
+                ),
+            },
         },
         'required': ['name', 'description', 'content'],
     },
@@ -1587,7 +1607,26 @@ def handle_add_note(
     note_key = args.get('note_key') or None
     template = args.get('template') or HERMES_USER_NOTE_TEMPLATE
 
-    from memex_common.schemas import NoteCreateDTO
+    from memex_common.schemas import IntentClass, NoteCreateDTO, RiskClass
+
+    raw_intent = args.get('intent_class')
+    raw_risk = args.get('risk_class')
+    parsed_intent: IntentClass | None = None
+    parsed_risk: RiskClass | None = None
+    if raw_intent:
+        try:
+            parsed_intent = IntentClass(str(raw_intent).lower())
+        except ValueError:
+            return tool_error(
+                f'Invalid intent_class={raw_intent!r}. Allowed: {[c.value for c in IntentClass]}'
+            )
+    if raw_risk:
+        try:
+            parsed_risk = RiskClass(str(raw_risk).lower())
+        except ValueError:
+            return tool_error(
+                f'Invalid risk_class={raw_risk!r}. Allowed: {[c.value for c in RiskClass]}'
+            )
 
     dto = NoteCreateDTO(
         name=name,
@@ -1598,6 +1637,8 @@ def handle_add_note(
         vault_id=str(vault_id) if vault_id else None,
         author='hermes',
         template=template,
+        intent_class=parsed_intent,
+        risk_class=parsed_risk,
     )
 
     try:
