@@ -172,12 +172,14 @@ def format_briefing_block(
     project_id: str,
     session_note_key: str,
     kv_instructions_if_no_vault: bool,
+    diagnostics_summary: dict[str, Any] | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
     Includes vault/project metadata, the session note key, routing guidance
-    for tool selection, and the fetched briefing markdown. If no vault is
-    resolved, appends guidance on how to bind one via the KV store.
+    for tool selection, the fetched briefing markdown, and (optionally) the
+    F32 diagnostics summary block. If no vault is resolved, appends guidance
+    on how to bind one via the KV store.
     """
     lines = ['## Memex Memory']
     if vault_id:
@@ -207,6 +209,9 @@ def format_briefing_block(
 
     lines.append('\n' + _ROUTING_GUIDE)
 
+    if diagnostics_summary:
+        lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
+
     if briefing:
         lines.append('\n---\n')
         lines.append(briefing)
@@ -231,4 +236,34 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 
 # --- F20 --- (filled by WS-revisit)
 
+
 # --- F32 --- (filled by WS-diagnostics)
+def _render_diagnostics_block(summary: dict[str, Any]) -> str:
+    """Render the F32 diagnostics summary as a compact markdown block.
+
+    Includes manifold_status, unit_counts, avg_mw_score, and top entity names —
+    at least three documented fields per AC-F32-6.
+    """
+    counts = summary.get('unit_counts') or {}
+    active = counts.get('active', 0)
+    stale = counts.get('stale', 0)
+    deprioritized = counts.get('deprioritized', 0)
+    manifold_status = summary.get('manifold_status', 'absent')
+    avg_mw = summary.get('avg_mw_score', 0.0)
+    cluster_count = summary.get('cluster_count')
+    top_entities = summary.get('top_5_retrieved_entities') or []
+    names = [e.get('name', '?') for e in top_entities[:5]]
+
+    lines = [
+        '### Memex diagnostics',
+        f'- Manifold status: `{manifold_status}` · cluster_count: `{cluster_count}`',
+        f'- Units: `{active}` active · `{stale}` stale · `{deprioritized}` deprioritized',
+        f'- Avg MW score: `{avg_mw:.2f}`',
+    ]
+    if names:
+        lines.append('- Top entities: ' + ', '.join(f'`{n}`' for n in names))
+    lines.append(
+        'Surface via `memex_get_diagnostics_summary(vault_id=...)` for details, '
+        'or run `memex diagnostics manifold|retrieval|summary --vault X` for full JSON.'
+    )
+    return '\n'.join(lines)
