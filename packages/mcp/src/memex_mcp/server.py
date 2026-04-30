@@ -3551,6 +3551,80 @@ if __name__ == '__main__':
 
 # --- F4 ---  (filled by WS-quick-wins)
 
+from memex_mcp._f4_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_MEMORY_RESTORE_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_memory_deprioritize',
+    description=MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_deprioritize(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+    reason: Annotated[
+        str,
+        Field(description='Why this unit is being deprioritized. Free text; logged to audit_logs.'),
+    ],
+) -> dict[str, Any]:
+    """Deprioritize a memory unit (non-destructive)."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        try:
+            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Deprioritize failed: {e}', exc_info=True)
+        raise ToolError(f'Deprioritize failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_restore',
+    description=MEMEX_MEMORY_RESTORE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_restore(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+) -> dict[str, Any]:
+    """Restore a deprioritized memory unit."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        try:
+            unit = await api.restore_memory_unit(uuid_obj)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': False}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Restore failed: {e}', exc_info=True)
+        raise ToolError(f'Restore failed: {e}')
+
+
 # --- F5 ---  (filled by WS-quick-wins)
 
 # --- F8 ---  (filled by WS-linter)

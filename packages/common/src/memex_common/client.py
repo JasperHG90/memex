@@ -705,6 +705,16 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    async def deprioritize_memory_unit(self, unit_id: UUID, reason: str) -> MemoryUnitDTO:
+        """Deprioritize a memory unit (non-destructive). See F4."""
+        result = await self._post(f'memories/{unit_id}/deprioritize', {'reason': reason})
+        return MemoryUnitDTO(**result)
+
+    async def restore_memory_unit(self, unit_id: UUID) -> MemoryUnitDTO:
+        """Restore a previously-deprioritized memory unit. See F4."""
+        result = await self._post(f'memories/{unit_id}/restore', {})
+        return MemoryUnitDTO(**result)
+
     async def get_memory_links(
         self,
         unit_id: UUID,
