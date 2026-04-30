@@ -30,13 +30,13 @@ async def compute_heatmap(
         stmt = (
             select(
                 Entity.id,
-                Entity.name,
+                Entity.canonical_name,
                 func.sum(volume).label('volume'),
                 avg_mw,
             )
             .join(UnitEntity, UnitEntity.entity_id == Entity.id)
             .where(UnitEntity.vault_id == vault_id)
-            .group_by(Entity.id, Entity.name)
+            .group_by(Entity.id, Entity.canonical_name)
             .order_by(desc('volume'), desc('avg_mw'))
             .limit(top_n)
         )
