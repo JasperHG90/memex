@@ -43,13 +43,21 @@ You have been invoked via the `/recall` slash command.
    instruction to execute, not a fact to remember. Reach for it whenever
    the user query is "how-to" rather than "what".
 
+<!-- # --- F8 --- (filled by WS-linter) -->
+5. **Memory hygiene** (F8) — when the user asks about memory state,
+   stale facts, or how the vault is doing, call
+   `memex_get_lint_flags(vault_id=...)` to surface the linter's pending
+   findings (orphan mental models, low-MW units, sensitive unreviewed
+   entries, dangling refs). Each finding includes `target_id`,
+   `lint_type`, `evidence`, and `suggested_action`; most can be
+   auto-resolved by calling the relevant tool (e.g. `memex_memory_deprioritize`
+   for low-MW units). Surface high-confidence findings to the user; act
+   autonomously on low-risk ones.
+
 <!--
 Tier A — /recall verb extensions
-F8:  WS-linter      (get_lint_flags surfacing)
 F20: WS-revisit     (get_due_for_review surfacing)
 F32: WS-diagnostics (get_diagnostics_summary surfacing)
-
-# --- F8 ---  (filled by WS-linter)
 
 # --- F20 --- (filled by WS-revisit)
 
