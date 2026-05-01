@@ -1075,6 +1075,20 @@ class TracingConfig(BaseModel):
     )
 
 
+class LintConfig(BaseModel):
+    """Configuration for the F6 maintenance ledger / rule-based linter."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic lint runs via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between lint runs. Default: 6 hours.',
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -1100,6 +1114,11 @@ class MemoryConfig(BaseModel):
     circuit_breaker: CircuitBreakerConfig = Field(
         default_factory=CircuitBreakerConfig,
         description='Configuration for the LLM call circuit breaker.',
+    )
+
+    lint: LintConfig = Field(
+        default_factory=LintConfig,
+        description='Configuration for the F6 maintenance ledger / rule-based linter.',
     )
 
 

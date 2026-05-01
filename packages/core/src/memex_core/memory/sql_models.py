@@ -1621,3 +1621,119 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
         ),
         Index('idx_procedure_outcomes_vault_key', 'vault_id', 'kv_key'),
     )
+
+
+# ---------------------------------------------------------------------------
+# F6 — Maintenance ledger (rule-based linter)
+# ---------------------------------------------------------------------------
+
+
+class LintType(str, Enum):
+    STRUCTURAL = 'structural'
+    QUALITY = 'quality'
+    GOVERNANCE = 'governance'
+    SCHEMA = 'schema'
+
+
+class LintStatus(str, Enum):
+    PENDING = 'pending'
+    RESOLVED = 'resolved'
+    DISMISSED = 'dismissed'
+
+
+class LintSource(str, Enum):
+    RULE = 'rule'
+    LLM = 'llm'
+
+
+class MaintenanceProposal(SQLModel, table=True):  # type: ignore
+    """Finding ledger row emitted by the F6 LintService.
+
+    Read-only from the agent surface (F8). The unique partial index on
+    ``(rule_name, target_type, target_id, vault_id) WHERE status = 'pending'``
+    makes ``LintService.run_rules`` idempotent on reruns. ``vault_id`` is
+    nullable per AC-F6-1 (NULL = global findings; reserved for Tier B).
+    """
+
+    __tablename__ = 'maintenance_proposals'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the maintenance proposal.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=True,
+        ),
+        description='Vault this finding belongs to. NULL = global; reserved for Tier B.',
+    )
+    lint_type: LintType = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Category of the finding.',
+    )
+    target_type: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description="Type of the targeted entity (e.g. 'memory_unit', 'mental_model').",
+    )
+    target_id: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Opaque identifier of the targeted entity.',
+    )
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Name of the rule that emitted this finding.',
+    )
+    evidence: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+        description='Rule-specific payload describing why the finding fired.',
+    )
+    suggested_action: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Free-text suggestion for the agent or operator.',
+    )
+    status: LintStatus = Field(
+        default=LintStatus.PENDING,
+        sa_column=Column(Text, nullable=False, server_default='pending'),
+        description='Lifecycle state of the finding.',
+    )
+    source: LintSource = Field(
+        default=LintSource.RULE,
+        sa_column=Column(Text, nullable=False, server_default='rule'),
+        description='Whether the finding came from a SQL rule or an LLM check (F10).',
+    )
+    created_at: datetime = created_at_field()
+    resolved_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when status flips to resolved or dismissed.',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "lint_type IN ('structural', 'quality', 'governance', 'schema')",
+            name='ck_maintenance_proposals_lint_type',
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved', 'dismissed')",
+            name='ck_maintenance_proposals_status',
+        ),
+        CheckConstraint(
+            "source IN ('rule', 'llm')",
+            name='ck_maintenance_proposals_source',
+        ),
+        Index('idx_maintenance_proposals_vault_status', 'vault_id', 'status'),
+        Index('idx_maintenance_proposals_lint_type', 'lint_type'),
+        Index(
+            'uq_maintenance_proposals_pending',
+            'rule_name',
+            'target_type',
+            'target_id',
+            'vault_id',
+            unique=True,
+            postgresql_where=sql_text("status = 'pending'"),
+        ),
+    )
