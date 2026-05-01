@@ -136,8 +136,14 @@ async def _classify_one(
         CLASSIFIER_CALLS_TOTAL.labels(status='error').inc()
         # fact retains schema defaults
     finally:
-        CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=fact.intent_class).inc()
-        CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=fact.risk_class).inc()
+        # Use ``.value`` so Prometheus labels stay as 'durable' / 'safety' /
+        # etc., not 'IntentClass.DURABLE' (str-Enum __str__ uses class.member).
+        intent_label = (
+            fact.intent_class.value if hasattr(fact.intent_class, 'value') else fact.intent_class
+        )
+        risk_label = fact.risk_class.value if hasattr(fact.risk_class, 'value') else fact.risk_class
+        CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=intent_label).inc()
+        CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=risk_label).inc()
 
 
 async def classify_facts(

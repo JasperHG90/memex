@@ -14,6 +14,7 @@ from pydantic import BaseModel, field_serializer, field_validator, model_validat
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
+from memex_common.schemas import IntentClass, RiskClass
 
 DATE_REGEX = r'^-?\d{4,}-\d{2}-\d{2}$'
 
@@ -607,12 +608,12 @@ class ProcessedFact(SQLModel):
         default_factory=list, description='Tags for categorization or filtering.'
     )
 
-    intent_class: str = Field(
-        default='durable',
+    intent_class: IntentClass = Field(
+        default=IntentClass.DURABLE,
         description='Write-time lifecycle class (permanent | durable | ephemeral).',
     )
-    risk_class: str = Field(
-        default='none',
+    risk_class: RiskClass = Field(
+        default=RiskClass.NONE,
         description='Write-time risk class (none | sensitive | private | safety).',
     )
 
