@@ -1106,6 +1106,20 @@ class LintConfig(BaseModel):
     )
 
 
+class RevisitConfig(BaseModel):
+    """Configuration for the F20 FSRS-5 revisitation scheduler."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic revisit-schedule populator via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=24 * 3600,
+        ge=60,
+        description='Interval in seconds between revisit populator runs. Default: 24 hours.',
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -1141,6 +1155,11 @@ class MemoryConfig(BaseModel):
     lint: LintConfig = Field(
         default_factory=LintConfig,
         description='Configuration for the F6 maintenance ledger / rule-based linter.',
+    )
+
+    revisit: RevisitConfig = Field(
+        default_factory=RevisitConfig,
+        description='F20 FSRS-5 revisitation scheduler configuration.',
     )
 
 
