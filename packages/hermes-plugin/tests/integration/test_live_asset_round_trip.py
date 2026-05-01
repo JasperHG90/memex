@@ -1,8 +1,8 @@
 """Integration test for the asset add → list → get round trip (AC-093).
 
 Exercises the full end-to-end path: real Hermes loader × real Memex FastAPI
-app × real Postgres, asserting byte-level round-trip through
-base64 encoding on the Hermes side.
+app × real Postgres, asserting byte-level round-trip through the
+disk-handoff contract on the Hermes side (PR #61 / issue #59).
 
 Per RFC-015 + POC-002: tools are invoked via
 ``initialized_provider.handle_tool_call(tool_name, args)`` — the canonical
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -83,10 +84,17 @@ async def test_asset_add_list_get_round_trip(initialized_provider, live_api, liv
     asset_path = asset['path']
 
     # 5. Fetch bytes by path and assert byte-level round-trip equality.
+    #    PR #61 changed the contract to disk-handoff: bytes are NEVER inlined
+    #    as ``content_b64``; agents read each ``local_path`` directly.
     get_raw = initialized_provider.handle_tool_call('memex_get_resources', {'paths': [asset_path]})
     get_data = json.loads(get_raw)
     assert len(get_data['results']) == 1
     result = get_data['results'][0]
     assert 'error' not in result, f'get_resources error: {result!r}'
-    assert base64.b64decode(result['content_b64']) == ASSET_BYTES
+    assert 'content_b64' not in result, 'disk-handoff must never inline bytes'
+    local_path = Path(result['local_path'])
+    assert local_path.exists(), f'local_path does not exist: {local_path}'
+    assert local_path.read_bytes() == ASSET_BYTES
     assert result['size_bytes'] == len(ASSET_BYTES)
+    assert result['filename'] == 'test.png'
+    assert result['mime_type'] == 'image/png'
