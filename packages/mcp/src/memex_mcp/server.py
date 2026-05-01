@@ -3810,6 +3810,84 @@ async def memex_get_lint_flags(
 
 # --- F9 ---  (filled by WS-locks)
 
+from memex_mcp._f9_descriptions import (
+    MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
+    MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_memory_reconsolidate',
+    description=MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=120.0,
+)
+async def memex_memory_reconsolidate(
+    ctx: Context,
+    entity_id: Annotated[str, Field(description='Entity UUID to reconsolidate.')],
+    vault_id: Annotated[
+        str, Field(description='Vault UUID — required for vault-scoped resolution.')
+    ],
+) -> dict[str, Any]:
+    """F9: re-evaluate memories on an entity under a per-entity advisory lock."""
+    try:
+        api = get_api(ctx)
+        try:
+            entity_uuid = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid entity UUID: {entity_id}')
+        try:
+            vault_uuid = UUID(vault_id)
+        except ValueError:
+            raise ToolError(f'Invalid vault UUID: {vault_id}')
+        try:
+            return await api.reconsolidate_entity(entity_uuid, vault_uuid)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                return {
+                    'error': 'lock_contention',
+                    'entity_id': entity_id,
+                    'message': 'another reconsolidation is in progress; retry in a moment',
+                }
+            raise
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_reconsolidate failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_reconsolidate failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_consolidate',
+    description=MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=300.0,
+)
+async def memex_memory_consolidate(
+    ctx: Context,
+    vault_id: Annotated[str, Field(description='Vault UUID to consolidate.')],
+    dry_run: Annotated[
+        bool,
+        Field(description='If true, return preview without making changes.'),
+    ] = False,
+) -> dict[str, Any]:
+    """F9: vault-wide low-MW unit consolidation."""
+    try:
+        api = get_api(ctx)
+        try:
+            vault_uuid = UUID(vault_id)
+        except ValueError:
+            raise ToolError(f'Invalid vault UUID: {vault_id}')
+        return await api.consolidate_vault(vault_uuid, dry_run=dry_run)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_consolidate failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_consolidate failed: {e}')
+
+
 # --- F20 --- (filled by WS-revisit)
 
 from memex_mcp._f20_descriptions import (

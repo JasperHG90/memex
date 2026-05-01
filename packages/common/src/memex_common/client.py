@@ -851,6 +851,35 @@ class RemoteMemexAPI:
         }
         return await self._post('memory/review', body)
 
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """F9: re-evaluate memories for an entity under a per-entity lock."""
+        return await self._post(
+            'memory/reconsolidate',
+            {
+                'entity_id': str(entity_id),
+                'vault_id': str(vault_id),
+                'timeout_seconds': timeout_seconds,
+            },
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """F9: vault-wide low-MW unit consolidation."""
+        return await self._post(
+            'memory/consolidate',
+            {'vault_id': str(vault_id), 'dry_run': dry_run},
+        )
+
     async def get_memory_links(
         self,
         unit_id: UUID,
