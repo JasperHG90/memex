@@ -30,6 +30,7 @@ from sqlalchemy.engine.url import make_url
 from sqlmodel import select
 
 from memex_common.exceptions import MemexError
+from memex_core.services.rate_limit import TokenBucketRateLimiter
 
 if TYPE_CHECKING:
     from memex_core.config import MemexConfig
@@ -184,6 +185,16 @@ class LocksService:
         self.contradiction = contradiction
         self.units = units
         self._dsn = _dsn_from_config(config)
+        # F9 / RFC-008 line 125: per-vault rate limit on memex_memory_consolidate.
+        # Reuses F5's TokenBucketRateLimiter primitive. Default 1 call per vault
+        # per hour (LLM-intensive + mass-mutation guard).
+        consolidate_cfg = config.server.memory.consolidate_rate_limit
+        self._consolidate_limiter = TokenBucketRateLimiter(
+            per_seconds=consolidate_cfg.per_vault_per_seconds,
+            burst=consolidate_cfg.burst,
+            max_keys=consolidate_cfg.max_keys,
+            enabled=consolidate_cfg.enabled,
+        )
 
     async def _resolve_entity_to_unit_ids(
         self,
@@ -342,9 +353,12 @@ class LocksService:
         """Vault-wide low-MW unit consolidation (RFC-008).
 
         Steps:
-            1. Identify candidates by predicate (see `_select_consolidate_candidates`).
-            2. If `dry_run`: return preview, no writes.
-            3. Otherwise: for each candidate, call F4
+            1. Acquire a per-vault rate-limit token (RFC-008 line 125;
+               default 1 call per vault per hour). Skipped on `dry_run`
+               so agents can preview cheaply without burning the bucket.
+            2. Identify candidates by predicate (see `_select_consolidate_candidates`).
+            3. If `dry_run`: return preview, no writes.
+            4. Otherwise: for each candidate, call F4
                `UnitsService.set_unit_deprioritized` and write a
                `MaintenanceProposal` row with `status='resolved'`,
                `rule_name='consolidate_vault_low_mw'`, evidence carrying
@@ -356,10 +370,18 @@ class LocksService:
         Branch B fallback: if `maintenance_proposals` table is missing
         (F6 not deployed), returns the preview shape without proposal
         writes. Branch A is live in this codebase since F6 merged.
+
+        Raises ``RateLimitExceededError`` (with ``retry_after_seconds``)
+        when the per-vault bucket is empty and ``dry_run=False``. The
+        exception is a service-layer signal — surface translation to
+        MCP/HTTP belongs to the calling layer (mirrors F5 summarize_node).
         """
         from sqlalchemy import inspect as sa_inspect
 
         from memex_core.metrics import CONSOLIDATE_TOTAL
+
+        if not dry_run:
+            self._consolidate_limiter.acquire(vault_id)
 
         try:
             candidates = await self._select_consolidate_candidates(vault_id)

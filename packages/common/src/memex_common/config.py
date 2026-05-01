@@ -850,6 +850,36 @@ class ConsolidationConfig(BaseModel):
     )
 
 
+class ConsolidateRateLimitConfig(BaseModel):
+    """F9: rate-limit config for memex_memory_consolidate (RFC-008 line 125).
+
+    Per-vault token bucket (default 1 call per vault per hour). LLM-intensive
+    workload + mass-mutation guard — reuses F5's TokenBucketRateLimiter
+    primitive. In-process LRU; multi-worker leakage matches F5's documented
+    limitation (advisory, not security gate).
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='When False, consolidate_vault calls are never rate-limited (set False in tests).',
+    )
+    per_vault_per_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description='Window in seconds across which `burst` calls are allowed per vault (default 1h).',
+    )
+    burst: int = Field(
+        default=1,
+        gt=0,
+        description='Token-bucket capacity. Default 1 = no bursting (1 call per window).',
+    )
+    max_keys: int = Field(
+        default=10000,
+        gt=0,
+        description='LRU eviction cap on tracked vault_id keys.',
+    )
+
+
 class Permission(str, Enum):
     """Granular permissions for API key access control."""
 
@@ -1235,6 +1265,11 @@ class MemoryConfig(BaseModel):
     consolidation: ConsolidationConfig = Field(
         default_factory=ConsolidationConfig,
         description='F38 consolidation orchestrator configuration.',
+    )
+
+    consolidate_rate_limit: ConsolidateRateLimitConfig = Field(
+        default_factory=ConsolidateRateLimitConfig,
+        description='F9: per-vault rate limit for memex_memory_consolidate (RFC-008 line 125).',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(
