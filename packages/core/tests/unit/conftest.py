@@ -241,6 +241,13 @@ def mock_config():
     rate_cfg.per_entity_per_seconds = 60
     rate_cfg.burst = 1
     rate_cfg.max_keys = 1000
+    # F9: per-vault consolidate rate limit; mirror the F5 disabled-by-default
+    # convention so unit tests building LocksService don't get throttled.
+    consolidate_cfg = config.server.memory.consolidate_rate_limit
+    consolidate_cfg.enabled = False
+    consolidate_cfg.per_vault_per_seconds = 3600
+    consolidate_cfg.burst = 1
+    consolidate_cfg.max_keys = 1000
     return config
 
 

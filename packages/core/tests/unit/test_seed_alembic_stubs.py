@@ -54,18 +54,22 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['029_lint_llm_quota'], f'Expected single head 029, got {heads}'
+    # Head moves forward with each Wave-N schema patch (issue #34 added 030).
+    assert heads == ['030_proposal_resolved_by'], (
+        f'Expected single head 030_proposal_resolved_by, got {heads}'
+    )
 
     walk = list(sd.walk_revisions())
-    top5 = [(r.revision, r.down_revision) for r in walk[:5]]
-    expected_top5 = [
+    top6 = [(r.revision, r.down_revision) for r in walk[:6]]
+    expected_top6 = [
+        ('030_proposal_resolved_by', '029_lint_llm_quota'),
         ('029_lint_llm_quota', '028_procedure_outcomes'),
         ('028_procedure_outcomes', '027_consolidation_ticks'),
         ('027_consolidation_ticks', '026_revisit_columns'),
         ('026_revisit_columns', '025_maintenance_proposals'),
         ('025_maintenance_proposals', '024_intent_risk_classifier'),
     ]
-    assert top5 == expected_top5, f'Tier A chain mismatch: got {top5}'
+    assert top6 == expected_top6, f'Tier A chain mismatch: got {top6}'
 
 
 @pytest.mark.parametrize('rev,down,fid', _TIER_A_STUBS)

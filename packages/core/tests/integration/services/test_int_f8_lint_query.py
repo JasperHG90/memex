@@ -168,6 +168,58 @@ async def test_finding_dto_surfaces_all_documented_fields(session: AsyncSession,
     assert f.vault_id == vault_id
     assert f.created_at is not None
     assert f.resolved_at is None
+    assert f.resolved_by is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #34 — resolved_by column population on set_status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_status_populates_resolved_by_with_actor(
+    session: AsyncSession,
+    api,
+) -> None:
+    """A pending finding flipped to ``resolved`` records the actor in resolved_by."""
+    vault_id = await _make_vault(session)
+    finding_id = await _seed_finding(session, vault_id=vault_id)
+
+    pending = await api.lint.get_findings(vault_id=vault_id, status='pending')
+    assert len(pending.findings) == 1
+    assert pending.findings[0].resolved_by is None
+
+    flipped = await api.lint.set_status(finding_id, 'resolved', actor='agent:claude')
+    assert flipped is True
+
+    resolved = await api.lint.get_findings(vault_id=vault_id, status='resolved')
+    assert len(resolved.findings) == 1
+    f = resolved.findings[0]
+    assert f.finding_id == finding_id
+    assert f.status == 'resolved'
+    assert f.resolved_at is not None
+    assert f.resolved_by == 'agent:claude'
+
+
+@pytest.mark.asyncio
+async def test_set_status_without_actor_leaves_resolved_by_null(
+    session: AsyncSession,
+    api,
+) -> None:
+    """When no actor is supplied the column stays NULL (back-compat)."""
+    vault_id = await _make_vault(session)
+    finding_id = await _seed_finding(session, vault_id=vault_id)
+
+    flipped = await api.lint.set_status(finding_id, 'dismissed')
+    assert flipped is True
+
+    page = await api.lint.get_findings(vault_id=vault_id, status='dismissed')
+    assert len(page.findings) == 1
+    f = page.findings[0]
+    assert f.finding_id == finding_id
+    assert f.status == 'dismissed'
+    assert f.resolved_at is not None
+    assert f.resolved_by is None
 
 
 # ---------------------------------------------------------------------------
@@ -283,12 +335,22 @@ async def test_vault_scoping(session: AsyncSession, api) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_table_raises_initialization_error(
-    session: AsyncSession, api, metastore
+    session: AsyncSession, api, metastore, engine
 ) -> None:
-    """Drop maintenance_proposals; the next get_findings raises the documented error."""
+    """Drop maintenance_proposals; the next get_findings raises the documented error.
+
+    The table is recreated in ``finally`` so downstream tests in the same
+    session do not observe the simulated uninitialized state.
+    """
+    from sqlmodel import SQLModel
+
     await session.execute(text('DROP TABLE IF EXISTS maintenance_proposals CASCADE'))
     await session.commit()
-
-    with pytest.raises(LintSubsystemNotInitializedError) as ei:
-        await api.lint.get_findings()
-    assert 'alembic upgrade head' in str(ei.value)
+    try:
+        with pytest.raises(LintSubsystemNotInitializedError) as ei:
+            await api.lint.get_findings()
+        assert 'alembic upgrade head' in str(ei.value)
+    finally:
+        table = SQLModel.metadata.tables['maintenance_proposals']
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
