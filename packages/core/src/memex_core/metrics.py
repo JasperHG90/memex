@@ -196,3 +196,20 @@ DIAGNOSTICS_CACHE_MISSES_TOTAL = Counter(
     'Manifold cache misses (no cache or cache_key drift) by vault.',
     ['vault_id'],
 )
+
+# ---------------------------------------------------------------------------
+# Lint metrics (F6)
+# ---------------------------------------------------------------------------
+
+LINT_FINDINGS_TOTAL = Counter(
+    'memex_lint_findings_total',
+    'Maintenance proposals emitted by F6 lint rules.',
+    ['rule_name', 'lint_type', 'vault_id'],
+)
+
+LINT_RUN_DURATION_SECONDS = Histogram(
+    'memex_lint_run_duration_seconds',
+    'Wall-clock duration of a single F6 lint rule execution (seconds).',
+    ['rule_name'],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)

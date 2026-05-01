@@ -1087,3 +1087,44 @@ class RemoteMemexAPI:
             params['pattern'] = pattern
         result = await self._get('kv', params=params or None)
         return [KVEntryDTO(**r) for r in result]
+
+    # ------------------------------------------------------------------
+    # F6 — maintenance ledger (lint)
+    # ------------------------------------------------------------------
+
+    async def lint_status(
+        self,
+        *,
+        scope: str = 'vault',
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Pending finding counts. ``scope`` ∈ {'vault', 'global', 'all'}."""
+        params: dict[str, Any] = {'scope': scope}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/status', params=params)
+
+    async def lint_findings(
+        self,
+        *,
+        vault_id: str | None = None,
+        lint_type: str | None = None,
+        status: str = 'pending',
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List maintenance findings with optional filters."""
+        params: dict[str, Any] = {'status': status, 'limit': limit, 'offset': offset}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        if lint_type is not None:
+            params['lint_type'] = lint_type
+        return await self._get('lint/findings', params=params)
+
+    async def lint_dismiss(self, finding_id: str) -> dict[str, Any]:
+        """Flip a pending finding to ``dismissed``."""
+        return await self._post(f'lint/findings/{finding_id}/dismiss', {})
+
+    async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
+        """Flip a pending finding to ``resolved``."""
+        return await self._post(f'lint/findings/{finding_id}/resolve', {})
