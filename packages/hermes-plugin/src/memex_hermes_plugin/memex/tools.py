@@ -3491,15 +3491,25 @@ MEMORY_REVIEW_SCHEMA: dict[str, Any] = {
                 'description': 'Memory unit UUID being reviewed.',
             },
             'quality': {
-                'type': 'string',
-                'enum': ['again', 'hard', 'good', 'easy'],
+                'oneOf': [
+                    {'type': 'string', 'enum': ['again', 'hard', 'good', 'easy']},
+                    {'type': 'integer', 'enum': [1, 2, 3, 4]},
+                ],
                 'description': (
-                    'Review rating. AGAIN/HARD record a failure outcome; '
-                    'GOOD/EASY record a success outcome.'
+                    'Review rating. Accepts the string form ("again"/"hard"/"good"/"easy") '
+                    'or the FSRS-5 IntEnum value (1/2/3/4). AGAIN/HARD record a failure '
+                    'outcome; GOOD/EASY record a success outcome.'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name the memory unit belongs to. REQUIRED — '
+                    'the service rejects cross-vault review (Wave 0 vault-scoping invariant).'
                 ),
             },
         },
-        'required': ['unit_id', 'quality'],
+        'required': ['unit_id', 'quality', 'vault_id'],
     },
 }
 
@@ -3553,6 +3563,7 @@ def handle_memory_review(
     try:
         raw_unit_id = _require(args, 'unit_id')
         raw_quality = _require(args, 'quality')
+        raw_vault_id = _require(args, 'vault_id')
     except ValueError as e:
         return tool_error(str(e))
     try:
@@ -3560,18 +3571,33 @@ def handle_memory_review(
     except ValueError:
         return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
 
-    quality_lc = str(raw_quality).strip().lower()
-    try:
-        from memex_core.memory.revisit import Quality
+    from memex_core.memory.revisit import Quality
 
-        quality_enum = Quality[quality_lc.upper()]
-    except KeyError:
-        return tool_error(
-            f"Invalid quality {raw_quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
+    if isinstance(raw_quality, int) and not isinstance(raw_quality, bool):
+        try:
+            quality_enum = Quality(raw_quality)
+        except ValueError:
+            return tool_error(
+                f'Invalid quality {raw_quality!r}; must be 1 (again), 2 (hard), '
+                '3 (good), or 4 (easy).'
+            )
+    else:
+        quality_lc = str(raw_quality).strip().lower()
+        try:
+            quality_enum = Quality[quality_lc.upper()]
+        except KeyError:
+            return tool_error(
+                f"Invalid quality {raw_quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
+            )
+
+    try:
+        resolved_vault_id = run_sync(api.resolve_vault_identifier(str(raw_vault_id)), timeout=30.0)
+        result = run_sync(
+            api.review_memory_unit(uuid_obj, quality_enum, vault_id=resolved_vault_id),
+            timeout=30.0,
         )
-
-    try:
-        result = run_sync(api.review_memory_unit(uuid_obj, quality_enum), timeout=30.0)
+    except PermissionError as e:
+        return tool_error(str(e))
     except Exception as e:
         logger.warning('memex_memory_review failed: %s', e)
         return tool_error(f'memory_review failed: {e}')

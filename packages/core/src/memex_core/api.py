@@ -1033,10 +1033,11 @@ class MemexAPI:
         unit_id: UUID,
         quality: Any,
         *,
+        vault_id: UUID,
         actor: UUID | None = None,
     ) -> dict[str, Any]:
         """F20: record a review outcome on a memory unit. Delegates to RevisitationService."""
-        return await self._revisit.review(unit_id, quality, actor=actor)
+        return await self._revisit.review(unit_id, quality, vault_id=vault_id, actor=actor)
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
