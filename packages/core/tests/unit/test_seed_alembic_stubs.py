@@ -21,7 +21,9 @@ _ALEMBIC_INI = _PACKAGE_ROOT / 'alembic.ini'
 _VERSIONS_DIR = _PACKAGE_ROOT / 'alembic' / 'versions'
 
 _TIER_A_STUBS: list[tuple[str, str, str]] = [
-    ('025_maintenance_proposals', '024_intent_risk_classifier', 'F6'),
+    # 025_maintenance_proposals (F6) is no longer a stub — see PR #20
+    # (real maintenance_proposals table + LintService rule engine).
+    # Integration coverage in tests/integration/test_int_f6_rules.py.
     ('026_revisit_columns', '025_maintenance_proposals', 'F20'),
     ('027_consolidation_ticks', '026_revisit_columns', 'F38'),
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
