@@ -8,8 +8,16 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Qu
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from memex_common.config import Permission
 from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
-from memex_core.server.auth import require_delete, require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_delete,
+    require_read,
+    require_write,
+)
 from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO
 
 from memex_core.api import MemexAPI
@@ -51,6 +59,23 @@ async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)
 
 class DeprioritizeRequest(BaseModel):
     reason: str = Field(..., description='Why this unit was deprioritized (logged to audit_logs).')
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+        ),
+    )
+
+
+class RestoreRequest(BaseModel):
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+        ),
+    )
 
 
 @router.post(
@@ -63,15 +88,20 @@ async def deprioritize_memory_unit(
     request: DeprioritizeRequest,
     background_tasks: BackgroundTasks,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Deprioritize a memory unit (non-destructive — flips ``is_deprioritized=True``).
 
     Per Wave 0 §6 #12: this is the NON-destructive curation verb. Archive
     remains the destructive counterpart.
     """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         unit = await api.deprioritize_memory_unit(
-            id, reason=request.reason, background_tasks=background_tasks
+            id,
+            reason=request.reason,
+            vault_id=request.vault_id,
+            background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
     except MemoryUnitNotFoundError as e:
@@ -87,12 +117,19 @@ async def deprioritize_memory_unit(
 )
 async def restore_memory_unit(
     id: UUID,
+    request: RestoreRequest,
     background_tasks: BackgroundTasks,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized=False``)."""
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        unit = await api.restore_memory_unit(id, background_tasks=background_tasks)
+        unit = await api.restore_memory_unit(
+            id,
+            vault_id=request.vault_id,
+            background_tasks=background_tasks,
+        )
         return build_memory_unit_dto(unit)
     except MemoryUnitNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -142,6 +179,7 @@ class ConsolidateRequest(BaseModel):
 async def reconsolidate_entity(
     request: Annotated[ReconsolidateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """F9: re-evaluate memories for an entity under a per-entity advisory lock.
 
@@ -149,6 +187,7 @@ async def reconsolidate_entity(
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
     `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
     """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         return await api.reconsolidate_entity(
             request.entity_id,
@@ -182,6 +221,7 @@ async def reconsolidate_entity(
 async def consolidate_vault(
     request: Annotated[ConsolidateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> Any:
     """F9: vault-wide low-MW unit consolidation. RFC-008.
 
@@ -192,6 +232,7 @@ async def consolidate_vault(
     hour). Translates ``RateLimitExceededError`` into a 429 envelope with a
     ``Retry-After`` header. Mirrors the F5 summarize-node 429 contract.
     """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
     except RateLimitExceededError as exc:

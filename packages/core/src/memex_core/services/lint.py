@@ -434,32 +434,68 @@ class LintService(BaseService):
             result = await session.execute(stmt, params)
             return int(result.scalar() or 0)
 
+    async def get_finding_vault_id(self, finding_id: UUID) -> tuple[bool, UUID | None]:
+        """Return the vault_id (or ``None`` for global findings) for a finding.
+
+        Returns ``(found, vault_id)``. ``found=False`` means no row exists with
+        that id — the route layer maps that to 404. ``found=True`` with
+        ``vault_id=None`` means a global finding (no vault scope), which the
+        per-vault gate treats as unrestricted.
+        """
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text('SELECT vault_id FROM maintenance_proposals WHERE id = :id'),
+                {'id': str(finding_id)},
+            )
+            row = result.first()
+            if row is None:
+                return (False, None)
+            return (True, row[0])
+
     async def set_status(
         self,
         finding_id: UUID,
         new_status: str,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
     ) -> bool:
         """Flip a finding's status to ``resolved`` or ``dismissed``.
 
         Returns True iff one row was updated; the finding must currently be
         ``pending``. Idempotent: hitting an already-resolved/dismissed row
-        returns False without raising. ``actor`` is recorded in
-        ``resolved_by`` for traceability — pass the agent name or operator
-        id; ``None`` keeps the column NULL.
+        returns False without raising.
+
+        When ``vault_id`` is supplied the UPDATE constrains by that vault as
+        well — defense-in-depth so a route bypass cannot mutate a finding
+        owned by a different vault (HIGH-4 sub). Pass ``vault_id=None`` to
+        preserve legacy in-process callers (e.g. background jobs that have
+        already authenticated higher up the stack).
+
+        ``actor`` is recorded in ``resolved_by`` for traceability — pass the
+        agent name or operator id; ``None`` keeps the column NULL.
         """
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
+
+        params: dict[str, Any] = {
+            'new': new_status,
+            'id': str(finding_id),
+            'actor': actor,
+        }
+        where_extra = ''
+        if vault_id is not None:
+            where_extra = ' AND vault_id = :vault_id'
+            params['vault_id'] = str(vault_id)
 
         async with self.metastore.session() as session:
             result = await session.execute(
                 text(
                     'UPDATE maintenance_proposals '
                     'SET status = :new, resolved_at = now(), resolved_by = :actor '
-                    "WHERE id = :id AND status = 'pending'"
+                    f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
-                {'new': new_status, 'id': str(finding_id), 'actor': actor},
+                params,
             )
             await session.commit()
             return bool(result.rowcount)
