@@ -466,13 +466,16 @@ class RetrievalEngine:
         # 6. Hydrate Objects
         t0 = _t()
         final_results = await self._hydrate_results(session, fused_items)
-        hydrated_candidates = list(final_results)
         t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
         if not request.include_superseded:
             threshold = self.retrieval_config.superseded_threshold
             final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
+
+        # Snapshot AFTER superseded filter so exploration injection cannot
+        # surface superseded-but-ACTIVE units (PR #91 cycle3 MED-1).
+        hydrated_candidates = list(final_results)
 
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
