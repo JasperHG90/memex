@@ -120,6 +120,9 @@ class MemexAPIProtocol(Protocol):
     # F32 — Diagnostics
     async def get_diagnostics_summary(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    # F8 — Lint flags (read-only agent surface)
+    async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
+
 
 # ---------------------------------------------------------------------------
 # Vault resolution helpers (Stream 1)
@@ -3442,6 +3445,90 @@ ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
 
 
 # --- F8 ---  (filled by WS-linter)
+
+GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_lint_flags',
+    'description': (
+        'memex_get_lint_flags — List pending memory-hygiene findings the linter has detected.\n'
+        'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
+        '\n'
+        '- vault_id (optional): scope to a single vault. Omit for all-vault view.\n'
+        '- lint_type (optional): structural | quality | governance | schema\n'
+        '- status (optional): pending | resolved | dismissed (default: pending)\n'
+        '- limit (default 20)\n'
+        '\n'
+        'Each finding includes: target_id, lint_type, evidence (why detected), suggested_action.\n'
+        'Most findings can be auto-resolved by calling the relevant tool (e.g., memory_deprioritize\n'
+        'for low-MW units). Surface high-confidence findings to the user; act autonomously on\n'
+        'low-risk ones (deprioritize, mark stale).'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name; omit for all-vault view.',
+            },
+            'lint_type': {
+                'type': 'string',
+                'enum': ['structural', 'quality', 'governance', 'schema'],
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['pending', 'resolved', 'dismissed'],
+                'default': 'pending',
+            },
+            'limit': {
+                'type': 'integer',
+                'minimum': 1,
+                'maximum': 200,
+                'default': 20,
+            },
+            'cursor': {
+                'type': 'string',
+                'description': 'Opaque cursor from a prior page; omit on first call.',
+            },
+        },
+        'required': [],
+    },
+}
+
+
+def handle_get_lint_flags(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_get_flags."""
+    raw_vault = args.get('vault_id')
+    resolved: str | None = None
+    try:
+        if raw_vault:
+            resolved_id = run_sync(api.resolve_vault_identifier(raw_vault), timeout=10.0)
+            resolved = str(resolved_id) if resolved_id else None
+        elif vault_id is not None:
+            resolved = str(vault_id)
+        result = run_sync(
+            api.lint_get_flags(
+                vault_id=resolved,
+                lint_type=args.get('lint_type'),
+                status=args.get('status', 'pending'),
+                limit=int(args.get('limit', 20)),
+                cursor=args.get('cursor'),
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_lint_flags failed: %s', e)
+        return tool_error(f'Lint flags query failed: {e}')
+
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_get_lint_flags'] = handle_get_lint_flags
+ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
+
 
 # --- F9 ---  (filled by WS-locks)
 
