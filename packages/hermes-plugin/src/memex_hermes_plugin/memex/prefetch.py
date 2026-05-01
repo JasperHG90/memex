@@ -37,6 +37,12 @@ class PrefetchCache:
         self._notes: list[Any] = []
         self._generation: int = 0
         self._pending: set[int] = set()
+        # Per-layer completion signals for the current generation. Both start
+        # set so a fresh cache with no queue() yet treats consume() as idle.
+        self._facts_done: threading.Event = threading.Event()
+        self._notes_done: threading.Event = threading.Event()
+        self._facts_done.set()
+        self._notes_done.set()
 
     def queue(
         self,
@@ -53,6 +59,13 @@ class PrefetchCache:
             self._facts = []
             self._notes = []
             self._pending = {gen}
+            # Replace events so stale completions from prior generations
+            # cannot satisfy this generation's wait. Bind new instances under
+            # the lock and let fetch closures capture them by reference.
+            self._facts_done = threading.Event()
+            self._notes_done = threading.Event()
+            facts_done = self._facts_done
+            notes_done = self._notes_done
 
         vault_ids: list[Any] | None = [vault_id] if vault_id else None
 
@@ -75,6 +88,8 @@ class PrefetchCache:
                         self._facts = list(result or [])
             except Exception as e:
                 logger.debug('Prefetch facts failed: %s', e)
+            finally:
+                facts_done.set()
 
         def _fetch_notes() -> None:
             try:
@@ -93,6 +108,8 @@ class PrefetchCache:
                         self._notes = list(result or [])
             except Exception as e:
                 logger.debug('Prefetch notes failed: %s', e)
+            finally:
+                notes_done.set()
 
         threading.Thread(
             target=_fetch_facts, daemon=True, name=f'memex-prefetch-facts-{gen}'
@@ -104,15 +121,25 @@ class PrefetchCache:
     def consume(self, timeout: float = 3.0) -> str:
         """Wait up to ``timeout`` for the current generation's results, then format.
 
-        Polls at 50ms intervals until both layers have landed or until the
-        deadline passes. Returns '' if nothing arrived. After consumption the
-        buffers are cleared so the next turn starts fresh.
+        Waits for BOTH layers to report completion (success or failure) or for
+        the deadline to pass. Returns whatever populated by then; '' if nothing
+        arrived. After consumption the buffers are cleared so the next turn
+        starts fresh.
+
+        Note on the wait shape: an earlier implementation broke the wait as
+        soon as EITHER layer reported data, then snapshot+cleared. Under load
+        the slow layer's results landed in the cleared buffer for the same
+        generation and were lost on the next ``queue()``. The both-or-deadline
+        wait fixes this; partial results are only returned post-deadline.
         """
+        with self._lock:
+            facts_done = self._facts_done
+            notes_done = self._notes_done
+
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            with self._lock:
-                if self._facts or self._notes:
-                    break
+            if facts_done.is_set() and notes_done.is_set():
+                break
             time.sleep(0.05)
 
         with self._lock:
