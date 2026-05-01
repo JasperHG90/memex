@@ -1898,5 +1898,6 @@ class LintLLMQuota(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         UniqueConstraint('vault_id', 'hour_bucket', name='uq_lint_llm_quota_vault_hour'),
+        CheckConstraint('count >= 0', name='ck_lint_llm_quota_count_non_negative'),
         Index('idx_lint_llm_quota_vault_hour', 'vault_id', 'hour_bucket'),
     )

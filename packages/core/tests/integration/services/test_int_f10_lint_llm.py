@@ -749,3 +749,32 @@ async def test_tick_skips_units_with_existing_pending_llm_proposal(
 
     candidates = await svc.list_tick_candidates(vault_id, limit=10, session=session)
     assert unit_id not in candidates
+
+
+# ---------------------------------------------------------------------------
+# LOW-F10-1 — DB-side defense-in-depth on count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lint_llm_quota_rejects_negative_count(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """ck_lint_llm_quota_count_non_negative must reject any direct write
+    that would seat a negative count, regardless of whether the service-
+    layer write path could ever produce one."""
+    from sqlalchemy.exc import IntegrityError
+
+    vault_id = await _make_vault(session)
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    with pytest.raises(IntegrityError, match='ck_lint_llm_quota_count_non_negative'):
+        await session.execute(
+            text("""
+                INSERT INTO lint_llm_quota (id, vault_id, hour_bucket, count)
+                VALUES (gen_random_uuid(), :v, :h, -1)
+            """),
+            {'v': str(vault_id), 'h': now},
+        )
+        await session.commit()
+    await session.rollback()
