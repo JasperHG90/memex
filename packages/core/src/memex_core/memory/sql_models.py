@@ -1737,3 +1737,90 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
             postgresql_where=sql_text("status = 'pending'"),
         ),
     )
+
+
+class ConsolidationTick(SQLModel, table=True):  # type: ignore
+    """One row per F38 ``consolidation_tick(vault_id)`` invocation.
+
+    F38's ``services/consolidation.py`` is a thin orchestrator over
+    reflection + contradiction + prune-stale-only; this row is its sole
+    DB write at the end of each tick (AC-F38-4). ``completed_at IS NULL``
+    signals an in-progress tick; the gap between ``started_at`` and
+    ``completed_at`` is wall-clock duration.
+    """
+
+    __tablename__ = 'consolidation_ticks'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the tick row.',
+    )
+
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            nullable=False,
+        ),
+        description='Vault this tick consolidated (Wave 0 invariant: NOT NULL).',
+    )
+
+    started_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='Wall-clock timestamp when the tick began.',
+    )
+
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Wall-clock timestamp when the tick finished; NULL means in-progress.',
+    )
+
+    units_processed: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Memory units returned by select_diff_units (capped at 500/tick).',
+    )
+
+    entities_reflected: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Distinct entities passed to ReflectionService during this tick.',
+    )
+
+    contradictions_run: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Contradiction-detection invocations made during this tick.',
+    )
+
+    stale_pruned: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Units pruned by prune_stale_evidence (status=STALE only).',
+    )
+
+    error: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Free-text error message on failure; None on success.',
+    )
+
+    created_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
+        description='Timestamp when the row was inserted.',
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['vault_id'],
+            ['vaults.id'],
+            ondelete='CASCADE',
+            name='fk_consolidation_ticks_vault_id',
+        ),
+        Index('idx_consolidation_ticks_vault_started', 'vault_id', 'started_at'),
+        Index(
+            'idx_consolidation_ticks_vault_completed',
+            'vault_id',
+            sql_text('completed_at DESC NULLS LAST'),
+        ),
+    )

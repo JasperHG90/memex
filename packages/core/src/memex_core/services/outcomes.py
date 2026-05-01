@@ -223,6 +223,21 @@ class OutcomeService:
         model_result = await session.exec(model_stmt)
         model_count = model_result.rowcount  # type: ignore[union-attr]
 
+        # F38 diff hook: emit one audit row per unit so consolidation_tick can
+        # find units with new outcome signal via AuditLog.action='outcome.record'.
+        from memex_core.memory.sql_models import AuditLog
+
+        outcome_label = 'success' if success else 'failure'
+        for uid in parsed_ids:
+            session.add(
+                AuditLog(
+                    action='outcome.record',
+                    resource_type='memory_unit',
+                    resource_id=str(uid),
+                    details={'vault_id': str(vault_uuid), 'outcome': outcome_label},
+                )
+            )
+
         # Single commit for all three counter updates — preserves co-occurrence
         # invariant across MemoryUnit, UnitEntity, and MentalModel tables.
         await session.commit()

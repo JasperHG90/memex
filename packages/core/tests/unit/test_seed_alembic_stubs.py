@@ -25,10 +25,10 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # (real maintenance_proposals table + LintService rule engine).
     # Integration coverage in tests/integration/test_int_f6_rules.py.
     ('026_revisit_columns', '025_maintenance_proposals', 'F20'),
-    ('027_consolidation_ticks', '026_revisit_columns', 'F38'),
+    # 027_consolidation_ticks (F38) is no longer a stub — see PR #19
+    # (real consolidation_ticks table + per-tick summary rows).
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
     # (real procedure_outcomes table + vault-scoped MW counters).
-    # Integration coverage in tests/integration/test_int_alembic_028.py.
     ('029_lint_llm_quota', '028_procedure_outcomes', 'F10'),
 ]
 
