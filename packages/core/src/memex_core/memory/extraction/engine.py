@@ -246,7 +246,7 @@ class ExtractionEngine:
             allowed = [c.value for c in RiskClass]
             raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
 
-        skip_classifier = bool(intent_override and risk_override)
+        skip_classifier = bool(intent_override or risk_override)
         if not skip_classifier and self._classifier_predictor is not None:
             await classify_facts(
                 processed_facts,
