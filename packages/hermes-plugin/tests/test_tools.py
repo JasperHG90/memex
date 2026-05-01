@@ -172,6 +172,7 @@ def test_all_schemas_have_required_fields():
         'memex_memory_deprioritize',
         'memex_memory_restore',
         'memex_memory_summarize_node',
+        'memex_record_outcome',
     }
     tier_a_diagnostics = {
         'memex_get_diagnostics_summary',
