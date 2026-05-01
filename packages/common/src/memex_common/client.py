@@ -867,11 +867,23 @@ class RemoteMemexAPI:
         *,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """F9: vault-wide low-MW unit consolidation."""
-        return await self._post(
-            'memory/consolidate',
-            {'vault_id': str(vault_id), 'dry_run': dry_run},
-        )
+        """F9: vault-wide low-MW unit consolidation.
+
+        On HTTP 429 (per-vault rate limit, RFC-008 line 125), raises a
+        structured ``RateLimitExceeded`` carrying ``retry_after_seconds``
+        so callers can surface the back-off time without re-parsing the
+        body. Mirrors :meth:`summarize_node`.
+        """
+        body = {'vault_id': str(vault_id), 'dry_run': dry_run}
+        response = await self.client.post('memory/consolidate', json=body)
+        if response.status_code == 429:
+            payload = response.json()
+            raise RateLimitExceeded(
+                retry_after_seconds=float(payload.get('retry_after_seconds', 0.0)),
+                message=str(payload.get('message', 'Rate limit exceeded.')),
+            )
+        response.raise_for_status()
+        return response.json()
 
     async def get_memory_links(
         self,
