@@ -237,13 +237,6 @@ class ExtractionEngine:
         if not processed_facts:
             return processed_facts
 
-        if intent_override:
-            for f in processed_facts:
-                f.intent_class = intent_override
-        if risk_override:
-            for f in processed_facts:
-                f.risk_class = risk_override
-
         skip_classifier = bool(intent_override and risk_override)
         if not skip_classifier and self._classifier_predictor is not None:
             await classify_facts(
@@ -252,12 +245,13 @@ class ExtractionEngine:
                 semaphore=self.semaphore,
                 predictor=self._classifier_predictor,
             )
-            if intent_override:
-                for f in processed_facts:
-                    f.intent_class = intent_override
-            if risk_override:
-                for f in processed_facts:
-                    f.risk_class = risk_override
+
+        if intent_override:
+            for f in processed_facts:
+                f.intent_class = intent_override
+        if risk_override:
+            for f in processed_facts:
+                f.risk_class = risk_override
 
         return filter_safety_blocked(processed_facts)
 
