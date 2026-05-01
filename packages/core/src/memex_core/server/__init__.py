@@ -37,6 +37,7 @@ from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
 from memex_core.server.memories import router as memories_router
+from memex_core.server.outcomes import router as outcomes_router
 from memex_core.server.reflection import router as reflection_router
 from memex_core.server.resources import router as resources_router
 from memex_core.server.retrieval import router as retrieval_router
@@ -330,6 +331,7 @@ app.include_router(notes_router)
 app.include_router(stats_router)
 app.include_router(entities_router)
 app.include_router(memories_router)
+app.include_router(outcomes_router)
 app.include_router(resources_router)
 app.include_router(health_router)
 app.include_router(summary_router)
