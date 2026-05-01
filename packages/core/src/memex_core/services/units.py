@@ -92,7 +92,17 @@ class UnitsService(BaseService):
             unit = await session.get(MemoryUnit, unit_id)
             if unit is None:
                 raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
-            # vault_id scoping is enforced in HIGH-005 follow-up commit.
+            if vault_id is not None and unit.vault_id != vault_id:
+                # Wave 0 vault-scoping invariant: cross-vault mutation rejected.
+                # Use 404 (not 403) so we don't leak whether the unit_id
+                # exists in another vault — same disclosure stance as the
+                # not-found path. The route layer's `check_vault_access` is
+                # the principal-vault gate; this is the per-row scope check
+                # that backstops the route when an in-scope key supplies a
+                # mismatched (unit_id, vault_id) pair.
+                raise MemoryUnitNotFoundError(
+                    f'Memory unit {unit_id} not found in vault {vault_id}.'
+                )
             unit.is_deprioritized = value
             session.add(unit)
             await session.commit()
