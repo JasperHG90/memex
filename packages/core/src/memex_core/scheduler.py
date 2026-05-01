@@ -107,6 +107,26 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
 
 
+async def periodic_lint_task(api: 'MemexAPI'):
+    """F6: per-vault lint run under existing MEMEX_LEADER_LOCK_ID."""
+    async with background_session('bg-sched-lint'):
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                try:
+                    summary = await api.lint.run_rules(vault.id)
+                    if summary.total_findings:
+                        logger.info(
+                            'Scheduler: F6 lint emitted %d findings in vault %s',
+                            summary.total_findings,
+                            vault.name,
+                        )
+                except Exception as e:
+                    logger.warning(f'Scheduler: Lint run failed for vault {vault.name}: {e}')
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: F6 lint task failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -155,6 +175,12 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     # ============================================================
 
     # --- F6 lint ---       (filled by WS-linter)
+    if config.server.memory.lint.enabled:
+        lint_interval = config.server.memory.lint.interval_seconds
+
+        @clock.task(trigger=Every(seconds=lint_interval))
+        async def run_lint_job():
+            await periodic_lint_task(api)
 
     # --- F20 revisit ---   (filled by WS-revisit)
 
