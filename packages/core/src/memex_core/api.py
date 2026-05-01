@@ -64,6 +64,7 @@ from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
+from memex_core.services.lint import LintService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
@@ -509,6 +510,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._lint = LintService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -557,6 +563,10 @@ class MemexAPI:
     @property
     def diagnostics(self) -> DiagnosticsService:
         return self._diagnostics
+
+    @property
+    def lint(self) -> LintService:
+        return self._lint
 
     @property
     def embedder(self) -> EmbeddingsModel:
