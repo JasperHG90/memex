@@ -3605,7 +3605,9 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
         'memex_get_lint_flags — List pending memory-hygiene findings the linter has detected.\n'
         'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
         '\n'
-        '- vault_id (optional): scope to a single vault. Omit for all-vault view.\n'
+        '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
+        'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
+        'all-vault view).\n'
         '- lint_type (optional): structural | quality | governance | schema\n'
         '- status (optional): pending | resolved | dismissed (default: pending)\n'
         '- limit (default 20)\n'
@@ -3620,7 +3622,9 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
         'properties': {
             'vault_id': {
                 'type': 'string',
-                'description': 'Vault UUID or name; omit for all-vault view.',
+                'description': (
+                    'Vault UUID or name. Omit to default to the session active write vault.'
+                ),
             },
             'lint_type': {
                 'type': 'string',
@@ -3653,7 +3657,12 @@ def handle_get_lint_flags(
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    """Sync wrapper around RemoteMemexAPI.lint_get_flags."""
+    """Sync wrapper around RemoteMemexAPI.lint_get_flags.
+
+    HIGH-006: never falls through to an all-vault view. Either the agent
+    supplies vault_id, or the Hermes session vault binding is used. If
+    neither is available, the call is rejected.
+    """
     raw_vault = args.get('vault_id')
     resolved: str | None = None
     try:
@@ -3662,6 +3671,12 @@ def handle_get_lint_flags(
             resolved = str(resolved_id) if resolved_id else None
         elif vault_id is not None:
             resolved = str(vault_id)
+        if resolved is None:
+            return tool_error(
+                'memex_get_lint_flags requires a vault_id or an active session '
+                'vault binding (Wave 0 vault-scoping invariant; refusing to '
+                'fall through to a global all-vault view).'
+            )
         result = run_sync(
             api.lint_get_flags(
                 vault_id=resolved,

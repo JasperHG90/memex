@@ -3794,7 +3794,14 @@ async def memex_get_lint_flags(
     ctx: Context,
     vault_id: Annotated[
         str | None,
-        Field(description='Vault UUID; omit for all-vault view.'),
+        Field(
+            description=(
+                'Vault UUID or name to scope the query. When omitted, falls '
+                'through to the active write vault from session config (per '
+                'Wave 0 vault-scoping invariant — never falls through to a '
+                'global all-vault view).'
+            ),
+        ),
     ] = None,
     lint_type: Annotated[
         str | None,
@@ -3810,12 +3817,21 @@ async def memex_get_lint_flags(
         Field(description='Opaque cursor from a prior page; omit on first call.'),
     ] = None,
 ) -> dict[str, Any]:
-    """F8 read-only surface: list pending memory-hygiene findings."""
+    """F8 read-only surface: list pending memory-hygiene findings.
+
+    HIGH-006: previously a missing ``vault_id`` would fall through to a
+    global all-vault view, leaking findings across tenants. The tool now
+    binds to the session's active write vault when no ``vault_id`` is
+    provided. Cross-tenant probing requires an explicit ``vault_id`` that
+    the principal's auth context allows.
+    """
     try:
         api = get_api(ctx)
-        resolved_vault: str | None = None
-        if vault_id is not None:
-            resolved_vault = str(await _resolve_vault_id(api, vault_id))
+        # HIGH-006: never fall through to all-vault — always scope to a
+        # concrete vault. Default to the session's active write vault when
+        # the agent omits vault_id.
+        effective_vault = vault_id if vault_id is not None else _default_write_vault(ctx)
+        resolved_vault = str(await _resolve_vault_id(api, effective_vault))
         try:
             return await api.lint_get_flags(
                 vault_id=resolved_vault,
