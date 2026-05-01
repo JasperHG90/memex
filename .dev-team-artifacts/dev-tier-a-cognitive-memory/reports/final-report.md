@@ -127,3 +127,36 @@ None block Tier-A surface acceptance; #30 and #31 are flake-class, #32–#34 are
 | F9 final merge     | 46    | +`memex_memory_reconsolidate`, +`memex_memory_consolidate`; F4/F5/F32 already counted |
 
 Net new MCP surface: 10 tools registered in `packages/mcp/src/memex_mcp/server.py` between lines 3469 and 4028. F10, F14 (KV-only), and F26 (CLI/HTTP only) intentionally did not add MCP tools — F10 is background-scheduled and F26 surfaces through F32.
+
+---
+
+## Phase 3 — Adversarial Review & Rework (2026-05-01)
+
+This addendum records the Phase 3 adversarial-review cycle that ran after the body of this report was first drafted. Phase 3 surfaced four findings that required rework before close-out; all four were adjudicated GO by `qa-adversarial-2` and merged into `memory_augmentation`.
+
+### Adjudicated findings → rework commits
+
+| Finding | Description | Rework commit(s) on `memory_augmentation` |
+| --- | --- | --- |
+| HIGH-1 | Hermes boot+discovery canary missing F4 / F8 / F29 verbs | `e9e9920` (`test(hermes): extend AC-X-10 canary to F4/F8/F29`) |
+| HIGH-3 | F38 ↔ F9 race — `ConsolidationService` did not acquire per-entity lock | `9e596e2` (`fix(F38): acquire per-entity lock around ConsolidationService loop`) + `2f14d43` (leader-lock dedup) |
+| HIGH-4 | Tier-A WRITE auth gaps on routers (F4 / F9 / F20 / F8 / F29 / lint) | `00a6826` (CRIT-001 sweep), `cbd46ce` (F32 diagnostics), `992fb35` (F8 MCP), `29d06e5` (UnitsService), `2190b27` (F29 `/record` Gap A), `39cc5e3` (lint dismiss/resolve Gap B + service-layer SQL filter) |
+| MEDIUM-1 | `LEADER_LOCK_ID` duplicated in `services/locks.py` and `scheduler.py` | `2f14d43` (`refactor(locks): dedup MEMEX_LEADER_LOCK_ID source of truth`) |
+
+### Backlog rework closed in the same window
+
+- #28 + #40 → PR #77 (RFC-014 FSRS-5 patch + Tier-A artifact corpus, commit `e59bb28`)
+- #30 → PR #75 (prefetch race triage)
+- #31 → PR #81 (bulk-suite flaky test triage, commit `8458bf3`)
+- #32 → PR #73 (F8 `test_missing_table_raises_initialization_error` CASCADE-restore fix, commit `0955721`)
+- #33 → PR #76 (F9 per-vault rate limit on `memex_memory_consolidate`, commit `9811301`)
+- #34 → PR #80 (F9 `MaintenanceProposal.resolved_by` column, commit `110b55f`)
+- #35 → already merged earlier (F10 real-LLM `@pytest.mark.llm` test, commit `0875255`)
+
+### Final state
+
+- **`memory_augmentation` HEAD post-Phase-3-rework**: `39cc5e3` — `fix(server/lint): enforce per-vault auth on /findings/{id}/{dismiss,resolve} + service-layer SQL filter (HIGH-4 Gap B)`.
+- **Phase 3 close criteria**: ALL MET. **0 CRITICAL / 0 HIGH open.** AC-X-7 (vault scoping on 11 server router files), AC-X-8 (single `MEMEX_LEADER_LOCK_ID` definition), and AC-X-10 (Hermes canary covers F4/F8/F29 verbs) verified intact against the post-rework HEAD.
+- **Carryover**: 6 Tier-B follow-ups (3 MEDIUM, 3 LOW) — symmetric `bool` coercion guard on F29 `record_outcome`, Aioclock leader-task serialization, `ConsolidationTick.vault_id` model/migration mismatch, F10 `LintLLMQuota.count` value-range nit, F38 scheduler-only canary documentation, and F8 lint-query teardown hardening — filed to `BACKLOG.md` § "Tier-A Phase 3 carryover (added 2026-05-01)".
+
+Phase 3 → Phase 4 transition: **APPROVED**. Tier-A surface ships clean.
