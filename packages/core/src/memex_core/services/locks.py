@@ -113,6 +113,8 @@ async def acquire_entity_lock(
     and the connection closed; if the process crashes before exit, Postgres
     auto-releases on backend termination (POC TC-12-5).
     """
+    from memex_core.metrics import ENTITY_LOCK_ACQUIRES_TOTAL
+
     lock_id = entity_lock_id(entity_id)
     conn = await asyncpg.connect(dsn)
     acquired = False
@@ -122,8 +124,10 @@ async def acquire_entity_lock(
             got = await conn.fetchval('SELECT pg_try_advisory_lock($1)', lock_id)
             if got:
                 acquired = True
+                ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='acquired').inc()
                 break
             if monotonic() >= deadline:
+                ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='timeout').inc()
                 raise EntityLockTimeoutError(
                     f'could not acquire advisory lock for entity {entity_id} '
                     f'within {timeout_seconds}s (lock_id={lock_id})'
@@ -221,64 +225,75 @@ class LocksService:
         Raises EntityLockTimeoutError if another reconsolidate is in flight.
         """
         from memex_core.memory.reflect.models import ReflectionRequest
+        from memex_core.metrics import RECONSOLIDATE_TOTAL
 
         log = logger.getChild(str(entity_id))
-        async with acquire_entity_lock(self._dsn, entity_id, timeout_seconds=timeout_seconds):
-            unit_ids = await self._resolve_entity_to_unit_ids(entity_id, vault_id)
-            log.info(
-                'reconsolidate.start',
-                extra={
+        try:
+            async with acquire_entity_lock(self._dsn, entity_id, timeout_seconds=timeout_seconds):
+                unit_ids = await self._resolve_entity_to_unit_ids(entity_id, vault_id)
+                log.info(
+                    'reconsolidate.start',
+                    extra={
+                        'entity_id': str(entity_id),
+                        'vault_id': str(vault_id),
+                        'unit_count': len(unit_ids),
+                    },
+                )
+
+                contradictions_run = 0
+                if unit_ids and self.contradiction is not None:
+                    await self.contradiction.detect_contradictions(
+                        session_factory=self.metastore.session_maker(),
+                        document_id=None,
+                        unit_ids=unit_ids,
+                        vault_id=vault_id,
+                    )
+                    contradictions_run = len(unit_ids)
+
+                results = await self.reflection.reflect_batch(
+                    [
+                        ReflectionRequest(
+                            entity_id=entity_id,
+                            vault_id=vault_id,
+                            limit_recent_memories=None,
+                        )
+                    ]
+                )
+                mental_model_id: str | None = None
+                observations_added = 0
+                if results:
+                    result = results[0]
+                    mental_model_id = (
+                        str(result.updated_model.id)
+                        if result.updated_model.id is not None
+                        else None
+                    )
+                    observations_added = len(result.new_observations)
+
+                log.info(
+                    'reconsolidate.complete',
+                    extra={
+                        'entity_id': str(entity_id),
+                        'units_examined': len(unit_ids),
+                        'contradictions_run': contradictions_run,
+                        'observations_added': observations_added,
+                    },
+                )
+                RECONSOLIDATE_TOTAL.labels(outcome='success').inc()
+                return {
                     'entity_id': str(entity_id),
                     'vault_id': str(vault_id),
-                    'unit_count': len(unit_ids),
-                },
-            )
-
-            contradictions_run = 0
-            if unit_ids and self.contradiction is not None:
-                await self.contradiction.detect_contradictions(
-                    session_factory=self.metastore.session_maker(),
-                    document_id=None,
-                    unit_ids=unit_ids,
-                    vault_id=vault_id,
-                )
-                contradictions_run = len(unit_ids)
-
-            results = await self.reflection.reflect_batch(
-                [
-                    ReflectionRequest(
-                        entity_id=entity_id,
-                        vault_id=vault_id,
-                        limit_recent_memories=None,
-                    )
-                ]
-            )
-            mental_model_id: str | None = None
-            observations_added = 0
-            if results:
-                result = results[0]
-                mental_model_id = (
-                    str(result.updated_model.id) if result.updated_model.id is not None else None
-                )
-                observations_added = len(result.new_observations)
-
-            log.info(
-                'reconsolidate.complete',
-                extra={
-                    'entity_id': str(entity_id),
                     'units_examined': len(unit_ids),
                     'contradictions_run': contradictions_run,
+                    'mental_model_id': mental_model_id,
                     'observations_added': observations_added,
-                },
-            )
-            return {
-                'entity_id': str(entity_id),
-                'vault_id': str(vault_id),
-                'units_examined': len(unit_ids),
-                'contradictions_run': contradictions_run,
-                'mental_model_id': mental_model_id,
-                'observations_added': observations_added,
-            }
+                }
+        except EntityLockTimeoutError:
+            RECONSOLIDATE_TOTAL.labels(outcome='lock_timeout').inc()
+            raise
+        except Exception:
+            RECONSOLIDATE_TOTAL.labels(outcome='error').inc()
+            raise
 
     async def _select_consolidate_candidates(self, vault_id: UUID) -> list[UUID]:
         """Identify low-MW + 5+-outcomes + non-deprioritized + 30-days-old units.
@@ -344,64 +359,72 @@ class LocksService:
         """
         from sqlalchemy import inspect as sa_inspect
 
-        candidates = await self._select_consolidate_candidates(vault_id)
-        log = logger.getChild(str(vault_id))
-        log.info(
-            'consolidate.start',
-            extra={
-                'vault_id': str(vault_id),
-                'candidates': len(candidates),
-                'dry_run': dry_run,
-            },
-        )
+        from memex_core.metrics import CONSOLIDATE_TOTAL
 
-        if dry_run:
-            return {
-                'vault_id': str(vault_id),
-                'dry_run': True,
-                'candidates': len(candidates),
-                'units_deprioritized': 0,
-                'proposals_written': 0,
-            }
-
-        has_proposals_table = await self._has_maintenance_proposals_table(sa_inspect)
-        units_deprioritized = 0
-        proposals_written = 0
-        reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
-
-        if self.units is None:
-            raise RuntimeError(
-                'consolidate_vault requires UnitsService — wire it via '
-                'LocksService(..., units=...) at construction'
+        try:
+            candidates = await self._select_consolidate_candidates(vault_id)
+            log = logger.getChild(str(vault_id))
+            log.info(
+                'consolidate.start',
+                extra={
+                    'vault_id': str(vault_id),
+                    'candidates': len(candidates),
+                    'dry_run': dry_run,
+                },
             )
 
-        for unit_id in candidates:
-            await self.units.set_unit_deprioritized(unit_id, reason, actor=actor)
-            units_deprioritized += 1
-            if has_proposals_table:
-                await self._write_consolidate_proposal(
-                    unit_id=unit_id,
-                    vault_id=vault_id,
-                    actor=actor,
-                    reason=reason,
-                )
-                proposals_written += 1
+            if dry_run:
+                CONSOLIDATE_TOTAL.labels(outcome='success').inc()
+                return {
+                    'vault_id': str(vault_id),
+                    'dry_run': True,
+                    'candidates': len(candidates),
+                    'units_deprioritized': 0,
+                    'proposals_written': 0,
+                }
 
-        log.info(
-            'consolidate.complete',
-            extra={
+            has_proposals_table = await self._has_maintenance_proposals_table(sa_inspect)
+            units_deprioritized = 0
+            proposals_written = 0
+            reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
+
+            if self.units is None:
+                raise RuntimeError(
+                    'consolidate_vault requires UnitsService — wire it via '
+                    'LocksService(..., units=...) at construction'
+                )
+
+            for unit_id in candidates:
+                await self.units.set_unit_deprioritized(unit_id, reason, actor=actor)
+                units_deprioritized += 1
+                if has_proposals_table:
+                    await self._write_consolidate_proposal(
+                        unit_id=unit_id,
+                        vault_id=vault_id,
+                        actor=actor,
+                        reason=reason,
+                    )
+                    proposals_written += 1
+
+            log.info(
+                'consolidate.complete',
+                extra={
+                    'vault_id': str(vault_id),
+                    'units_deprioritized': units_deprioritized,
+                    'proposals_written': proposals_written,
+                },
+            )
+            CONSOLIDATE_TOTAL.labels(outcome='success').inc()
+            return {
                 'vault_id': str(vault_id),
+                'dry_run': False,
+                'candidates': len(candidates),
                 'units_deprioritized': units_deprioritized,
                 'proposals_written': proposals_written,
-            },
-        )
-        return {
-            'vault_id': str(vault_id),
-            'dry_run': False,
-            'candidates': len(candidates),
-            'units_deprioritized': units_deprioritized,
-            'proposals_written': proposals_written,
-        }
+            }
+        except Exception:
+            CONSOLIDATE_TOTAL.labels(outcome='error').inc()
+            raise
 
     async def _has_maintenance_proposals_table(self, sa_inspect: Any) -> bool:
         engine = self.metastore.engine
