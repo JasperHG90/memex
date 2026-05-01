@@ -30,7 +30,12 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # (real consolidation_ticks table + per-tick summary rows).
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
     # (real procedure_outcomes table + vault-scoped MW counters).
-    ('029_lint_llm_quota', '028_procedure_outcomes', 'F10'),
+    # 029_lint_llm_quota (F10) is no longer a stub — real implementation
+    # creates the lint_llm_quota table for the rolling-24h cost-cap counter
+    # (RFC-006). Integration coverage in tests covering F10 lint quota.
+    # All five Tier A stubs (025-029) are now real migrations; the list is
+    # intentionally empty so the parametrised stub-still-NotImplementedError
+    # check produces a no-op pass rather than a false failure.
 ]
 
 
