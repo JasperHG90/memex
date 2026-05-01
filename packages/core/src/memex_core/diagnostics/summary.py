@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import case, func, select
 
 from memex_core.diagnostics.heatmap import compute_heatmap
+from memex_core.diagnostics.lint_dashboard import pending_by_type as _lint_pending_by_type
 from memex_core.diagnostics.umap import (
     load_cached_manifold,
 )
@@ -31,13 +32,14 @@ async def compute_diagnostics_summary(
     avg_mw = await _avg_mw_score(metastore, vault_id)
     manifold_status, cluster_count = await _manifold_status(filestore, vault_id, pending_compute)
     heatmap = await compute_heatmap(metastore, vault_id, top_n=5)
+    lint_pending_by_type = await _lint_pending_by_type(metastore, vault_id)
 
     return {
         'vault_id': str(vault_id),
         'as_of': datetime.now(timezone.utc).isoformat(),
         'manifold_status': manifold_status,
         'unit_counts': unit_counts,
-        'lint_pending_by_type': {},
+        'lint_pending_by_type': lint_pending_by_type,
         'cluster_count': cluster_count,
         'avg_mw_score': avg_mw,
         'top_5_retrieved_entities': heatmap['entities'],

@@ -122,27 +122,72 @@ async def test_returns_all_fields_with_cluster_count_null(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.parametrize('with_f6_seed', [False, True])
-async def test_lint_pending_by_type_pre_post_f6(
+async def test_lint_pending_by_type_reflects_findings(
     session: AsyncSession,
     metastore,
     filestore,
     memex_config: MemexConfig,
-    with_f6_seed: bool,
 ):
-    """Pre-F6: lint_pending_by_type is {} (key always present).
-    Post-F6: skipped until MaintenanceProposal lands."""
-    if with_f6_seed:
-        try:
-            from memex_core.memory.sql_models import MaintenanceProposal  # noqa: F401
-        except ImportError:
-            pytest.skip('MaintenanceProposal table absent; F6 not yet shipped')
+    """F26: ``lint_pending_by_type`` reflects pending MaintenanceProposal rows
+    for the vault, grouped by lint_type. Empty vault still returns ``{}``
+    (the key is always present — F32-core invariant).
+    """
+    from memex_core.memory.sql_models import (
+        LintSource,
+        LintStatus,
+        LintType,
+        MaintenanceProposal,
+    )
 
     vault = await _seed_vault_with_units(session, n_active=1, n_stale=0, n_deprioritized=0)
 
     service = DiagnosticsService(metastore=metastore, filestore=filestore, config=memex_config)
-    summary = await service.get_summary(vault.id)
 
+    # Empty vault: key present, value empty.
+    summary = await service.get_summary(vault.id)
     assert 'lint_pending_by_type' in summary
-    if not with_f6_seed:
-        assert summary['lint_pending_by_type'] == {}
+    assert summary['lint_pending_by_type'] == {}
+
+    # Seed two pending findings (one structural, one quality) + one resolved
+    # row that must NOT show up in pending_by_type.
+    session.add_all(
+        [
+            MaintenanceProposal(
+                vault_id=vault.id,
+                lint_type=LintType.STRUCTURAL,
+                target_type='memory_unit',
+                target_id=str(uuid4()),
+                rule_name='rule_x',
+                evidence={},
+                suggested_action='fix it',
+                status=LintStatus.PENDING,
+                source=LintSource.RULE,
+            ),
+            MaintenanceProposal(
+                vault_id=vault.id,
+                lint_type=LintType.QUALITY,
+                target_type='memory_unit',
+                target_id=str(uuid4()),
+                rule_name='rule_y',
+                evidence={},
+                suggested_action='fix it',
+                status=LintStatus.PENDING,
+                source=LintSource.LLM,
+            ),
+            MaintenanceProposal(
+                vault_id=vault.id,
+                lint_type=LintType.QUALITY,
+                target_type='memory_unit',
+                target_id=str(uuid4()),
+                rule_name='rule_z',
+                evidence={},
+                suggested_action='fix it',
+                status=LintStatus.RESOLVED,
+                source=LintSource.RULE,
+            ),
+        ]
+    )
+    await session.commit()
+
+    summary = await service.get_summary(vault.id)
+    assert summary['lint_pending_by_type'] == {'structural': 1, 'quality': 1}
