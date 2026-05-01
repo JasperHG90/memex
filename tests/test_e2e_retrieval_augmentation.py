@@ -415,6 +415,8 @@ async def test_e2e_ingest_search_record_outcome_search(client: TestClient, db_se
     Marked ``llm`` because the F25 write-time classifier (default-on as of
     PR #91) issues a real Gemini call inside the ingestion pipeline that is
     not covered by the ``_extract_facts`` mock used in ``_ingest_note``.
+    The search path also invokes query expansion via Gemini; CI runs
+    `integration and not llm`, so this test skips without credentials.
     """
     from memex_core.services.outcomes import OutcomeService
     from memex_core.memory.sql_models import MemoryUnit
