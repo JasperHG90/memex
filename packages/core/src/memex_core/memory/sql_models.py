@@ -599,6 +599,33 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Confidence score (0.0-1.0). Decreased when contradicted by newer information.',
     )
 
+    revisit_due_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='F20: when this unit is next due for FSRS-5 review (NULL if not scheduled).',
+    )
+
+    revisit_stability: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='F20: FSRS-5 stability state (NULL until first review).',
+    )
+
+    revisit_difficulty: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='F20: FSRS-5 difficulty state (NULL until first review).',
+    )
+
+    revisit_review_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'F20: consecutive Again-rating count for the sticky auto-deprioritize gate. '
+            'Resets to 0 on Hard/Good/Easy.'
+        ),
+    )
+
     unit_metadata: dict[str, Any] = Field(
         default={},
         sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
