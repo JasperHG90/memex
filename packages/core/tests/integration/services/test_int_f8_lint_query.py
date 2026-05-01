@@ -283,12 +283,22 @@ async def test_vault_scoping(session: AsyncSession, api) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_table_raises_initialization_error(
-    session: AsyncSession, api, metastore
+    session: AsyncSession, api, metastore, engine
 ) -> None:
-    """Drop maintenance_proposals; the next get_findings raises the documented error."""
+    """Drop maintenance_proposals; the next get_findings raises the documented error.
+
+    The table is recreated in ``finally`` so downstream tests in the same
+    session do not observe the simulated uninitialized state.
+    """
+    from sqlmodel import SQLModel
+
     await session.execute(text('DROP TABLE IF EXISTS maintenance_proposals CASCADE'))
     await session.commit()
-
-    with pytest.raises(LintSubsystemNotInitializedError) as ei:
-        await api.lint.get_findings()
-    assert 'alembic upgrade head' in str(ei.value)
+    try:
+        with pytest.raises(LintSubsystemNotInitializedError) as ei:
+            await api.lint.get_findings()
+        assert 'alembic upgrade head' in str(ei.value)
+    finally:
+        table = SQLModel.metadata.tables['maintenance_proposals']
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
