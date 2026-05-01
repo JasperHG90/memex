@@ -1315,6 +1315,25 @@ GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
 }
 
 
+TOOLS_MODE_SCHEMAS: list[dict[str, Any]] = [
+    # The minimal "primary" tool surface exposed when ``memory_mode='tools'``.
+    # Memory-mode 'tools' opts the agent out of briefing + prefetch context,
+    # so we hand it only the LLM-reaches-for-most-often verbs and rely on the
+    # model to compose them. Keep this list narrow; do NOT auto-grow it when
+    # new MCP verbs land — Tier-A's ALL_SCHEMAS expansion silently broke this
+    # surface once already (46 tools leaking into tools-mode). New verbs ship
+    # in 'hybrid' mode by default; promote one to TOOLS_MODE_SCHEMAS only when
+    # there is a deliberate product decision and a paired test update.
+    RECALL_SCHEMA,
+    RETRIEVE_NOTES_SCHEMA,
+    SURVEY_SCHEMA,
+    RETAIN_SCHEMA,
+    LIST_ENTITIES_SCHEMA,
+    GET_ENTITY_MENTIONS_SCHEMA,
+    GET_ENTITY_COOCCURRENCES_SCHEMA,
+]
+
+
 ALL_SCHEMAS: list[dict[str, Any]] = [
     # --- Vault-scoped (Stream 1) ---
     RECALL_SCHEMA,
@@ -3195,6 +3214,7 @@ __all__ = [
     'RETAIN_SCHEMA',
     'RETRIEVE_NOTES_SCHEMA',
     'SURVEY_SCHEMA',
+    'TOOLS_MODE_SCHEMAS',
     'VaultResolutionError',
     'dispatch',
     # --- Read/discovery (Stream 2) ---

@@ -74,6 +74,52 @@ def test_get_tool_schemas_respects_memory_mode(tmp_path: Path, monkeypatch: pyte
             provider.shutdown()
 
 
+def test_get_tool_schemas_in_tools_mode_returns_primary_seven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``memory_mode='tools'`` exposes only the 7-tool primary subset.
+
+    Regression for the Tier-A 46→7 leak: when the test was first written
+    (commit e3eb9be) ``ALL_SCHEMAS`` happened to contain exactly seven
+    entries, so a no-op ``tools``-mode filter satisfied the integration
+    test by accident. Successive Tier-A waves (F4/F5/F8/F9/F14/F20/F32 +
+    append_note + Stream 2-5 schemas) grew the surface to 46, which
+    silently leaked into ``tools`` mode and broke the agent contract.
+
+    The contract ``tools`` mode encodes: briefing skipped, prefetch
+    skipped, narrow tool surface — only the LLM-most-reached-for verbs.
+    Locking it down here so the next schema landing has to consciously
+    decide whether to promote the verb to ``TOOLS_MODE_SCHEMAS``.
+    """
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_HERMES_MODE', 'tools')
+
+    fake_api = Mock()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    fake_api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
+    fake_api.get_session_briefing = AsyncMock(return_value='')
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        provider = MemexMemoryProvider()
+        provider.initialize('s', hermes_home=str(tmp_path), platform='cli')
+        try:
+            schemas = provider.get_tool_schemas()
+            names = {s['name'] for s in schemas}
+            assert names == {
+                'memex_memory_search',
+                'memex_note_search',
+                'memex_survey',
+                'memex_add_note',
+                'memex_list_entities',
+                'memex_get_entity_mentions',
+                'memex_get_entity_cooccurrences',
+            }
+            assert len(schemas) == 7
+        finally:
+            provider.shutdown()
+
+
 def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
     """Hybrid mode exposes exactly the 44 Memex tools (AC-086 + AC-008 + Tier A F4/F5/F29 + F32 diagnostics + F8 + F20)."""
     provider, *_ = provider_with_stubbed_api
