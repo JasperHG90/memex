@@ -3921,14 +3921,30 @@ async def memex_memory_consolidate(
         Field(description='If true, return preview without making changes.'),
     ] = False,
 ) -> dict[str, Any]:
-    """F9: vault-wide low-MW unit consolidation."""
+    """F9: vault-wide low-MW unit consolidation.
+
+    Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
+    hour). On 429 the tool returns a structured envelope with
+    ``retry_after_seconds`` rather than raising — mirrors the F5
+    summarize-node contract so agents can back off without retry loops.
+    """
+    from memex_common.client import RateLimitExceeded
+
     try:
         api = get_api(ctx)
         try:
             vault_uuid = UUID(vault_id)
         except ValueError:
             raise ToolError(f'Invalid vault UUID: {vault_id}')
-        return await api.consolidate_vault(vault_uuid, dry_run=dry_run)
+        try:
+            return await api.consolidate_vault(vault_uuid, dry_run=dry_run)
+        except RateLimitExceeded as exc:
+            return {
+                'error': 'rate_limit_exceeded',
+                'vault_id': vault_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
     except ToolError:
         raise
     except Exception as e:

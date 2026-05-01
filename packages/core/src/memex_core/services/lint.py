@@ -85,6 +85,7 @@ class LintFindingDTO(BaseModel):
     vault_id: UUID | None
     created_at: datetime
     resolved_at: datetime | None
+    resolved_by: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> LintFindingDTO:
@@ -101,6 +102,7 @@ class LintFindingDTO(BaseModel):
             vault_id=row['vault_id'],
             created_at=row['created_at'],
             resolved_at=row['resolved_at'],
+            resolved_by=row['resolved_by'] if 'resolved_by' in row.keys() else None,
         )
 
 
@@ -456,6 +458,7 @@ class LintService(BaseService):
         new_status: str,
         *,
         vault_id: UUID | None = None,
+        actor: str | None = None,
     ) -> bool:
         """Flip a finding's status to ``resolved`` or ``dismissed``.
 
@@ -468,11 +471,18 @@ class LintService(BaseService):
         owned by a different vault (HIGH-4 sub). Pass ``vault_id=None`` to
         preserve legacy in-process callers (e.g. background jobs that have
         already authenticated higher up the stack).
+
+        ``actor`` is recorded in ``resolved_by`` for traceability — pass the
+        agent name or operator id; ``None`` keeps the column NULL.
         """
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
 
-        params: dict[str, Any] = {'new': new_status, 'id': str(finding_id)}
+        params: dict[str, Any] = {
+            'new': new_status,
+            'id': str(finding_id),
+            'actor': actor,
+        }
         where_extra = ''
         if vault_id is not None:
             where_extra = ' AND vault_id = :vault_id'
@@ -481,7 +491,8 @@ class LintService(BaseService):
         async with self.metastore.session() as session:
             result = await session.execute(
                 text(
-                    'UPDATE maintenance_proposals SET status = :new, resolved_at = now() '
+                    'UPDATE maintenance_proposals '
+                    'SET status = :new, resolved_at = now(), resolved_by = :actor '
                     f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
                 params,
@@ -546,7 +557,8 @@ class LintService(BaseService):
         # second round-trip count.
         stmt = text(
             f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '
-            f'evidence, suggested_action, status, source, created_at, resolved_at '
+            f'evidence, suggested_action, status, source, created_at, resolved_at, '
+            f'resolved_by '
             f'FROM maintenance_proposals WHERE {where_sql} '
             'ORDER BY created_at DESC, id DESC LIMIT :limit + 1'
         )

@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from memex_common.config import Permission
@@ -26,6 +27,7 @@ from memex_core.server.common import (
     get_api,
 )
 from memex_core.services.locks import EntityLockTimeoutError
+from memex_core.services.rate_limit import RateLimitExceededError
 
 logger = logging.getLogger('memex.core.server')
 
@@ -201,21 +203,49 @@ async def reconsolidate_entity(
 @router.post(
     '/memory/consolidate',
     dependencies=[Depends(require_write)],
+    responses={
+        429: {
+            'description': 'Rate limit exceeded for this vault (default 1 call per vault per hour).',
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'rate_limit_exceeded',
+                        'retry_after_seconds': 1234.5,
+                        'message': 'Rate limit exceeded; retry after 1234.50s.',
+                    }
+                }
+            },
+        }
+    },
 )
 async def consolidate_vault(
     request: Annotated[ConsolidateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
-) -> dict[str, Any]:
+) -> Any:
     """F9: vault-wide low-MW unit consolidation. RFC-008.
 
     Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
     created_at<now()-30d. dry_run=true returns preview without writes.
-    Note: rate-limit deferred to task #33.
+
+    Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
+    hour). Translates ``RateLimitExceededError`` into a 429 envelope with a
+    ``Retry-After`` header. Mirrors the F5 summarize-node 429 contract.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
+    except RateLimitExceededError as exc:
+        retry_after = max(0, int(exc.retry_after_seconds + 0.999))
+        return JSONResponse(
+            status_code=429,
+            content={
+                'error': 'rate_limit_exceeded',
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            },
+            headers={'Retry-After': str(retry_after)},
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Consolidate failed')
 

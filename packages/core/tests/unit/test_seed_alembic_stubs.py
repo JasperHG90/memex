@@ -30,7 +30,12 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # (real consolidation_ticks table + per-tick summary rows).
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
     # (real procedure_outcomes table + vault-scoped MW counters).
-    ('029_lint_llm_quota', '028_procedure_outcomes', 'F10'),
+    # 029_lint_llm_quota (F10) is no longer a stub — real implementation
+    # creates the lint_llm_quota table for the rolling-24h cost-cap counter
+    # (RFC-006). Integration coverage in tests covering F10 lint quota.
+    # All five Tier A stubs (025-029) are now real migrations; the list is
+    # intentionally empty so the parametrised stub-still-NotImplementedError
+    # check produces a no-op pass rather than a false failure.
 ]
 
 
@@ -49,18 +54,22 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['029_lint_llm_quota'], f'Expected single head 029, got {heads}'
+    # Head moves forward with each Wave-N schema patch (issue #34 added 030).
+    assert heads == ['030_proposal_resolved_by'], (
+        f'Expected single head 030_proposal_resolved_by, got {heads}'
+    )
 
     walk = list(sd.walk_revisions())
-    top5 = [(r.revision, r.down_revision) for r in walk[:5]]
-    expected_top5 = [
+    top6 = [(r.revision, r.down_revision) for r in walk[:6]]
+    expected_top6 = [
+        ('030_proposal_resolved_by', '029_lint_llm_quota'),
         ('029_lint_llm_quota', '028_procedure_outcomes'),
         ('028_procedure_outcomes', '027_consolidation_ticks'),
         ('027_consolidation_ticks', '026_revisit_columns'),
         ('026_revisit_columns', '025_maintenance_proposals'),
         ('025_maintenance_proposals', '024_intent_risk_classifier'),
     ]
-    assert top5 == expected_top5, f'Tier A chain mismatch: got {top5}'
+    assert top6 == expected_top6, f'Tier A chain mismatch: got {top6}'
 
 
 @pytest.mark.parametrize('rev,down,fid', _TIER_A_STUBS)

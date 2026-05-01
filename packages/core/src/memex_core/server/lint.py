@@ -107,7 +107,7 @@ async def lint_findings(
                 text(
                     'SELECT id::text, vault_id::text, lint_type, target_type, target_id, '
                     'rule_name, evidence, suggested_action, status, source, '
-                    'created_at, resolved_at '
+                    'created_at, resolved_at, resolved_by '
                     f'FROM maintenance_proposals WHERE {where} '
                     'ORDER BY created_at DESC '
                     'LIMIT :limit OFFSET :offset'
