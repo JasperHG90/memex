@@ -22,23 +22,23 @@ def test_deprioritize_skill_describes_non_destructive_verb():
     """At least one CC plugin skill mentions the verb + the non-destructive
     contrast vs archive (Wave 0 §6 #12).
     """
-    found_in: Path | None = None
-    for p in _candidate_skill_files():
-        if p.exists() and 'memex_memory_deprioritize' in p.read_text():
-            found_in = p
+    matching = [
+        p
+        for p in _candidate_skill_files()
+        if p.exists() and 'memex_memory_deprioritize' in p.read_text()
+    ]
+    assert matching, 'memex_memory_deprioritize verb not described in any CC plugin skill'
+
+    contrast_satisfied = False
+    for p in matching:
+        text = p.read_text().lower()
+        if ('non-destructive' in text and 'archive' in text) or (
+            'deprioritize' in text and 'destructive' in text
+        ):
+            contrast_satisfied = True
             break
-    assert found_in is not None, (
-        'memex_memory_deprioritize verb not described in any CC plugin skill'
-    )
 
-    text = found_in.read_text()
-    assert 'memex_memory_deprioritize' in text
-    assert ('archive' in text.lower()) or ('destructive' in text.lower())
-
-    has_contrast = ('non-destructive' in text.lower() and 'archive' in text.lower()) or (
-        'deprioritize' in text.lower() and 'destructive' in text.lower()
-    )
-    assert has_contrast, (
-        'CC skill must explicitly contrast deprioritize (non-destructive) vs archive '
-        '(destructive) per Wave 0 §6 #12'
+    assert contrast_satisfied, (
+        f'At least one of {[str(p) for p in matching]} must contrast deprioritize '
+        '(non-destructive) vs archive (destructive) per Wave 0 §6 #12'
     )

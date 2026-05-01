@@ -1,10 +1,11 @@
-"""F32 — Diagnostics endpoints (manifold + retrieval heatmap + summary).
+"""F32 — Diagnostics endpoints (manifold + retrieval heatmap + summary + lint).
 
 Routes:
 - GET /diagnostics/manifold/{vault_id}              — 200 (warm) | 202 (cold) | 501 (umap missing)
 - GET /diagnostics/manifold/{vault_id}/status       — 200 (done) | 202 (still computing) | 404
 - GET /diagnostics/retrieval/{vault_id}             — 200 with heatmap JSON
 - GET /diagnostics/summary/{vault_id}               — 200 with full summary
+- GET /diagnostics/lint/{vault_id}                  — 200 with lint pivot dashboard (F26)
 """
 
 from __future__ import annotations
@@ -107,3 +108,21 @@ async def get_diagnostics_summary(
         return await api.diagnostics.get_summary(vault_id)
     except Exception as e:
         raise _handle_error(e, 'Failed to compute diagnostics summary')
+
+
+@router.get('/lint/{vault_id}')
+async def get_lint_dashboard(
+    vault_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> dict[str, Any]:
+    """F26 — Lint dashboard pivot for one vault.
+
+    Returns the (lint_type, status, source) pivot, the pending_by_type
+    slice, and the top-5 most-recent pending findings. Distinct from F6's
+    /lint/status (single count) and /lint/findings (paginated row listing) —
+    this is the operator/observability dashboard view per RFC-009 §72.
+    """
+    try:
+        return await api.diagnostics.get_lint_dashboard(vault_id)
+    except Exception as e:
+        raise _handle_error(e, 'Failed to compute lint dashboard')

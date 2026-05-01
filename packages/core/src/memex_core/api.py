@@ -64,9 +64,11 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.lint import LintService
+from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
+from memex_core.services.revisitation import RevisitationService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
 from memex_core.services.units import UnitsService
@@ -520,6 +522,27 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._revisit = RevisitationService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+
+        from memex_core.services.lint_llm import LintLLMService
+
+        self._lint_llm = LintLLMService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+
+        self._locks = LocksService(
+            metastore=self.metastore,
+            config=self.config,
+            reflection=self._reflection,
+            contradiction=self._contradiction,
+            units=self._units,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -555,6 +578,7 @@ class MemexAPI:
             self._search,
             self._lineage,
             self._units,
+            self._revisit,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -576,6 +600,47 @@ class MemexAPI:
     @property
     def lint(self) -> LintService:
         return self._lint
+
+    @property
+    def revisit(self) -> RevisitationService:
+        return self._revisit
+
+    @property
+    def lint_llm(self):
+        """F10 surprise-gated LLM lint service."""
+        return self._lint_llm
+
+    @property
+    def locks(self) -> LocksService:
+        return self._locks
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Re-evaluate memories for an entity under a per-entity advisory lock.
+
+        Facade for `LocksService.reconsolidate_entity` (F9).
+        """
+        return await self._locks.reconsolidate_entity(
+            entity_id, vault_id, timeout_seconds=timeout_seconds
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-MW unit consolidation (F9 / RFC-008).
+
+        Facade for `LocksService.consolidate_vault`.
+        """
+        return await self._locks.consolidate_vault(vault_id, dry_run=dry_run, actor=actor)
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -1007,6 +1072,26 @@ class MemexAPI:
             actor=actor,
             background_tasks=background_tasks,
         )
+
+    async def get_due_for_review(
+        self,
+        vault_id: UUID,
+        *,
+        limit: int = 20,
+    ) -> list[Any]:
+        """F20: list memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
+        return await self._revisit.list_due(vault_id, limit=limit)
+
+    async def review_memory_unit(
+        self,
+        unit_id: UUID,
+        quality: Any,
+        *,
+        vault_id: UUID,
+        actor: UUID | None = None,
+    ) -> dict[str, Any]:
+        """F20: record a review outcome on a memory unit. Delegates to RevisitationService."""
+        return await self._revisit.review(unit_id, quality, vault_id=vault_id, actor=actor)
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""

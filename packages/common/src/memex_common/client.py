@@ -531,6 +531,15 @@ class RemoteMemexAPI:
         """Fetch the F32 diagnostics summary for a vault."""
         return await self._get(f'diagnostics/summary/{vault_id}')
 
+    async def get_diagnostics_lint(self, vault_id: UUID | str) -> dict[str, Any]:
+        """F26 — Fetch the lint dashboard pivot for a vault.
+
+        Returns ``{vault_id, counts_by_type_status_source, pending_by_type,
+        top_5_pending}``. Operator/observability view; orthogonal to F6's
+        ``/lint/status`` (single count) and ``/lint/findings`` (paginated rows).
+        """
+        return await self._get(f'diagnostics/lint/{vault_id}')
+
     async def get_diagnostics_retrieval(
         self, vault_id: UUID | str, top_n: int = 50
     ) -> dict[str, Any]:
@@ -784,6 +793,92 @@ class RemoteMemexAPI:
         """Restore a previously-deprioritized memory unit. See F4."""
         result = await self._post(f'memories/{unit_id}/restore', {})
         return MemoryUnitDTO(**result)
+
+    async def get_due_for_review(
+        self,
+        vault_id: UUID | str,
+        *,
+        limit: int = 20,
+    ) -> list[Any]:
+        """List memory units due for FSRS-5 revisit in a vault. See F20.
+
+        Returns a list of objects with attributes ``unit_id``, ``text_preview``,
+        ``revisit_due_at``, and ``intent_class``. Wire format is JSON dicts
+        with those keys; we wrap each in a ``SimpleNamespace`` so callers can
+        use attribute access symmetrically with the in-process ``DueUnit``.
+        """
+        from datetime import datetime
+        from types import SimpleNamespace
+        from uuid import UUID as _UUID
+
+        params = {'vault_id': str(vault_id), 'limit': limit}
+        result = await self._get('memory/due_for_review', params=params)
+        out: list[Any] = []
+        for r in result:
+            out.append(
+                SimpleNamespace(
+                    unit_id=_UUID(r['unit_id']),
+                    text_preview=r['text_preview'],
+                    revisit_due_at=datetime.fromisoformat(r['revisit_due_at']),
+                    intent_class=r['intent_class'],
+                )
+            )
+        return out
+
+    async def review_memory_unit(
+        self,
+        unit_id: UUID,
+        quality: Any,
+        *,
+        vault_id: UUID | str,
+    ) -> dict[str, Any]:
+        """Record a review outcome on a memory unit (F20).
+
+        Mirrors :meth:`memex_core.api.MemexAPI.review_memory_unit`.
+        ``quality`` accepts the FSRS-5 IntEnum, its int value (1-4), or the
+        case-insensitive string ('again'/'hard'/'good'/'easy'). ``vault_id``
+        is REQUIRED — the server enforces cross-vault rejection (returns
+        HTTP 403 if the unit's vault does not match).
+        """
+        if hasattr(quality, 'name'):
+            quality_payload: int | str = quality.name.lower()
+        else:
+            quality_payload = quality
+        body = {
+            'unit_id': str(unit_id),
+            'quality': quality_payload,
+            'vault_id': str(vault_id),
+        }
+        return await self._post('memory/review', body)
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """F9: re-evaluate memories for an entity under a per-entity lock."""
+        return await self._post(
+            'memory/reconsolidate',
+            {
+                'entity_id': str(entity_id),
+                'vault_id': str(vault_id),
+                'timeout_seconds': timeout_seconds,
+            },
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """F9: vault-wide low-MW unit consolidation."""
+        return await self._post(
+            'memory/consolidate',
+            {'vault_id': str(vault_id), 'dry_run': dry_run},
+        )
 
     async def get_memory_links(
         self,

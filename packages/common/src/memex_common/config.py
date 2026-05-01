@@ -1106,6 +1106,110 @@ class LintConfig(BaseModel):
     )
 
 
+class RevisitConfig(BaseModel):
+    """Configuration for the F20 FSRS-5 revisitation scheduler."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic revisit-schedule populator via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=24 * 3600,
+        ge=60,
+        description='Interval in seconds between revisit populator runs. Default: 24 hours.',
+    )
+
+
+class LintLLMCheckConfig(BaseModel):
+    """Per-check feature flag for an F10 DSPy lint signature."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Whether this LLM check is invoked when the surprise gate fires.',
+    )
+
+
+class LintLLMChecksConfig(BaseModel):
+    """Feature flags for the individual F10 DSPy lint signatures.
+
+    Default-on; ops can disable a check (e.g. ``semantic_contradiction``) if
+    false-positives manifest in production. Tier B follow-up will revisit
+    polarity discrimination via NLI without touching this surface.
+    """
+
+    semantic_contradiction: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description='CheckSemanticContradiction signature (sentence-level).',
+    )
+    schema_drift: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description='CheckSchemaDrift signature (date format / id style / structure).',
+    )
+
+
+class LintLLMConfig(BaseModel):
+    """Configuration for F10 surprise-gated LLM-assisted lint.
+
+    Default-on at the cap-zero gate: if ``cost_cap_per_24h`` is 0 the F10 tick
+    short-circuits before any work, including the surprise computation.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='Master switch; if False, the F10 tick is a no-op.',
+    )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between F10 lint ticks. Default: 6 hours.',
+    )
+    units_per_tick: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            'Maximum candidate units evaluated per F10 tick per vault. The '
+            'cost cap will short-circuit further work once exhausted.'
+        ),
+    )
+    surprise_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum surprise score for a unit to be eligible for LLM lint. '
+            'Validated by POC-F10 against synthetic topical-anomaly data.'
+        ),
+    )
+    cost_cap_per_24h: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            'Maximum LLM lint calls per vault per rolling 24h window. '
+            'Setting this to 0 disables F10 entirely.'
+        ),
+    )
+    deferred_queue_cap: int = Field(
+        default=100,
+        ge=0,
+        description=(
+            'Maximum llm_deferred MaintenanceProposal rows kept per vault. '
+            'Excess entries evicted oldest-first with a warning span.'
+        ),
+    )
+    surprise_k: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            'Top-k peer-similarity count used to derive the surprise score '
+            'for a unit. Matches the POC-validated default.'
+        ),
+    )
+    checks: LintLLMChecksConfig = Field(
+        default_factory=LintLLMChecksConfig,
+        description='Per-check feature flags for the DSPy lint signatures.',
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -1141,6 +1245,16 @@ class MemoryConfig(BaseModel):
     lint: LintConfig = Field(
         default_factory=LintConfig,
         description='Configuration for the F6 maintenance ledger / rule-based linter.',
+    )
+
+    revisit: RevisitConfig = Field(
+        default_factory=RevisitConfig,
+        description='F20 FSRS-5 revisitation scheduler configuration.',
+    )
+
+    lint_llm: LintLLMConfig = Field(
+        default_factory=LintLLMConfig,
+        description='Configuration for F10 surprise-gated LLM-assisted lint.',
     )
 
 

@@ -408,8 +408,13 @@ async def test_e2e_exploration_units_in_search(client: TestClient, db_session):
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 async def test_e2e_ingest_search_record_outcome_search(client: TestClient, db_session):
-    """Full pipeline: ingest → search → record outcome → search again."""
+    """Full pipeline: ingest → search → record outcome → search again.
+
+    Marked llm: the search path invokes query expansion via Gemini; CI runs
+    `integration and not llm`, so this test skips without credentials.
+    """
     from memex_core.services.outcomes import OutcomeService
     from memex_core.memory.sql_models import MemoryUnit
 

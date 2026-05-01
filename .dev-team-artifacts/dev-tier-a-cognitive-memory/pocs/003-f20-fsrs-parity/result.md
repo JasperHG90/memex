@@ -1,3 +1,22 @@
+# POC-F20 — FSRS reference parity result
+
+> **2026-05-01 — ALGORITHM-LABEL CORRECTION (Path A).** The original POC
+> heading and "FSRS-4.5" framing throughout this document are
+> **mislabelled**. `py-fsrs==4.1.2` actually implements **FSRS-5** (19
+> weights), not FSRS-4.5 (17 weights) — pip version ≠ algorithm version.
+> See `paper-cross-check.md` (this directory) for the verification: 4
+> formula divergences from the FSRS-4.5 paper, all because the lib
+> shipped FSRS-5 since py-fsrs v3.0.0. **The bit-exact parity result is
+> still valid** — it proves the port matches `py-fsrs==4.1.2` (= FSRS-5),
+> which is the current production-grade open-source SRS algorithm
+> (Anki, RemNote, ts-fsrs all ship FSRS-5 in 2025).
+>
+> Path A directive (team-lead-approved): drop the vendored port; depend
+> on `py-fsrs>=4.0.0,<5.0.0` directly; `memory/revisit.py` is now a thin
+> ~80-LOC wrapper. Shipped in #24 (PR `wave-2/F20-revisit-fsrs5`).
+> Read `paper-cross-check.md` BEFORE relying on any "FSRS-4.5" wording
+> below.
+
 # POC-F20 — FSRS-4.5 reference parity result
 
 | Field | Value |

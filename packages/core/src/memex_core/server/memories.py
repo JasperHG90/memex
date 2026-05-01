@@ -1,10 +1,10 @@
 """Memory unit endpoints."""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
@@ -17,6 +17,7 @@ from memex_core.server.common import (
     build_memory_unit_dto,
     get_api,
 )
+from memex_core.services.locks import EntityLockTimeoutError
 
 logger = logging.getLogger('memex.core.server')
 
@@ -95,6 +96,87 @@ async def restore_memory_unit(
         raise HTTPException(status_code=404, detail=str(e))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to restore memory unit {id}')
+
+
+# ---------------------------------------------------------------------------
+# F9 — memex_memory_reconsolidate / memex_memory_consolidate
+# ---------------------------------------------------------------------------
+
+
+class ReconsolidateRequest(BaseModel):
+    """F9: per-entity reconsolidation under an advisory lock."""
+
+    entity_id: UUID = Field(..., description='Entity UUID to reconsolidate.')
+    vault_id: UUID = Field(..., description='Vault UUID — explicit per RFC-005 to scope unit_ids.')
+    timeout_seconds: float = Field(
+        default=30.0,
+        ge=0.1,
+        le=300.0,
+        description='Advisory lock acquisition timeout.',
+    )
+
+
+class ConsolidateRequest(BaseModel):
+    """F9: vault-wide low-MW consolidation."""
+
+    vault_id: UUID = Field(..., description='Vault UUID to consolidate.')
+    dry_run: bool = Field(
+        default=False,
+        description='If true, return preview without writes.',
+    )
+
+
+@router.post(
+    '/memory/reconsolidate',
+    dependencies=[Depends(require_write)],
+    responses={
+        409: {
+            'description': (
+                'Concurrent reconsolidation in progress on this entity (advisory lock contention).'
+            )
+        }
+    },
+)
+async def reconsolidate_entity(
+    request: Annotated[ReconsolidateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> dict[str, Any]:
+    """F9: re-evaluate memories for an entity under a per-entity advisory lock.
+
+    Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
+    `ContradictionEngine.detect_contradictions` over linked unit_ids, then
+    `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
+    """
+    try:
+        return await api.reconsolidate_entity(
+            request.entity_id,
+            request.vault_id,
+            timeout_seconds=request.timeout_seconds,
+        )
+    except EntityLockTimeoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Reconsolidate failed')
+
+
+@router.post(
+    '/memory/consolidate',
+    dependencies=[Depends(require_write)],
+)
+async def consolidate_vault(
+    request: Annotated[ConsolidateRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> dict[str, Any]:
+    """F9: vault-wide low-MW unit consolidation. RFC-008.
+
+    Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
+    created_at<now()-30d. dry_run=true returns preview without writes.
+    Note: rate-limit deferred to task #33.
+    """
+    try:
+        return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Consolidate failed')
 
 
 @router.get(

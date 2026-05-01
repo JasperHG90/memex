@@ -99,6 +99,8 @@ class MemexAPIProtocol(Protocol):
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
     async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_due_for_review(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def review_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
     async def record_outcome(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -123,6 +125,10 @@ class MemexAPIProtocol(Protocol):
 
     # F8 — Lint flags (read-only agent surface)
     async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # F9 — Per-entity advisory lock + vault-wide consolidate
+    async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -3668,7 +3674,274 @@ ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
 
 # --- F9 ---  (filled by WS-locks)
 
+MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_reconsolidate',
+    'description': (
+        'Re-evaluate memories for a specific entity, detecting contradictions and '
+        'updating mental models. Use when retrieved facts about an entity disagree. '
+        'Runs contradiction detection across all units linked to the entity, then '
+        'triggers reflection. ENTITY-SCOPED counterpart to memex_memory_consolidate '
+        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reconsolidate.',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID — required for vault-scoped unit resolution.',
+            },
+        },
+        'required': ['entity_id', 'vault_id'],
+    },
+}
+
+
+MEMORY_CONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_consolidate',
+    'description': (
+        'Vault-wide batch curation. Identifies low-MW + stale units and '
+        'deprioritizes them; writes findings to the maintenance ledger. '
+        'VAULT-SCOPED counterpart to memex_memory_reconsolidate (per-entity). '
+        'Use sparingly (e.g., monthly per vault). For per-entity hygiene, prefer '
+        'memex_memory_reconsolidate.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID to consolidate.',
+            },
+            'dry_run': {
+                'type': 'boolean',
+                'description': 'If true, preview without making changes.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
+
+def handle_memory_reconsolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_entity = _require(args, 'entity_id')
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity}')
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    try:
+        result = run_sync(api.reconsolidate_entity(entity_uuid, vault_uuid), timeout=120.0)
+    except Exception as e:
+        logger.warning('memex_memory_reconsolidate failed: %s', e)
+        return tool_error(f'Reconsolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_memory_consolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    dry_run = bool(args.get('dry_run', False))
+    try:
+        result = run_sync(api.consolidate_vault(vault_uuid, dry_run=dry_run), timeout=300.0)
+    except Exception as e:
+        logger.warning('memex_memory_consolidate failed: %s', e)
+        return tool_error(f'Consolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_memory_reconsolidate'] = handle_memory_reconsolidate
+HANDLERS['memex_memory_consolidate'] = handle_memory_consolidate
+ALL_SCHEMAS.extend([MEMORY_RECONSOLIDATE_SCHEMA, MEMORY_CONSOLIDATE_SCHEMA])
+
+
 # --- F20 --- (filled by WS-revisit)
+
+GET_DUE_FOR_REVIEW_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_due_for_review',
+    'description': (
+        'List memory units due for FSRS-5 revisit in a vault. Use when the user asks '
+        '"what memories are due for review?", "show my review queue", etc. READ verb — '
+        'does NOT advance any schedule. Companion to memex_memory_review.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name (defaults to active vault if omitted).',
+            },
+            'limit': {
+                'type': 'integer',
+                'description': 'Maximum due units to return (default 20, max 200).',
+                'minimum': 1,
+                'maximum': 200,
+            },
+        },
+        'required': [],
+    },
+}
+
+MEMORY_REVIEW_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_review',
+    'description': (
+        'Record a review outcome on a memory unit. Use when the user says "I just reviewed '
+        'X, it was \'good\'", "mark X as easy", or "I forgot X". Advances the FSRS-5 '
+        'schedule, increments outcome counters, maintains the sticky-deprioritize streak '
+        '(5 consecutive Again ratings auto-flips is_deprioritized=true), and writes an '
+        'audit row — all in a single transaction.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID being reviewed.',
+            },
+            'quality': {
+                'oneOf': [
+                    {'type': 'string', 'enum': ['again', 'hard', 'good', 'easy']},
+                    {'type': 'integer', 'enum': [1, 2, 3, 4]},
+                ],
+                'description': (
+                    'Review rating. Accepts the string form ("again"/"hard"/"good"/"easy") '
+                    'or the FSRS-5 IntEnum value (1/2/3/4). AGAIN/HARD record a failure '
+                    'outcome; GOOD/EASY record a success outcome.'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name the memory unit belongs to. REQUIRED — '
+                    'the service rejects cross-vault review (Wave 0 vault-scoping invariant).'
+                ),
+            },
+        },
+        'required': ['unit_id', 'quality', 'vault_id'],
+    },
+}
+
+
+def handle_get_due_for_review(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    raw_vault_id = args.get('vault_id')
+    limit_raw = args.get('limit', 20)
+    try:
+        limit = int(limit_raw)
+    except (TypeError, ValueError):
+        return tool_error(f'Invalid limit: {limit_raw!r}')
+    if limit < 1 or limit > 200:
+        return tool_error(f'limit must be in [1, 200], got {limit}')
+
+    try:
+        if raw_vault_id:
+            resolved = run_sync(api.resolve_vault_identifier(str(raw_vault_id)), timeout=30.0)
+        elif vault_id is not None:
+            resolved = vault_id
+        else:
+            return tool_error('No vault_id provided and no active vault binding.')
+        due = run_sync(api.get_due_for_review(resolved, limit=limit), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_get_due_for_review failed: %s', e)
+        return tool_error(f'get_due_for_review failed: {e}')
+
+    return json.dumps(
+        [
+            {
+                'unit_id': str(d.unit_id),
+                'text_preview': d.text_preview,
+                'revisit_due_at': d.revisit_due_at.isoformat(),
+                'intent_class': d.intent_class,
+            }
+            for d in due
+        ]
+    )
+
+
+def handle_memory_review(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+        raw_quality = _require(args, 'quality')
+        raw_vault_id = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+
+    from memex_core.memory.revisit import Quality
+
+    if isinstance(raw_quality, int) and not isinstance(raw_quality, bool):
+        try:
+            quality_enum = Quality(raw_quality)
+        except ValueError:
+            return tool_error(
+                f'Invalid quality {raw_quality!r}; must be 1 (again), 2 (hard), '
+                '3 (good), or 4 (easy).'
+            )
+    else:
+        quality_lc = str(raw_quality).strip().lower()
+        try:
+            quality_enum = Quality[quality_lc.upper()]
+        except KeyError:
+            return tool_error(
+                f"Invalid quality {raw_quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
+            )
+
+    try:
+        resolved_vault_id = run_sync(api.resolve_vault_identifier(str(raw_vault_id)), timeout=30.0)
+        result = run_sync(
+            api.review_memory_unit(uuid_obj, quality_enum, vault_id=resolved_vault_id),
+            timeout=30.0,
+        )
+    except PermissionError as e:
+        return tool_error(str(e))
+    except Exception as e:
+        logger.warning('memex_memory_review failed: %s', e)
+        return tool_error(f'memory_review failed: {e}')
+
+    return json.dumps(result)
+
+
+HANDLERS['memex_get_due_for_review'] = handle_get_due_for_review
+HANDLERS['memex_memory_review'] = handle_memory_review
+ALL_SCHEMAS.extend([GET_DUE_FOR_REVIEW_SCHEMA, MEMORY_REVIEW_SCHEMA])
 
 
 # --- F32 --- (filled by WS-diagnostics)

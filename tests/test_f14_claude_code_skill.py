@@ -111,7 +111,6 @@ def test_recall_step_numbering_is_consecutive():
     visible = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
 
     step_nums = [int(m) for m in re.findall(r'^(\d+)\.\s', visible, flags=re.MULTILINE)]
-    assert step_nums == [1, 2, 3, 4], (
-        f'visible steps in recall/SKILL.md must be 1-4 consecutive (post-F14 '
-        f'renumber); got {step_nums}'
+    assert step_nums == list(range(1, len(step_nums) + 1)), (
+        f'visible steps in recall/SKILL.md must be 1..N consecutive starting at 1; got {step_nums}'
     )

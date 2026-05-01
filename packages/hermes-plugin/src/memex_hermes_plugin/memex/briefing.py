@@ -192,7 +192,21 @@ Match the tool to the query type:
     - Background `reflect` (scheduler-driven) is the cheaper default. Reach
       for `summarize_node` only with an in-session reason.
     - Rate-limited per (entity, vault). On rejection the response includes
-      `retry_after_seconds`; do NOT retry-loop."""
+      `retry_after_seconds`; do NOT retry-loop.
+- **Reconsolidating versus consolidating** — F9 ships two related but distinct
+  curation verbs:
+    - `memex_memory_reconsolidate(entity_id, vault_id)` is **ENTITY-SCOPED**.
+      Use when you notice retrieved facts about a specific entity disagree.
+      Runs contradiction detection across that entity's linked units, then
+      reflection. Acquires a per-entity Postgres advisory lock — concurrent
+      reconsolidations on the same entity serialise.
+    - `memex_memory_consolidate(vault_id, dry_run)` is **VAULT-SCOPED**.
+      Identifies low-MW + stale units across the entire vault and
+      deprioritizes them, writing findings to the maintenance ledger. Use
+      sparingly (e.g., monthly per vault). `dry_run=true` returns the
+      candidate list as a preview without writes.
+    - Reach for `reconsolidate` on concrete contradiction signals;
+      `consolidate` is the periodic batch."""
 
 
 def format_briefing_block(
@@ -205,6 +219,7 @@ def format_briefing_block(
     diagnostics_summary: dict[str, Any] | None = None,
     procedural_observations: list[dict[str, Any]] | None = None,
     lint_pending_count: int | None = None,
+    revisit_due_count: int | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
@@ -247,6 +262,9 @@ def format_briefing_block(
 
     if lint_pending_count is not None and lint_pending_count > 0:
         lines.append('\n' + _render_lint_block(lint_pending_count))
+
+    if revisit_due_count is not None and revisit_due_count > 0:
+        lines.append('\n' + _render_revisit_block(revisit_due_count))
 
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
@@ -325,6 +343,28 @@ def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
 
 
 # --- F20 --- (filled by WS-revisit)
+def _render_revisit_block(due_count: int) -> str:
+    """Render the F20 revisitation pending-count block.
+
+    Surfaces the count of memory units whose `revisit_due_at <= now()` AND
+    that pass the 5-gate eligibility predicate. The agent learns about both
+    F20 verbs (READ + WRITE) so it can disambiguate list-vs-record intent.
+    """
+    if due_count <= 0:
+        return (
+            '### Memories due for review\n'
+            '- No memories currently due for review. The FSRS-5 scheduler will '
+            'surface units here as their stability-based due dates pass.'
+        )
+    return (
+        f'### Memories due for review\n'
+        f'- {due_count} memories due for review. Use '
+        f'`memex_get_due_for_review()` to list them, then call '
+        f'`memex_memory_review(unit_id, quality)` for each one you reviewed '
+        f"(quality is one of 'again', 'hard', 'good', 'easy'). Five "
+        f"consecutive 'again' ratings auto-flips a unit to deprioritized; "
+        f'`memex memory restore` is the only way back.'
+    )
 
 
 # --- F32 --- (filled by WS-diagnostics)
