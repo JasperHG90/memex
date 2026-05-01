@@ -105,6 +105,25 @@ do not retry-loop. Reach for `summarize_node` only when an in-session reason
 exists (a contradiction signal, a user-driven question that depends on the
 consolidated view); otherwise let background reflection do its work.
 
+## Reconsolidating versus consolidating (F9)
+
+Two related but **distinct** curation verbs:
+
+- `memex_memory_reconsolidate(entity_id, vault_id)` is **ENTITY-SCOPED**.
+  Use when retrieved facts about a specific entity disagree. Runs
+  contradiction detection across that entity's linked units, then reflection.
+  Acquires a per-entity Postgres advisory lock — concurrent calls on the
+  same entity serialise (the second observes a `lock_contention` envelope).
+- `memex_memory_consolidate(vault_id, dry_run)` is **VAULT-SCOPED**.
+  Identifies low-MW + stale units across the entire vault and deprioritizes
+  them; writes findings to the maintenance ledger. Use sparingly (e.g.,
+  monthly per vault). `dry_run=true` returns the candidate list as a preview
+  without writes.
+
+Reach for `reconsolidate` on concrete contradiction signals; `consolidate`
+is the periodic batch. Both are LLM-intensive and write-side — prefer
+`memex_memory_deprioritize` for individual high-confidence noise units.
+
 <!--
 Tier A — /remember verb extensions
 F4:  WS-quick-wins  (memory_deprioritize/restore disclosure)

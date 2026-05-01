@@ -64,6 +64,7 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.lint import LintService
+from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
@@ -535,6 +536,14 @@ class MemexAPI:
             config=self.config,
         )
 
+        self._locks = LocksService(
+            metastore=self.metastore,
+            config=self.config,
+            reflection=self._reflection,
+            contradiction=self._contradiction,
+            units=self._units,
+        )
+
         from memex_core.services.session_briefing import SessionBriefingService
 
         self.session_briefing = SessionBriefingService(
@@ -600,6 +609,38 @@ class MemexAPI:
     def lint_llm(self):
         """F10 surprise-gated LLM lint service."""
         return self._lint_llm
+
+    @property
+    def locks(self) -> LocksService:
+        return self._locks
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Re-evaluate memories for an entity under a per-entity advisory lock.
+
+        Facade for `LocksService.reconsolidate_entity` (F9).
+        """
+        return await self._locks.reconsolidate_entity(
+            entity_id, vault_id, timeout_seconds=timeout_seconds
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-MW unit consolidation (F9 / RFC-008).
+
+        Facade for `LocksService.consolidate_vault`.
+        """
+        return await self._locks.consolidate_vault(vault_id, dry_run=dry_run, actor=actor)
 
     @property
     def embedder(self) -> EmbeddingsModel:
