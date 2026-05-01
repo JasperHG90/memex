@@ -3747,6 +3747,67 @@ async def memex_memory_summarize_node(
 
 # --- F8 ---  (filled by WS-linter)
 
+from memex_mcp._f8_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_get_lint_flags',
+    description=MEMEX_GET_LINT_FLAGS_DESCRIPTION,
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_lint_flags(
+    ctx: Context,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID; omit for all-vault view.'),
+    ] = None,
+    lint_type: Annotated[
+        str | None,
+        Field(description='structural | quality | governance | schema'),
+    ] = None,
+    status: Annotated[
+        str,
+        Field(description='pending | resolved | dismissed (default: pending)'),
+    ] = 'pending',
+    limit: Annotated[int, Field(description='Page size (default 20, max 200).')] = 20,
+    cursor: Annotated[
+        str | None,
+        Field(description='Opaque cursor from a prior page; omit on first call.'),
+    ] = None,
+) -> dict[str, Any]:
+    """F8 read-only surface: list pending memory-hygiene findings."""
+    try:
+        api = get_api(ctx)
+        resolved_vault: str | None = None
+        if vault_id is not None:
+            resolved_vault = str(await _resolve_vault_id(api, vault_id))
+        try:
+            return await api.lint_get_flags(
+                vault_id=resolved_vault,
+                lint_type=lint_type,
+                status=status,
+                limit=limit,
+                cursor=cursor,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 503:
+                # AC-F8-5 — translate the server's structured envelope.
+                detail = exc.response.json().get('detail', {})
+                if (
+                    isinstance(detail, dict)
+                    and detail.get('error') == 'lint_subsystem_not_initialized'
+                ):
+                    return detail
+            raise
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_get_lint_flags failed: {e}', exc_info=True)
+        raise ToolError(f'memex_get_lint_flags failed: {e}')
+
+
 # --- F9 ---  (filled by WS-locks)
 
 # --- F20 --- (filled by WS-revisit)

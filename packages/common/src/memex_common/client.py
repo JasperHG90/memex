@@ -1128,3 +1128,28 @@ class RemoteMemexAPI:
     async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
         """Flip a pending finding to ``resolved``."""
         return await self._post(f'lint/findings/{finding_id}/resolve', {})
+
+    async def lint_get_flags(
+        self,
+        *,
+        vault_id: str | None = None,
+        lint_type: str | None = None,
+        target_type: str | None = None,
+        status: str = 'pending',
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """F8 agent surface — cursor-paginated, shape-stable findings list.
+
+        Returns ``{findings: [...], next_cursor: str|null}``.
+        """
+        params: dict[str, Any] = {'status': status, 'limit': limit}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        if lint_type is not None:
+            params['lint_type'] = lint_type
+        if target_type is not None:
+            params['target_type'] = target_type
+        if cursor is not None:
+            params['cursor'] = cursor
+        return await self._get('lint/flags', params=params)
