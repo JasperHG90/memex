@@ -264,8 +264,8 @@ class ConsolidationService:
         Reads ``AuditLog`` rows where ``action='outcome.record'``,
         ``resource_type='memory_unit'``, ``details->>'vault_id' = vault_id``,
         and ``timestamp > last_tick_timestamp`` (or all rows if no prior tick).
-        Distinct on ``resource_id``; oldest-first by AuditLog.timestamp; then
-        sliced to ``budget``.
+        Distinct on ``resource_id``; oldest-first by AuditLog.timestamp;
+        capped to ``budget`` rows via SQL ``LIMIT``.
 
         Returns parsed UUIDs; rows whose ``resource_id`` is unparseable are
         dropped (defensive — should not happen since record_outcome writes
@@ -280,6 +280,7 @@ class ConsolidationService:
             )
             .group_by(AuditLog.resource_id)
             .order_by(sa_func.min(AuditLog.timestamp))
+            .limit(budget)
         )
         if last_tick_timestamp is not None:
             stmt = stmt.where(AuditLog.timestamp > last_tick_timestamp)
