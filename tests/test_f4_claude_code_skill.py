@@ -23,7 +23,8 @@ def test_deprioritize_skill_describes_non_destructive_verb():
     contrast vs archive (Wave 0 §6 #12).
     """
     matching = [
-        p for p in _candidate_skill_files()
+        p
+        for p in _candidate_skill_files()
         if p.exists() and 'memex_memory_deprioritize' in p.read_text()
     ]
     assert matching, 'memex_memory_deprioritize verb not described in any CC plugin skill'
