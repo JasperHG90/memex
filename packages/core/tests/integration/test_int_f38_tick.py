@@ -6,6 +6,7 @@ Covers the AC-F38 invariants from RFC-010:
 - Tick-summary row written with per-step counts
 - Per-tick budget cap (oldest-first by AuditLog timestamp)
 - No-op tick on empty diff (empty unit_ids → empty entity_ids → no calls)
+- MEDIUM-1 LIMIT regression: budget enforced via SQL ``LIMIT``, not Python slice
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -309,4 +311,80 @@ async def test_500_unit_cap_oldest_first(metastore, memex_config, session):
         selected = await svc.select_diff_units(s, vault_id, last_tick_timestamp=None, budget=3)
     assert selected == seeded_ids[:3], (
         f'Expected oldest-3 ordering; got {selected} vs {seeded_ids[:3]}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_select_diff_units_pushes_limit_into_sql(metastore, session):
+    """MEDIUM-1 regression: budget is enforced by SQL ``LIMIT``, not Python slice.
+
+    Hooks ``before_cursor_execute`` on the underlying sync engine, runs
+    ``select_diff_units`` against a vault with more rows than the budget,
+    and asserts the issued SQL contains ``LIMIT <budget>``. Without the
+    LIMIT push-down, the query materialises every matching audit row into
+    memory before the Python-side slice — a ~50ms vs ~5s difference under
+    realistic prod traffic with a 24h gap.
+    """
+    vault_id = await _seed_vault(session)
+    note_id = await _seed_note(session, vault_id)
+
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    seeded_ids: list[UUID] = []
+    for i in range(10):
+        uid, _ = await _seed_unit_with_entity(
+            session, vault_id=vault_id, note_id=note_id, status=ContentStatus.ACTIVE
+        )
+        seeded_ids.append(uid)
+        await _emit_outcome_audit(
+            session, unit_id=uid, vault_id=vault_id, when=base + timedelta(seconds=i)
+        )
+
+    captured_sql: list[str] = []
+
+    def _capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        captured_sql.append(statement)
+
+    contradiction_spy = MagicMock()
+    contradiction_spy.detect_contradictions = AsyncMock()
+    reflection_spy = AsyncMock(return_value=[])
+
+    from memex_common.config import MemexConfig
+
+    svc = _make_service(
+        metastore,
+        contradiction_spy=contradiction_spy,
+        reflection_spy=reflection_spy,
+        config=MemexConfig(),
+    )
+
+    budget = 5
+    async with metastore.session() as s:
+        sync_engine = s.bind.sync_engine  # type: ignore[union-attr]
+        event.listen(sync_engine, 'before_cursor_execute', _capture)
+        try:
+            selected = await svc.select_diff_units(
+                s, vault_id, last_tick_timestamp=None, budget=budget
+            )
+        finally:
+            event.remove(sync_engine, 'before_cursor_execute', _capture)
+
+    # Behavioural: result is exactly the oldest `budget` units, not all 10.
+    assert len(selected) == budget
+    assert selected == seeded_ids[:budget]
+
+    # SQL surface: a statement containing both audit_logs + LIMIT was issued
+    # with the budget value bound. asyncpg renders LIMIT as `LIMIT $N::INTEGER`,
+    # so the literal isn't in the statement string — assert the LIMIT clause
+    # is present and that no statement scanned audit_logs without one.
+    audit_select_stmts = [s for s in captured_sql if 'audit_logs' in s.lower()]
+    assert audit_select_stmts, 'Expected at least one SELECT against audit_logs'
+    select_stmts_with_limit = [s for s in audit_select_stmts if 'limit' in s.lower()]
+    assert select_stmts_with_limit, (
+        'AC: select_diff_units must push LIMIT into SQL, but no audit_logs '
+        f'SELECT contained a LIMIT clause. Captured: {audit_select_stmts}'
+    )
+    select_stmts_without_limit = [s for s in audit_select_stmts if 'limit' not in s.lower()]
+    assert not select_stmts_without_limit, (
+        'AC: a SELECT against audit_logs ran WITHOUT a LIMIT clause — would '
+        f'materialise every matching row into memory. Found: {select_stmts_without_limit}'
     )
