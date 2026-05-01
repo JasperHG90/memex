@@ -833,6 +833,23 @@ class ContradictionConfig(BaseModel):
     )
 
 
+class ConsolidationConfig(BaseModel):
+    """F38 consolidation orchestrator configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Run the per-vault consolidation tick on the scheduler.',
+    )
+    cadence_seconds: int = Field(
+        default=86400,
+        description='Wall-clock interval between consolidation ticks (default: 24h).',
+    )
+    units_per_tick: int = Field(
+        default=500,
+        description='Per-tick budget (oldest-first). Saturation signalled by units_processed=cap.',
+    )
+
+
 class Permission(str, Enum):
     """Granular permissions for API key access control."""
 
@@ -1095,6 +1112,11 @@ class MemoryConfig(BaseModel):
     contradiction: ContradictionConfig = Field(
         default_factory=ContradictionConfig,
         description='Configuration for contradiction detection.',
+    )
+
+    consolidation: ConsolidationConfig = Field(
+        default_factory=ConsolidationConfig,
+        description='F38 consolidation orchestrator configuration.',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(

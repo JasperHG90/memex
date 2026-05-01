@@ -107,6 +107,28 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
 
 
+async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
+    """F38: per-vault consolidation tick under the single leader lock.
+
+    Sequential per-vault iteration — per-vault parallelism is intentionally
+    out of scope (Wave 0: only F9 introduces additional advisory locks).
+    Per-vault failures are warning-logged and never raise — one bad vault
+    must not stop other vaults from being consolidated this tick.
+    """
+    async with background_session('bg-sched-consolidation'):
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                try:
+                    await api.consolidation.tick(vault.id, budget=units_per_tick)
+                except Exception as e:
+                    logger.warning(
+                        f'Scheduler: Consolidation tick failed for vault {vault.name}: {e}'
+                    )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Consolidation failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -164,6 +186,19 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         await periodic_diagnostics_refresh_task(api)
 
     # --- F38 consolidation --- (filled by WS-quick-wins)
+    consolidation_cfg = config.server.memory.consolidation
+    if consolidation_cfg.enabled:
+        logger.info(
+            f'Scheduler: F38 consolidation enabled. '
+            f'Cadence: {consolidation_cfg.cadence_seconds}s. '
+            f'Budget: {consolidation_cfg.units_per_tick} units/tick.'
+        )
+
+        @clock.task(trigger=Every(seconds=consolidation_cfg.cadence_seconds))
+        async def run_consolidation_job():
+            await periodic_consolidation_task(api, consolidation_cfg.units_per_tick)
+    else:
+        logger.info('Scheduler: F38 consolidation DISABLED via config.')
 
     # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
     sa_url = make_url(config.server.meta_store.instance.connection_string)
