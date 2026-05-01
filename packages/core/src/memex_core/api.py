@@ -1044,6 +1044,25 @@ class MemexAPI:
             background_tasks=background_tasks,
         )
 
+    async def get_due_for_review(
+        self,
+        vault_id: UUID,
+        *,
+        limit: int = 20,
+    ) -> list[Any]:
+        """F20: list memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
+        return await self._revisit.list_due(vault_id, limit=limit)
+
+    async def review_memory_unit(
+        self,
+        unit_id: UUID,
+        quality: Any,
+        *,
+        actor: UUID | None = None,
+    ) -> dict[str, Any]:
+        """F20: record a review outcome on a memory unit. Delegates to RevisitationService."""
+        return await self._revisit.review(unit_id, quality, actor=actor)
+
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
         return await self._search.retrieve(request)
