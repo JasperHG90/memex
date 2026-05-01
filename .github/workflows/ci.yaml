@@ -5,9 +5,11 @@ on:
     branches:
       - main
       - release/tier-a-cognitive-memory
+      - memory_augmentation
   push:
     branches:
       - main
+      - memory_augmentation
 
 permissions:
   contents: read

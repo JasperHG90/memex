@@ -36,10 +36,28 @@ jobs:
       - id: pr
         run: echo "number=${{ github.event.pull_request.number || github.event.issue.number || inputs.pr-number }}" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch PR diff
+      - name: Fetch PR diff (with size guard)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr diff "${{ steps.pr.outputs.number }}" > "${{ runner.temp }}/pr.patch"
+          MAX_DIFF_LINES: '4000'
+        run: |
+          set -euo pipefail
+          PATCH="${{ runner.temp }}/pr.patch"
+          gh pr diff "${{ steps.pr.outputs.number }}" > "$PATCH"
+          LINES=$(wc -l < "$PATCH")
+          echo "PR diff size: $LINES lines (cap: $MAX_DIFF_LINES)"
+          if [ "$LINES" -gt "$MAX_DIFF_LINES" ]; then
+            echo "Diff exceeds cap — falling back to file-list + stat summary."
+            {
+              echo "# PR is too large for full-diff review ($LINES lines, cap $MAX_DIFF_LINES)."
+              echo ""
+              echo "## Files changed"
+              gh pr diff "${{ steps.pr.outputs.number }}" --name-only
+              echo ""
+              echo "## Stat summary"
+              gh pr view "${{ steps.pr.outputs.number }}" --json files --jq '.files[] | "\(.additions)+ \(.deletions)- \(.path)"'
+            } > "$PATCH"
+          fi
 
       - id: hermes
         uses: JasperHG90/toiminnot/actions/hermes@0c29e3265ba4c99a88c03d9926c6771c9759adab  # main as of 2026-04-24
