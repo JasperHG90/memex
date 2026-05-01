@@ -60,6 +60,21 @@ F20: WS-revisit     (get_due_for_review surfacing)
 F32: WS-diagnostics (get_diagnostics_summary surfacing)
 
 # --- F20 --- (filled by WS-revisit)
+4. **Memories due for review** (when the user asks "what's due?", "what
+   should I revisit?", "show my review queue", etc.): call
+   `memex_get_due_for_review(vault_id?)` to list units whose
+   `revisit_due_at <= now()` AND that pass the 5-gate eligibility
+   predicate. The list returns `{unit_id, text_preview, revisit_due_at,
+   intent_class}`. After the user reviews each one, call
+   `memex_memory_review(unit_id, quality)` with `quality` ∈ {`'again'`,
+   `'hard'`, `'good'`, `'easy'`} to advance the FSRS-5 schedule and
+   record the outcome.
+
+   Sticky-deprioritize: 5 consecutive `'again'` ratings auto-flips a
+   unit to `is_deprioritized=true`. The `auto_deprioritized` field on
+   the response signals when the gate just triggered — surface that to
+   the user. Only `memex memory restore <id>` (CLI) flips the gate
+   back; positive ratings do NOT auto-restore.
 
 # --- F32 --- (filled by WS-diagnostics)
 5. **Vault diagnostics** (when the user asks "how is this vault doing?",

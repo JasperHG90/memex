@@ -230,6 +230,7 @@ class MemexMemoryProvider(MemoryProvider):
             kv_instructions_if_no_vault=self._vault_name is None,
             procedural_observations=self._fetch_top_procedure_outcomes(),
             lint_pending_count=self._fetch_lint_pending_count(),
+            revisit_due_count=self._fetch_revisit_due_count(),
         )
 
     def _fetch_top_procedure_outcomes(self) -> list[dict[str, Any]] | None:
@@ -268,6 +269,24 @@ class MemexMemoryProvider(MemoryProvider):
             return int(payload.get('pending', 0))
         except Exception as e:
             logger.debug('lint_status fetch failed: %s', e)
+            return None
+
+    def _fetch_revisit_due_count(self) -> int | None:
+        """F20 — fetch count of memory units due for FSRS-5 review in the active vault.
+
+        Best-effort: any failure returns None and the briefing renders
+        without the revisit section. Vault must be resolved.
+        """
+        if self._api is None or self._vault_id is None:
+            return None
+        try:
+            due = run_sync(
+                self._api.get_due_for_review(self._vault_id, limit=200),
+                timeout=2.0,
+            )
+            return len(due)
+        except Exception as e:
+            logger.debug('get_due_for_review fetch failed: %s', e)
             return None
 
     # -- Tools ---------------------------------------------------------------

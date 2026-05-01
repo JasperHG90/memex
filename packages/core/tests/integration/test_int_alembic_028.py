@@ -31,10 +31,13 @@ from _alembic_test_helpers import (  # noqa: F401
 
 pytestmark = [pytest.mark.integration]
 
-_STUBS_BETWEEN = [
-    '025_maintenance_proposals',
-    '026_revisit_columns',
-    '027_consolidation_ticks',
+_STUBS_BETWEEN: list[str] = [
+    # 025_maintenance_proposals (F6 #20), 026_revisit_columns (F20 #24),
+    # and 027_consolidation_ticks (F38 #19) are all no longer stubs;
+    # the real migrations run cleanly so no neutralization is required.
+    # Kept as an empty list so the `with neutralized_stub_revisions(...)`
+    # blocks below remain syntactically valid and ready if a future
+    # stub gets inserted.
 ]
 
 

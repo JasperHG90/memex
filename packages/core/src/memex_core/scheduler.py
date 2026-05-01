@@ -149,6 +149,37 @@ async def periodic_lint_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: F6 lint task failed: {e}', exc_info=True)
 
 
+async def periodic_revisit_task(api: 'MemexAPI'):
+    """F20: per-vault revisit-schedule populator under existing MEMEX_LEADER_LOCK_ID.
+
+    Walks every vault and seeds `revisit_due_at` for never-evaluated eligible
+    units. Idempotent — already-scheduled units and previously-evaluated-and-
+    excluded units are skipped (re-eligibility flows through this same path
+    on the next tick once the eligibility predicate flips).
+
+    Per-vault failures are warning-logged and never raise — one bad vault
+    must not stop other vaults from being seeded this tick.
+    """
+    async with background_session('bg-sched-revisit'):
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                try:
+                    scheduled = await api.revisit.populate_initial_schedules(vault.id)
+                    if scheduled:
+                        logger.info(
+                            'Scheduler: F20 revisit scheduled %d unit(s) in vault %s',
+                            scheduled,
+                            vault.name,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f'Scheduler: F20 revisit populator failed for vault {vault.name}: {e}'
+                    )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: F20 revisit task failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -205,6 +236,12 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
             await periodic_lint_task(api)
 
     # --- F20 revisit ---   (filled by WS-revisit)
+    if config.server.memory.revisit.enabled:
+        revisit_interval = config.server.memory.revisit.interval_seconds
+
+        @clock.task(trigger=Every(seconds=revisit_interval))
+        async def run_revisit_job():
+            await periodic_revisit_task(api)
 
     # --- F32 diagnostics --- (filled by WS-diagnostics)
     @clock.task(trigger=Every(seconds=7 * 86400))

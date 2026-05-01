@@ -67,6 +67,7 @@ from memex_core.services.lint import LintService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
+from memex_core.services.revisitation import RevisitationService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
 from memex_core.services.units import UnitsService
@@ -520,6 +521,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._revisit = RevisitationService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -555,6 +561,7 @@ class MemexAPI:
             self._search,
             self._lineage,
             self._units,
+            self._revisit,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -576,6 +583,10 @@ class MemexAPI:
     @property
     def lint(self) -> LintService:
         return self._lint
+
+    @property
+    def revisit(self) -> RevisitationService:
+        return self._revisit
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -1007,6 +1018,26 @@ class MemexAPI:
             actor=actor,
             background_tasks=background_tasks,
         )
+
+    async def get_due_for_review(
+        self,
+        vault_id: UUID,
+        *,
+        limit: int = 20,
+    ) -> list[Any]:
+        """F20: list memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
+        return await self._revisit.list_due(vault_id, limit=limit)
+
+    async def review_memory_unit(
+        self,
+        unit_id: UUID,
+        quality: Any,
+        *,
+        vault_id: UUID,
+        actor: UUID | None = None,
+    ) -> dict[str, Any]:
+        """F20: record a review outcome on a memory unit. Delegates to RevisitationService."""
+        return await self._revisit.review(unit_id, quality, vault_id=vault_id, actor=actor)
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
