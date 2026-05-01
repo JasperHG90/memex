@@ -563,3 +563,53 @@ def test_inject_user_notes_empty_lines_preserved():
     result = inject_user_notes(content, notes)
     fm = _parse_frontmatter(result)
     assert fm['user_notes'] == 'Para one\n\nPara two'
+
+
+# ---------------------------------------------------------------------------
+# ingest() override validation (PR #91 MED-2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_rejects_invalid_intent_override(api):
+    """``intent_override`` must be a valid IntentClass value."""
+    note = MagicMock(spec=NoteInput)
+    with pytest.raises(ValueError, match='intent_override must be one of'):
+        await api.ingest(note, intent_override='garbage')
+
+
+@pytest.mark.asyncio
+async def test_ingest_rejects_invalid_risk_override(api):
+    """``risk_override`` must be a valid RiskClass value."""
+    note = MagicMock(spec=NoteInput)
+    with pytest.raises(ValueError, match='risk_override must be one of'):
+        await api.ingest(note, risk_override='unknown')
+
+
+@pytest.mark.asyncio
+async def test_ingest_accepts_valid_overrides(api):
+    """Valid overrides flow through to the IngestionService unchanged."""
+    note = MagicMock(spec=NoteInput)
+    with patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest:
+        mock_ingest.return_value = {'status': 'success'}
+        result = await api.ingest(
+            note,
+            intent_override='permanent',
+            risk_override='sensitive',
+        )
+        assert result['status'] == 'success'
+        mock_ingest.assert_called_once()
+        kwargs = mock_ingest.call_args.kwargs
+        assert kwargs['intent_override'] == 'permanent'
+        assert kwargs['risk_override'] == 'sensitive'
+
+
+@pytest.mark.asyncio
+async def test_ingest_accepts_none_overrides(api):
+    """None overrides bypass validation."""
+    note = MagicMock(spec=NoteInput)
+    with patch.object(IngestionService, 'ingest', new_callable=AsyncMock) as mock_ingest:
+        mock_ingest.return_value = {'status': 'success'}
+        result = await api.ingest(note)
+        assert result['status'] == 'success'
+        mock_ingest.assert_called_once()
