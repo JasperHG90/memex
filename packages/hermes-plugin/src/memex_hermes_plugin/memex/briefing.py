@@ -204,6 +204,7 @@ def format_briefing_block(
     kv_instructions_if_no_vault: bool,
     diagnostics_summary: dict[str, Any] | None = None,
     procedural_observations: list[dict[str, Any]] | None = None,
+    lint_pending_count: int | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
@@ -244,6 +245,9 @@ def format_briefing_block(
     if procedural_observations:
         lines.append('\n' + _render_procedural_block(procedural_observations))
 
+    if lint_pending_count is not None and lint_pending_count > 0:
+        lines.append('\n' + _render_lint_block(lint_pending_count))
+
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
 
@@ -265,7 +269,21 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 # F32: diagnostic summary                 (WS-diagnostics)
 # ============================================================
 
+
 # --- F6 ---  (filled by WS-linter)
+def _render_lint_block(pending_count: int) -> str:
+    """Render the F6 maintenance-ledger pending-count block (AC-F6-7).
+
+    Surfaces the pending count from ``maintenance_proposals`` and points the
+    operator at the CLI for triage. Read-only on the agent surface — the
+    agent should NOT auto-resolve findings; deferring to a human is the
+    intended default in v1.
+    """
+    return (
+        f'### Maintenance findings\n'
+        f'- {pending_count} pending lint findings. To inspect them, '
+        f'run `memex lint findings`.'
+    )
 
 
 # --- F14 --- (filled by WS-quick-wins)
