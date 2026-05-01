@@ -67,6 +67,7 @@ from memex_core.services.lint import LintService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
+from memex_core.services.revisitation import RevisitationService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
 from memex_core.services.units import UnitsService
@@ -520,6 +521,11 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._revisit = RevisitationService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -555,6 +561,7 @@ class MemexAPI:
             self._search,
             self._lineage,
             self._units,
+            self._revisit,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -576,6 +583,10 @@ class MemexAPI:
     @property
     def lint(self) -> LintService:
         return self._lint
+
+    @property
+    def revisit(self) -> RevisitationService:
+        return self._revisit
 
     @property
     def embedder(self) -> EmbeddingsModel:
