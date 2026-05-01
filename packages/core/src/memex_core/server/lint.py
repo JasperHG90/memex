@@ -1,13 +1,15 @@
-"""F6 — Lint endpoints (maintenance ledger).
+"""F6 + F8 — Lint endpoints (maintenance ledger).
 
 Routes:
 - GET    /api/v1/lint/status                          — pending counts (global + per-vault)
-- GET    /api/v1/lint/findings                        — list findings with optional filters
+- GET    /api/v1/lint/findings                        — list findings (CLI surface, offset paged)
+- GET    /api/v1/lint/flags                           — cursor-paginated agent surface (F8)
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed'
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved'
 
-The maintenance ledger is read-only from the agent surface (F8 ships the
-MCP tool); these endpoints back the human-facing CLI (``memex lint ...``).
+The ``findings`` endpoint backs ``memex lint findings`` (CLI). The
+``flags`` endpoint is the F8 agent surface — shape-stable returns and
+opaque cursor pagination, mirrored by ``memex_get_lint_flags`` MCP.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from sqlalchemy import text
 from memex_core.api import MemexAPI
 from memex_core.server.auth import require_read, require_write
 from memex_core.server.common import _handle_error, get_api
+from memex_core.services.lint import LintSubsystemNotInitializedError
 
 logger = logging.getLogger('memex.core.server.lint')
 
@@ -137,3 +140,51 @@ async def lint_resolve(
     if not ok:
         raise HTTPException(status_code=404, detail='Finding not found or not pending')
     return {'finding_id': str(finding_id), 'status': 'resolved'}
+
+
+@router.get('/flags', dependencies=[Depends(require_read)])
+async def lint_flags(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: UUID | None = Query(None, description='Scope to one vault.'),
+    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema)$'),
+    target_type: str | None = Query(None),
+    status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
+    limit: int = Query(20, ge=1, le=200),
+    cursor: str | None = Query(None, description='Opaque cursor from a prior page.'),
+) -> dict[str, Any]:
+    """F8 agent surface — shape-stable, cursor-paginated.
+
+    Returns ``{findings: [...], next_cursor: str|null}``. The envelope is
+    stable across empty / partial / full pages so agents never need to
+    handle a missing key.
+
+    AC-F8-5 path: when the maintenance ledger is missing returns 503
+    with the documented initialization-error envelope.
+    """
+    try:
+        page = await api.lint.get_findings(
+            vault_id=vault_id,
+            lint_type=lint_type,
+            target_type=target_type,
+            status=status,
+            limit=limit,
+            cursor=cursor,
+        )
+    except LintSubsystemNotInitializedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                'error': 'lint_subsystem_not_initialized',
+                'message': str(exc),
+                'missing_migration': '025_maintenance_proposals',
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as e:
+        raise _handle_error(e, 'Failed to query lint flags')
+
+    return {
+        'findings': [f.model_dump(mode='json') for f in page.findings],
+        'next_cursor': page.next_cursor,
+    }
