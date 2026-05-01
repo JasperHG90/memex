@@ -100,3 +100,18 @@ def test_handler_returns_tool_error_on_api_failure() -> None:
     parsed = json.loads(result)
     assert 'error' in parsed
     assert 'boom' in parsed.get('message', '') or 'boom' in parsed.get('error', '')
+
+
+def test_handler_rejects_unbound_call_no_global_fallthrough() -> None:
+    """HIGH-006: when the agent omits vault_id AND no session vault is bound,
+    the handler MUST refuse the call rather than fall through to a global
+    all-vault view (Wave 0 vault-scoping invariant).
+    """
+    api = Mock()
+    api.lint_get_flags = AsyncMock(return_value={'findings': [], 'next_cursor': None})
+    config = Mock()
+
+    result = handle_get_lint_flags(api, config, vault_id=None, args={})
+    parsed = json.loads(result)
+    assert 'error' in parsed
+    api.lint_get_flags.assert_not_called()
