@@ -213,3 +213,27 @@ LINT_RUN_DURATION_SECONDS = Histogram(
     ['rule_name'],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
+
+# ---------------------------------------------------------------------------
+# F9 — Per-entity advisory lock + reconsolidate / consolidate metrics
+# ---------------------------------------------------------------------------
+
+ENTITY_LOCK_ACQUIRES_TOTAL = Counter(
+    'memex_entity_lock_acquires_total',
+    'Per-entity advisory lock acquisition outcomes.',
+    ['outcome'],  # acquired | timeout
+)
+
+RECONSOLIDATE_TOTAL = Counter(
+    'memex_reconsolidate_total',
+    'Total memex_memory_reconsolidate invocations by outcome.',
+    ['outcome'],  # success | lock_timeout | error
+)
+
+CONSOLIDATE_TOTAL = Counter(
+    'memex_consolidate_total',
+    'Total memex_memory_consolidate invocations by outcome.',
+    ['outcome'],  # success | error
+    # No dry_run label — dry_run runs increment as success but the candidate
+    # count is in the response body (no separate metric).
+)
