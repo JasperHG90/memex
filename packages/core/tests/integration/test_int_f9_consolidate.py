@@ -220,6 +220,9 @@ async def test_writes_deprioritize_and_proposal_per_unit(
         assert p.evidence['resolved_by'] == 'memex_memory_consolidate'
         assert p.evidence['actor'] == 'test-actor'
         assert p.resolved_at is not None
+        # Issue #34 — first-class resolved_by column populated alongside
+        # resolved_at on the F9 consolidate resolution path.
+        assert p.resolved_by == 'test-actor'
 
 
 async def test_branch_b_fallback_when_table_missing(

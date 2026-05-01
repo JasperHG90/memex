@@ -490,6 +490,7 @@ class LocksService:
                 status=LintStatus.RESOLVED,
                 source=LintSource.RULE,
                 resolved_at=datetime.now(timezone.utc),
+                resolved_by=actor or 'memex_memory_consolidate',
             )
             session.add(proposal)
             await session.commit()
