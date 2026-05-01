@@ -3863,6 +3863,18 @@ async def memex_get_due_for_review(
         raise ToolError(f'memex_get_due_for_review failed: {e}')
 
 
+def _reject_bool_quality(v: Any) -> Any:
+    """Pydantic BeforeValidator that blocks ``bool`` from being coerced into
+    ``int`` for the F20 ``quality`` field. Without this, ``True`` would silently
+    map to ``Quality.AGAIN`` because ``bool ⊂ int``.
+    """
+    if isinstance(v, bool):
+        raise ValueError(
+            f"bool is not a valid quality (got {v!r}); use 1/2/3/4 or 'again'/'hard'/'good'/'easy'."
+        )
+    return v
+
+
 @mcp.tool(
     name='memex_memory_review',
     description=MEMEX_MEMORY_REVIEW_DESCRIPTION,
@@ -3875,6 +3887,7 @@ async def memex_memory_review(
     unit_id: Annotated[str, Field(description='Memory unit UUID being reviewed.')],
     quality: Annotated[
         int | str,
+        BeforeValidator(_reject_bool_quality),
         Field(
             description=(
                 'Review rating. Accepts the FSRS-5 IntEnum value (1=again, 2=hard, '
