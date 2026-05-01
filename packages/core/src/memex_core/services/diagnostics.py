@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from memex_core.config import MemexConfig
+from memex_core.diagnostics.lint_dashboard import aggregate_lint_findings
 from memex_core.diagnostics.summary import compute_diagnostics_summary
 from memex_core.diagnostics.umap import (
     UMAPNotInstalledError,
@@ -47,6 +48,13 @@ class DiagnosticsService(BaseService):
             vault_id,
             pending_compute=in_flight,
         )
+
+    async def get_lint_dashboard(self, vault_id: UUID) -> dict[str, Any]:
+        """F26 — Pivot MaintenanceProposal rows by (lint_type, status, source) plus top-5 pending.
+
+        Thin wrapper over :func:`memex_core.diagnostics.lint_dashboard.aggregate_lint_findings`.
+        """
+        return await aggregate_lint_findings(self.metastore, vault_id)
 
     async def get_or_compute_manifold(
         self,
