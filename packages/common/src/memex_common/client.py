@@ -784,14 +784,39 @@ class RemoteMemexAPI:
                 return False
             raise
 
-    async def deprioritize_memory_unit(self, unit_id: UUID, reason: str) -> MemoryUnitDTO:
-        """Deprioritize a memory unit (non-destructive). See F4."""
-        result = await self._post(f'memories/{unit_id}/deprioritize', {'reason': reason})
+    async def deprioritize_memory_unit(
+        self,
+        unit_id: UUID,
+        reason: str,
+        *,
+        vault_id: UUID | str | None = None,
+    ) -> MemoryUnitDTO:
+        """Deprioritize a memory unit (non-destructive). See F4.
+
+        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        optional here only so legacy callers get a clear server-side 422.
+        """
+        body: dict[str, Any] = {'reason': reason}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        result = await self._post(f'memories/{unit_id}/deprioritize', body)
         return MemoryUnitDTO(**result)
 
-    async def restore_memory_unit(self, unit_id: UUID) -> MemoryUnitDTO:
-        """Restore a previously-deprioritized memory unit. See F4."""
-        result = await self._post(f'memories/{unit_id}/restore', {})
+    async def restore_memory_unit(
+        self,
+        unit_id: UUID,
+        *,
+        vault_id: UUID | str | None = None,
+    ) -> MemoryUnitDTO:
+        """Restore a previously-deprioritized memory unit. See F4.
+
+        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        optional here only so legacy callers get a clear server-side 422.
+        """
+        body: dict[str, Any] = {}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        result = await self._post(f'memories/{unit_id}/restore', body)
         return MemoryUnitDTO(**result)
 
     async def get_due_for_review(

@@ -111,6 +111,26 @@ def _seed_unit(postgres_url: str, *, is_deprioritized: bool = False) -> UUID:
         loop.close()
 
 
+def _global_vault_id(postgres_url: str) -> UUID:
+    """Resolve the global vault UUID. F4 routes require ``vault_id`` in body."""
+    dsn = postgres_url.replace('postgresql+asyncpg://', 'postgresql://')
+
+    async def _q() -> UUID:
+        conn = await asyncpg.connect(dsn)
+        try:
+            row = await conn.fetchrow("SELECT id FROM vaults WHERE name = 'global' LIMIT 1")
+            assert row is not None
+            return row['id']
+        finally:
+            await conn.close()
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_q())
+    finally:
+        loop.close()
+
+
 def _read_unit(postgres_url: str, unit_id: UUID) -> dict:
     dsn = postgres_url.replace('postgresql+asyncpg://', 'postgresql://')
 
@@ -160,8 +180,10 @@ def test_flip_sets_column_and_no_cascade(client: TestClient, postgres_url: str):
     finally:
         loop.close()
 
+    vault_id = _global_vault_id(postgres_url)
     resp = client.post(
-        f'/api/v1/memories/{target}/deprioritize', json={'reason': 'test cascade guard'}
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': 'test cascade guard', 'vault_id': str(vault_id)},
     )
     assert resp.status_code == 200, resp.text
 
@@ -185,7 +207,11 @@ def test_reason_logged_to_audit_logs(client: TestClient, postgres_url: str):
     target = _seed_unit(postgres_url)
     reason = f'unit was wrong about {uuid4().hex[:8]}'
 
-    resp = client.post(f'/api/v1/memories/{target}/deprioritize', json={'reason': reason})
+    vault_id = _global_vault_id(postgres_url)
+    resp = client.post(
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': reason, 'vault_id': str(vault_id)},
+    )
     assert resp.status_code == 200
 
     rows = _query_audit(postgres_url, 'memory_deprioritize', str(target))
@@ -205,7 +231,11 @@ def test_audit_log_total_counter_increments(client: TestClient, postgres_url: st
     before = MEMEX_AUDIT_LOG_TOTAL.labels(action='memory_deprioritize')._value.get()
 
     target = _seed_unit(postgres_url)
-    resp = client.post(f'/api/v1/memories/{target}/deprioritize', json={'reason': 'metrics check'})
+    vault_id = _global_vault_id(postgres_url)
+    resp = client.post(
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': 'metrics check', 'vault_id': str(vault_id)},
+    )
     assert resp.status_code == 200
     # Block until audit row lands so we know _persist completed.
     rows = _query_audit(postgres_url, 'memory_deprioritize', str(target))
@@ -224,12 +254,19 @@ def test_audit_log_total_counter_increments(client: TestClient, postgres_url: st
 def test_restore_round_trip(client: TestClient, postgres_url: str):
     """T5: deprioritize → restore writes 1 + 1 audit rows; column flips both ways."""
     target = _seed_unit(postgres_url)
+    vault_id = _global_vault_id(postgres_url)
 
-    r1 = client.post(f'/api/v1/memories/{target}/deprioritize', json={'reason': 'first call'})
+    r1 = client.post(
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': 'first call', 'vault_id': str(vault_id)},
+    )
     assert r1.status_code == 200
     assert _read_unit(postgres_url, target)['is_deprioritized'] is True
 
-    r2 = client.post(f'/api/v1/memories/{target}/restore')
+    r2 = client.post(
+        f'/api/v1/memories/{target}/restore',
+        json={'vault_id': str(vault_id)},
+    )
     assert r2.status_code == 200
     assert _read_unit(postgres_url, target)['is_deprioritized'] is False
 
@@ -253,10 +290,17 @@ def test_double_deprioritize_writes_two_audit_log_rows(client: TestClient, postg
     (False→True→True is fine).
     """
     target = _seed_unit(postgres_url)
+    vault_id = _global_vault_id(postgres_url)
 
-    r1 = client.post(f'/api/v1/memories/{target}/deprioritize', json={'reason': 'first'})
+    r1 = client.post(
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': 'first', 'vault_id': str(vault_id)},
+    )
     assert r1.status_code == 200
-    r2 = client.post(f'/api/v1/memories/{target}/deprioritize', json={'reason': 'second'})
+    r2 = client.post(
+        f'/api/v1/memories/{target}/deprioritize',
+        json={'reason': 'second', 'vault_id': str(vault_id)},
+    )
     assert r2.status_code == 200
 
     rows = _query_audit(postgres_url, 'memory_deprioritize', str(target))
@@ -271,8 +315,12 @@ def test_double_deprioritize_writes_two_audit_log_rows(client: TestClient, postg
 
 
 @pytest.mark.integration
-def test_deprioritize_missing_unit_returns_404(client: TestClient):
+def test_deprioritize_missing_unit_returns_404(client: TestClient, postgres_url: str):
     """Bad-path: deprioritize on a unit that doesn't exist returns 404."""
     bogus = uuid4()
-    resp = client.post(f'/api/v1/memories/{bogus}/deprioritize', json={'reason': 'never matters'})
+    vault_id = _global_vault_id(postgres_url)
+    resp = client.post(
+        f'/api/v1/memories/{bogus}/deprioritize',
+        json={'reason': 'never matters', 'vault_id': str(vault_id)},
+    )
     assert resp.status_code == 404
