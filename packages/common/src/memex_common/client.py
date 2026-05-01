@@ -531,6 +531,15 @@ class RemoteMemexAPI:
         """Fetch the F32 diagnostics summary for a vault."""
         return await self._get(f'diagnostics/summary/{vault_id}')
 
+    async def get_diagnostics_lint(self, vault_id: UUID | str) -> dict[str, Any]:
+        """F26 — Fetch the lint dashboard pivot for a vault.
+
+        Returns ``{vault_id, counts_by_type_status_source, pending_by_type,
+        top_5_pending}``. Operator/observability view; orthogonal to F6's
+        ``/lint/status`` (single count) and ``/lint/findings`` (paginated rows).
+        """
+        return await self._get(f'diagnostics/lint/{vault_id}')
+
     async def get_diagnostics_retrieval(
         self, vault_id: UUID | str, top_n: int = 50
     ) -> dict[str, Any]:

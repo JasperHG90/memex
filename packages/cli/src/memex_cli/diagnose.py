@@ -4,9 +4,7 @@ Subcommands:
 - manifold   — emit UMAP projection JSON (or 202 task info)
 - retrieval  — emit top-N entities heatmap JSON
 - summary    — emit full diagnostics summary JSON
-
-NOTE: there is intentionally NO `lint` subcommand in this module — that ships
-in #26 (last in sub-wave C, after F6's MaintenanceProposal table is merged).
+- lint       — emit lint-finding pivot JSON (F26)
 """
 
 from __future__ import annotations
@@ -84,6 +82,30 @@ async def summary_cmd(
         try:
             vault_id = await api.resolve_vault_identifier(vault)
             payload = await api.get_diagnostics_summary(vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    console.print_json(json.dumps(payload, default=str))
+
+
+@app.command('lint')
+@async_command
+async def lint_cmd(
+    ctx: typer.Context,
+    vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
+):
+    """Print the lint-finding pivot JSON (F26).
+
+    Surfaces the (lint_type, status, source) pivot, the pending-by-type slice,
+    and the top-5 most-recent pending findings for the vault. Distinct from
+    `memex lint status` (single count) and `memex lint findings` (paginated
+    rows) — this is the operator/observability dashboard view.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            vault_id = await api.resolve_vault_identifier(vault)
+            payload = await api.get_diagnostics_lint(vault_id)
         except Exception as e:
             handle_api_error(e)
             return
