@@ -1851,3 +1851,52 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
             postgresql_where=sql_text("status = 'pending'"),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# F10 — LLM lint quota (rolling-24h cost cap)
+# ---------------------------------------------------------------------------
+
+
+class LintLLMQuota(SQLModel, table=True):  # type: ignore
+    """Hour-bucket counter for the F10 24h-rolling cost cap.
+
+    One row per (vault_id, hour_bucket). The 24h rolling window is computed by
+    summing the last 24 hour-buckets via the indexed range scan
+    ``idx_lint_llm_quota_vault_hour``. UPSERT is idempotent through the
+    ``uq_lint_llm_quota_vault_hour`` constraint.
+    """
+
+    __tablename__ = 'lint_llm_quota'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
+        description='Vault this quota row belongs to.',
+    )
+    hour_bucket: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='UTC timestamp truncated to the hour. Clients MUST normalise.',
+    )
+    count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Number of LLM lint calls made in this hour for this vault.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'hour_bucket', name='uq_lint_llm_quota_vault_hour'),
+        CheckConstraint('count >= 0', name='ck_lint_llm_quota_count_non_negative'),
+        Index('idx_lint_llm_quota_vault_hour', 'vault_id', 'hour_bucket'),
+    )

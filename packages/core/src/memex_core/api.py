@@ -527,6 +527,14 @@ class MemexAPI:
             config=self.config,
         )
 
+        from memex_core.services.lint_llm import LintLLMService
+
+        self._lint_llm = LintLLMService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+
         from memex_core.services.session_briefing import SessionBriefingService
 
         self.session_briefing = SessionBriefingService(
@@ -587,6 +595,11 @@ class MemexAPI:
     @property
     def revisit(self) -> RevisitationService:
         return self._revisit
+
+    @property
+    def lint_llm(self):
+        """F10 surprise-gated LLM lint service."""
+        return self._lint_llm
 
     @property
     def embedder(self) -> EmbeddingsModel:
