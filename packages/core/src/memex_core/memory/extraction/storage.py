@@ -266,6 +266,19 @@ async def store_chunks_batch(
     return {row[1]: str(row[0]) for row in results.all()}
 
 
+# Default widening factor for the candidate pool fed into the Python-side
+# anisotropy filter. Pulling N×limit rows gives the normalized filter room to
+# discard rows that fall below ``threshold`` after correction.
+_DEFAULT_POOL_MULTIPLIER = 4
+
+# Hard cap on the pool size so the multiplier cannot trigger unbounded scans on
+# very large memory_units tables. Even with a permissive raw_floor and a high
+# limit, we never request more than this many rows from pgvector. Tuned to be
+# generous (well above realistic ``limit`` values) while preventing pathological
+# scans flagged by Hermes review on PR #91 (MED-3).
+_MAX_POOL_SIZE = 1000
+
+
 async def find_similar_facts(
     session: AsyncSession,
     embedding: list[float],
@@ -274,6 +287,8 @@ async def find_similar_facts(
     exclude_ids: list[UUID] | None = None,
     fact_type: str | None = None,
     vault_ids: list[UUID] | None = None,
+    pool_multiplier: int = _DEFAULT_POOL_MULTIPLIER,
+    max_pool_size: int = _MAX_POOL_SIZE,
 ) -> list[tuple[UUID, float]]:
     """
     Find semantically similar facts using vector cosine distance.
@@ -291,6 +306,12 @@ async def find_similar_facts(
         exclude_ids: List of UUIDs to exclude from results.
         fact_type: Optional filter for fact type.
         vault_ids: Optional list of Vault IDs to scope search. If None/Empty, search all.
+        pool_multiplier: Widening factor applied to ``limit`` when sizing the
+            candidate pool that feeds the Python-side normalized filter. Defaults
+            to ``_DEFAULT_POOL_MULTIPLIER``.
+        max_pool_size: Hard cap on the candidate-pool LIMIT clause sent to
+            pgvector. Prevents runaway scans when ``limit`` and
+            ``pool_multiplier`` combine to produce an unreasonably large pool.
 
     Returns:
         List of ``(unit_id, similarity_score)`` tuples sorted by descending
@@ -309,14 +330,16 @@ async def find_similar_facts(
     # Pull a wider candidate pool than `limit` so the Python-side normalized
     # filter has room to work. The anisotropy corrector compresses scores
     # toward (0, 1); a raw cutoff of 0.5 is a generous coarse pre-filter.
+    # The pool size is hard-capped via ``max_pool_size`` so that very large
+    # ``limit`` values cannot trigger pathological scans (PR #91 MED-3).
     raw_floor = min(threshold, 0.5)
-    pool_multiplier = 4
+    pool_size = min(limit * pool_multiplier, max_pool_size)
     statement = (
         select(MemoryUnit.id, similarity)
         .where(similarity >= raw_floor)
         .where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
         .order_by(similarity.desc())
-        .limit(limit * pool_multiplier)
+        .limit(pool_size)
     )
 
     if fact_type:
