@@ -32,7 +32,7 @@ router = APIRouter(prefix='/api/v1/lint')
 async def lint_status(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    scope: str = Query('vault', regex='^(vault|global|all)$'),
+    scope: str = Query('vault', pattern='^(vault|global|all)$'),
 ) -> dict[str, Any]:
     """Pending finding counts.
 
@@ -67,8 +67,8 @@ async def lint_status(
 async def lint_findings(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    lint_type: str | None = Query(None, regex='^(structural|quality|governance|schema)$'),
-    status: str = Query('pending', regex='^(pending|resolved|dismissed)$'),
+    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema)$'),
+    status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
