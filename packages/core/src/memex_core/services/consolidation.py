@@ -40,6 +40,12 @@ from memex_core.memory.sql_models import (
     MemoryUnit,
     UnitEntity,
 )
+from sqlalchemy.engine.url import make_url
+
+from memex_core.services.locks import (
+    EntityLockTimeoutError,
+    acquire_entity_lock,
+)
 from memex_core.services.mental_model_cleanup import prune_stale_evidence
 from memex_core.services.reflection import ReflectionService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -47,6 +53,7 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 logger = logging.getLogger('memex.core.services.consolidation')
 
 DEFAULT_TICK_BUDGET = 500
+DEFAULT_ENTITY_LOCK_TIMEOUT_SECONDS = 5.0
 
 
 class ConsolidationService:
@@ -64,11 +71,18 @@ class ConsolidationService:
         config: MemexConfig,
         reflection: ReflectionService,
         contradiction: ContradictionEngine | None,
+        *,
+        entity_lock_timeout_seconds: float = DEFAULT_ENTITY_LOCK_TIMEOUT_SECONDS,
     ) -> None:
         self.metastore = metastore
         self.config = config
         self.reflection = reflection
         self.contradiction = contradiction
+        # Derive a plain `postgresql://` DSN for asyncpg from the SQLAlchemy
+        # connection string (mirrors `services/locks.py::_dsn_from_config`).
+        sa_url = make_url(config.server.meta_store.instance.connection_string)
+        self._dsn = sa_url.set(drivername='postgresql').render_as_string(hide_password=False)
+        self._entity_lock_timeout_seconds = entity_lock_timeout_seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -92,16 +106,18 @@ class ConsolidationService:
 
         async with self.metastore.session() as session:
             unit_ids = await self.select_diff_units(session, vault_id, last_tick, budget=budget)
-            entity_ids = (
-                await self.resolve_unit_ids_to_entity_ids(session, unit_ids, vault_id)
+            unit_ids_by_entity = (
+                await self._resolve_unit_ids_grouped_by_entity(session, unit_ids, vault_id)
                 if unit_ids
-                else set()
+                else {}
             )
             already_stale_ids = (
                 await self._select_already_stale_ids(session, unit_ids, vault_id)
                 if unit_ids
                 else []
             )
+        entity_ids: set[UUID] = set(unit_ids_by_entity.keys())
+        already_stale_set = set(already_stale_ids)
 
         log = logger.getChild(str(vault_id))
         log.info(
@@ -123,50 +139,82 @@ class ConsolidationService:
                 'entities_reflected': len(entity_ids),
                 'contradictions_run': len(unit_ids),
                 'stale_pruned_candidates': len(already_stale_ids),
+                'entities_deferred': 0,
                 'tick_id': None,
             }
 
         contradictions_run = 0
         entities_reflected = 0
         stale_pruned = 0
+        entities_deferred: list[UUID] = []
         error: str | None = None
 
-        if unit_ids:
+        # Per-entity loop under F9's per-entity advisory lock so this tick
+        # cannot race with `memex_memory_reconsolidate` (LocksService) on the
+        # same MentalModel/MemoryUnits. Contention policy: skip-and-log-deferred
+        # — if another reconsolidation holds the lock, leave the entity for the
+        # next tick rather than block the whole tick. AC-F38-1 step ordering
+        # (contradiction → reflection → prune) is preserved per entity.
+        for eid in entity_ids:
+            entity_unit_ids = unit_ids_by_entity[eid]
+            if not entity_unit_ids:
+                continue
             try:
-                # Step 2: contradiction BEFORE reflection (B1 adjudication).
-                if self.contradiction is not None:
-                    await self.contradiction.detect_contradictions(
-                        session_factory=self.metastore.session_maker(),
-                        document_id=None,
-                        unit_ids=unit_ids,
-                        vault_id=vault_id,
-                    )
-                    contradictions_run = len(unit_ids)
-                else:
-                    log.warning('consolidation.tick.contradiction_disabled')
+                async with acquire_entity_lock(
+                    self._dsn, eid, timeout_seconds=self._entity_lock_timeout_seconds
+                ):
+                    try:
+                        if self.contradiction is not None:
+                            await self.contradiction.detect_contradictions(
+                                session_factory=self.metastore.session_maker(),
+                                document_id=None,
+                                unit_ids=entity_unit_ids,
+                                vault_id=vault_id,
+                            )
+                            contradictions_run += len(entity_unit_ids)
+                        else:
+                            log.warning('consolidation.tick.contradiction_disabled')
 
-                # Step 3: reflection AFTER contradiction.
-                if entity_ids:
-                    requests = [
-                        ReflectionRequest(entity_id=eid, vault_id=vault_id) for eid in entity_ids
-                    ]
-                    await self.reflection.reflect_batch(requests)
-                    entities_reflected = len(entity_ids)
-
-                # Step 4: prune ONLY units already STALE (F38 does NOT stale).
-                if already_stale_ids and entity_ids:
-                    async with self.metastore.session() as session:
-                        await prune_stale_evidence(
-                            session,
-                            entity_ids=entity_ids,
-                            deleted_unit_ids=already_stale_ids,
-                            vault_id=vault_id,
+                        await self.reflection.reflect_batch(
+                            [ReflectionRequest(entity_id=eid, vault_id=vault_id)]
                         )
-                        await session.commit()
-                    stale_pruned = len(already_stale_ids)
-            except Exception as exc:
-                error = f'{type(exc).__name__}: {exc}'
-                log.warning('consolidation.tick.error', extra={'error': error}, exc_info=True)
+                        entities_reflected += 1
+
+                        entity_stale_ids = [
+                            uid for uid in entity_unit_ids if uid in already_stale_set
+                        ]
+                        if entity_stale_ids:
+                            async with self.metastore.session() as session:
+                                await prune_stale_evidence(
+                                    session,
+                                    entity_ids={eid},
+                                    deleted_unit_ids=entity_stale_ids,
+                                    vault_id=vault_id,
+                                )
+                                await session.commit()
+                            stale_pruned += len(entity_stale_ids)
+                    except Exception as exc:
+                        # Per-entity failure should not poison the tick — log
+                        # and move on. Outer `error` captures the first failure
+                        # for the tick-summary row (parity with prior behaviour).
+                        if error is None:
+                            error = f'{type(exc).__name__}: {exc}'
+                        log.warning(
+                            'consolidation.tick.entity_error',
+                            extra={'entity_id': str(eid), 'error': str(exc)},
+                            exc_info=True,
+                        )
+            except EntityLockTimeoutError:
+                entities_deferred.append(eid)
+                log.info(
+                    'consolidation.tick.entity_deferred',
+                    extra={
+                        'entity_id': str(eid),
+                        'reason': 'entity_lock_timeout',
+                        'timeout_seconds': self._entity_lock_timeout_seconds,
+                    },
+                )
+                continue
 
         tick_id = await self._write_tick_summary(
             vault_id=vault_id,
@@ -185,6 +233,7 @@ class ConsolidationService:
                 'vault_id': str(vault_id),
                 'tick_id': str(tick_id),
                 'error': error,
+                'entities_deferred': len(entities_deferred),
             },
         )
 
@@ -195,6 +244,7 @@ class ConsolidationService:
             'entities_reflected': entities_reflected,
             'contradictions_run': contradictions_run,
             'stale_pruned': stale_pruned,
+            'entities_deferred': len(entities_deferred),
             'error': error,
         }
 
@@ -318,6 +368,34 @@ class ConsolidationService:
         )
         result = await session.exec(stmt)
         return {row for row in result.all() if row is not None}
+
+    async def _resolve_unit_ids_grouped_by_entity(
+        self,
+        session: Any,
+        unit_ids: list[UUID],
+        vault_id: UUID,
+    ) -> dict[UUID, list[UUID]]:
+        """Return a {entity_id: [unit_ids]} map for the diff units.
+
+        Used by ``tick()`` to drive a per-entity loop under
+        ``acquire_entity_lock`` so F38 cannot race with F9's
+        ``memex_memory_reconsolidate`` on the same MentalModel. Vault-scoped.
+        """
+        if not unit_ids:
+            return {}
+        stmt = select(UnitEntity.entity_id, UnitEntity.unit_id).where(
+            UnitEntity.unit_id.in_(unit_ids),  # type: ignore[attr-defined]
+            UnitEntity.vault_id == vault_id,
+        )
+        result = await session.exec(stmt)
+        grouped: dict[UUID, list[UUID]] = {}
+        for row in result.all():
+            entity_id = row[0] if isinstance(row, tuple) else row.entity_id
+            unit_id = row[1] if isinstance(row, tuple) else row.unit_id
+            if entity_id is None or unit_id is None:
+                continue
+            grouped.setdefault(entity_id, []).append(unit_id)
+        return grouped
 
     async def _select_already_stale_ids(
         self,
