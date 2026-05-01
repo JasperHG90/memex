@@ -171,6 +171,14 @@ async def view_memory(
 async def deprioritize_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
+    vault: Annotated[
+        str,
+        typer.Option(
+            '--vault',
+            '-v',
+            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+        ),
+    ],
     reason: Annotated[
         str,
         typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
@@ -185,7 +193,10 @@ async def deprioritize_memory(
 
     async with get_api_context(config) as api:
         try:
-            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+            resolved_vault = await api.resolve_vault_identifier(vault)
+            unit = await api.deprioritize_memory_unit(
+                uuid_obj, reason=reason, vault_id=resolved_vault
+            )
         except Exception as e:
             handle_api_error(e)
             return
@@ -200,6 +211,14 @@ async def deprioritize_memory(
 async def restore_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
+    vault: Annotated[
+        str,
+        typer.Option(
+            '--vault',
+            '-v',
+            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+        ),
+    ],
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj
@@ -207,7 +226,8 @@ async def restore_memory(
 
     async with get_api_context(config) as api:
         try:
-            unit = await api.restore_memory_unit(uuid_obj)
+            resolved_vault = await api.resolve_vault_identifier(vault)
+            unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
         except Exception as e:
             handle_api_error(e)
             return

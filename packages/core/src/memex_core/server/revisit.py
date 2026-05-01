@@ -23,10 +23,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator, Field
 
+from memex_common.config import Permission
 from memex_common.exceptions import MemexError
 from memex_common.revisit import reject_bool_quality
 from memex_core.api import MemexAPI
-from memex_core.server.auth import require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_read,
+    require_write,
+)
 from memex_core.server.common import _handle_error, get_api
 
 logger = logging.getLogger('memex.core.server.revisit')
@@ -68,6 +75,7 @@ async def get_due_for_review(
         int,
         Query(ge=1, le=200, description='Maximum due units to return.'),
     ] = 20,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> list[dict[str, Any]]:
     """List memory units due for FSRS-5 revisit in a vault.
 
@@ -79,6 +87,8 @@ async def get_due_for_review(
         resolved_vault = await api.resolve_vault_identifier(vault_id)
     except (MemexError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=f'Unknown vault: {vault_id!r}') from exc
+
+    await check_vault_access(auth, [resolved_vault], api, permission=Permission.READ)
 
     try:
         due = await api.get_due_for_review(resolved_vault, limit=limit)
@@ -100,6 +110,7 @@ async def get_due_for_review(
 async def post_review(
     body: ReviewMemoryRequest,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """Record a review outcome on a memory unit.
 
@@ -145,6 +156,8 @@ async def post_review(
         resolved_vault = await api.resolve_vault_identifier(body.vault_id)
     except (MemexError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=f'Unknown vault: {body.vault_id!r}') from exc
+
+    await check_vault_access(auth, [resolved_vault], api, permission=Permission.WRITE)
 
     try:
         return await api.review_memory_unit(unit_uuid, quality_enum, vault_id=resolved_vault)

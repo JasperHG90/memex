@@ -1076,13 +1076,20 @@ class MemexAPI:
         unit_id: UUID,
         reason: str,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
-        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService."""
+        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
         return await self._units.set_unit_deprioritized(
             unit_id,
             reason,
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )
@@ -1091,12 +1098,19 @@ class MemexAPI:
         self,
         unit_id: UUID,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
-        """Restore a deprioritized memory unit. Delegates to UnitsService."""
+        """Restore a deprioritized memory unit. Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
         return await self._units.restore_unit(
             unit_id,
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )

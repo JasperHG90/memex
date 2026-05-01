@@ -92,7 +92,7 @@ def test_real_agent_uses_deprioritize_after_record_outcome(client, postgres_url)
     # here we drive the MW counter directly to avoid coupling to outcome HTTP
     # surface (which is a service-only seam in v1) and assert the deprioritize
     # half lands cleanly on top of the MW state.
-    from test_e2e_f4_deprioritize import _seed_unit, _read_unit, _query_audit
+    from test_e2e_f4_deprioritize import _seed_unit, _read_unit, _query_audit, _global_vault_id
     import asyncio
     import asyncpg
 
@@ -118,10 +118,12 @@ def test_real_agent_uses_deprioritize_after_record_outcome(client, postgres_url)
         loop.close()
 
     # Step 2: deprioritize the unit (the agent's response to the failed outcome).
+    vault_id = _global_vault_id(postgres_url)
     deprio_resp = client.post(
         f'/api/v1/memories/{unit_id}/deprioritize',
         json={
-            'reason': 'Outcome confirmed misleading; deprioritized after agent observed failure.'
+            'reason': ('Outcome confirmed misleading; deprioritized after agent observed failure.'),
+            'vault_id': str(vault_id),
         },
     )
     assert deprio_resp.status_code == 200, deprio_resp.text

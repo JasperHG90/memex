@@ -21,8 +21,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
+from memex_common.config import Permission
 from memex_core.api import MemexAPI
-from memex_core.server.auth import require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_read,
+    require_write,
+)
 from memex_core.server.common import _handle_error, get_api
 from memex_core.services.lint import LintSubsystemNotInitializedError
 
@@ -36,6 +43,7 @@ async def lint_status(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
     scope: str = Query('all', pattern='^(vault|global|all)$'),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """Pending finding counts.
 
@@ -58,6 +66,7 @@ async def lint_status(
                 status_code=400,
                 detail='vault_id is required when scope=vault',
             )
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
         count = await api.lint.count_pending(vault_id)
         return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
     except HTTPException:
@@ -74,9 +83,12 @@ async def lint_findings(
     status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """List maintenance findings with optional filters."""
     try:
+        if vault_id is not None:
+            await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
         # `clauses` only contains hard-coded predicate fragments (no user input);
         # the column/operator strings are trusted constants and all values are
         # bound via :named parameters. SQLAlchemy Core constructs would be more
@@ -151,6 +163,7 @@ async def lint_flags(
     status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
     limit: int = Query(20, ge=1, le=200),
     cursor: str | None = Query(None, description='Opaque cursor from a prior page.'),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """F8 agent surface — shape-stable, cursor-paginated.
 
@@ -161,6 +174,8 @@ async def lint_flags(
     AC-F8-5 path: when the maintenance ledger is missing returns 503
     with the documented initialization-error envelope.
     """
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
     try:
         page = await api.lint.get_findings(
             vault_id=vault_id,

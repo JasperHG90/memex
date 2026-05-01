@@ -3622,6 +3622,16 @@ async def memex_memory_deprioritize(
         str,
         Field(description='Why this unit is being deprioritized. Free text; logged to audit_logs.'),
     ],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. Defaults to the active '
+                'write vault. Required for Wave 0 vault-scoping; cross-vault calls '
+                'are rejected.'
+            ),
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Deprioritize a memory unit (non-destructive)."""
     try:
@@ -3630,11 +3640,18 @@ async def memex_memory_deprioritize(
             uuid_obj = UUID(unit_id)
         except ValueError:
             raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        resolved_vault = await _resolve_vault_id(
+            api, vault_id if vault_id is not None else _default_write_vault(ctx)
+        )
         try:
-            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+            unit = await api.deprioritize_memory_unit(
+                uuid_obj, reason=reason, vault_id=resolved_vault
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 raise ToolError(f'Memory unit {unit_id} not found.')
+            if exc.response.status_code == 403:
+                raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
             raise
         return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
     except ToolError:
@@ -3654,6 +3671,16 @@ async def memex_memory_deprioritize(
 async def memex_memory_restore(
     ctx: Context,
     unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. Defaults to the active '
+                'write vault. Required for Wave 0 vault-scoping; cross-vault calls '
+                'are rejected.'
+            ),
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Restore a deprioritized memory unit."""
     try:
@@ -3662,11 +3689,16 @@ async def memex_memory_restore(
             uuid_obj = UUID(unit_id)
         except ValueError:
             raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        resolved_vault = await _resolve_vault_id(
+            api, vault_id if vault_id is not None else _default_write_vault(ctx)
+        )
         try:
-            unit = await api.restore_memory_unit(uuid_obj)
+            unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 raise ToolError(f'Memory unit {unit_id} not found.')
+            if exc.response.status_code == 403:
+                raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
             raise
         return {'unit_id': str(unit.id), 'is_deprioritized': False}
     except ToolError:

@@ -3278,6 +3278,9 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
         'required': ['unit_id', 'reason'],
     },
 }
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
 
 MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_restore',
@@ -3314,8 +3317,13 @@ def handle_memory_deprioritize(
         uuid_obj = UUID(str(raw_unit_id))
     except ValueError:
         return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot deprioritize.')
     try:
-        result = run_sync(api.deprioritize_memory_unit(uuid_obj, reason=reason), timeout=30.0)
+        result = run_sync(
+            api.deprioritize_memory_unit(uuid_obj, reason=reason, vault_id=vault_id),
+            timeout=30.0,
+        )
     except Exception as e:
         logger.warning('memex_memory_deprioritize failed: %s', e)
         return tool_error(f'Deprioritize failed: {e}')
@@ -3342,8 +3350,10 @@ def handle_memory_restore(
         uuid_obj = UUID(str(raw_unit_id))
     except ValueError:
         return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot restore.')
     try:
-        result = run_sync(api.restore_memory_unit(uuid_obj), timeout=30.0)
+        result = run_sync(api.restore_memory_unit(uuid_obj, vault_id=vault_id), timeout=30.0)
     except Exception as e:
         logger.warning('memex_memory_restore failed: %s', e)
         return tool_error(f'Restore failed: {e}')
