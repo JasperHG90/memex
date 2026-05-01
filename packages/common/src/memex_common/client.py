@@ -575,6 +575,41 @@ class RemoteMemexAPI:
         params = {'vault_id': str(vault_id)} if vault_id is not None else None
         return await self._get('consolidation/status', params=params)
 
+    # --- Outcomes (F29) ---
+    async def record_outcome(
+        self,
+        unit_ids: list[str] | None,
+        success: bool,
+        vault_id: str | None = None,
+        outcome_confidence: float = 1.0,
+        reason: str | None = None,
+        *,
+        target_type: str = 'memory_unit',
+        kv_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an outcome (F14 ADD-2 over HTTP).
+
+        Mirrors :meth:`memex_core.api.MemexAPI.record_outcome` exactly so
+        in-process and remote callers share one call shape. ``unit_ids``
+        and ``success`` are positional; ``target_type`` and ``kv_key`` are
+        keyword-only — preserving the F14 ADD-2 invariant that a kwargless
+        call cannot silently record FAILURE.
+        """
+        body: dict[str, Any] = {
+            'success': success,
+            'outcome_confidence': outcome_confidence,
+            'target_type': target_type,
+        }
+        if unit_ids is not None:
+            body['unit_ids'] = unit_ids
+        if vault_id is not None:
+            body['vault_id'] = vault_id
+        if reason is not None:
+            body['reason'] = reason
+        if kv_key is not None:
+            body['kv_key'] = kv_key
+        return await self._post('outcomes/record', body)
+
     # --- Stats & Overview ---
     async def get_stats_counts(
         self,
