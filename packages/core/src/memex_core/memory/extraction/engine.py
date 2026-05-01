@@ -256,11 +256,19 @@ class ExtractionEngine:
             )
 
         if intent_override:
+            intent_value = (
+                IntentClass(intent_override)
+                if isinstance(intent_override, str)
+                else intent_override
+            )
             for f in processed_facts:
-                f.intent_class = intent_override
+                f.intent_class = intent_value
         if risk_override:
+            risk_value = (
+                RiskClass(risk_override) if isinstance(risk_override, str) else risk_override
+            )
             for f in processed_facts:
-                f.risk_class = risk_override
+                f.risk_class = risk_value
 
         return filter_safety_blocked(processed_facts)
 
