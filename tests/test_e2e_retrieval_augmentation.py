@@ -407,9 +407,15 @@ async def test_e2e_exploration_units_in_search(client: TestClient, db_session):
         assert total < 5
 
 
+@pytest.mark.llm
 @pytest.mark.integration
 async def test_e2e_ingest_search_record_outcome_search(client: TestClient, db_session):
-    """Full pipeline: ingest → search → record outcome → search again."""
+    """Full pipeline: ingest → search → record outcome → search again.
+
+    Marked ``llm`` because the F25 write-time classifier (default-on as of
+    PR #91) issues a real Gemini call inside the ingestion pipeline that is
+    not covered by the ``_extract_facts`` mock used in ``_ingest_note``.
+    """
     from memex_core.services.outcomes import OutcomeService
     from memex_core.memory.sql_models import MemoryUnit
 
