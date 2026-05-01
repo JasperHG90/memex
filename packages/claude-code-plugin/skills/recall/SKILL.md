@@ -51,8 +51,9 @@ You have been invoked via the `/recall` slash command.
    entries, dangling refs). Each finding includes `target_id`,
    `lint_type`, `evidence`, and `suggested_action`; most can be
    auto-resolved by calling the relevant tool (e.g. `memex_memory_deprioritize`
-   for low-MW units). Surface high-confidence findings to the user; act
-   autonomously on low-risk ones.
+   for low-MW units, or `memex_memory_consolidate(vault_id, dry_run=true)`
+   for a vault-wide preview before applying). Surface high-confidence
+   findings to the user; act autonomously on low-risk ones.
 
 <!--
 Tier A — /recall verb extensions

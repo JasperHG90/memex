@@ -127,6 +127,10 @@ class MemexAPIProtocol(Protocol):
     # F8 — Lint flags (read-only agent surface)
     async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    # F9 — Per-entity advisory lock + vault-wide consolidate
+    async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
+
 
 # ---------------------------------------------------------------------------
 # Vault resolution helpers (Stream 1)
@@ -3670,6 +3674,113 @@ ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
 
 
 # --- F9 ---  (filled by WS-locks)
+
+MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_reconsolidate',
+    'description': (
+        'Re-evaluate memories for a specific entity, detecting contradictions and '
+        'updating mental models. Use when retrieved facts about an entity disagree. '
+        'Runs contradiction detection across all units linked to the entity, then '
+        'triggers reflection. ENTITY-SCOPED counterpart to memex_memory_consolidate '
+        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reconsolidate.',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID — required for vault-scoped unit resolution.',
+            },
+        },
+        'required': ['entity_id', 'vault_id'],
+    },
+}
+
+
+MEMORY_CONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_consolidate',
+    'description': (
+        'Vault-wide batch curation. Identifies low-MW + stale units and '
+        'deprioritizes them; writes findings to the maintenance ledger. '
+        'VAULT-SCOPED counterpart to memex_memory_reconsolidate (per-entity). '
+        'Use sparingly (e.g., monthly per vault). For per-entity hygiene, prefer '
+        'memex_memory_reconsolidate.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID to consolidate.',
+            },
+            'dry_run': {
+                'type': 'boolean',
+                'description': 'If true, preview without making changes.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
+
+def handle_memory_reconsolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_entity = _require(args, 'entity_id')
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity}')
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    try:
+        result = run_sync(api.reconsolidate_entity(entity_uuid, vault_uuid), timeout=120.0)
+    except Exception as e:
+        logger.warning('memex_memory_reconsolidate failed: %s', e)
+        return tool_error(f'Reconsolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_memory_consolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    dry_run = bool(args.get('dry_run', False))
+    try:
+        result = run_sync(api.consolidate_vault(vault_uuid, dry_run=dry_run), timeout=300.0)
+    except Exception as e:
+        logger.warning('memex_memory_consolidate failed: %s', e)
+        return tool_error(f'Consolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_memory_reconsolidate'] = handle_memory_reconsolidate
+HANDLERS['memex_memory_consolidate'] = handle_memory_consolidate
+ALL_SCHEMAS.extend([MEMORY_RECONSOLIDATE_SCHEMA, MEMORY_CONSOLIDATE_SCHEMA])
+
 
 # --- F20 --- (filled by WS-revisit)
 

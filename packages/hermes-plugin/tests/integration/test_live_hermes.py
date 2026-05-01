@@ -74,6 +74,8 @@ def test_get_tool_schemas_exposes_stream_1_and_post_seed_tools(initialized_provi
     )  # F5 — new MCP verb, must be reachable through dispatch
     assert 'memex_get_due_for_review' in names  # F20 — READ verb
     assert 'memex_memory_review' in names  # F20 — WRITE verb (FSRS-5 schedule advance)
+    assert 'memex_memory_reconsolidate' in names  # F9 — entity-scoped curation
+    assert 'memex_memory_consolidate' in names  # F9 — vault-scoped curation
 
 
 def test_get_tool_schemas_at_registration_time(loaded_provider):
