@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - release/tier-a-cognitive-memory
   push:
     branches:
       - main
