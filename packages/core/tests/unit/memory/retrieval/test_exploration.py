@@ -7,13 +7,15 @@ from memex_core.memory.retrieval.exploration import (
     inject_exploration_units,
     select_exploration_candidates,
 )
-from memex_core.memory.sql_models import MemoryUnit
+from memex_core.memory.sql_models import ContentStatus, MemoryUnit
 
 
 def _make_unit(
     success: int = 0,
     failure: int = 0,
     text: str = 'test',
+    status: ContentStatus = ContentStatus.ACTIVE,
+    is_deprioritized: bool = False,
 ) -> MemoryUnit:
     return MemoryUnit(
         id=uuid4(),
@@ -25,6 +27,8 @@ def _make_unit(
         embedding=[],
         success_co_count=success,
         failure_co_count=failure,
+        status=status,
+        is_deprioritized=is_deprioritized,
     )
 
 
@@ -81,6 +85,24 @@ class TestSelectExplorationCandidates:
                 results, candidates, epsilon=0.05, max_injections=1
             )
         assert len(selected) <= 1
+
+    def test_deprioritized_units_excluded(self):
+        """Deprioritized units are not eligible for exploration injection (PR #91 MED-1)."""
+        results = [_make_unit(success=10, failure=2)]
+        deprioritized_cold = _make_unit(success=0, failure=0, is_deprioritized=True)
+        candidates = [results[0], deprioritized_cold]
+        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+            selected = select_exploration_candidates(results, candidates, epsilon=0.05)
+        assert selected == []
+
+    def test_stale_units_excluded(self):
+        """Stale (superseded) units are not eligible for exploration injection (PR #91 MED-1)."""
+        results = [_make_unit(success=10, failure=2)]
+        stale_cold = _make_unit(success=0, failure=0, status=ContentStatus.STALE)
+        candidates = [results[0], stale_cold]
+        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+            selected = select_exploration_candidates(results, candidates, epsilon=0.05)
+        assert selected == []
 
     def test_custom_low_mw_threshold(self):
         results = [_make_unit()]

@@ -16,7 +16,7 @@ import random
 
 import structlog
 
-from memex_core.memory.sql_models import MemoryUnit
+from memex_core.memory.sql_models import ContentStatus, MemoryUnit
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
 
@@ -63,11 +63,16 @@ def select_exploration_candidates(
 
     result_ids = {u.id for u in results}
 
-    # Eligible: not already in results, and low total outcome count
+    # Eligible: not already in results, ACTIVE, not deprioritized, and low total outcome count.
+    # Excludes stale (superseded by reflection) and deprioritized units to avoid surfacing
+    # content the system has already de-emphasised.
     eligible = [
         u
         for u in all_candidates
-        if u.id not in result_ids and (u.success_co_count + u.failure_co_count) < low_mw_threshold
+        if u.id not in result_ids
+        and not u.is_deprioritized
+        and u.status == ContentStatus.ACTIVE
+        and (u.success_co_count + u.failure_co_count) < low_mw_threshold
     ]
 
     if not eligible:
