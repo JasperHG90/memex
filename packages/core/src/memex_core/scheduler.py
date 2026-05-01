@@ -149,6 +149,70 @@ async def periodic_lint_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: F6 lint task failed: {e}', exc_info=True)
 
 
+async def periodic_lint_llm_task(api: 'MemexAPI'):
+    """F10: per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
+
+    Runs the enabled DSPy lint signatures per RFC-006 Option (A): semantic
+    contradiction + schema drift. Both share the same 24h cost cap, so the
+    second pass eats from whatever the first one left.
+    """
+    from memex_core.memory.lint_llm.checks import (
+        make_schema_drift_check,
+        make_semantic_contradiction_check,
+    )
+
+    settings = api.config.server.memory.lint_llm
+    if not settings.enabled or settings.cost_cap_per_24h <= 0:
+        return
+
+    checks: list[tuple[str, object]] = []
+    if settings.checks.semantic_contradiction.enabled:
+        checks.append(
+            (
+                'semantic_contradiction',
+                make_semantic_contradiction_check(api.lm, k=settings.surprise_k),
+            )
+        )
+    if settings.checks.schema_drift.enabled:
+        checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
+
+    if not checks:
+        logger.info('Scheduler: F10 lint_llm — no checks enabled, skipping tick')
+        return
+
+    async with background_session('bg-sched-lint-llm'):
+        try:
+            vaults = await api.list_vaults()
+            for vault in vaults:
+                for check_name, check in checks:
+                    try:
+                        summary = await api.lint_llm.tick(vault.id, run_llm_check=check)
+                        if (
+                            summary.findings_emitted
+                            or summary.deferred
+                            or summary.deferred_processed
+                        ):
+                            logger.info(
+                                'Scheduler: F10 lint_llm[%s] vault=%s: '
+                                'evaluated=%d emitted=%d deferred=%d processed_deferred=%d',
+                                check_name,
+                                vault.name,
+                                summary.candidates_evaluated,
+                                summary.findings_emitted,
+                                summary.deferred,
+                                summary.deferred_processed,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            'Scheduler: F10 lint_llm[%s] failed for vault %s: %s',
+                            check_name,
+                            vault.name,
+                            e,
+                        )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: F10 lint_llm task failed: {e}', exc_info=True)
+
+
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
     """
     Leader election loop using Postgres Advisory Locks.
@@ -203,6 +267,22 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         @clock.task(trigger=Every(seconds=lint_interval))
         async def run_lint_job():
             await periodic_lint_task(api)
+
+    # --- F10 lint_llm ---  (filled by WS-linter)
+    lint_llm_cfg = config.server.memory.lint_llm
+    if lint_llm_cfg.enabled and lint_llm_cfg.cost_cap_per_24h > 0:
+        logger.info(
+            f'Scheduler: F10 lint_llm enabled. '
+            f'Interval: {lint_llm_cfg.interval_seconds}s. '
+            f'Cap: {lint_llm_cfg.cost_cap_per_24h}/24h/vault. '
+            f'Threshold: {lint_llm_cfg.surprise_threshold}.'
+        )
+
+        @clock.task(trigger=Every(seconds=lint_llm_cfg.interval_seconds))
+        async def run_lint_llm_job():
+            await periodic_lint_llm_task(api)
+    else:
+        logger.info('Scheduler: F10 lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
 
     # --- F20 revisit ---   (filled by WS-revisit)
 

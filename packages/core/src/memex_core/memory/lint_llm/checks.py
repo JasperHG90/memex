@@ -30,8 +30,8 @@ from memex_core.memory.lint_llm.signatures import (
     CheckSemanticContradiction,
 )
 from memex_core.memory.lint_llm.surprise import compute_unit_surprise
+from memex_core.memory.lint_llm.types import LLMLintFinding, RunLLMCheck
 from memex_core.memory.sql_models import LintType
-from memex_core.services.lint_llm import LLMLintFinding, RunLLMCheck
 
 logger = logging.getLogger('memex.core.memory.lint_llm.checks')
 

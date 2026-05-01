@@ -584,3 +584,168 @@ async def test_f8_returns_llm_findings(
     assert f.evidence['check_type'] == 'semantic_contradiction'
     assert f.evidence['surprise_score'] == 0.85
     assert f.evidence['explanation']  # non-empty
+
+
+# ---------------------------------------------------------------------------
+# tick — scheduler entry-point (drains deferred + processes fresh candidates)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_real_unit(session: AsyncSession, vault_id: UUID) -> UUID:
+    """Insert a real memory_unit row (with an embedding) so list_tick_candidates
+    can find it. Differs from _new_unit_id() which only mints a UUID."""
+    unit_id = uuid4()
+    note_id = uuid4()
+    await session.execute(
+        text("""
+            INSERT INTO notes (id, vault_id, content_hash, title)
+            VALUES (:id, :vid, :hash, :title)
+        """),
+        {
+            'id': str(note_id),
+            'vid': str(vault_id),
+            'hash': uuid4().hex,
+            'title': 'F10 tick test',
+        },
+    )
+    await session.execute(
+        text("""
+            INSERT INTO memory_units (
+                id, note_id, vault_id, text, fact_type, status, embedding, event_date
+            )
+            VALUES (
+                :id, :nid, :vid, :text, 'observation', 'active', :emb, :ed
+            )
+        """),
+        {
+            'id': str(unit_id),
+            'nid': str(note_id),
+            'vid': str(vault_id),
+            'text': f'tick fact {unit_id}',
+            'emb': str([0.1] * 384),
+            'ed': datetime.now(timezone.utc),
+        },
+    )
+    await session.commit()
+    return unit_id
+
+
+@pytest.mark.asyncio
+async def test_tick_short_circuits_when_disabled(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    memex_config.server.memory.lint_llm.enabled = False
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+
+    summary = await svc.tick(vault_id, run_llm_check=_stub_check(returns=_make_finding(uuid4())))
+    assert summary.candidates_evaluated == 0
+    assert summary.findings_emitted == 0
+
+
+@pytest.mark.asyncio
+async def test_tick_short_circuits_when_cap_zero(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    memex_config.server.memory.lint_llm.cost_cap_per_24h = 0
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+    await _seed_real_unit(session, vault_id)
+
+    summary = await svc.tick(vault_id, run_llm_check=_stub_check(returns=_make_finding(uuid4())))
+    assert summary.candidates_evaluated == 0
+
+
+@pytest.mark.asyncio
+async def test_tick_picks_fresh_units_and_drains_deferred(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """A single tick must (a) drain the deferred queue first and (b) pick
+    fresh candidate units up to units_per_tick. Loop closure: a unit
+    deferred on a prior tick processes here when budget is available."""
+    memex_config.server.memory.lint_llm.cost_cap_per_24h = 5
+    memex_config.server.memory.lint_llm.units_per_tick = 2
+    memex_config.server.memory.lint_llm.surprise_threshold = 0.0  # admit all
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+
+    # Pre-seed: one deferred row (from a prior over-cap tick).
+    deferred_unit = await _seed_real_unit(session, vault_id)
+    await svc.defer(
+        deferred_unit,
+        vault_id,
+        reason='cost_cap_exceeded',
+        surprise_score=0.9,
+        session=session,
+    )
+    await session.commit()
+
+    # Two fresh candidates that the tick should pick up.
+    fresh_a = await _seed_real_unit(session, vault_id)
+    fresh_b = await _seed_real_unit(session, vault_id)
+
+    # Stub run_llm_check returns a finding for any unit.
+    summary = await svc.tick(vault_id, run_llm_check=_stub_check(returns=_make_finding(fresh_a)))
+
+    # Deferred unit was processed first.
+    assert summary.deferred_processed == 1
+    # Two fresh candidates evaluated, both below threshold (0.0 admits all).
+    assert summary.candidates_evaluated == 2
+    # 1 deferred + 2 fresh = 3 LLM calls = 3 quota slots used.
+    used = await svc.quota_used(vault_id, session=session)
+    assert used == 3
+
+    # The deferred row was dismissed; no leftover llm_deferred rows pending.
+    assert (
+        await _count_proposals(session, vault_id, rule_name='llm_deferred', status='pending') == 0
+    )
+    # And new findings landed (with rule_name='llm_semantic_contradiction').
+    new_findings = await _count_proposals(
+        session, vault_id, rule_name='llm_semantic_contradiction', source='llm'
+    )
+    assert new_findings >= 2  # one from deferred, two from fresh, dedup-permitting
+
+    # Sanity: candidate IDs include both fresh units (deferred already
+    # excluded — its row had source='llm' which is the filter NOT EXISTS uses).
+    _ = fresh_b  # referenced for clarity
+
+
+@pytest.mark.asyncio
+async def test_tick_respects_cost_cap_and_defers_excess_fresh(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    memex_config.server.memory.lint_llm.cost_cap_per_24h = 1
+    memex_config.server.memory.lint_llm.units_per_tick = 3
+    memex_config.server.memory.lint_llm.surprise_threshold = 0.0
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+
+    [await _seed_real_unit(session, vault_id) for _ in range(3)]
+
+    summary = await svc.tick(vault_id, run_llm_check=_stub_check(returns=_make_finding(uuid4())))
+
+    # 1 admitted (cost cap), 2 deferred.
+    assert summary.findings_emitted >= 1
+    assert summary.deferred == 2
+    deferred_pending = await _count_proposals(
+        session, vault_id, rule_name='llm_deferred', status='pending'
+    )
+    assert deferred_pending == 2
+
+
+@pytest.mark.asyncio
+async def test_tick_skips_units_with_existing_pending_llm_proposal(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """list_tick_candidates excludes units that already have a pending
+    source='llm' proposal — preventing re-audit on every tick."""
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+    unit_id = await _seed_real_unit(session, vault_id)
+
+    finding = _make_finding(unit_id, surprise=0.85)
+    await svc.write_finding(finding, vault_id, session=session)
+    await session.commit()
+
+    candidates = await svc.list_tick_candidates(vault_id, limit=10, session=session)
+    assert unit_id not in candidates

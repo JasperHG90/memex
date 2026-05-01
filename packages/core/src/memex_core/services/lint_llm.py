@@ -25,17 +25,25 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory.lint_llm.surprise import compute_unit_surprise
-from memex_core.memory.sql_models import LintType
+from memex_core.memory.lint_llm.types import LLMLintFinding, RunLLMCheck
 from memex_core.services.base import BaseService
+
+__all__ = [
+    'LLMLintFinding',
+    'LintLLMService',
+    'LintLLMTickSummary',
+    'MaybeRunOutcome',
+    'RunLLMCheck',
+]
 
 try:
     from opentelemetry import trace as _otel_trace
@@ -58,27 +66,6 @@ _DEFER_REASON_QUEUE_CAP = 'deferred_queue_cap_exceeded'
 
 
 @dataclass
-class LLMLintFinding:
-    """Output of an F10 LLM check, ready to persist as a MaintenanceProposal.
-
-    ``rule_name`` identifies the DSPy signature that produced the finding
-    (e.g. ``llm_semantic_contradiction``, ``llm_schema_drift``).
-    ``check_type`` is the corresponding evidence-payload tag per RFC-006.
-    """
-
-    rule_name: str
-    check_type: str
-    target_type: str
-    target_id: str
-    suggested_action: str
-    surprise_score: float
-    explanation: str
-    related_unit_ids: list[str] = field(default_factory=list)
-    extra_evidence: dict[str, Any] = field(default_factory=dict)
-    lint_type: LintType = LintType.QUALITY
-
-
-@dataclass
 class MaybeRunOutcome:
     """Result of a single ``LintLLMService.maybe_run`` call.
 
@@ -92,7 +79,16 @@ class MaybeRunOutcome:
     surprise_score: float | None = None
 
 
-RunLLMCheck = Callable[[UUID, UUID, AsyncSession], Awaitable[LLMLintFinding | None]]
+@dataclass
+class LintLLMTickSummary:
+    """Per-vault summary of an F10 scheduler tick."""
+
+    vault_id: UUID
+    candidates_evaluated: int = 0
+    findings_emitted: int = 0
+    deferred: int = 0
+    skipped_below_threshold: int = 0
+    deferred_processed: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +180,25 @@ _EVICT_OLDEST_DEFERRED_SQL = text("""
         ORDER BY created_at ASC, id ASC
         LIMIT :n
     )
+""")
+
+
+_SELECT_TICK_CANDIDATES_SQL = text("""
+    SELECT m.id
+    FROM memory_units m
+    WHERE m.vault_id = :vault_id
+      AND m.status = 'active'
+      AND m.embedding IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM maintenance_proposals p
+          WHERE p.target_type = 'memory_unit'
+            AND p.target_id = m.id::text
+            AND p.vault_id = :vault_id
+            AND p.source = 'llm'
+            AND p.status = 'pending'
+      )
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT :limit
 """)
 
 
@@ -482,3 +497,95 @@ class LintLLMService(BaseService):
             await self.dismiss_deferred(proposal_id, session=session)
             processed += 1
         return processed
+
+    # -- tick (scheduler entry-point) -----------------------------------
+
+    async def list_tick_candidates(
+        self,
+        vault_id: UUID,
+        *,
+        limit: int,
+        session: AsyncSession,
+    ) -> list[UUID]:
+        """Return up to ``limit`` candidate units for this tick.
+
+        Selects active units in the vault that have an embedding and do not
+        already have a pending ``source='llm'`` MaintenanceProposal. Ordered
+        most-recent-first so the freshest content gets audited under the cap.
+        """
+        if limit <= 0:
+            return []
+        result = await session.execute(
+            _SELECT_TICK_CANDIDATES_SQL,
+            {'vault_id': str(vault_id), 'limit': limit},
+        )
+        return [row.id for row in result]
+
+    async def tick(
+        self,
+        vault_id: UUID,
+        *,
+        run_llm_check: RunLLMCheck,
+    ) -> LintLLMTickSummary:
+        """Single F10 scheduler-tick for ``vault_id``.
+
+        Order of operations matches RFC-006 §"Cost-cap implementation":
+
+        1. Process the deferred queue first (so over-cap units from a prior
+           tick get budget priority once it's free).
+        2. Pick fresh candidate units up to ``units_per_tick``.
+        3. For each, ``maybe_run`` (gate → quota → check → write OR defer).
+
+        Each unit's work is wrapped in its own session+commit so partial
+        progress is durable across LLM failures. The 24h cost cap is
+        enforced atomically via ``check_and_increment_quota``.
+        """
+        summary = LintLLMTickSummary(vault_id=vault_id)
+        settings = self._settings
+
+        if not settings.enabled or settings.cost_cap_per_24h <= 0:
+            return summary
+
+        # 1. Drain deferred queue first.
+        async with self.metastore.session() as session:
+            try:
+                summary.deferred_processed = await self.process_deferred(
+                    vault_id, run_llm_check=run_llm_check, session=session
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                logger.exception('F10 tick: process_deferred failed for vault %s', vault_id)
+
+        # 2. Fresh candidates.
+        async with self.metastore.session() as session:
+            candidates = await self.list_tick_candidates(
+                vault_id, limit=settings.units_per_tick, session=session
+            )
+
+        for unit_id in candidates:
+            async with self.metastore.session() as session:
+                try:
+                    outcome = await self.maybe_run(
+                        unit_id,
+                        vault_id,
+                        run_llm_check=run_llm_check,
+                        session=session,
+                    )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.exception(
+                        'F10 tick: maybe_run failed for unit %s in vault %s',
+                        unit_id,
+                        vault_id,
+                    )
+                    continue
+            summary.candidates_evaluated += 1
+            if outcome.skipped_below_threshold:
+                summary.skipped_below_threshold += 1
+            if outcome.deferred:
+                summary.deferred += 1
+            if outcome.finding_emitted:
+                summary.findings_emitted += 1
+        return summary
