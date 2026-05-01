@@ -1160,6 +1160,19 @@ class LintLLMConfig(BaseModel):
         default=True,
         description='Master switch; if False, the F10 tick is a no-op.',
     )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between F10 lint ticks. Default: 6 hours.',
+    )
+    units_per_tick: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            'Maximum candidate units evaluated per F10 tick per vault. The '
+            'cost cap will short-circuit further work once exhausted.'
+        ),
+    )
     surprise_threshold: float = Field(
         default=0.7,
         ge=0.0,
