@@ -23,8 +23,9 @@ _VERSIONS_DIR = _PACKAGE_ROOT / 'alembic' / 'versions'
 _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # 025_maintenance_proposals (F6) is no longer a stub — see PR #20
     # (real maintenance_proposals table + LintService rule engine).
-    # Integration coverage in tests/integration/test_int_f6_rules.py.
-    ('026_revisit_columns', '025_maintenance_proposals', 'F20'),
+    # 026_revisit_columns (F20) is no longer a stub — see PR #24
+    # (real revisit columns + FSRS-5 scheduler).
+    # Integration coverage in tests/integration/test_int_alembic_026.py.
     # 027_consolidation_ticks (F38) is no longer a stub — see PR #19
     # (real consolidation_ticks table + per-tick summary rows).
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
