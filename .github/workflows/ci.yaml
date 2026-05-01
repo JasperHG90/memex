@@ -33,6 +33,7 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       ci-config: ${{ steps.filter.outputs.ci-config }}
       hermes-runner: ${{ steps.filter.outputs.hermes-runner }}
+      hermes-plugin: ${{ steps.filter.outputs.hermes-plugin }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -58,6 +59,12 @@ jobs:
               - '.github/workflows/ci.yaml'
             hermes-runner:
               - '.github/actions/hermes/**'
+            hermes-plugin:
+              - 'packages/hermes-plugin/**'
+              - 'packages/common/**'
+              - 'packages/core/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
 
   pre-commit:
     needs: changes
@@ -168,6 +175,32 @@ jobs:
       - name: Run runner tests
         run: uv run pytest
         working-directory: .github/actions/hermes/runner
+
+  # Hermes plugin integration tests (packages/hermes-plugin/tests/integration/)
+  # Requirements:
+  #   - Docker daemon (testcontainers spins up pgvector Postgres)
+  #   - hermes-agent installed via the `hermes-integration` dependency group
+  # Tests are gated by the `hermes_integration` pytest marker; the suite
+  # skips itself if Docker or hermes-agent is unavailable, so this job is
+  # safe even on runners that lack one of those prerequisites.
+  hermes-integration:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.hermes-plugin == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Sync workspace with hermes-integration group
+        run: uv sync --all-extras --all-packages --group hermes-integration
+      - name: Run hermes-plugin integration tests
+        run: uv run pytest packages/hermes-plugin/tests/integration/ -v --tb=short -m hermes_integration
 
   build-python:
     needs: [changes, pre-commit, python-tests]
