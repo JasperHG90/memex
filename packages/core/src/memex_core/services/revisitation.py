@@ -179,6 +179,7 @@ class RevisitationService(BaseService):
         unit_id: UUID,
         quality: Quality,
         *,
+        vault_id: UUID,
         actor: UUID | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
@@ -199,11 +200,13 @@ class RevisitationService(BaseService):
 
         Order of operations (single transaction):
           1. Load + row-lock the unit
-          2. FSRS-5 schedule advance via `memory.revisit.schedule()`
-          3. Persist new schedule + sticky streak + (maybe) is_deprioritized
-          4. OutcomeService.record_outcome — atomic counter increments
-          5. audit_event('memory_review', ...)
-          6. Single commit
+          2. Assert unit.vault_id matches the caller's vault — Wave 0
+             vault-scoping invariant; cross-vault review is rejected.
+          3. FSRS-5 schedule advance via `memory.revisit.schedule()`
+          4. Persist new schedule + sticky streak + (maybe) is_deprioritized
+          5. OutcomeService.record_outcome — atomic counter increments
+          6. audit_event('memory_review', ...)
+          7. Single commit
         """
         review_at = now or datetime.now(timezone.utc)
         outcome_service = OutcomeService()
@@ -211,6 +214,8 @@ class RevisitationService(BaseService):
             unit = await session.get(MemoryUnit, unit_id, with_for_update=True)
             if unit is None:
                 raise ValueError(f'memory unit not found: {unit_id}')
+            if unit.vault_id != vault_id:
+                raise PermissionError(f'memory unit {unit_id} does not belong to vault {vault_id}')
 
             prior_state: UnitState | None
             if unit.revisit_stability is None or unit.revisit_difficulty is None:
