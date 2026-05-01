@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -87,3 +88,50 @@ def test_slow_fetch_respects_timeout():
     api.search_notes = slow_search
     cache.queue('q', api=api, config=config, vault_id=uuid4())
     assert cache.consume(timeout=0.1) == ''
+
+
+def test_consume_waits_for_both_layers_when_one_is_slow():
+    """Regression: under load the prior consume() exited as soon as EITHER
+    layer landed and cleared the buffers, losing the slower layer. Now
+    consume() waits until both layers have reported completion or until the
+    deadline expires.
+    """
+    cache = PrefetchCache()
+    config = HermesMemexConfig()
+    api = Mock()
+
+    async def slow_facts(*args, **kwargs):
+        await asyncio.sleep(0.2)
+        return [_fact('slow-fact')]
+
+    async def fast_notes(*args, **kwargs):
+        return [_note_result('fast-note')]
+
+    api.search = slow_facts
+    api.search_notes = fast_notes
+    cache.queue('q', api=api, config=config, vault_id=uuid4())
+    text = cache.consume(timeout=2.0)
+    assert 'slow-fact' in text, 'slow layer was lost — early-exit regression'
+    assert 'fast-note' in text
+
+
+def test_consume_returns_partial_after_deadline_does_not_deadlock():
+    """Worst-case: both layers exceed the deadline. consume() must terminate
+    at the deadline and return whatever's populated (or '' if nothing).
+    """
+    cache = PrefetchCache()
+    config = HermesMemexConfig()
+    api = Mock()
+
+    async def hung_search(*args, **kwargs):
+        await asyncio.sleep(5)
+        return []
+
+    api.search = hung_search
+    api.search_notes = hung_search
+    cache.queue('q', api=api, config=config, vault_id=uuid4())
+    started = time.monotonic()
+    text = cache.consume(timeout=0.2)
+    elapsed = time.monotonic() - started
+    assert text == ''
+    assert elapsed < 1.0, f'consume() did not honour deadline: elapsed={elapsed:.3f}s'
