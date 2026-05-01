@@ -112,7 +112,6 @@ dev = [
     "types-dateparser>=1.3.0.20260211",
     "matplotlib>=3.10.8",
     "seaborn>=0.13.2",
-    "fsrs>=4.0.0,<5.0.0",
 ]
 docs = [
     "zensical>=0.0.25",

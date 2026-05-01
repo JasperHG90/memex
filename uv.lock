@@ -2982,7 +2982,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "fsrs" },
     { name = "gcsfs" },
     { name = "hypothesis" },
     { name = "ipykernel" },
@@ -3024,7 +3023,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "fsrs", specifier = ">=4.0.0,<5.0.0" },
     { name = "gcsfs", specifier = ">=2024.6.0" },
     { name = "hypothesis", specifier = ">=6.151.9" },
     { name = "ipykernel", specifier = ">=6.29.5" },
@@ -3140,6 +3138,7 @@ dependencies = [
     { name = "dateparser" },
     { name = "dspy" },
     { name = "fastapi" },
+    { name = "fsrs" },
     { name = "fsspec" },
     { name = "granian" },
     { name = "greenlet" },
@@ -3212,6 +3211,7 @@ requires-dist = [
     { name = "dateparser", specifier = ">=1.2.2" },
     { name = "dspy", specifier = ">=3.1.0,<3.2.0" },
     { name = "fastapi", specifier = ">=0.128.0" },
+    { name = "fsrs", specifier = ">=4.0.0,<5.0.0" },
     { name = "fsspec", specifier = ">=2026.1.0" },
     { name = "gcsfs", marker = "extra == 'cloud'", specifier = ">=2024.6.0" },
     { name = "gcsfs", marker = "extra == 'gcs'", specifier = ">=2024.6.0" },
