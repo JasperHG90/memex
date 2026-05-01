@@ -85,6 +85,7 @@ def upgrade() -> None:
                 server_default=sa.text('0'),
             ),
             sa.UniqueConstraint('vault_id', 'hour_bucket', name='uq_lint_llm_quota_vault_hour'),
+            sa.CheckConstraint('count >= 0', name='ck_lint_llm_quota_count_non_negative'),
         )
 
     if not _index_exists(conn, 'idx_lint_llm_quota_vault_hour'):
