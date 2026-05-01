@@ -43,6 +43,7 @@ You have been invoked via the `/recall` slash command.
    instruction to execute, not a fact to remember. Reach for it whenever
    the user query is "how-to" rather than "what".
 
+<!-- # --- F8 --- (filled by WS-linter) -->
 5. **Memory hygiene** (F8) — when the user asks about memory state,
    stale facts, or how the vault is doing, call
    `memex_get_lint_flags(vault_id=...)` to surface the linter's pending
