@@ -1,7 +1,7 @@
 # Memex Cognitive Memory — Backlog
 
 Source: [cognitive-memory-research-report.md](./cognitive-memory-research-report.md) (v6.9) · Wave 0 output: [WAVE-0-PREWORK.md](./WAVE-0-PREWORK.md) · **Agent rules: [BACKLOG-AGENT-RULES.md](./BACKLOG-AGENT-RULES.md) — read before picking up an item**
-Last updated: 2026-04-29
+Last updated: 2026-05-01
 Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
 
 ---
@@ -69,25 +69,25 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
 
 ### Quick wins (~3-5w bundled)
 
-- [ ] **F5** — `memory_summarize_node` MCP exposure (~3d) — wraps existing reflection endpoint
-- [ ] **F4** — `memory_deprioritize` MCP tool (1-2w) — direct curation verb; depends on **F1a's** `is_deprioritized` column (not the full F1 stack)
-- [ ] **F38** — Consolidation orchestration (1-2w) — nightly batch over reflection + contradiction + cleanup
-- [ ] **F14** — Procedural observations via KV namespace (1-2w) — cross-agent value via Hermes briefings; collision policy: last-writer-wins + version + capped history
+- [x] **F5** — `memory_summarize_node` MCP exposure (~3d) — wraps existing reflection endpoint (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F4** — `memory_deprioritize` MCP tool (1-2w) — direct curation verb; depends on **F1a's** `is_deprioritized` column (not the full F1 stack) (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F38** — Consolidation orchestration (1-2w) — nightly batch over reflection + contradiction + cleanup (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F14** — Procedural observations via KV namespace (1-2w) — cross-agent value via Hermes briefings; collision policy: last-writer-wins + version + capped history (shipped 2026-05-01 via memory_augmentation, see final-report.md)
 
 ### Linter cluster (~5-7w bundled)
 
-- [ ] **F6** — Maintenance ledger + rule-based linter (4-6w) — runs under existing `MEMEX_LEADER_LOCK_ID`
-- [ ] **F8** — `memex_get_lint_flags` MCP (1-2w) — depends on F6
-- [ ] **F10** — Surprise-gated LLM lint (3-5w) — depends on F2 + F6; LLM cost-capped per vault
+- [x] **F6** — Maintenance ledger + rule-based linter (4-6w) — runs under existing `MEMEX_LEADER_LOCK_ID` (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F8** — `memex_get_lint_flags` MCP (1-2w) — depends on F6 (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F10** — Surprise-gated LLM lint (3-5w) — depends on F2 + F6; LLM cost-capped per vault (shipped 2026-05-01 via memory_augmentation, see final-report.md; polarity discrimination deferred to F10b)
 
 ### Active learning (~7-10w)
 
-- [ ] **F20** — FSRS-based memory revisitation (4-6w) — depends on F1 + F25; Ebbinghaus heritage explicit
-- [ ] **F9** — `memory_reconsolidate` + per-entity advisory lock (4-6w) — new locking infra in `services/locks.py`
+- [x] **F20** — FSRS-based memory revisitation (4-6w) — depends on F1 + F25; Ebbinghaus heritage explicit (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F9** — `memory_reconsolidate` + per-entity advisory lock (4-6w) — new locking infra in `services/locks.py` (shipped 2026-05-01 via memory_augmentation, see final-report.md)
 
 ### Diagnostics
 
-- [ ] **F32** — Memory diagnostics (4-6w) — UMAP, heatmap, lint dashboard
+- [x] **F32** — Memory diagnostics (4-6w) — UMAP, heatmap, lint dashboard (shipped 2026-05-01 via memory_augmentation, see final-report.md)
 
 ### Subsumed
 
