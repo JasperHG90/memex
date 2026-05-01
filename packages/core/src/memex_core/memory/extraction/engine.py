@@ -237,6 +237,15 @@ class ExtractionEngine:
         if not processed_facts:
             return processed_facts
 
+        from memex_common.schemas import IntentClass, RiskClass
+
+        if intent_override is not None and intent_override not in {c.value for c in IntentClass}:
+            allowed = [c.value for c in IntentClass]
+            raise ValueError(f'intent_override must be one of {allowed}, got {intent_override!r}')
+        if risk_override is not None and risk_override not in {c.value for c in RiskClass}:
+            allowed = [c.value for c in RiskClass]
+            raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
+
         skip_classifier = bool(intent_override and risk_override)
         if not skip_classifier and self._classifier_predictor is not None:
             await classify_facts(
