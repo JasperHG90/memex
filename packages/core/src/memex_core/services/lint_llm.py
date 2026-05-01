@@ -208,14 +208,14 @@ _SELECT_DEFERRED_FIFO_SQL = text("""
 
 _DISMISS_DEFERRED_SQL = text("""
     UPDATE maintenance_proposals
-    SET status = 'dismissed', resolved_at = now()
+    SET status = 'dismissed', resolved_at = now(), resolved_by = 'lint_llm'
     WHERE id = :id
 """)
 
 
 _EVICT_OLDEST_DEFERRED_SQL = text("""
     UPDATE maintenance_proposals
-    SET status = 'dismissed', resolved_at = now()
+    SET status = 'dismissed', resolved_at = now(), resolved_by = 'lint_llm'
     WHERE id IN (
         SELECT id FROM maintenance_proposals
         WHERE vault_id = :vault_id
