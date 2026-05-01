@@ -49,6 +49,9 @@ async def aggregate_lint_findings(
     with vault_id IS NULL are not surfaced through this per-vault view; that
     matches F32's per-vault diagnostics summary contract).
     """
+    # Column-positional select (not select(MaintenanceProposal)) matches heatmap.py —
+    # SQLModel's session.exec(select(Model)) returns Row tuples wrapping the model
+    # under async paths; switch to .scalars() only if relationship traversal is needed.
     pivot_stmt = (
         select(
             MaintenanceProposal.lint_type,
