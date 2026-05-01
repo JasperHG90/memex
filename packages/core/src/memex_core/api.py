@@ -1144,13 +1144,22 @@ class MemexAPI:
 
     async def record_outcome(
         self,
-        unit_ids: list[str],
+        unit_ids: list[str] | None,
         success: bool,
-        vault_id: str,
+        vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,
+        *,
+        target_type: str = 'memory_unit',
+        kv_key: str | None = None,
     ) -> dict[str, Any]:
-        """Record an outcome for memory units. Delegates to OutcomeService."""
+        """Record an outcome. Delegates to OutcomeService.
+
+        For ``target_type='kv_key'`` (F14), increments the vault-scoped
+        success/failure counters on ``procedure_outcomes`` for ``kv_key``
+        instead of memory units. See
+        :meth:`OutcomeService.record_outcome` for the full contract.
+        """
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
@@ -1159,6 +1168,8 @@ class MemexAPI:
                 vault_id=vault_id,
                 outcome_confidence=outcome_confidence,
                 reason=reason,
+                target_type=target_type,
+                kv_key=kv_key,
             )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
@@ -1456,9 +1467,14 @@ class MemexAPI:
             key=key, value=value, embedding=embedding, ttl_seconds=ttl_seconds
         )
 
-    async def kv_get(self, key: str) -> Any | None:
-        """Get a KV entry by key. Delegates to KVService."""
-        return await self._kv.get(key=key)
+    async def kv_get(self, key: str, *, include_history: bool = False) -> Any | None:
+        """Get a KV entry by key. Delegates to KVService.
+
+        For ``procedure:`` keys (RFC-007), ``include_history=True`` swaps the
+        returned entry's ``value`` field from the unwrapped active string to
+        a dict ``{value, version, history}``. Default behavior is unchanged.
+        """
+        return await self._kv.get(key=key, include_history=include_history)
 
     async def kv_search(
         self,
@@ -1469,6 +1485,18 @@ class MemexAPI:
         """Semantic search over KV entries. Delegates to KVService."""
         return await self._kv.search(
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
+        )
+
+    async def list_top_procedure_outcomes(
+        self,
+        vault_id: str | UUID,
+        *,
+        context: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """F14 — Top procedure outcomes for a vault, ranked by MW score."""
+        return await self._kv.list_top_procedure_outcomes(
+            vault_id=vault_id, context=context, limit=limit
         )
 
     async def kv_delete(self, key: str) -> bool:

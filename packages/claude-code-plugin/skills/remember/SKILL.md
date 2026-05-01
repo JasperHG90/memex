@@ -52,6 +52,39 @@ that contaminates retrieval, prefer the **NON-DESTRUCTIVE** verb:
   it removes the unit from the entity graph and is irreversible. Prefer
   deprioritize unless the unit MUST leave the graph entirely.
 
+## Capturing a learned procedure (procedure: KV namespace, F14)
+
+Some kinds of "remembering" are NOT a note — they are a compact, learned
+how-to: "how I write commit messages for this project", "how I run the
+test matrix on this monorepo". For those, write to the `procedure:` KV
+namespace instead of `memex_add_note`. Each procedure key is
+
+```
+procedure:<verb>:<context-tag>
+```
+
+— for example `procedure:write_pr:commit-style` or
+`procedure:run_tests:python-monorepo`. The agent owns the verb (the
+action you are taking); Memex stores observations about how to ADAPT the
+verb to a specific context (the context-tag).
+
+Use `memex_kv_write(value=..., key="procedure:<verb>:<context-tag>")` to
+save. The server keeps the active value plus a capped 5-version history,
+so an updated procedure overwrites the active value but does not lose
+prior versions — read them with
+`memex_kv_get(key, include_history=true)`.
+
+After actually USING a procedure key in a turn (you read it via
+`memex_kv_get` and then performed the action), close the loop with
+`memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` so
+Memex's per-(vault, key) Memory Worth counters reflect what worked. The
+counters drive the F14 briefing surface — silence provides no learning
+signal.
+
+Use a procedure: key when the content is a how-to that you (or a future
+agent) will ACTUALLY EXECUTE; use `memex_add_note` when the content is a
+fact, decision, or piece of context to recall.
+
 ## Synchronously consolidating mid-conversation (summarize_node vs reflect)
 
 When you notice mid-conversation that retrieved facts about a topic are
@@ -86,7 +119,7 @@ F20: WS-revisit     (memory_review disclosure)
 
 # --- F9 ---  (filled by WS-locks)
 
-# --- F14 --- (filled by WS-quick-wins)
+# --- F14 --- (filled by WS-quick-wins — see "Capturing a learned procedure" section above)
 
 # --- F20 --- (filled by WS-revisit)
 -->

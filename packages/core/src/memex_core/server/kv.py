@@ -7,7 +7,14 @@ from pydantic import BaseModel
 
 from memex_common.exceptions import MemexError
 from memex_core.server.auth import require_delete, require_read, require_write
-from memex_common.schemas import KVEntryDTO, KVPutRequest, KVSearchRequest
+from memex_common.schemas import (
+    KVEntryDTO,
+    KVProcedureEntryDTO,
+    KVProcedureValueDTO,
+    KVPutRequest,
+    KVSearchRequest,
+    ProcedureOutcomeDTO,
+)
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api
@@ -58,16 +65,42 @@ async def kv_put(
         raise _handle_error(e, 'Failed to put KV entry')
 
 
-@router.get('/kv/get', response_model=KVEntryDTO, dependencies=[Depends(require_read)])
+@router.get(
+    '/kv/get',
+    response_model=KVEntryDTO | KVProcedureEntryDTO,
+    dependencies=[Depends(require_read)],
+)
 async def kv_get(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to look up'),
+    include_history: bool = Query(
+        False,
+        description=(
+            'For procedure: keys, return the full envelope (value, version, history) '
+            'instead of just the active value. Ignored for non-procedure keys.'
+        ),
+    ),
 ):
-    """Get a key-value entry by key."""
+    """Get a key-value entry by key.
+
+    For ``procedure:`` keys (RFC-007), the default response contains only
+    the active value (back-compat — same shape as any other KV entry). Pass
+    ``include_history=true`` to expose the structured envelope as
+    :class:`KVProcedureEntryDTO`.
+    """
     try:
-        entry = await api.kv_get(key=key)
+        entry = await api.kv_get(key=key, include_history=include_history)
         if entry is None:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
+        if include_history and key.startswith('procedure:') and isinstance(entry.value, dict):
+            return KVProcedureEntryDTO(
+                id=entry.id,
+                key=entry.key,
+                value=KVProcedureValueDTO.model_validate(entry.value),
+                expires_at=entry.expires_at,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
         return KVEntryDTO.model_validate(entry, from_attributes=True)
     except HTTPException:
         raise
@@ -147,3 +180,52 @@ async def kv_list(
         return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list KV entries')
+
+
+@router.get(
+    '/kv/procedure-observations',
+    response_model=list[ProcedureOutcomeDTO],
+    dependencies=[Depends(require_read)],
+)
+async def kv_procedure_observations(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: Annotated[str, Query(description='Vault UUID to scope observations to.')],
+    context: Annotated[
+        str | None,
+        Query(
+            description=(
+                'Optional substring filter on the procedure key '
+                "context-tag (the third segment after 'procedure:<verb>:'). "
+                'Case-insensitive.'
+            ),
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=20,
+            description='Max observations to return (1-20, default 5).',
+        ),
+    ] = 5,
+):
+    """F14 — Top procedure outcomes ranked by Memory Worth (RFC-007 §155-185).
+
+    Drives the F14 procedural-observations briefing block. Rows are ordered
+    by ``mw_score = (success + 1) / (success + failure + 2)`` descending,
+    tie-broken by ``last_outcome_at`` descending.
+    """
+    from uuid import UUID
+
+    try:
+        UUID(vault_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f'Invalid vault_id: {vault_id}')
+
+    try:
+        rows = await api.list_top_procedure_outcomes(
+            vault_id=vault_id, context=context, limit=limit
+        )
+        return [ProcedureOutcomeDTO.model_validate(r) for r in rows]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to list procedure observations')
