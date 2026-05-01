@@ -92,6 +92,34 @@ def _reset_inflight_gauges():
 
 
 @pytest.fixture(autouse=True)
+def _reset_global_circuit_breaker():
+    """Per-test reset of the process-wide LLM circuit breaker.
+
+    ``memex_core.llm._circuit_breaker`` is a module-level singleton (see the
+    block-comment at the top of ``llm.py``). Tests that drive the real
+    ``run_dspy_operation`` path with a mock predictor that raises (e.g.
+    ``test_extract_facts_from_chunk_*_error`` in ``memory/extraction/test_core.py``)
+    record consecutive failures against this global. After the failure
+    threshold is crossed, the breaker latches OPEN and a downstream test
+    in the same process — most visibly
+    ``test_fact_classification.py::test_extraction_rules_contain_classification_guidance``
+    — fails with ``CircuitBreakerOpen`` instead of running its assertions.
+
+    The leak is order-dependent: alone, the downstream test passes; under
+    ``-p no:randomly`` it fails reproducibly because alphabetical order puts
+    the failure-recording tests before it. This fixture resets the breaker
+    pre- and post-yield so each unit test starts from a known CLOSED state.
+    """
+    from memex_core.llm import get_circuit_breaker
+
+    get_circuit_breaker().reset()
+    try:
+        yield
+    finally:
+        get_circuit_breaker().reset()
+
+
+@pytest.fixture(autouse=True)
 def _configure_offload_semaphores_default():
     """Initialise sync-offload semaphores so gated to_thread sites are callable.
 

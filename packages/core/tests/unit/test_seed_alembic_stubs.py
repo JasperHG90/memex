@@ -34,6 +34,10 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # (real lint_llm_quota table + rolling-24h cost cap).
     # 030_revisit_last_reviewed_at (F20) ships real in PR #101 with the
     # FSRS-5 last_review fix; never staged as a stub.
+    # 031_proposal_resolved_by (F9) ships real with the resolved_by column.
+    # All Tier A stubs are now real migrations; the list is
+    # intentionally empty so the parametrised stub-still-NotImplementedError
+    # check produces a no-op pass rather than a false failure.
 ]
 
 
