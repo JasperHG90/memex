@@ -32,7 +32,7 @@ from .prefetch import PrefetchCache
 from .project import derive_project_id, resolve_vault
 from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
-from .tools import ALL_SCHEMAS, dispatch
+from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -302,12 +302,23 @@ class MemexMemoryProvider(MemoryProvider):
         "Unknown tool" error path.
 
         The schemas are static module-level constants; there's no reason to
-        gate them on runtime state. Only hide them when the user has
-        explicitly configured ``memory_mode='context'`` — in which case the
-        plugin is intentionally context-only, no tools exposed.
+        gate them on runtime state pre-init.
+
+        Memory-mode contracts (post-init):
+        - ``hybrid`` (default): full ``ALL_SCHEMAS`` surface — briefing +
+          prefetch + every Memex verb the agent can dispatch.
+        - ``context``: empty list — context-only mode, no tool dispatch.
+        - ``tools``: minimal ``TOOLS_MODE_SCHEMAS`` (primary 7) — briefing +
+          prefetch are skipped, so we hand the agent only the LLM-most-used
+          verbs and trust it to compose them. The narrow surface is the
+          contract; do not auto-expand it when new MCP verbs land.
         """
-        if self._config is not None and self._config.memory_mode == 'context':
+        if self._config is None:
+            return list(ALL_SCHEMAS)
+        if self._config.memory_mode == 'context':
             return []
+        if self._config.memory_mode == 'tools':
+            return list(TOOLS_MODE_SCHEMAS)
         return list(ALL_SCHEMAS)
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:  # type: ignore[override]

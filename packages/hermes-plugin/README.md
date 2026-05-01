@@ -146,11 +146,19 @@ Additional tools cover note lifecycle (`memex_set_note_status`, `memex_update_us
 
 | Mode | Briefing | Prefetch | Tools |
 |---|---|---|---|
-| `hybrid` (default) | injected | yes | exposed |
+| `hybrid` (default) | injected | yes | full surface (~46 verbs) |
 | `context` | injected | yes | hidden |
-| `tools` | skipped | skipped | exposed |
+| `tools` | skipped | skipped | primary 7 verbs only |
 
 Set via `memory_mode` in the config file or `MEMEX_HERMES_MODE=tools`.
+
+`tools` mode opts the agent out of automatic context (no briefing, no
+per-turn prefetch) and hands it the narrow set of LLM-most-reached-for
+verbs — `memex_memory_search`, `memex_note_search`, `memex_survey`,
+`memex_add_note`, `memex_list_entities`, `memex_get_entity_mentions`,
+`memex_get_entity_cooccurrences`. Use it when you want a tool-driven
+agent to compose retrieval explicitly, without the briefing/prefetch
+machinery deciding what context to inject.
 
 ## What gets captured automatically
 
