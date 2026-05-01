@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('memex.core.services.locks')
 
-LEADER_LOCK_ID: Final[int] = 5432789123456789
 ENTITY_LOCK_HIGH_BIT: Final[int] = 1 << 62
 ENTITY_LOCK_MASK: Final[int] = (1 << 62) - 1
 
@@ -71,8 +70,9 @@ def entity_lock_id(entity_id: uuid.UUID) -> int:
     """Derive a deterministic int64 advisory lock id from an entity UUID.
 
     The high bit is set so the result lives in [2^62, 2^63-1], disjoint from
-    LEADER_LOCK_ID (~2^52). Deterministic by construction — the same UUID
-    yields the same lock_id across processes (no PYTHONHASHSEED dependency).
+    the leader advisory lock (~2^52, defined in ``memex_core.scheduler``).
+    Deterministic by construction — the same UUID yields the same lock_id
+    across processes (no PYTHONHASHSEED dependency).
     """
     raw = int.from_bytes(entity_id.bytes, 'big', signed=False) & ENTITY_LOCK_MASK
     return ENTITY_LOCK_HIGH_BIT | raw
