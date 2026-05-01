@@ -129,6 +129,8 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_record_outcome',
         # Tier A WS-diagnostics (F32)
         'memex_get_diagnostics_summary',
+        # Tier A WS-linter (F8)
+        'memex_get_lint_flags',
     }
     assert names == expected
 
@@ -144,8 +146,8 @@ class TestGetToolSchemasBeforeInitialize:
     def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
         pre-init. After Stream 6 + asset disk-handoff + memex_append_note +
-        Tier A F4/F5 + F14/F29 + F32 diagnostics we register exactly 41
-        tools, and the assertion is strict equality.
+        Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint flags we register
+        exactly 41 tools, and the assertion is strict equality.
         """
         p = MemexMemoryProvider()
         # NOTE: no initialize() call.
@@ -201,6 +203,8 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_record_outcome',
             # Tier A WS-diagnostics (F32)
             'memex_get_diagnostics_summary',
+            # Tier A WS-linter (F8)
+            'memex_get_lint_flags',
         }
         assert names == expected
 
@@ -215,7 +219,7 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 41-tool set (Stream 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics verbs).
+        # Pre-init: full 41-tool set (Stream 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint).
         p = MemexMemoryProvider()
         assert len(p.get_tool_schemas()) == 41
 
