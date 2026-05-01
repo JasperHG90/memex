@@ -14,6 +14,7 @@ Cold-start units (0/0) get mw_score = 0.5 → mw_boost = 1.0 (neutral).
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 from uuid import UUID
 
@@ -75,6 +76,14 @@ class OutcomeService:
         (success=False) on each unit, and propagates the counter increment
         to linked UnitEntity and MentalModel rows.
 
+        .. note::
+
+            ``outcome_confidence`` is **currently ignored** in counter
+            arithmetic — v1 uses integer increments only. Fractional
+            weighting is tracked under F36. Until F36 ships, callers
+            passing values other than ``1.0`` will receive a
+            ``FutureWarning`` so the silent loss of signal is visible.
+
         Args:
             session: Active async DB session.
             unit_ids: UUIDs of the memory units that were load-bearing.
@@ -89,6 +98,17 @@ class OutcomeService:
         Returns:
             Dict with counts of updated units, entities, and models.
         """
+        if outcome_confidence is not None and outcome_confidence != 1.0:
+            warnings.warn(
+                'outcome_confidence is currently ignored in counter arithmetic '
+                '(v1 uses integer increments). Fractional weighting is tracked '
+                'under F36. The supplied value '
+                f'(outcome_confidence={outcome_confidence!r}) will be logged '
+                'but not affect counters.',
+                FutureWarning,
+                stacklevel=2,
+            )
+
         from memex_core.memory.sql_models import MemoryUnit as MU
 
         counter_field = 'success_co_count' if success else 'failure_co_count'
