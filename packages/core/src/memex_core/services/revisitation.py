@@ -207,6 +207,13 @@ class RevisitationService(BaseService):
           5. OutcomeService.record_outcome — atomic counter increments
           6. audit_event('memory_review', ...)
           7. Single commit
+
+        Cross-feature plumbing (F38 consolidation hook):
+        Step 5 inserts an audit row that F38's `select_diff_units`
+        observes on its next consolidation tick — so a review
+        automatically schedules the unit for downstream contradiction +
+        reflection passes without any direct service coupling. The
+        audit-log signal IS the integration seam.
         """
         review_at = now or datetime.now(timezone.utc)
         outcome_service = OutcomeService()
