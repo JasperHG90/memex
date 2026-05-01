@@ -984,21 +984,24 @@ class ExtractionEngine:
                             risk_override=risk_override,
                         )
 
-                    if final_processed:
-                        unit_ids = await storage.insert_facts_batch(
-                            session, final_processed, note_id=note_id
-                        )
+                        # Classifier may drop all facts (safety filter). Skip
+                        # persistence in that case but still run reconciliation
+                        # below (track_document, page_index updates, etc).
+                        if final_processed:
+                            unit_ids = await storage.insert_facts_batch(
+                                session, final_processed, note_id=note_id
+                            )
 
-                        touched_entity_ids = await self._resolve_entities(
-                            session, unit_ids, final_processed, vault_id=vault_id
-                        )
-                        await create_links(
-                            session,
-                            unit_ids,
-                            final_processed,
-                            vault_id=vault_id,
-                            event_date=event_date,
-                        )
+                            touched_entity_ids = await self._resolve_entities(
+                                session, unit_ids, final_processed, vault_id=vault_id
+                            )
+                            await create_links(
+                                session,
+                                unit_ids,
+                                final_processed,
+                                vault_id=vault_id,
+                                event_date=event_date,
+                            )
 
         # 10. Update thin tree + document tracking
         await track_document(session, note_id, contents, is_first_batch=False, vault_id=vault_id)
