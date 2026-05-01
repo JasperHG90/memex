@@ -42,6 +42,9 @@ def mock_api():
     api.lint = AsyncMock()
     api.lint.count_pending = AsyncMock(return_value=0)
     api.lint.get_findings = AsyncMock(return_value=SimpleNamespace(findings=[], next_cursor=None))
+    # Default: finding belongs to ALLOWED_VAULT (tests override per-case).
+    api.lint.get_finding_vault_id = AsyncMock(return_value=(True, ALLOWED_VAULT))
+    api.lint.set_status = AsyncMock(return_value=True)
     api.metastore = SimpleNamespace()
     return api
 
@@ -158,3 +161,94 @@ class TestLintReadExtras:
         client = _make_client(mock_api, auth)
         resp = client.get(f'/api/v1/lint/flags?vault_id={FORBIDDEN_VAULT}')
         assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------------------
+# F8 mutation routes — /findings/{id}/dismiss + /resolve (HIGH-4 sub)
+#
+# These verbs operate on a bare finding_id and previously had no per-vault
+# auth check; the route now resolves the finding's vault_id and gates against
+# the auth context. ``LintService.set_status`` also takes the vault_id and
+# constrains the UPDATE WHERE — defense-in-depth.
+# ---------------------------------------------------------------------------
+
+
+def _scoped_writer() -> AuthContext:
+    return AuthContext(
+        key_prefix='test1234',
+        key_name='scoped-writer',
+        policy=Policy.WRITER,
+        permissions=POLICY_PERMISSIONS[Policy.WRITER],
+        vault_ids=[str(ALLOWED_VAULT)],
+        read_vault_ids=None,
+    )
+
+
+FINDING_ID = uuid4()
+
+
+class TestLintMutationForbiddenVault:
+    def test_dismiss_blocks_when_finding_belongs_to_other_vault(self, mock_api):
+        # Finding belongs to FORBIDDEN_VAULT; caller is scoped to ALLOWED_VAULT.
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, FORBIDDEN_VAULT))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 403, resp.text
+        mock_api.lint.set_status.assert_not_called()
+
+    def test_resolve_blocks_when_finding_belongs_to_other_vault(self, mock_api):
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, FORBIDDEN_VAULT))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
+        assert resp.status_code == 403, resp.text
+        mock_api.lint.set_status.assert_not_called()
+
+    def test_dismiss_returns_404_when_finding_not_found(self, mock_api):
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(False, None))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 404, resp.text
+        mock_api.lint.set_status.assert_not_called()
+
+
+class TestLintMutationAllowedVault:
+    def test_dismiss_allows_in_scope_finding(self, mock_api):
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, ALLOWED_VAULT))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 200, resp.text
+        # Service receives the finding's vault_id for SQL-level filter.
+        mock_api.lint.set_status.assert_awaited_once()
+        call = mock_api.lint.set_status.await_args
+        assert call.kwargs['vault_id'] == ALLOWED_VAULT
+
+    def test_resolve_allows_in_scope_finding(self, mock_api):
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, ALLOWED_VAULT))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
+        assert resp.status_code == 200, resp.text
+        mock_api.lint.set_status.assert_awaited_once()
+
+
+class TestLintMutationNoAuth:
+    def test_dismiss_with_no_auth_passes_through(self, mock_api):
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, FORBIDDEN_VAULT))
+        client = _make_client(mock_api, auth=None)
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 200, resp.text
+        mock_api.lint.set_status.assert_awaited_once()
+
+
+class TestLintMutationGlobalFinding:
+    def test_global_finding_bypasses_per_vault_gate(self, mock_api):
+        """A finding with vault_id NULL is global — the per-vault auth gate
+        does not apply. The service-layer SQL filter still constrains by
+        ``vault_id IS NULL`` (passed through as ``None``).
+        """
+        mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, None))
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 200, resp.text
+        mock_api.lint.set_status.assert_awaited_once()
+        call = mock_api.lint.set_status.await_args
+        assert call.kwargs['vault_id'] is None

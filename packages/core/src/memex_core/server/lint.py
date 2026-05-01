@@ -120,14 +120,45 @@ async def lint_findings(
         raise _handle_error(e, 'Failed to list lint findings')
 
 
+async def _gate_finding_for_write(
+    finding_id: UUID,
+    api: MemexAPI,
+    auth: AuthContext | None,
+) -> UUID | None:
+    """Defense-in-depth helper for ``/findings/{id}/dismiss`` + ``/resolve``.
+
+    Looks up the finding's vault_id, then gates the auth context against it.
+    Returns the resolved vault_id (or ``None`` for global findings) so the
+    caller can pass it through to ``LintService.set_status`` for SQL-level
+    constraint as well (HIGH-4 sub: route + service layered checks).
+
+    Raises:
+      - 404 if the finding does not exist.
+      - 403 if the auth context cannot WRITE to the finding's vault.
+    """
+    found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
+    if not found:
+        raise HTTPException(status_code=404, detail='Finding not found or not pending')
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
+    return finding_vault
+
+
 @router.post('/findings/{finding_id}/dismiss', dependencies=[Depends(require_write)])
 async def lint_dismiss(
     finding_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
-    """Flip a pending finding to ``dismissed``. Idempotent."""
+    """Flip a pending finding to ``dismissed``. Idempotent.
+
+    Per Wave 0 multi-tenant invariant: looks up the finding's vault and
+    gates the auth context BEFORE mutating, so a vault-A scoped key with a
+    leaked vault-B finding_id cannot dismiss the vault-B row (HIGH-4 sub).
+    """
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:
-        ok = await api.lint.set_status(finding_id, 'dismissed')
+        ok = await api.lint.set_status(finding_id, 'dismissed', vault_id=finding_vault)
     except Exception as e:
         raise _handle_error(e, 'Failed to dismiss finding')
     if not ok:
@@ -139,10 +170,17 @@ async def lint_dismiss(
 async def lint_resolve(
     finding_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
-    """Flip a pending finding to ``resolved``. Idempotent."""
+    """Flip a pending finding to ``resolved``. Idempotent.
+
+    Per Wave 0 multi-tenant invariant: looks up the finding's vault and
+    gates the auth context BEFORE mutating, so a vault-A scoped key with a
+    leaked vault-B finding_id cannot resolve the vault-B row (HIGH-4 sub).
+    """
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:
-        ok = await api.lint.set_status(finding_id, 'resolved')
+        ok = await api.lint.set_status(finding_id, 'resolved', vault_id=finding_vault)
     except Exception as e:
         raise _handle_error(e, 'Failed to resolve finding')
     if not ok:
