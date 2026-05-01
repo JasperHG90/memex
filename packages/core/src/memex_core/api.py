@@ -546,6 +546,7 @@ class MemexAPI:
             config=self.config,
             reflection=self._reflection,
             contradiction=self._contradiction,
+            units=self._units,
         )
 
         from memex_core.services.session_briefing import SessionBriefingService
@@ -632,6 +633,19 @@ class MemexAPI:
         return await self._locks.reconsolidate_entity(
             entity_id, vault_id, timeout_seconds=timeout_seconds
         )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-MW unit consolidation (F9 / RFC-008).
+
+        Facade for `LocksService.consolidate_vault`.
+        """
+        return await self._locks.consolidate_vault(vault_id, dry_run=dry_run, actor=actor)
 
     @property
     def embedder(self) -> EmbeddingsModel:

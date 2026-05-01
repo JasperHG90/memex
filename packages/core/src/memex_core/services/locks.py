@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from memex_core.config import MemexConfig
     from memex_core.memory.contradiction.engine import ContradictionEngine
     from memex_core.services.reflection import ReflectionService
+    from memex_core.services.units import UnitsService
     from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.locks')
@@ -159,8 +160,10 @@ class LocksService:
     """Per-entity advisory-lock orchestration for reconsolidate / consolidate.
 
     Holds references to the metastore + contradiction engine + reflection
-    service. Computes the asyncpg DSN once at init from `config`. `consolidate_vault`
-    is added in TC-23-5.
+    service + units service. Computes the asyncpg DSN once at init from
+    `config`. `consolidate_vault` does NOT acquire an advisory lock (per
+    RFC-008 §`memex_memory_consolidate` — per-row F4 deprioritize is
+    idempotent, so no batch lock is needed).
     """
 
     def __init__(
@@ -169,11 +172,13 @@ class LocksService:
         config: 'MemexConfig',
         reflection: 'ReflectionService',
         contradiction: 'ContradictionEngine | None',
+        units: 'UnitsService | None' = None,
     ) -> None:
         self.metastore = metastore
         self.config = config
         self.reflection = reflection
         self.contradiction = contradiction
+        self.units = units
         self._dsn = _dsn_from_config(config)
 
     async def _resolve_entity_to_unit_ids(
@@ -274,3 +279,172 @@ class LocksService:
                 'mental_model_id': mental_model_id,
                 'observations_added': observations_added,
             }
+
+    async def _select_consolidate_candidates(self, vault_id: UUID) -> list[UUID]:
+        """Identify low-MW + 5+-outcomes + non-deprioritized + 30-days-old units.
+
+        Predicate (RFC-008 §`memex_memory_consolidate`):
+            ``mw_score < 0.35
+              AND (success_co_count + failure_co_count) >= 5
+              AND is_deprioritized = false
+              AND created_at < now() - INTERVAL '30 days'``
+
+        Threshold 0.35 is intentionally broader than F6 `cold_low_mw_unit`
+        (0.3) — that rule proposes; this verb proposes-and-acts.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        async with self.metastore.session() as session:
+            stmt = (
+                select(MemoryUnit.id)
+                .where(MemoryUnit.vault_id == vault_id)
+                .where(MemoryUnit.status == 'active')
+                .where(MemoryUnit.is_deprioritized.is_(False))
+                .where((MemoryUnit.success_co_count + MemoryUnit.failure_co_count) >= 5)
+                .where(
+                    (
+                        (MemoryUnit.success_co_count + 1.0)
+                        / (MemoryUnit.success_co_count + MemoryUnit.failure_co_count + 2)
+                    )
+                    < 0.35
+                )
+                .where(MemoryUnit.created_at < cutoff)
+                .order_by(MemoryUnit.created_at.asc())
+            )
+            result = await session.exec(stmt)
+            return list(result)
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-MW unit consolidation (RFC-008).
+
+        Steps:
+            1. Identify candidates by predicate (see `_select_consolidate_candidates`).
+            2. If `dry_run`: return preview, no writes.
+            3. Otherwise: for each candidate, call F4
+               `UnitsService.set_unit_deprioritized` and write a
+               `MaintenanceProposal` row with `status='resolved'`,
+               `rule_name='consolidate_vault_low_mw'`, evidence carrying
+               actor + reason for traceability.
+
+        Does NOT acquire an advisory lock — per-row F4 deprioritize is
+        idempotent (column flip).
+
+        Branch B fallback: if `maintenance_proposals` table is missing
+        (F6 not deployed), returns the preview shape without proposal
+        writes. Branch A is live in this codebase since F6 merged.
+        """
+        from sqlalchemy import inspect as sa_inspect
+
+        candidates = await self._select_consolidate_candidates(vault_id)
+        log = logger.getChild(str(vault_id))
+        log.info(
+            'consolidate.start',
+            extra={
+                'vault_id': str(vault_id),
+                'candidates': len(candidates),
+                'dry_run': dry_run,
+            },
+        )
+
+        if dry_run:
+            return {
+                'vault_id': str(vault_id),
+                'dry_run': True,
+                'candidates': len(candidates),
+                'units_deprioritized': 0,
+                'proposals_written': 0,
+            }
+
+        has_proposals_table = await self._has_maintenance_proposals_table(sa_inspect)
+        units_deprioritized = 0
+        proposals_written = 0
+        reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
+
+        if self.units is None:
+            raise RuntimeError(
+                'consolidate_vault requires UnitsService — wire it via '
+                'LocksService(..., units=...) at construction'
+            )
+
+        for unit_id in candidates:
+            await self.units.set_unit_deprioritized(unit_id, reason, actor=actor)
+            units_deprioritized += 1
+            if has_proposals_table:
+                await self._write_consolidate_proposal(
+                    unit_id=unit_id,
+                    vault_id=vault_id,
+                    actor=actor,
+                    reason=reason,
+                )
+                proposals_written += 1
+
+        log.info(
+            'consolidate.complete',
+            extra={
+                'vault_id': str(vault_id),
+                'units_deprioritized': units_deprioritized,
+                'proposals_written': proposals_written,
+            },
+        )
+        return {
+            'vault_id': str(vault_id),
+            'dry_run': False,
+            'candidates': len(candidates),
+            'units_deprioritized': units_deprioritized,
+            'proposals_written': proposals_written,
+        }
+
+    async def _has_maintenance_proposals_table(self, sa_inspect: Any) -> bool:
+        engine = self.metastore.engine
+        async with engine.connect() as conn:
+            return await conn.run_sync(
+                lambda sync_conn: sa_inspect(sync_conn).has_table('maintenance_proposals')
+            )
+
+    async def _write_consolidate_proposal(
+        self,
+        *,
+        unit_id: UUID,
+        vault_id: UUID,
+        actor: str | None,
+        reason: str,
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from memex_core.memory.sql_models import (
+            LintSource,
+            LintStatus,
+            LintType,
+            MaintenanceProposal,
+        )
+
+        async with self.metastore.session() as session:
+            proposal = MaintenanceProposal(
+                vault_id=vault_id,
+                lint_type=LintType.QUALITY,
+                target_type='memory_unit',
+                target_id=str(unit_id),
+                rule_name='consolidate_vault_low_mw',
+                evidence={
+                    'reason': reason,
+                    'resolved_by': 'memex_memory_consolidate',
+                    'actor': actor,
+                },
+                suggested_action=(
+                    'Unit deprioritized by vault-wide consolidate (low MW + 5+ outcomes after 30d).'
+                ),
+                status=LintStatus.RESOLVED,
+                source=LintSource.RULE,
+                resolved_at=datetime.now(timezone.utc),
+            )
+            session.add(proposal)
+            await session.commit()
