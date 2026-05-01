@@ -3,8 +3,18 @@
 Submodules:
 
 - ``surprise``: anisotropy-corrected surprise score for a memory unit.
+- ``signatures``: DSPy signatures for the LLM lint checks.
+- ``checks``: factories that bind a DSPy LM to a runnable ``RunLLMCheck``.
 """
 
+from memex_core.memory.lint_llm.checks import (
+    make_schema_drift_check,
+    make_semantic_contradiction_check,
+)
+from memex_core.memory.lint_llm.signatures import (
+    CheckSchemaDrift,
+    CheckSemanticContradiction,
+)
 from memex_core.memory.lint_llm.surprise import (
     DEFAULT_K,
     compute_unit_surprise,
@@ -12,7 +22,11 @@ from memex_core.memory.lint_llm.surprise import (
 )
 
 __all__ = [
+    'CheckSchemaDrift',
+    'CheckSemanticContradiction',
     'DEFAULT_K',
     'compute_unit_surprise',
+    'make_schema_drift_check',
+    'make_semantic_contradiction_check',
     'warm_corrector',
 ]
