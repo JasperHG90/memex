@@ -554,6 +554,27 @@ class RemoteMemexAPI:
             response.raise_for_status()
         return response.status_code, response.json()
 
+    # --- Consolidation (F38) ---
+    async def consolidation_tick(
+        self,
+        vault_id: UUID | str | None = None,
+        *,
+        dry_run: bool = False,
+        budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Run a consolidation tick. ``vault_id=None`` ticks every vault."""
+        body: dict[str, Any] = {'dry_run': dry_run}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        if budget is not None:
+            body['budget'] = budget
+        return await self._post('consolidation/tick', body)
+
+    async def consolidation_status(self, vault_id: UUID | str | None = None) -> dict[str, Any]:
+        """Return the most recent consolidation tick row per vault (or for one vault)."""
+        params = {'vault_id': str(vault_id)} if vault_id is not None else None
+        return await self._get('consolidation/status', params=params)
+
     # --- Stats & Overview ---
     async def get_stats_counts(
         self,
