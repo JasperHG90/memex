@@ -55,7 +55,16 @@ def _f43_tool_set() -> list[dict[str, Any]]:
     so the model has to actually pick by description, not by lonely-verb-in-list.
     """
 
-    def _tool(name: str, description: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _tool(
+        name: str,
+        description: str,
+        params: dict[str, Any],
+        required: list[str] | None = None,
+    ) -> dict[str, Any]:
+        # The default `list(params.keys())[:1]` only marks the first parameter
+        # required, which is wrong for tools whose required set is multi-arg
+        # (e.g. memex_record_outcome needs BOTH success AND unit_ids in
+        # memory_unit mode). Pass an explicit `required=` for those.
         return {
             'type': 'function',
             'function': {
@@ -64,7 +73,7 @@ def _f43_tool_set() -> list[dict[str, Any]]:
                 'parameters': {
                     'type': 'object',
                     'properties': params,
-                    'required': list(params.keys())[:1],  # keep schemas valid
+                    'required': required if required is not None else list(params.keys())[:1],
                 },
             },
         }
@@ -78,6 +87,7 @@ def _f43_tool_set() -> list[dict[str, Any]]:
                 'unit_ids': {'type': 'array', 'items': {'type': 'string'}},
                 'reason': {'type': 'string'},
             },
+            required=['success', 'unit_ids'],
         ),
         _tool(
             'memex_memory_deprioritize',
@@ -86,6 +96,7 @@ def _f43_tool_set() -> list[dict[str, Any]]:
                 'unit_id': {'type': 'string'},
                 'reason': {'type': 'string'},
             },
+            required=['unit_id'],
         ),
         _tool(
             'memex_find_note',
