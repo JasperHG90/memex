@@ -3498,9 +3498,72 @@ def handle_memory_summarize_node(
         target_vault = vault_id
     else:
         try:
-            target_vault = UUID(str(raw_vault))
-        except ValueError:
-            return tool_error(f'Invalid vault UUID: {raw_vault}')
+            target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
+        except ValueError as e:
+            # Malformed identifier — string failed to parse as a UUID or vault
+            # name (typo, bad format). Distinct log line from the KeyError path
+            # so operators can grep for "malformed" vs "not found" in
+            # log aggregators. User-facing tool_error stays generic for UX.
+            logger.warning(
+                'memex_memory_summarize_node: vault identifier malformed (input=%r): %s',
+                raw_vault,
+                e,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except KeyError as e:
+            # Identifier parsed cleanly but no vault with that id/name exists.
+            # Distinct log line from the ValueError path; same generic
+            # user-facing tool_error message for UX consistency.
+            logger.warning(
+                'memex_memory_summarize_node: vault identifier parsed but vault '
+                'not found (input=%r): %s',
+                raw_vault,
+                e,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except TimeoutError:
+            # `run_sync` raises `concurrent.futures.TimeoutError` (aliased to
+            # the built-in `TimeoutError` in 3.11+) when the 10s budget is
+            # exhausted. Surface a distinct message so a stuck backend doesn't
+            # masquerade as a generic resolution failure.
+            # ORDERING INVARIANT: `TimeoutError` is a subclass of `OSError`
+            # (Python 3.3+). This handler MUST stay above any `except OSError:`
+            # branch — otherwise OSError would silently intercept timeouts.
+            logger.warning(
+                'memex_memory_summarize_node: vault resolution timed out for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Vault resolution timed out')
+        except Exception:
+            # Catch-all for infrastructure failures (HTTP errors, network
+            # errors, backend exceptions). Surface a distinct message so
+            # genuine connectivity issues don't masquerade as missing-vault
+            # errors.
+            logger.exception(
+                'memex_memory_summarize_node: vault resolution failed for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Failed to resolve vault identifier')
+
+    # Narrow ``target_vault`` to ``UUID``. ``api.resolve_vault_identifier`` is
+    # contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
+    # but the protocol stub used here (line 110) types it as ``Any`` and the
+    # protocol-level return is ``UUID | None``. ``None`` is not a valid downstream
+    # value for this handler, and ``isinstance(None, UUID)`` is ``False`` — so a
+    # single ``not isinstance`` check catches both ``None`` and any other unexpected
+    # type. Keep the diagnostic detail in the operator log; return a generic
+    # user-facing message that matches the obfuscation policy of the surrounding
+    # ValueError / KeyError / TimeoutError / generic-Exception paths in this
+    # handler instead of leaking the type name to the caller. A regular
+    # ``if``/``return`` (not ``assert``) ensures the check survives ``python -O``.
+    if not isinstance(target_vault, UUID):
+        logger.error(
+            'memex_memory_summarize_node: vault resolution returned unexpected '
+            'type %s (expected UUID, raw_input=%r)',
+            type(target_vault).__name__,
+            raw_vault,
+        )
+        return tool_error('Internal error: vault resolution returned unexpected result')
 
     try:
         result = run_sync(

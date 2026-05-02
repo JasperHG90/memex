@@ -3522,3 +3522,140 @@ def test_append_note_api_failure_returns_error(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data or 'isError' in data, out
+
+
+# ---------------------------------------------------------------------------
+# handle_memory_summarize_node — vault resolution error paths (Hermes round-2)
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_node_value_error_on_vault_returns_not_found(config, vault_id):
+    """ValueError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=ValueError('bad input'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_key_error_on_vault_returns_not_found(config, vault_id):
+    """KeyError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=KeyError('missing'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_unexpected_exception_returns_generic_resolution_error(config, vault_id):
+    """Unexpected exceptions (e.g. infrastructure failures) surface a distinct
+    generic message — they must NOT masquerade as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=RuntimeError('connection refused'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Failed to resolve vault identifier' in data['error']
+    assert 'Vault not found' not in data['error']
+    api.summarize_node.assert_not_called()
+
+
+# NOTE: This test verifies the EXCEPTION-PATH handling — that a TimeoutError
+# raised from inside resolve_vault_identifier is caught and produces the
+# distinct 'Vault resolution timed out' tool_error. It does NOT exercise
+# run_sync's own timeout-after-N-seconds cancellation mechanism, which
+# would require a 10s slow-coroutine setup. The exception path is the
+# load-bearing assertion (run_sync is third-party / std-lib).
+def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, vault_id):
+    """``TimeoutError`` from ``run_sync`` (10s budget exhausted) MUST surface a
+    distinct 'timed out' message — it must NOT masquerade as either the
+    'Vault not found' typo path or the generic 'Failed to resolve vault
+    identifier' infrastructure-failure path. ``run_sync`` raises
+    ``concurrent.futures.TimeoutError`` which is aliased to the built-in
+    ``TimeoutError`` in Python 3.11+, so the side_effect uses the built-in.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=TimeoutError('vault resolve > 10s'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'slow-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'timed out' in data['error'].lower()
+    assert 'Vault not found' not in data['error']
+    assert 'Failed to resolve vault identifier' not in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_none_target_vault_returns_internal_error(config, vault_id):
+    """Round-9 regression: when ``resolve_vault_identifier`` returns ``None``
+    (the protocol stub permits ``UUID | None``), the handler MUST surface a
+    clean ``tool_error`` rather than letting ``None`` flow into
+    ``api.summarize_node`` and produce a confusing call-site ``AttributeError``.
+    The single ``not isinstance(target_vault, UUID)`` guard catches this because
+    ``isinstance(None, UUID)`` is ``False``.
+
+    Round-11: the user-facing message is intentionally generic (matches the
+    obfuscation policy of sibling ValueError/KeyError/TimeoutError/Exception
+    paths). The type name (``'NoneType'``) is logged for operators, not
+    returned to the caller — so the assertion checks for the generic string
+    only.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=None)
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Internal error' in data['error']
+    assert 'unexpected result' in data['error']
+    # Type-name detail is now logged, NOT user-facing. Confirm we don't leak
+    # 'NoneType' (information disclosure) in the response.
+    assert 'NoneType' not in data['error']
+    api.summarize_node.assert_not_called()

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 from uuid import UUID
 
 from memex_core.config import MemexConfig
@@ -89,10 +90,25 @@ class DiagnosticsService(BaseService):
             task = asyncio.create_task(self._compute_and_cache(vault_id))
             self._pending[key] = task
 
-            def _on_done(_t: asyncio.Task[dict[str, Any]], k: str = key) -> None:
-                self._clear_registry(k)
+            # Default-argument capture is intentional: binds _service and _key at
+            # definition time (early binding). A bare closure would late-bind, which
+            # is fragile if a future refactor mutates self/key between callback
+            # creation and firing. See round-7/round-12 review notes.
+            # The default-arg pattern means the callback is callable as
+            # Callable[[Task], None] at runtime, but strict type checkers see the
+            # 3-param signature; the cast at add_done_callback below pins the
+            # runtime contract so signature drift surfaces as a type error.
+            def _on_done(
+                t: asyncio.Task[dict[str, Any]],
+                _service: 'DiagnosticsService' = self,
+                _key: str = key,
+            ) -> None:
+                _handle_diagnostics_task_completion(_service, _key, t)
 
-            task.add_done_callback(_on_done)
+            # Cast (not type:ignore) so that if `_on_done`'s real signature drifts from
+            # the early-binding default-arg form, mypy will fail at the cast — making
+            # the contract explicit instead of silently swallowing a wrong-arity call.
+            task.add_done_callback(cast(Callable[[asyncio.Task[dict[str, Any]]], None], _on_done))
             return 'computing', {'task_id': _task_id_for(task)}
 
     async def get_manifold_status(
@@ -127,6 +143,8 @@ class DiagnosticsService(BaseService):
         return await compute_manifold(self.metastore, self.filestore, vault_id)
 
     def _clear_registry(self, key: str) -> None:
+        # Sync ``def`` (called from a done-callback). ``dict.pop`` is atomic
+        # under the GIL; revisit if/when 3.13t (free-threaded) is adopted.
         self._pending.pop(key, None)
 
     async def shutdown(self) -> None:
@@ -142,3 +160,41 @@ class DiagnosticsService(BaseService):
 
 def _task_id_for(task: asyncio.Task[Any]) -> str:
     return f'{id(task):x}'
+
+
+def _handle_diagnostics_task_completion(
+    service: DiagnosticsService,
+    key: str,
+    task: asyncio.Task[dict[str, Any]],
+) -> None:
+    """Done-callback body for diagnostics UMAP compute tasks.
+
+    Extracted to module scope so unit tests can drive it directly without
+    monkey-patching ``Task.add_done_callback`` on a real asyncio.Task — the
+    closure-capture form is fragile under PyPy/uvloop. ``service`` and
+    ``key`` are passed explicitly; ``task`` is the completed task supplied
+    by the asyncio scheduler.
+    """
+    # Always run the registry clear, but never let a failure here bypass the
+    # cancelled / InvalidStateError / failure-logging branches below. A raise
+    # from ``_clear_registry`` would otherwise silently swallow the task's
+    # exception and leave both error branches unexecuted.
+    try:
+        service._clear_registry(key)
+    except Exception:
+        logger.exception('Failed to clear diagnostics registry for key=%s', key)
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except asyncio.InvalidStateError:
+        return
+    if exc is not None:
+        # Use ``logger.error`` (not ``logger.exception``) because we are not
+        # inside an ``except`` block — the explicit exc_info tuple from the
+        # task's stored exception is what carries the traceback.
+        logger.error(
+            'Diagnostics manifold compute failed for key %s',
+            key,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )

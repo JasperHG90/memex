@@ -561,3 +561,95 @@ async def test_create_job_concurrent_empty_batch_rejected(manager, mock_api):
         f'all 5 concurrent empty-batch submissions must raise ValueError; '
         f'got types: {[type(r).__name__ for r in results]}'
     )
+
+
+# ---------------------------------------------------------------------------
+# Hermes round-5: _task_done_callback must capture exception + traceback in
+# the LogRecord. The previous form ``exc_info=exc`` (passing the exception
+# instance) silently dropped the traceback because the logging stdlib treats
+# a non-tuple non-True ``exc_info`` outside an ``except`` block as
+# ``sys.exc_info()`` — which returns ``(None, None, None)`` from a callback
+# fired off the asyncio loop, not the originating frame. The fix passes an
+# explicit ``(type, exc, exc.__traceback__)`` tuple; this test pins that.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_done_callback_captures_exception_traceback(manager, caplog):
+    """A background task that raises must produce a LogRecord whose
+    ``exc_info`` is populated and whose ``exc_text`` contains the
+    exception's traceback (the type name + originating frame). Without the
+    explicit ``(type, exc, exc.__traceback__)`` tuple, ``exc_text`` is empty
+    and operators get an exception message with no stack — making post-hoc
+    debugging of failed batch jobs much harder.
+    """
+    import asyncio
+    import logging
+
+    job_id = uuid4()
+
+    class _BatchProbeError(RuntimeError):
+        """Sentinel exception so the assertion is unambiguous."""
+
+    async def _raise() -> None:
+        raise _BatchProbeError('synthetic failure inside batch task')
+
+    task = asyncio.create_task(_raise())
+    # Drive the coroutine to completion so ``task.exception()`` is populated.
+    try:
+        await task
+    except _BatchProbeError:
+        pass
+
+    with caplog.at_level(logging.ERROR, logger='memex.core.processing.batch'):
+        manager._task_done_callback(job_id, task)
+
+    error_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.ERROR and r.name == 'memex.core.processing.batch'
+    ]
+    assert len(error_records) == 1, f'expected 1 ERROR record, got {len(error_records)}'
+    record = error_records[0]
+    # The bug: previously ``exc_info`` was ``None`` because logging resolved
+    # ``exc_info=<exception>`` via ``sys.exc_info()`` from a non-except frame.
+    assert record.exc_info is not None, (
+        'LogRecord.exc_info must be populated; otherwise the formatter has '
+        'no stack to render and operators see the exception message with no '
+        'traceback.'
+    )
+    # ``exc_text`` is lazily populated by Formatter.format(); force it.
+    formatter = logging.Formatter()
+    formatter.format(record)
+    assert record.exc_text, 'exc_text must contain the rendered traceback'
+    assert '_BatchProbeError' in record.exc_text, (
+        f'rendered traceback must reference the exception class; got: {record.exc_text!r}'
+    )
+    assert 'synthetic failure inside batch task' in record.exc_text, (
+        f'rendered traceback must include the exception message; got: {record.exc_text!r}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_done_callback_pops_active_task(manager):
+    """The callback must remove the job from ``_active_tasks`` whether the
+    task succeeded, raised, or was cancelled. Pinning the cleanup contract
+    so ``JobManager`` can't silently leak task references on the error
+    path that round-5 just instrumented.
+    """
+    import asyncio
+
+    job_id = uuid4()
+
+    async def _raise() -> None:
+        raise RuntimeError('boom')
+
+    task = asyncio.create_task(_raise())
+    try:
+        await task
+    except RuntimeError:
+        pass
+
+    manager._active_tasks[job_id] = task
+    manager._task_done_callback(job_id, task)
+    assert job_id not in manager._active_tasks
