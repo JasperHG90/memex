@@ -49,14 +49,16 @@ async def aggregate_lint_findings(
     with vault_id IS NULL are not surfaced through this per-vault view; that
     matches F32's per-vault diagnostics summary contract).
     """
-    # Column-positional select (not select(MaintenanceProposal)) matches heatmap.py —
-    # SQLModel's session.exec(select(Model)) returns Row tuples wrapping the model
-    # under async paths; switch to .scalars() only if relationship traversal is needed.
+    # Use explicit `.label()` on each column so rows are accessed by name via
+    # SQLAlchemy's Row attribute API, rather than positional unpacking. Keeps
+    # the SELECT and the post-fetch loop in sync if the column order ever
+    # changes (matches heatmap.py shape; .scalars() is unnecessary here —
+    # we don't need ORM instance hydration).
     pivot_stmt = (
         select(
-            MaintenanceProposal.lint_type,
-            MaintenanceProposal.status,
-            MaintenanceProposal.source,
+            MaintenanceProposal.lint_type.label('lint_type'),
+            MaintenanceProposal.status.label('status'),
+            MaintenanceProposal.source.label('source'),
             func.count().label('count'),
         )
         .where(MaintenanceProposal.vault_id == vault_id)
@@ -68,15 +70,15 @@ async def aggregate_lint_findings(
     )
     top5_stmt = (
         select(
-            MaintenanceProposal.id,
-            MaintenanceProposal.lint_type,
-            MaintenanceProposal.target_type,
-            MaintenanceProposal.target_id,
-            MaintenanceProposal.rule_name,
-            MaintenanceProposal.suggested_action,
-            MaintenanceProposal.status,
-            MaintenanceProposal.source,
-            MaintenanceProposal.created_at,
+            MaintenanceProposal.id.label('id'),
+            MaintenanceProposal.lint_type.label('lint_type'),
+            MaintenanceProposal.target_type.label('target_type'),
+            MaintenanceProposal.target_id.label('target_id'),
+            MaintenanceProposal.rule_name.label('rule_name'),
+            MaintenanceProposal.suggested_action.label('suggested_action'),
+            MaintenanceProposal.status.label('status'),
+            MaintenanceProposal.source.label('source'),
+            MaintenanceProposal.created_at.label('created_at'),
         )
         .where(
             MaintenanceProposal.vault_id == vault_id,
@@ -92,28 +94,28 @@ async def aggregate_lint_findings(
 
     counts: list[dict[str, Any]] = []
     pending_by_type: dict[str, int] = {}
-    for lint_type, status, source, count in pivot_rows:
-        lt = _enum_value(lint_type)
-        st = _enum_value(status)
-        src = _enum_value(source)
-        c = int(count)
+    for row in pivot_rows:
+        lt = _enum_value(row.lint_type)
+        st = _enum_value(row.status)
+        src = _enum_value(row.source)
+        c = int(row.count)
         counts.append({'lint_type': lt, 'status': st, 'source': src, 'count': c})
         if st == 'pending':
             pending_by_type[lt] = pending_by_type.get(lt, 0) + c
 
     top5: list[dict[str, Any]] = [
         {
-            'id': str(rid),
-            'lint_type': _enum_value(rlt),
-            'target_type': rtt,
-            'target_id': rti,
-            'rule_name': rn,
-            'suggested_action': ra,
-            'status': _enum_value(rs),
-            'source': _enum_value(rsrc),
-            'created_at': rca.isoformat() if rca else None,
+            'id': str(row.id),
+            'lint_type': _enum_value(row.lint_type),
+            'target_type': row.target_type,
+            'target_id': row.target_id,
+            'rule_name': row.rule_name,
+            'suggested_action': row.suggested_action,
+            'status': _enum_value(row.status),
+            'source': _enum_value(row.source),
+            'created_at': row.created_at.isoformat() if row.created_at else None,
         }
-        for rid, rlt, rtt, rti, rn, ra, rs, rsrc, rca in top5_rows
+        for row in top5_rows
     ]
 
     return {
@@ -133,7 +135,10 @@ async def pending_by_type(
     top-5 SELECT.
     """
     stmt = (
-        select(MaintenanceProposal.lint_type, func.count().label('count'))
+        select(
+            MaintenanceProposal.lint_type.label('lint_type'),
+            func.count().label('count'),
+        )
         .where(
             MaintenanceProposal.vault_id == vault_id,
             MaintenanceProposal.status == LintStatus.PENDING,
@@ -142,7 +147,7 @@ async def pending_by_type(
     )
     async with metastore.session() as sess:
         rows = (await sess.exec(stmt)).all()
-    return {_enum_value(lint_type): int(count) for lint_type, count in rows}
+    return {_enum_value(row.lint_type): int(row.count) for row in rows}
 
 
 def _enum_value(v: Any) -> str:
