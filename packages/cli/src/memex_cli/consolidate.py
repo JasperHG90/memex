@@ -90,7 +90,7 @@ async def tick_cmd(
             str(row.get('units_processed', 0)),
             str(row.get('entities_reflected', 0)),
             str(row.get('contradictions_run', 0)),
-            str(row.get('stale_pruned', row.get('stale_pruned_candidates', 0))),
+            str(row.get('stale_pruned', 0)),
             row.get('error') or '',
         )
     console.print(table)

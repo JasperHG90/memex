@@ -29,6 +29,7 @@ from uuid import UUID
 
 from sqlalchemy import func as sa_func
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.config import MemexConfig
 from memex_core.memory.contradiction.engine import ContradictionEngine
@@ -122,7 +123,7 @@ class ConsolidationService:
                 'units_processed': len(unit_ids),
                 'entities_reflected': len(entity_ids),
                 'contradictions_run': len(unit_ids),
-                'stale_pruned_candidates': len(already_stale_ids),
+                'stale_pruned': len(already_stale_ids),
                 'tick_id': None,
             }
 
@@ -203,24 +204,32 @@ class ConsolidationService:
 
         Pass ``vault_id=None`` to get one row per vault (latest each); pass a
         specific vault_id to get only that vault's latest row.
+
+        Uses Postgres ``DISTINCT ON (vault_id)`` so every vault's latest tick
+        is returned regardless of total tick volume — no implicit row cap.
         """
         async with self.metastore.session() as session:
-            stmt = (
-                select(ConsolidationTick)
-                .order_by(ConsolidationTick.completed_at.desc().nullslast())  # type: ignore[union-attr]
-                .limit(1 if vault_id is not None else 1000)
-            )
             if vault_id is not None:
-                stmt = stmt.where(ConsolidationTick.vault_id == vault_id)
+                stmt = (
+                    select(ConsolidationTick)
+                    .where(ConsolidationTick.vault_id == vault_id)
+                    .order_by(ConsolidationTick.completed_at.desc().nullslast())  # type: ignore[union-attr]
+                    .limit(1)
+                )
+            else:
+                stmt = (
+                    select(ConsolidationTick)
+                    .distinct(ConsolidationTick.vault_id)
+                    .order_by(
+                        ConsolidationTick.vault_id,
+                        ConsolidationTick.completed_at.desc().nullslast(),  # type: ignore[union-attr]
+                    )
+                )
             result = await session.exec(stmt)
             rows = result.all()
 
-        seen: set[UUID] = set()
         out: list[dict[str, Any]] = []
         for row in rows:
-            if row.vault_id in seen:
-                continue
-            seen.add(row.vault_id)
             out.append(
                 {
                     'vault_id': str(row.vault_id),
@@ -253,7 +262,7 @@ class ConsolidationService:
 
     async def select_diff_units(
         self,
-        session: Any,
+        session: AsyncSession,
         vault_id: UUID,
         last_tick_timestamp: datetime | None,
         *,
@@ -301,7 +310,7 @@ class ConsolidationService:
 
     async def resolve_unit_ids_to_entity_ids(
         self,
-        session: Any,
+        session: AsyncSession,
         unit_ids: list[UUID],
         vault_id: UUID,
     ) -> set[UUID]:
@@ -321,7 +330,7 @@ class ConsolidationService:
 
     async def _select_already_stale_ids(
         self,
-        session: Any,
+        session: AsyncSession,
         unit_ids: list[UUID],
         vault_id: UUID,
     ) -> list[UUID]:
