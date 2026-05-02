@@ -111,6 +111,20 @@ def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
     Both filters are independent and additive — pass either, both, or neither.
     Values are not validated here (validation happens at the API/CLI boundary
     against the ``IntentClass`` / ``RiskClass`` enums).
+
+    NULL semantics: this filter uses strict SQL equality (``column = :value``),
+    so rows with ``NULL`` in ``intent_class`` or ``risk_class`` are excluded
+    when the corresponding filter is active. This is by design and matches
+    the legacy client-side filter (``getattr(u, 'intent_class', 'durable') ==
+    wanted`` likewise excluded ``None`` values, because the attribute exists
+    on the model — ``getattr``'s default is only returned when the attribute
+    is missing entirely). In production, NULLs cannot occur: the F25
+    migration (``024_intent_risk_classifier``) adds both columns as
+    ``NOT NULL`` with ``server_default`` (``'durable'`` / ``'none'``) and a
+    CHECK constraint pinning values to the enum domain, so existing rows
+    are backfilled and new rows are rejected if NULL is attempted. A persistent
+    NULL would therefore indicate genuinely-unclassified data that should not
+    silently match a specific intent/risk query.
     """
     intent_class = kwargs.get('intent_class')
     if intent_class is not None:

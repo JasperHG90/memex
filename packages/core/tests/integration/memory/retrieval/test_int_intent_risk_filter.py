@@ -291,3 +291,130 @@ class TestIntentRiskFilter:
     async def test_invalid_risk_class_rejected(self):
         with pytest.raises(ValueError, match='Invalid risk_class'):
             RetrievalRequest(query='x', risk_class='not-a-real-class')
+
+
+@pytest.mark.integration
+class TestIntentRiskNullSemantics:
+    """Round-5 regression guard for NULL ``intent_class`` / ``risk_class`` semantics.
+
+    The server-side filter uses strict SQL equality (``column = :value``), so rows
+    with NULL classifications would be excluded when a filter is active. The legacy
+    client-side filter (``getattr(u, 'intent_class', 'durable') == wanted``) was
+    behaviorally equivalent — ``getattr``'s default fires only when the attribute
+    is missing, never when it is the literal ``None``. Migrating from client- to
+    server-side filtering therefore preserves the original semantics.
+
+    These tests assert the F25 schema invariants that make this safe in production:
+    ``intent_class`` and ``risk_class`` are ``NOT NULL`` with ``server_default``
+    backfills, plus CHECK constraints pinning values to the enum domain. If these
+    invariants ever regress, the filter's NULL-exclusion behavior could leak.
+    """
+
+    async def test_intent_class_rejects_null_at_db_level(self, session: AsyncSession):
+        """The NOT NULL constraint must reject INSERTs with intent_class = NULL."""
+        note_id = uuid4()
+        unit_id = uuid4()
+        await session.execute(
+            text(
+                'INSERT INTO notes (id, original_text, vault_id) '
+                'VALUES (CAST(:id AS uuid), :txt, CAST(:vault AS uuid))'
+            ),
+            {'id': str(note_id), 'txt': 'null-semantics test', 'vault': str(GLOBAL_VAULT_ID)},
+        )
+        with pytest.raises(Exception, match=r'(?i)null|not[- ]null'):
+            await session.execute(
+                text(
+                    'INSERT INTO memory_units '
+                    '(id, note_id, text, fact_type, vault_id, event_date, intent_class) '
+                    'VALUES (CAST(:id AS uuid), CAST(:note AS uuid), :txt, :ft, '
+                    'CAST(:vault AS uuid), now(), NULL)'
+                ),
+                {
+                    'id': str(unit_id),
+                    'note': str(note_id),
+                    'txt': 'should fail',
+                    'ft': FactTypes.WORLD.value,
+                    'vault': str(GLOBAL_VAULT_ID),
+                },
+            )
+        await session.rollback()
+
+    async def test_risk_class_rejects_null_at_db_level(self, session: AsyncSession):
+        """The NOT NULL constraint must reject INSERTs with risk_class = NULL."""
+        note_id = uuid4()
+        unit_id = uuid4()
+        await session.execute(
+            text(
+                'INSERT INTO notes (id, original_text, vault_id) '
+                'VALUES (CAST(:id AS uuid), :txt, CAST(:vault AS uuid))'
+            ),
+            {'id': str(note_id), 'txt': 'null-semantics test', 'vault': str(GLOBAL_VAULT_ID)},
+        )
+        with pytest.raises(Exception, match=r'(?i)null|not[- ]null'):
+            await session.execute(
+                text(
+                    'INSERT INTO memory_units '
+                    '(id, note_id, text, fact_type, vault_id, event_date, risk_class) '
+                    'VALUES (CAST(:id AS uuid), CAST(:note AS uuid), :txt, :ft, '
+                    'CAST(:vault AS uuid), now(), NULL)'
+                ),
+                {
+                    'id': str(unit_id),
+                    'note': str(note_id),
+                    'txt': 'should fail',
+                    'ft': FactTypes.WORLD.value,
+                    'vault': str(GLOBAL_VAULT_ID),
+                },
+            )
+        await session.rollback()
+
+    async def test_intent_class_default_is_durable(self, session: AsyncSession):
+        """An INSERT that omits intent_class/risk_class must be backfilled by server_default.
+
+        This guarantees pre-F25 rows (added before the columns existed) are
+        seen as ``intent_class='durable'`` / ``risk_class='none'`` rather than
+        ``NULL``, matching the legacy client-side filter's implicit assumption.
+        """
+        note_id = uuid4()
+        unit_id = uuid4()
+        await session.execute(
+            text(
+                'INSERT INTO notes (id, original_text, vault_id) '
+                'VALUES (CAST(:id AS uuid), :txt, CAST(:vault AS uuid))'
+            ),
+            {'id': str(note_id), 'txt': 'default test', 'vault': str(GLOBAL_VAULT_ID)},
+        )
+        await session.execute(
+            text(
+                'INSERT INTO memory_units '
+                '(id, note_id, text, fact_type, vault_id, event_date) '
+                'VALUES (CAST(:id AS uuid), CAST(:note AS uuid), :txt, :ft, '
+                'CAST(:vault AS uuid), now())'
+            ),
+            {
+                'id': str(unit_id),
+                'note': str(note_id),
+                'txt': 'default-backfill row',
+                'ft': FactTypes.WORLD.value,
+                'vault': str(GLOBAL_VAULT_ID),
+            },
+        )
+        await session.commit()
+
+        result = await session.execute(
+            text('SELECT intent_class, risk_class FROM memory_units WHERE id = CAST(:id AS uuid)'),
+            {'id': str(unit_id)},
+        )
+        row = result.one()
+        assert row.intent_class == 'durable'
+        assert row.risk_class == 'none'
+
+        await session.execute(
+            text('DELETE FROM memory_units WHERE id = CAST(:id AS uuid)'),
+            {'id': str(unit_id)},
+        )
+        await session.execute(
+            text('DELETE FROM notes WHERE id = CAST(:id AS uuid)'),
+            {'id': str(note_id)},
+        )
+        await session.commit()
