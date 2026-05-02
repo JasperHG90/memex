@@ -1045,7 +1045,7 @@ class BatchJob(SQLModel, table=True):  # type: ignore
 
     status: BatchJobStatus = Field(
         default=BatchJobStatus.PENDING,
-        sa_column=Column(Text, nullable=False, server_default='pending'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
         description='Current status of the batch job.',
     )
 
@@ -1161,7 +1161,7 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
 
     status: ReflectionStatus = Field(
         default=ReflectionStatus.PENDING,
-        sa_column=Column(Text, nullable=False, server_default='pending'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
         description='Current status of the reflection task.',
     )
 
@@ -1362,7 +1362,7 @@ class KVEntry(SQLModel, table=True):  # type: ignore
     Function: Provides simple, named storage for configuration, preferences,
     and structured data that doesn't fit the note/memory model.
     Key Features:
-        - Keys must start with a namespace prefix: global:, user:, project:, or app:.
+        - Keys must start with a namespace prefix: global:, user:, project:, app:, or procedure:.
         - Unique constraint on key.
         - btree index with text_pattern_ops for efficient prefix queries.
         - Optional embedding for semantic search over values.
@@ -1544,4 +1544,284 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
             ondelete='CASCADE',
         ),
         Index('idx_note_appends_note_id_applied_at', 'note_id', 'applied_at'),
+    )
+
+
+class ProcedureOutcome(SQLModel, table=True):  # type: ignore
+    """Per-(vault, procedure_kv_key) MW success/failure counter row.
+
+    Counters increment via :class:`memex_core.services.outcome.OutcomeService`
+    (target_type='kv_key'). The active value/version/history live in the
+    JSON envelope at ``kv_entries.value`` for the corresponding ``procedure:``
+    key — this table holds counters only. FK ON DELETE CASCADE removes
+    counter rows when the parent KVEntry is deleted.
+    """
+
+    __tablename__ = 'procedure_outcomes'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the counter row.',
+    )
+
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=False,
+            index=True,
+        ),
+        description='Vault that owns this counter row (Wave 0 invariant: NOT NULL).',
+    )
+
+    kv_key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='The procedure KV key these counters belong to.',
+    )
+
+    success_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Cumulative success outcomes recorded against this key.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Cumulative failure outcomes recorded against this key.',
+    )
+
+    last_outcome_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Timestamp of the most recent recorded outcome.',
+    )
+
+    created_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
+        description='Timestamp when the counter row was created.',
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+        description='Timestamp when the counter row was last updated.',
+    )
+
+    __table_args__ = (
+        # The unique constraint below auto-creates a btree index on
+        # (vault_id, kv_key); no separate Index(...) is needed.
+        UniqueConstraint('vault_id', 'kv_key', name='uq_procedure_outcomes_vault_key'),
+        ForeignKeyConstraint(
+            ['kv_key'],
+            ['kv_entries.key'],
+            ondelete='CASCADE',
+            name='fk_procedure_outcomes_kv_key',
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# F6 — Maintenance ledger (rule-based linter)
+# ---------------------------------------------------------------------------
+
+
+class LintType(str, Enum):
+    STRUCTURAL = 'structural'
+    QUALITY = 'quality'
+    GOVERNANCE = 'governance'
+    SCHEMA = 'schema'
+
+
+class LintStatus(str, Enum):
+    PENDING = 'pending'
+    RESOLVED = 'resolved'
+    DISMISSED = 'dismissed'
+
+
+class LintSource(str, Enum):
+    RULE = 'rule'
+    LLM = 'llm'
+
+
+class MaintenanceProposal(SQLModel, table=True):  # type: ignore
+    """Finding ledger row emitted by the F6 LintService.
+
+    Read-only from the agent surface (F8). The unique partial index on
+    ``(rule_name, target_type, target_id, vault_id) WHERE status = 'pending'``
+    makes ``LintService.run_rules`` idempotent on reruns. ``vault_id`` is
+    nullable per AC-F6-1 (NULL = global findings; reserved for Tier B).
+    """
+
+    __tablename__ = 'maintenance_proposals'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the maintenance proposal.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=True,
+        ),
+        description='Vault this finding belongs to. NULL = global; reserved for Tier B.',
+    )
+    lint_type: LintType = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Category of the finding.',
+    )
+    target_type: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description="Type of the targeted entity (e.g. 'memory_unit', 'mental_model').",
+    )
+    target_id: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Opaque identifier of the targeted entity.',
+    )
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Name of the rule that emitted this finding.',
+    )
+    evidence: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+        description='Rule-specific payload describing why the finding fired.',
+    )
+    suggested_action: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Free-text suggestion for the agent or operator.',
+    )
+    status: LintStatus = Field(
+        default=LintStatus.PENDING,
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
+        description='Lifecycle state of the finding.',
+    )
+    source: LintSource = Field(
+        default=LintSource.RULE,
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'rule'")),
+        description='Whether the finding came from a SQL rule or an LLM check (F10).',
+    )
+    created_at: datetime = created_at_field()
+    resolved_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when status flips to resolved or dismissed.',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "lint_type IN ('structural', 'quality', 'governance', 'schema')",
+            name='ck_maintenance_proposals_lint_type',
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved', 'dismissed')",
+            name='ck_maintenance_proposals_status',
+        ),
+        CheckConstraint(
+            "source IN ('rule', 'llm')",
+            name='ck_maintenance_proposals_source',
+        ),
+        Index('idx_maintenance_proposals_vault_status', 'vault_id', 'status'),
+        Index('idx_maintenance_proposals_lint_type', 'lint_type'),
+        Index(
+            'uq_maintenance_proposals_pending',
+            'rule_name',
+            'target_type',
+            'target_id',
+            'vault_id',
+            unique=True,
+            postgresql_where=sql_text("status = 'pending'"),
+        ),
+    )
+
+
+class ConsolidationTick(SQLModel, table=True):  # type: ignore
+    """One row per F38 ``consolidation_tick(vault_id)`` invocation.
+
+    F38's ``services/consolidation.py`` is a thin orchestrator over
+    reflection + contradiction + prune-stale-only; this row is its sole
+    DB write at the end of each tick (AC-F38-4). ``completed_at IS NULL``
+    signals an in-progress tick; the gap between ``started_at`` and
+    ``completed_at`` is wall-clock duration.
+    """
+
+    __tablename__ = 'consolidation_ticks'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the tick row.',
+    )
+
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            nullable=False,
+        ),
+        description='Vault this tick consolidated (Wave 0 invariant: NOT NULL).',
+    )
+
+    started_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='Wall-clock timestamp when the tick began.',
+    )
+
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Wall-clock timestamp when the tick finished; NULL means in-progress.',
+    )
+
+    units_processed: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Memory units returned by select_diff_units (capped at 500/tick).',
+    )
+
+    entities_reflected: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Distinct entities passed to ReflectionService during this tick.',
+    )
+
+    contradictions_run: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Contradiction-detection invocations made during this tick.',
+    )
+
+    stale_pruned: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Units pruned by prune_stale_evidence (status=STALE only).',
+    )
+
+    error: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Free-text error message on failure; None on success.',
+    )
+
+    created_at: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
+        description='Timestamp when the row was inserted.',
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['vault_id'],
+            ['vaults.id'],
+            ondelete='CASCADE',
+            name='fk_consolidation_ticks_vault_id',
+        ),
+        Index('idx_consolidation_ticks_vault_started', 'vault_id', 'started_at'),
+        Index(
+            'idx_consolidation_ticks_vault_completed',
+            'vault_id',
+            sql_text('completed_at DESC NULLS LAST'),
+        ),
     )

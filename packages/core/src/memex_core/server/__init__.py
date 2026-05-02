@@ -27,7 +27,9 @@ except ImportError:
 from memex_core.logging_config import configure_logging
 from memex_core.server.audit import router as audit_router
 from memex_core.server.auth import auth_middleware, setup_auth
+from memex_core.server.consolidation import router as consolidation_router
 from memex_core.server.diagnostics import router as diagnostics_router
+from memex_core.server.lint import router as lint_router
 from memex_core.server.rate_limit import setup_rate_limiting
 from memex_core.services.audit import AuditService
 from memex_core.server.kv import router as kv_router
@@ -35,6 +37,7 @@ from memex_core.server.notes import router as notes_router
 from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
 from memex_core.server.memories import router as memories_router
+from memex_core.server.outcomes import router as outcomes_router
 from memex_core.server.reflection import router as reflection_router
 from memex_core.server.resources import router as resources_router
 from memex_core.server.retrieval import router as retrieval_router
@@ -328,6 +331,7 @@ app.include_router(notes_router)
 app.include_router(stats_router)
 app.include_router(entities_router)
 app.include_router(memories_router)
+app.include_router(outcomes_router)
 app.include_router(resources_router)
 app.include_router(health_router)
 app.include_router(summary_router)
@@ -337,3 +341,5 @@ app.include_router(survey_router)
 app.include_router(vault_summary_router)
 app.include_router(session_briefing_router)
 app.include_router(diagnostics_router)
+app.include_router(lint_router)
+app.include_router(consolidation_router)

@@ -228,7 +228,47 @@ class MemexMemoryProvider(MemoryProvider):
             project_id=self._project_id,
             session_note_key=self._session_note_key,
             kv_instructions_if_no_vault=self._vault_name is None,
+            procedural_observations=self._fetch_top_procedure_outcomes(),
+            lint_pending_count=self._fetch_lint_pending_count(),
         )
+
+    def _fetch_top_procedure_outcomes(self) -> list[dict[str, Any]] | None:
+        """F14 — fetch top 5 procedure outcomes for the active vault.
+
+        Best-effort and synchronous (briefing render is on the hot path);
+        any failure logs at DEBUG and returns ``None`` so the briefing
+        still renders without the procedural section. The vault must be
+        resolved (``self._vault_id``) — without it there is no per-vault
+        listing to surface.
+        """
+        if self._api is None or self._vault_id is None:
+            return None
+        try:
+            return run_sync(
+                self._api.list_top_procedure_outcomes(vault_id=str(self._vault_id), limit=5),
+                timeout=2.0,
+            )
+        except Exception as e:
+            logger.debug('procedure_outcomes fetch failed: %s', e)
+            return None
+
+    def _fetch_lint_pending_count(self) -> int | None:
+        """F6 — fetch pending lint-finding count for the active vault.
+
+        Best-effort: any failure returns None and the briefing renders
+        without the maintenance section. Vault must be resolved.
+        """
+        if self._api is None or self._vault_id is None:
+            return None
+        try:
+            payload = run_sync(
+                self._api.lint_status(scope='vault', vault_id=str(self._vault_id)),
+                timeout=2.0,
+            )
+            return int(payload.get('pending', 0))
+        except Exception as e:
+            logger.debug('lint_status fetch failed: %s', e)
+            return None
 
     # -- Tools ---------------------------------------------------------------
 

@@ -833,6 +833,25 @@ class ContradictionConfig(BaseModel):
     )
 
 
+class ConsolidationConfig(BaseModel):
+    """F38 consolidation orchestrator configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Run the per-vault consolidation tick on the scheduler.',
+    )
+    cadence_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description='Wall-clock interval between consolidation ticks (default: 24h).',
+    )
+    units_per_tick: int = Field(
+        default=500,
+        ge=1,
+        description='Per-tick budget (oldest-first). Saturation signalled by units_processed=cap.',
+    )
+
+
 class Permission(str, Enum):
     """Granular permissions for API key access control."""
 
@@ -1075,6 +1094,20 @@ class TracingConfig(BaseModel):
     )
 
 
+class LintConfig(BaseModel):
+    """Configuration for the F6 maintenance ledger / rule-based linter."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable periodic lint runs via the scheduler.',
+    )
+    interval_seconds: int = Field(
+        default=6 * 3600,
+        ge=60,
+        description='Interval in seconds between lint runs. Default: 6 hours.',
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -1097,9 +1130,19 @@ class MemoryConfig(BaseModel):
         description='Configuration for contradiction detection.',
     )
 
+    consolidation: ConsolidationConfig = Field(
+        default_factory=ConsolidationConfig,
+        description='F38 consolidation orchestrator configuration.',
+    )
+
     circuit_breaker: CircuitBreakerConfig = Field(
         default_factory=CircuitBreakerConfig,
         description='Configuration for the LLM call circuit breaker.',
+    )
+
+    lint: LintConfig = Field(
+        default_factory=LintConfig,
+        description='Configuration for the F6 maintenance ledger / rule-based linter.',
     )
 
 

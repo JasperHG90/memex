@@ -149,7 +149,15 @@ Match the tool to the query type:
 - **KV store** → namespaced operational state — preferences, project
   bindings, conventions — via `memex_kv_write(value, key)` /
   `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys
-  MUST start with `global:`, `user:`, `project:<id>:`, or `app:<id>:`.
+  MUST start with `global:`, `user:`, `project:<id>:`, `app:<id>:`, or
+  `procedure:<verb>:<context-tag>` (RFC-007). The `procedure:` namespace is
+  for compact, learned how-tos owned by the agent — write a procedure that
+  worked using `memex_kv_write`, then read the active value with
+  `memex_kv_get(key)` or pass `include_history=true` to inspect the
+  envelope (active value + version + capped 5-version history). Memex
+  tracks per-procedure success/failure counters server-side
+  (procedure_outcomes table); on the MCP surface those counters are
+  updated via `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`.
   Deletion is CLI-only (`memex kv delete`).
 - **Capturing work**:
     - `memex_add_note` for a NEW note (or to fully overwrite an existing one).
@@ -195,13 +203,16 @@ def format_briefing_block(
     session_note_key: str,
     kv_instructions_if_no_vault: bool,
     diagnostics_summary: dict[str, Any] | None = None,
+    procedural_observations: list[dict[str, Any]] | None = None,
+    lint_pending_count: int | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
     Includes vault/project metadata, the session note key, routing guidance
     for tool selection, the fetched briefing markdown, and (optionally) the
-    F32 diagnostics summary block. If no vault is resolved, appends guidance
-    on how to bind one via the KV store.
+    F32 diagnostics summary block and F14 procedural-observations block. If
+    no vault is resolved, appends guidance on how to bind one via the KV
+    store.
     """
     lines = ['## Memex Memory']
     if vault_id:
@@ -231,6 +242,12 @@ def format_briefing_block(
 
     lines.append('\n' + _ROUTING_GUIDE)
 
+    if procedural_observations:
+        lines.append('\n' + _render_procedural_block(procedural_observations))
+
+    if lint_pending_count is not None and lint_pending_count > 0:
+        lines.append('\n' + _render_lint_block(lint_pending_count))
+
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
 
@@ -252,9 +269,60 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 # F32: diagnostic summary                 (WS-diagnostics)
 # ============================================================
 
+
 # --- F6 ---  (filled by WS-linter)
+def _render_lint_block(pending_count: int) -> str:
+    """Render the F6 maintenance-ledger pending-count block (AC-F6-7).
+
+    Surfaces the pending count from ``maintenance_proposals`` and points the
+    operator at the CLI for triage. Read-only on the agent surface — the
+    agent should NOT auto-resolve findings; deferring to a human is the
+    intended default in v1.
+    """
+    return (
+        f'### Maintenance findings\n'
+        f'- {pending_count} pending lint findings. To inspect them, '
+        f'run `memex lint findings`.'
+    )
+
 
 # --- F14 --- (filled by WS-quick-wins)
+def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
+    """Render the F14 procedural-observations block.
+
+    ``observations`` is a list of ``{kv_key, success_co_count,
+    failure_co_count, last_outcome_at}`` dicts (typically the top-N rows
+    from ``procedure_outcomes`` for the active vault, sorted by
+    ``last_outcome_at`` desc). The rendered block exposes each procedure's
+    MW counters and an actionability cue per RFC-007 §155-185 — the agent
+    is told to pair every procedure call with ``memex_record_outcome`` so
+    the counters stay calibrated.
+    """
+    lines = ['### Learned procedures (recent)']
+    if not observations:
+        lines.append(
+            '- No procedure keys recorded yet. When you discover a how-to that '
+            'works, write it to a `procedure:<verb>:<context-tag>` key (e.g. '
+            '`procedure:write_pr:commit-style`) and record the outcome.'
+        )
+        return '\n'.join(lines)
+
+    for obs in observations[:5]:
+        key = obs.get('kv_key', '?')
+        succ = int(obs.get('success_co_count', 0))
+        fail = int(obs.get('failure_co_count', 0))
+        last = obs.get('last_outcome_at')
+        last_str = f' · last: {last}' if last else ''
+        lines.append(f'- `{key}` — {succ} success / {fail} failure{last_str}')
+
+    lines.append(
+        'Read the active value with `memex_kv_get(key)`; pair every use with '
+        '`memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` '
+        'so the counters reflect what actually worked. Use '
+        '`memex_kv_get(key, include_history=true)` to see prior versions.'
+    )
+    return '\n'.join(lines)
+
 
 # --- F20 --- (filled by WS-revisit)
 

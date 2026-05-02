@@ -35,8 +35,10 @@ from memex_common.schemas import (
     IngestResponse,
     EntityDTO,
     KVEntryDTO,
+    KVProcedureEntryDTO,
     KVPutRequest,
     KVSearchRequest,
+    ProcedureOutcomeDTO,
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
@@ -552,6 +554,62 @@ class RemoteMemexAPI:
             response.raise_for_status()
         return response.status_code, response.json()
 
+    # --- Consolidation (F38) ---
+    async def consolidation_tick(
+        self,
+        vault_id: UUID | str | None = None,
+        *,
+        dry_run: bool = False,
+        budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Run a consolidation tick. ``vault_id=None`` ticks every vault."""
+        body: dict[str, Any] = {'dry_run': dry_run}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        if budget is not None:
+            body['budget'] = budget
+        return await self._post('consolidation/tick', body)
+
+    async def consolidation_status(self, vault_id: UUID | str | None = None) -> dict[str, Any]:
+        """Return the most recent consolidation tick row per vault (or for one vault)."""
+        params = {'vault_id': str(vault_id)} if vault_id is not None else None
+        return await self._get('consolidation/status', params=params)
+
+    # --- Outcomes (F29) ---
+    async def record_outcome(
+        self,
+        unit_ids: list[str] | None,
+        success: bool,
+        vault_id: str | None = None,
+        outcome_confidence: float = 1.0,
+        reason: str | None = None,
+        *,
+        target_type: str = 'memory_unit',
+        kv_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an outcome (F14 ADD-2 over HTTP).
+
+        Mirrors :meth:`memex_core.api.MemexAPI.record_outcome` exactly so
+        in-process and remote callers share one call shape. ``unit_ids``
+        and ``success`` are positional; ``target_type`` and ``kv_key`` are
+        keyword-only — preserving the F14 ADD-2 invariant that a kwargless
+        call cannot silently record FAILURE.
+        """
+        body: dict[str, Any] = {
+            'success': success,
+            'outcome_confidence': outcome_confidence,
+            'target_type': target_type,
+        }
+        if unit_ids is not None:
+            body['unit_ids'] = unit_ids
+        if vault_id is not None:
+            body['vault_id'] = vault_id
+        if reason is not None:
+            body['reason'] = reason
+        if kv_key is not None:
+            body['kv_key'] = kv_key
+        return await self._post('outcomes/record', body)
+
     # --- Stats & Overview ---
     async def get_stats_counts(
         self,
@@ -980,16 +1038,47 @@ class RemoteMemexAPI:
     async def kv_get(
         self,
         key: str,
-    ) -> KVEntryDTO | None:
-        """Get a KV entry by exact key. Returns None if not found."""
-        params: dict[str, Any] = {'key': key}
+        *,
+        include_history: bool = False,
+    ) -> KVEntryDTO | KVProcedureEntryDTO | None:
+        """Get a KV entry by exact key. Returns None if not found.
+
+        For ``procedure:`` keys, ``include_history=True`` returns a
+        :class:`KVProcedureEntryDTO` whose ``value`` field is the
+        structured envelope ({value, version, history}).
+        """
+        params: dict[str, Any] = {'key': key, 'include_history': include_history}
         try:
             result = await self._get('kv/get', params=params)
+            if (
+                include_history
+                and key.startswith('procedure:')
+                and isinstance(result.get('value'), dict)
+            ):
+                return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
             raise
+
+    async def list_top_procedure_outcomes(
+        self,
+        vault_id: str,
+        *,
+        context: str | None = None,
+        limit: int = 5,
+    ) -> list[ProcedureOutcomeDTO]:
+        """F14 — fetch top procedure outcomes for ``vault_id`` (RFC-007 §155-185).
+
+        Rows ranked by Memory Worth score
+        ``(s+1)/(s+f+2)`` descending; tie-broken by ``last_outcome_at``.
+        """
+        params: dict[str, Any] = {'vault_id': vault_id, 'limit': limit}
+        if context is not None:
+            params['context'] = context
+        result = await self._get('kv/procedure-observations', params=params)
+        return [ProcedureOutcomeDTO(**r) for r in result]
 
     async def kv_search(
         self,
@@ -1033,3 +1122,44 @@ class RemoteMemexAPI:
             params['pattern'] = pattern
         result = await self._get('kv', params=params or None)
         return [KVEntryDTO(**r) for r in result]
+
+    # ------------------------------------------------------------------
+    # F6 — maintenance ledger (lint)
+    # ------------------------------------------------------------------
+
+    async def lint_status(
+        self,
+        *,
+        scope: str = 'vault',
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Pending finding counts. ``scope`` ∈ {'vault', 'global', 'all'}."""
+        params: dict[str, Any] = {'scope': scope}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/status', params=params)
+
+    async def lint_findings(
+        self,
+        *,
+        vault_id: str | None = None,
+        lint_type: str | None = None,
+        status: str = 'pending',
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List maintenance findings with optional filters."""
+        params: dict[str, Any] = {'status': status, 'limit': limit, 'offset': offset}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        if lint_type is not None:
+            params['lint_type'] = lint_type
+        return await self._get('lint/findings', params=params)
+
+    async def lint_dismiss(self, finding_id: str) -> dict[str, Any]:
+        """Flip a pending finding to ``dismissed``."""
+        return await self._post(f'lint/findings/{finding_id}/dismiss', {})
+
+    async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
+        """Flip a pending finding to ``resolved``."""
+        return await self._post(f'lint/findings/{finding_id}/resolve', {})

@@ -32,6 +32,8 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'entity': 'memex_cli.entities:app',
     'note': 'memex_cli.notes:app',
     'kv': 'memex_cli.kv:app',
+    'procedure': 'memex_cli.procedure:app',
+    'lint': 'memex_cli.lint:app',
     'system': 'memex_cli.stats:app',
     'config': 'memex_cli.config:app',
     'server': 'memex_cli.server:app',
@@ -41,6 +43,7 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'setup': 'memex_cli.setup_claude_code:app',
     'report-bug': 'memex_cli.report_bug:app',
     'diagnostics': 'memex_cli.diagnose:app',
+    'consolidate': 'memex_cli.consolidate:app',
 }
 
 

@@ -100,6 +100,7 @@ class MemexAPIProtocol(Protocol):
     async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def record_outcome(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Vaults
     async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -1210,13 +1211,28 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
 
 KV_GET_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_get',
-    'description': 'Get a KV entry by exact key. Returns null if not found.',
+    'description': (
+        'Get a KV entry by exact key. Returns null if not found. For '
+        'procedure: keys (RFC-007), the default response value is the '
+        'unwrapped active procedure text. Pass include_history=true to '
+        'receive the structured envelope ({value, version, history}) so '
+        'you can review prior versions.'
+    ),
     'parameters': {
         'type': 'object',
         'properties': {
             'key': {
                 'type': 'string',
                 'description': 'Exact key to look up.',
+            },
+            'include_history': {
+                'type': 'boolean',
+                'description': (
+                    'For procedure: keys (RFC-007), return the full '
+                    'envelope (value, version, capped history of 5 prior '
+                    'versions) instead of just the active value. Ignored '
+                    'for non-procedure keys.'
+                ),
             },
         },
         'required': ['key'],
@@ -3209,6 +3225,8 @@ __all__ = [
     # --- F4 (WS-quick-wins) ---
     'MEMORY_DEPRIORITIZE_SCHEMA',
     'MEMORY_RESTORE_SCHEMA',
+    # --- F14 / F29 record_outcome (WS-quick-wins) ---
+    'RECORD_OUTCOME_SCHEMA',
 ]
 
 
@@ -3424,6 +3442,139 @@ def handle_memory_summarize_node(
 
 HANDLERS['memex_memory_summarize_node'] = handle_memory_summarize_node
 ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
+
+
+# --- F14 / F29 record_outcome --- (WS-quick-wins; fills the F14 ADD-2 Hermes gap)
+
+RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
+    'name': 'memex_record_outcome',
+    'description': (
+        'Record whether previously retrieved memories or a stored procedure '
+        'contributed to a successful outcome. Default mode increments MW '
+        "counters on memory units (target_type='memory_unit', "
+        "unit_ids=[...]); set target_type='kv_key' with kv_key="
+        "'procedure:<verb>:<context-tag>' to score a stored procedure. Call "
+        'after you actually used the retrieved memory or the procedure.\n\n'
+        'Call generously. Silence provides no learning signal.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'success': {
+                'type': 'boolean',
+                'description': (
+                    'True if the task succeeded using these memories, '
+                    'false if they were misleading.'
+                ),
+            },
+            'unit_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': (
+                    'memory_unit mode only. UUIDs of memory units you actually '
+                    'used — not all retrieved units, only the ones that were '
+                    "load-bearing in your reasoning. Required when target_type='memory_unit'."
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name. Defaults to the session-bound vault.',
+            },
+            'outcome_confidence': {
+                'type': 'number',
+                'minimum': 0.0,
+                'maximum': 1.0,
+                'description': 'Weight for this outcome signal (0.0-1.0). Default 1.0.',
+            },
+            'reason': {
+                'type': 'string',
+                'description': 'Optional free-text reason (logged, not stored on units).',
+            },
+            'target_type': {
+                'type': 'string',
+                'enum': ['memory_unit', 'kv_key'],
+                'description': (
+                    "What the outcome scores. 'memory_unit' (default) increments "
+                    "MW counters on memory units in unit_ids. 'kv_key' (F14) "
+                    'increments counters on the procedure_outcomes row for kv_key.'
+                ),
+            },
+            'kv_key': {
+                'type': 'string',
+                'description': (
+                    'kv_key mode only. Procedure KV key '
+                    "(procedure:<verb>:<context-tag>). Required when target_type='kv_key'."
+                ),
+            },
+        },
+        'required': ['success'],
+    },
+}
+
+
+def handle_record_outcome(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Dual-mode dispatcher (memory_unit / kv_key).
+
+    Preserves the F14 ADD-2 invariant by passing ``unit_ids`` and ``success``
+    positionally and ``target_type`` / ``kv_key`` keyword-only — same shape
+    as MemexAPI.record_outcome and RemoteMemexAPI.record_outcome.
+    """
+    try:
+        success = _require(args, 'success')
+    except ValueError as e:
+        return tool_error(str(e))
+    if not isinstance(success, bool):
+        return tool_error(f"'success' must be a boolean, got {type(success).__name__}")
+
+    target_type = args.get('target_type', 'memory_unit')
+    if target_type not in ('memory_unit', 'kv_key'):
+        return tool_error(f"target_type must be 'memory_unit' or 'kv_key', got {target_type!r}")
+
+    unit_ids = args.get('unit_ids')
+    if unit_ids is not None and not isinstance(unit_ids, list):
+        return tool_error("'unit_ids' must be a list of UUID strings")
+
+    kv_key = args.get('kv_key')
+    if kv_key is not None and not isinstance(kv_key, str):
+        return tool_error("'kv_key' must be a string")
+
+    raw_vault = args.get('vault_id')
+    target_vault: str | None
+    if raw_vault is None:
+        target_vault = str(vault_id) if vault_id else None
+    else:
+        target_vault = str(raw_vault)
+
+    outcome_confidence = args.get('outcome_confidence', 1.0)
+    reason = args.get('reason')
+
+    try:
+        result = run_sync(
+            api.record_outcome(
+                unit_ids,
+                success,
+                target_vault,
+                outcome_confidence,
+                reason,
+                target_type=target_type,
+                kv_key=kv_key,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_record_outcome failed: %s', e)
+        return tool_error(f'record_outcome failed: {e}')
+
+    return json.dumps(result)
+
+
+HANDLERS['memex_record_outcome'] = handle_record_outcome
+ALL_SCHEMAS.append(RECORD_OUTCOME_SCHEMA)
 
 
 # --- F8 ---  (filled by WS-linter)
