@@ -746,11 +746,16 @@ class RetrievalConfig(BaseModel):
     )
     confidence_alpha: float = Field(
         default=0.0,
+        ge=0.0,
+        le=2.0,
         description='F47: Multiplicative contradiction-derived confidence boost strength for '
         'cross-encoder reranking. Default 0.0 (off) at ship time — flip to non-zero '
         '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
         'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
-        'unit a multiplicative lift before calibration justifies it.',
+        'unit a multiplicative lift before calibration justifies it. '
+        'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction (penalise '
+        'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
+        'low-confidence units.',
     )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,

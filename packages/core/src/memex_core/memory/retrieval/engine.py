@@ -1217,10 +1217,13 @@ class RetrievalEngine:
                 # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
                 # Schema is NOT NULL DEFAULT 1.0; the `is None` guard is defensive
                 # for stripped/stale model objects.
+                # Floor at 0.0 belt-and-suspenders with the config-level ge=0.0/le=2.0
+                # bounds — keeps boosted_score non-negative even if the constraint is
+                # later weakened.
                 confidence = getattr(unit, 'confidence', 1.0)
                 if confidence is None:
                     confidence = 1.0
-                confidence_boost = 1.0 + confidence_alpha * (confidence - 0.5)
+                confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
                 CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
 
                 boosted_scores.append(
