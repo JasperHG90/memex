@@ -61,17 +61,14 @@ _LOAD_UNIT_TEXT_SQL = text("""
 
 
 _LOAD_TOP_K_RELATED_SQL = text("""
-    WITH self AS (
-        SELECT embedding FROM memory_units WHERE id = :unit_id
-    )
     SELECT m.id, m.text
-    FROM memory_units m, self
+    FROM memory_units m
     WHERE m.vault_id = :vault_id
       AND m.id != :unit_id
       AND m.status = 'active'
       AND m.embedding IS NOT NULL
-      AND self.embedding IS NOT NULL
-    ORDER BY (m.embedding <=> self.embedding)
+      AND (SELECT embedding FROM memory_units WHERE id = :unit_id) IS NOT NULL
+    ORDER BY m.embedding <=> (SELECT embedding FROM memory_units WHERE id = :unit_id)
     LIMIT :k
 """)
 
