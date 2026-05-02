@@ -10,7 +10,7 @@ import pytest_asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import GLOBAL_VAULT_ID
@@ -146,24 +146,17 @@ class TestIntentRiskFilter:
                 'safety_id': safety_id,
             }
         finally:
-            # Explicit teardown — defends against state leak across tests
-            # even if the autouse `clean_tables` fixture is ever bypassed.
-            await session.execute(
-                text('DELETE FROM unit_entities WHERE unit_id = ANY(CAST(:ids AS uuid[]))'),
-                {'ids': [str(u) for u in unit_ids]},
-            )
-            await session.execute(
-                text('DELETE FROM memory_units WHERE id = ANY(CAST(:ids AS uuid[]))'),
-                {'ids': [str(u) for u in unit_ids]},
-            )
-            await session.execute(
-                text('DELETE FROM entities WHERE id = CAST(:id AS uuid)'),
-                {'id': str(entity_id)},
-            )
-            await session.execute(
-                text('DELETE FROM notes WHERE id = CAST(:id AS uuid)'),
-                {'id': str(note_id)},
-            )
+            # Explicit teardown — defends against state leak across tests even
+            # if the autouse ``clean_tables`` fixture is ever bypassed. Uses
+            # ORM ``delete()`` rather than raw ``text()`` because asyncpg can
+            # mis-serialise Python lists passed to ``text()`` array binds
+            # (round-7 review: the previous ``ANY(CAST(:ids AS uuid[]))``
+            # form raised ``syntax error at or near "{"`` at runtime; the
+            # ``TRUNCATE`` in ``clean_tables`` was masking the broken path).
+            await session.execute(delete(UnitEntity).where(UnitEntity.unit_id.in_(unit_ids)))
+            await session.execute(delete(MemoryUnit).where(MemoryUnit.id.in_(unit_ids)))
+            await session.execute(delete(Entity).where(Entity.id == entity_id))
+            await session.execute(delete(Note).where(Note.id == note_id))
             await session.commit()
 
     async def test_intent_filter_permanent(

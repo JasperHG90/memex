@@ -9,9 +9,11 @@ from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
 __all__ = [
     'RetrievalRequest',
     'VALID_STRATEGIES',
-    'VALID_INTENT_CLASSES',
-    'VALID_RISK_CLASSES',
 ]
+# ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` are imported above for use
+# in the ``model_validator`` below but deliberately NOT re-exported. The
+# canonical home is ``memex_common.schemas`` — re-exporting here would create
+# a second public import path and risk future drift (round-7 review).
 
 VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'mental_model'})
 

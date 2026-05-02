@@ -1574,17 +1574,13 @@ def handle_memory_search(
     vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     # Allowed sets are canonical in memex_common.schemas (derived from the
-    # IntentClass / RiskClass enums). Imported lazily to keep the module
-    # import surface lean for handler discovery. After the local string
-    # check we coerce to the enum so we satisfy RemoteMemexAPI.search's
-    # IntentClass | None / RiskClass | None signature without relying on
-    # implicit Pydantic coercion downstream.
-    from memex_common.schemas import (
-        IntentClass,
-        RiskClass,
-        VALID_INTENT_CLASSES,
-        VALID_RISK_CLASSES,
-    )
+    # IntentClass / RiskClass enums). ``IntentClass`` / ``RiskClass`` are
+    # already imported at module scope (used to derive the JSON-schema enum
+    # lists); only the ``VALID_*`` frozensets need a local import here.
+    # After the local string check we coerce to the enum so we satisfy
+    # ``RemoteMemexAPI.search``'s ``IntentClass | None`` / ``RiskClass | None``
+    # signature without relying on implicit Pydantic coercion downstream.
+    from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
 
     raw_intent = args.get('intent_class') or None
     if raw_intent is not None and raw_intent not in VALID_INTENT_CLASSES:
