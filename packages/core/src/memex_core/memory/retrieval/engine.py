@@ -64,6 +64,8 @@ logger = logging.getLogger('memex.core.memory.retrieval.engine')
 STABILITY_SECONDS_PER_DAY: float = 86400.0
 
 
+# SECURITY: all interpolated values in pre_filter_clause must be module-level constants
+# (e.g., STABILITY_SECONDS_PER_DAY), NEVER user input. SQL injection vector if violated.
 def _build_pre_filter_clause(
     *,
     apply_pre_filter: bool,
@@ -621,7 +623,7 @@ class RetrievalEngine:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import F33_EXPLORATION_INJECTED_TOTAL
 
-            should_inject = random.random() <= self.retrieval_config.exploration_epsilon
+            should_inject = random.random() < self.retrieval_config.exploration_epsilon
 
             if should_inject:
                 exploration_pool = hydrated_candidates
@@ -1177,6 +1179,8 @@ class RetrievalEngine:
             if pre_filter_clause is not None:
                 from sqlalchemy import text as _sa_text
 
+                # SECURITY: all interpolated values in pre_filter_clause must be module-level constants
+                # (e.g., STABILITY_SECONDS_PER_DAY), NEVER user input. SQL injection vector if violated.
                 stmt = stmt.where(_sa_text(f'NOT ({pre_filter_clause})'))
 
             t0 = time.monotonic()

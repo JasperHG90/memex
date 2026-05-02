@@ -149,8 +149,12 @@ MW_BOOST_OBSERVED = Histogram(
 # ---------------------------------------------------------------------------
 # F40 / F44 / F45 — pre-reranker filter observability
 # ---------------------------------------------------------------------------
-# All four metrics emit on every retrieval call (regardless of apply_pre_filter)
-# so observability comparisons (with/without filter) are always possible.
+# CROSS_ENCODER_INPUT_COUNT_HISTOGRAM and F33_EXPLORATION_INJECTED_TOTAL emit
+# on every retrieval call (regardless of apply_pre_filter) so observability
+# comparisons (with/without filter) are always possible.
+# HYDRATION_QUERY_DURATION_SECONDS and PRE_FILTER_CANDIDATES_PRUNED skip
+# empty-input retrievals (model-only results) — the hydration query itself is
+# skipped in that case, so neither histogram observes a value.
 
 HYDRATION_QUERY_DURATION_SECONDS = Histogram(
     'memex_hydration_query_duration_seconds',

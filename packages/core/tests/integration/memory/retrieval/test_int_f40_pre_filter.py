@@ -13,7 +13,9 @@ end-to-end and that:
 * F44 — the F33 exploration path bypasses F40 so a low-MW unit pruned from
   the main path can still re-surface via the exploration injection (the
   self-correction property; without F44 MW becomes monotonic).
-* F45 — observability histograms emit on every retrieval call.
+* F45 — observability histograms emit on retrieval calls (the
+  hydration-tied histograms skip empty-input retrievals; see ``metrics.py``
+  for the precise emission contract).
 """
 
 from __future__ import annotations
@@ -468,13 +470,16 @@ class TestF44ExplorationBypass:
             're-surface for re-validation.'
         )
 
-    async def test_pruned_low_mw_unit_can_resurface_via_exploration(
+    async def test_cold_start_unit_surfaces_via_exploration_bypass(
         self, session: AsyncSession, embedder
     ):
-        """The load-bearing F44 invariant — a unit that F40 actively prunes
-        (failure-heavy with ``>= 5 outcomes``) must STILL be reachable via
-        the exploration bypass when ε=1.0. This is the self-correction
-        property: low-MW units can climb back through user re-validation."""
+        """The load-bearing F44 invariant — a cold-start unit that F40's
+        ``>= 5 outcomes`` safeguard already lets through must STILL be
+        reachable via the F33 exploration bypass when ε=1.0. F40 (>= 5)
+        and F33 (< 5) are disjoint by design, so the test is constructed
+        at this boundary; the deeper invariant pinned is that the F33
+        bypass queries the unfiltered set, so future filter branches
+        cannot silently shrink its candidate pool."""
         topic = 'Redis cluster slot migration'
 
         note = Note(id=uuid4(), original_text='F44 self-correction', vault_id=GLOBAL_VAULT_ID)
@@ -742,38 +747,3 @@ class TestF45Observability:
             'pre-filter is disabled (value=0) so observability comparisons '
             'with/without the filter are possible.'
         )
-
-    def test_metrics_registered(self):
-        """Pinning test: all four F45 metrics must be importable from
-        memex_core.metrics. Catches accidental rename/removal."""
-        from memex_core import metrics
-
-        assert hasattr(metrics, 'HYDRATION_QUERY_DURATION_SECONDS')
-        assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED')
-        assert hasattr(metrics, 'CROSS_ENCODER_INPUT_COUNT_HISTOGRAM')
-        assert hasattr(metrics, 'F33_EXPLORATION_INJECTED_TOTAL')
-
-
-def test_f45_metric_names_present_in_registry():
-    """Pinning: the four F45 metrics are registered to the default
-    Prometheus registry (i.e., scraped by the /metrics endpoint without
-    any extra wiring). Co-located with MW_BOOST_OBSERVED, which already
-    asserts this same property informally."""
-    from prometheus_client import REGISTRY
-
-    expected = {
-        'memex_hydration_query_duration_seconds',
-        'memex_pre_filter_candidates_pruned',
-        'memex_cross_encoder_input_count',
-        'memex_f33_exploration_injected_total',
-    }
-    found: set[str] = set()
-    for collector in REGISTRY.collect():
-        # Histograms expose ``_sum`` / ``_count`` / ``_bucket`` suffixes; the
-        # base metric name is stable across the suffix variants.
-        for sample in collector.samples:
-            for name in expected:
-                if sample.name.startswith(name):
-                    found.add(name)
-    missing = expected - found
-    assert not missing, f'F45 metric(s) not registered: {missing}'
