@@ -130,6 +130,7 @@ class RevisitationService(BaseService):
                 unit.revisit_due_at = next_due
                 unit.revisit_stability = stability
                 unit.revisit_difficulty = difficulty
+                unit.revisit_last_reviewed_at = now
                 session.add(unit)
                 scheduled += 1
             await session.commit()
@@ -228,10 +229,15 @@ class RevisitationService(BaseService):
             if unit.revisit_stability is None or unit.revisit_difficulty is None:
                 prior_state = None
             else:
+                # Prefer the dedicated last-reviewed timestamp; fall back to
+                # revisit_due_at for legacy rows from migration 026 that
+                # predate the 030 column. New reviews always populate
+                # revisit_last_reviewed_at, so the fallback is one-shot.
+                last_reviewed = unit.revisit_last_reviewed_at or unit.revisit_due_at
                 prior_state = UnitState(
                     stability=unit.revisit_stability,
                     difficulty=unit.revisit_difficulty,
-                    last_review=unit.revisit_due_at,
+                    last_review=last_reviewed,
                 )
 
             next_due, interval_days, new_stab, new_diff = schedule(
@@ -243,6 +249,7 @@ class RevisitationService(BaseService):
             unit.revisit_due_at = next_due
             unit.revisit_stability = new_stab
             unit.revisit_difficulty = new_diff
+            unit.revisit_last_reviewed_at = review_at
 
             if quality == Quality.AGAIN:
                 unit.revisit_review_count = unit.revisit_review_count + 1

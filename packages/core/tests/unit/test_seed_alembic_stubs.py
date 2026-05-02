@@ -30,7 +30,10 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # (real consolidation_ticks table + per-tick summary rows).
     # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
     # (real procedure_outcomes table + vault-scoped MW counters).
-    ('029_lint_llm_quota', '028_procedure_outcomes', 'F10'),
+    # 029_lint_llm_quota (F10) is no longer a stub — see PR #35
+    # (real lint_llm_quota table + rolling-24h cost cap).
+    # 030_revisit_last_reviewed_at (F20) ships real in PR #101 with the
+    # FSRS-5 last_review fix; never staged as a stub.
 ]
 
 
@@ -49,18 +52,19 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['029_lint_llm_quota'], f'Expected single head 029, got {heads}'
+    assert heads == ['030_revisit_last_reviewed_at'], f'Expected single head 030, got {heads}'
 
     walk = list(sd.walk_revisions())
-    top5 = [(r.revision, r.down_revision) for r in walk[:5]]
-    expected_top5 = [
+    top6 = [(r.revision, r.down_revision) for r in walk[:6]]
+    expected_top6 = [
+        ('030_revisit_last_reviewed_at', '029_lint_llm_quota'),
         ('029_lint_llm_quota', '028_procedure_outcomes'),
         ('028_procedure_outcomes', '027_consolidation_ticks'),
         ('027_consolidation_ticks', '026_revisit_columns'),
         ('026_revisit_columns', '025_maintenance_proposals'),
         ('025_maintenance_proposals', '024_intent_risk_classifier'),
     ]
-    assert top5 == expected_top5, f'Tier A chain mismatch: got {top5}'
+    assert top6 == expected_top6, f'Tier A chain mismatch: got {top6}'
 
 
 @pytest.mark.parametrize('rev,down,fid', _TIER_A_STUBS)

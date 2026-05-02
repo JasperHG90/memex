@@ -626,6 +626,15 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         ),
     )
 
+    revisit_last_reviewed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'F20: wall-clock timestamp of the most recent review. Distinct from '
+            'revisit_due_at (next-due); FSRS-5 elapsed-days uses this column.'
+        ),
+    )
+
     unit_metadata: dict[str, Any] = Field(
         default={},
         sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
