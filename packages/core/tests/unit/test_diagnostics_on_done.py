@@ -29,11 +29,22 @@ import pytest
 
 
 def _make_service():
-    """Construct a ``DiagnosticsService`` without invoking the real ``__init__``.
+    """Construct a DiagnosticsService bypassing __init__ for unit-test isolation.
 
     Bypasses the dependency wiring (metastore/filestore/config) — only the
     registry state needed by ``get_or_compute_manifold`` and the done-callback
     is populated.
+
+    Tests using this helper exercise code paths that read ONLY:
+      - service._pending (dict[str, asyncio.Task])
+      - service._registry_lock (asyncio.Lock)
+
+    If production ``DiagnosticsService.__init__`` grows new attributes that are
+    read in the code paths under test (``get_or_compute_manifold``, ``_on_done``,
+    ``_handle_diagnostics_task_completion``, ``_clear_registry``), this helper
+    must set them explicitly OR the tests must be migrated to a real fixture.
+    Otherwise an ``AttributeError`` will surface in tests when production code
+    starts reading the new attribute (e.g. ``self._cache``).
     """
     from memex_core.services.diagnostics import DiagnosticsService
 

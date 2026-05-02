@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 from uuid import UUID
 
 from memex_core.config import MemexConfig
@@ -95,7 +96,8 @@ class DiagnosticsService(BaseService):
             # creation and firing. See round-7/round-12 review notes.
             # The default-arg pattern means the callback is callable as
             # Callable[[Task], None] at runtime, but strict type checkers see the
-            # 3-param signature; the type-ignore on add_done_callback is required.
+            # 3-param signature; the cast at add_done_callback below pins the
+            # runtime contract so signature drift surfaces as a type error.
             def _on_done(
                 t: asyncio.Task[dict[str, Any]],
                 _service: 'DiagnosticsService' = self,
@@ -103,7 +105,10 @@ class DiagnosticsService(BaseService):
             ) -> None:
                 _handle_diagnostics_task_completion(_service, _key, t)
 
-            task.add_done_callback(_on_done)  # type: ignore[arg-type]
+            # Cast (not type:ignore) so that if `_on_done`'s real signature drifts from
+            # the early-binding default-arg form, mypy will fail at the cast — making
+            # the contract explicit instead of silently swallowing a wrong-arity call.
+            task.add_done_callback(cast(Callable[[asyncio.Task[dict[str, Any]]], None], _on_done))
             return 'computing', {'task_id': _task_id_for(task)}
 
     async def get_manifold_status(
