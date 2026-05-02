@@ -65,9 +65,10 @@ class UnitsService(BaseService):
         existed and were not already deprioritized — the predicate
         ``is_deprioritized = false`` makes the call idempotent).
 
-        Audit log entries are emitted per-unit so the per-row reason and
-        cascade semantics match the single-row path; batching the audit
-        emission is tracked as a follow-up.
+        Audit emission is also batched into a single ``add_all`` INSERT so
+        the per-row INSERT cost no longer dominates large consolidation
+        batches. The per-row reason / cascade semantics still match the
+        single-row path (one ``AuditLog`` row per affected unit).
         """
         from sqlalchemy import update as sa_update
 
@@ -89,16 +90,20 @@ class UnitsService(BaseService):
             await session.commit()
 
         if self._audit_service is not None and updated_ids:
-            for uid in updated_ids:
-                self._audit_service.log(
-                    action='memory_deprioritize',
-                    actor=actor if actor is not None else get_actor(),
-                    resource_type='memory_unit',
-                    resource_id=str(uid),
-                    session_id=get_session_id(),
-                    details={'reason': reason},
-                    background_tasks=background_tasks,
-                )
+            resolved_actor = actor if actor is not None else get_actor()
+            session_id = get_session_id()
+            entries = [
+                {
+                    'action': 'memory_deprioritize',
+                    'actor': resolved_actor,
+                    'resource_type': 'memory_unit',
+                    'resource_id': str(uid),
+                    'session_id': session_id,
+                    'details': {'reason': reason},
+                }
+                for uid in updated_ids
+            ]
+            self._audit_service.log_batch(entries, background_tasks=background_tasks)
         return updated_ids
 
     async def restore_unit(

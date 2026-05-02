@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from memex_common.config import Permission
 from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
@@ -165,13 +165,51 @@ class ConsolidateRequest(BaseModel):
     )
 
 
+class ReconsolidateResponse(BaseModel):
+    """F9: typed response envelope for /memory/reconsolidate.
+
+    Mirrors `LocksService.reconsolidate_entity` return shape (RFC-005 / RFC-008).
+    """
+
+    entity_id: UUID = Field(..., description='Entity UUID that was reconsolidated.')
+    vault_id: UUID = Field(..., description='Vault UUID the entity was scoped to.')
+    units_examined: int = Field(
+        ..., description='Number of memory units linked to the entity in this vault.'
+    )
+    contradictions_run: int = Field(
+        ..., description='Number of unit_ids passed to ContradictionEngine.detect_contradictions.'
+    )
+    mental_model_id: UUID | None = Field(
+        default=None,
+        description='ID of the updated MentalModel, if reflection produced one.',
+    )
+    observations_added: int = Field(
+        default=0, description='Number of new observations added to the mental model.'
+    )
+    error: str | None = Field(
+        default=None,
+        description=(
+            'Optional error string for non-fatal partial outcomes. Reserved for '
+            'future partial-outcome reporting from the service layer (RFC-008 '
+            'v6.9 plan): when a reconsolidation completes with degraded results '
+            '(e.g., reflection succeeded but contradiction detection skipped a '
+            'subset of units), the service may surface a non-fatal explanation '
+            'here without raising. Currently always ``None`` — populated when '
+            'partial-outcome reporting lands.'
+        ),
+    )
+
+
 @router.post(
     '/memory/reconsolidate',
+    response_model=ReconsolidateResponse,
     dependencies=[Depends(require_write)],
     responses={
-        409: {
+        503: {
             'description': (
-                'Concurrent reconsolidation in progress on this entity (advisory lock contention).'
+                'Concurrent reconsolidation in progress on this entity (advisory lock '
+                'contention). Includes a ``Retry-After`` header. Mirrors the '
+                '``/memory/consolidate`` lock-timeout contract.'
             )
         }
     },
@@ -180,24 +218,60 @@ async def reconsolidate_entity(
     request: Annotated[ReconsolidateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
-) -> dict[str, Any]:
+) -> ReconsolidateResponse:
     """F9: re-evaluate memories for an entity under a per-entity advisory lock.
 
     Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
     `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
+
+    Translates ``EntityLockTimeoutError`` into a 503 with a ``Retry-After``
+    header derived from ``request.timeout_seconds`` (parity with
+    ``consolidate_vault``). The internal exception text is logged
+    server-side and never surfaced to the client.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        return await api.reconsolidate_entity(
+        result = await api.reconsolidate_entity(
             request.entity_id,
             request.vault_id,
             timeout_seconds=request.timeout_seconds,
         )
     except EntityLockTimeoutError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        logger.warning(
+            'Reconsolidate entity lock timeout (entity_id=%s vault_id=%s): %s',
+            request.entity_id,
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
+        # Hermes round-4 MED: derive Retry-After from the request's configured
+        # timeout (the canonical value the caller asked us to wait). Falls
+        # back to '5' only if the request somehow lacks a positive timeout.
+        retry_after = max(1, int(request.timeout_seconds)) if request.timeout_seconds else 5
+        raise HTTPException(
+            status_code=503,
+            detail='Entity lock timeout — please retry shortly',
+            headers={'Retry-After': str(retry_after)},
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reconsolidate failed')
+
+    # Response construction is a code-only operation: a ValidationError here
+    # is schema drift between LocksService.reconsolidate_entity's return shape
+    # and ReconsolidateResponse, NOT a client-visible business error. Surface
+    # it as a logged 500 ("schema mismatch") instead of letting the broad
+    # service-error handler swallow it as a generic Internal Server Error.
+    try:
+        return ReconsolidateResponse(**result)
+    except ValidationError as exc:
+        logger.critical(
+            'Reconsolidate response schema drift: service returned dict that does '
+            'not match ReconsolidateResponse: %s',
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail='Internal response schema mismatch')
 
 
 @router.post(
@@ -235,6 +309,29 @@ async def consolidate_vault(
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
+    except EntityLockTimeoutError as exc:
+        logger.warning(
+            'Consolidate entity lock timeout (vault_id=%s): %s',
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
+        # Hermes round-4 MED: derive Retry-After from the exception's
+        # carried timeout (set by acquire_entity_lock). ConsolidateRequest
+        # has no client-supplied timeout field — RFC-008 says consolidate
+        # does NOT acquire a per-entity lock — so the only timeout context
+        # available is whatever the underlying lock context used. Falls
+        # back to '5' if absent.
+        retry_after = (
+            max(1, int(exc.timeout_seconds))
+            if exc.timeout_seconds is not None and exc.timeout_seconds > 0
+            else 5
+        )
+        raise HTTPException(
+            status_code=503,
+            detail='Entity lock timeout — please retry shortly',
+            headers={'Retry-After': str(retry_after)},
+        )
     except RateLimitExceededError as exc:
         retry_after = max(0, int(exc.retry_after_seconds + 0.999))
         return JSONResponse(
