@@ -643,6 +643,15 @@ class MentalModelStrategy:
         # those facets. If a write-time risk/intent filter must constrain
         # mental-model retrieval in the future, the join would need to fan out
         # through the contributing MemoryUnits — out of scope for issue #92.
+        intent_class = kwargs.get('intent_class')
+        risk_class = kwargs.get('risk_class')
+        if intent_class is not None or risk_class is not None:
+            logger.debug(
+                'Intent/risk filters silently skipped for mental_model strategy '
+                '(intent_class=%s, risk_class=%s) — out-of-scope per issue #92',
+                intent_class,
+                risk_class,
+            )
 
         if query_embedding is None:
             # Fallback to name match if no embedding
