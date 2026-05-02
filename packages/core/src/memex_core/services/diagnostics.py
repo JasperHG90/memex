@@ -131,6 +131,12 @@ class DiagnosticsService(BaseService):
         return await compute_manifold(self.metastore, self.filestore, vault_id)
 
     def _clear_registry(self, key: str) -> None:
+        # Plain ``def`` — intentionally NOT ``async``. Called from
+        # ``_handle_diagnostics_task_completion`` which is wired as an
+        # asyncio.Task done-callback (sync context). An ``async def`` here
+        # would silently return an unawaited coroutine. ``dict.pop`` is atomic
+        # in CPython under the GIL; the registry needs no async coordination
+        # for this single-statement mutation.
         self._pending.pop(key, None)
 
     async def shutdown(self) -> None:

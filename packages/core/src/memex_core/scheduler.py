@@ -109,6 +109,9 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
                     # Programming errors (AttributeError/TypeError/NameError) must not
                     # silently poison the per-vault loop — log with full traceback and
                     # continue so other vaults still get refreshed this tick.
+                    # ``SystemExit`` / ``KeyboardInterrupt`` / ``asyncio.CancelledError``
+                    # are ``BaseException`` subclasses (not ``Exception``) and correctly
+                    # escape this handler so shutdown / cancellation still propagate.
                     logger.exception(
                         'Scheduler: Unexpected error refreshing manifold for vault %s',
                         vault.name,

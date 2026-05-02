@@ -168,3 +168,81 @@ def test_on_done_swallows_invalid_state_error(caplog):
     assert not any(
         'Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records
     ), 'InvalidStateError path must not emit a failure log'
+
+
+def test_on_done_clear_registry_failure_does_not_swallow_task_exception(caplog):
+    """Round-10 regression: a failure inside ``_clear_registry`` MUST NOT
+    bypass the task-exception logging branch.
+
+    The done-callback wraps ``service._clear_registry(key)`` in try/except
+    specifically to defend against this swallow. If a future refactor drops
+    the wrapper (or replaces it with bare ``service._clear_registry(key)``),
+    the registry-clear exception would propagate out of the callback before
+    we ever reach ``task.exception()``, and the task's real failure would
+    never hit the logs. This test pins the defense by:
+
+    * mocking ``_clear_registry`` to raise ``RuntimeError('clear failed')``
+    * passing a task whose ``exception()`` returns the real task error
+    * asserting BOTH log records appear (registry-clear failure AND
+      original task exception, the latter with ``exc_info`` populated).
+    """
+    from memex_core.services import diagnostics as diagnostics_module
+    from memex_core.services.diagnostics import _handle_diagnostics_task_completion
+
+    service = _make_service()
+    vault_id = uuid4()
+    key = str(vault_id)
+
+    real_task_exc = RuntimeError('umap exploded')
+    fake_task = MagicMock()
+    fake_task.cancelled = MagicMock(return_value=False)
+    # Set ``__traceback__`` so the explicit exc_info tuple in the callback has
+    # a non-None traceback slot (matches what asyncio normally provides).
+    try:
+        raise real_task_exc
+    except RuntimeError as e:
+        captured = e
+    fake_task.exception = MagicMock(return_value=captured)
+
+    # Patch the bound method to raise; ``_handle_diagnostics_task_completion``
+    # calls ``service._clear_registry(key)`` so we replace the instance attribute.
+    def _boom(_key: str) -> None:
+        raise RuntimeError('clear failed')
+
+    service._clear_registry = _boom  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR, logger=diagnostics_module.logger.name):
+        _handle_diagnostics_task_completion(service, key, fake_task)
+
+    # (a) registry-clear failure must be logged with exc_info (logger.exception).
+    clear_records = [
+        rec for rec in caplog.records if 'Failed to clear diagnostics registry' in rec.getMessage()
+    ]
+    assert clear_records, 'registry-clear failure must produce a log record'
+    assert clear_records[0].exc_info is not None, (
+        'registry-clear failure must carry exc_info from logger.exception'
+    )
+    assert 'clear failed' in str(clear_records[0].exc_info[1])
+
+    # (b) original task exception must STILL be logged with exc_info — the
+    # whole point of the try/except wrapper around ``_clear_registry``.
+    task_records = [
+        rec for rec in caplog.records if 'Diagnostics manifold compute failed' in rec.getMessage()
+    ]
+    assert task_records, (
+        'task exception MUST be logged even when _clear_registry failed; '
+        'the try/except around _clear_registry exists precisely to prevent '
+        'this swallow'
+    )
+    assert task_records[0].exc_info is not None
+    assert task_records[0].exc_info[1] is captured
+    assert 'umap exploded' in str(task_records[0].exc_info[1])
+
+    # Two distinct records — one per failure surface.
+    assert len(clear_records) == 1
+    assert len(task_records) == 1
+    assert clear_records[0] is not task_records[0]
+
+    # ``task.exception()`` MUST have been consulted — proves we reached the
+    # post-clear branch even though clear raised.
+    fake_task.exception.assert_called_once()

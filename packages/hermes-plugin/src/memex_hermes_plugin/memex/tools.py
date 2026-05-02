@@ -3449,13 +3449,26 @@ def handle_memory_summarize_node(
     else:
         try:
             target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
-        except (ValueError, KeyError):
-            # Routine "not found" / typo — the %r-formatted identifier in the
-            # message is sufficient for diagnosis. Skip exc_info to avoid
-            # noisy tracebacks for expected control-flow outcomes.
+        except ValueError as e:
+            # Malformed identifier — string failed to parse as a UUID or vault
+            # name (typo, bad format). Distinct log line from the KeyError path
+            # so operators can grep for "malformed" vs "not found" in
+            # log aggregators. User-facing tool_error stays generic for UX.
             logger.warning(
-                'memex_memory_summarize_node: vault not found for identifier %r',
+                'memex_memory_summarize_node: vault identifier malformed (input=%r): %s',
                 raw_vault,
+                e,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except KeyError as e:
+            # Identifier parsed cleanly but no vault with that id/name exists.
+            # Distinct log line from the ValueError path; same generic
+            # user-facing tool_error message for UX consistency.
+            logger.warning(
+                'memex_memory_summarize_node: vault identifier parsed but vault '
+                'not found (input=%r): %s',
+                raw_vault,
+                e,
             )
             return tool_error('Vault not found or invalid identifier')
         except TimeoutError:
