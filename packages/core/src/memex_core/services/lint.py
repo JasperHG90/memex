@@ -594,7 +594,6 @@ def _json_dumps(value: Any) -> str:
     pgvector's asyncpg adapter emits JSONB rows as Python dicts; we round-trip
     through ``json.dumps`` so the INSERT can ``CAST(... AS jsonb)`` cleanly.
     """
-    import json
     from datetime import date, datetime
     from uuid import UUID as _UUID
 
