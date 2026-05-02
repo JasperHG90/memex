@@ -112,6 +112,14 @@ _UPSERT_HOUR_BUCKET_SQL = text("""
 """)
 
 
+# NOTE: The ON CONFLICT clauses below rely on the partial unique index
+# `uq_maintenance_proposals_pending` on
+# `maintenance_proposals (rule_name, target_type, target_id, vault_id)
+#  WHERE status = 'pending'`,
+# created in alembic migration 025_maintenance_proposals.py. The predicate
+# in `WHERE status = 'pending'` here MUST match the index predicate exactly
+# for Postgres to use it as the conflict arbiter; if migration 025 is ever
+# changed, these clauses must be updated in lockstep.
 _INSERT_LLM_FINDING_SQL = text("""
     INSERT INTO maintenance_proposals (
         vault_id, lint_type, target_type, target_id,
@@ -127,6 +135,8 @@ _INSERT_LLM_FINDING_SQL = text("""
 """)
 
 
+# Same partial-unique-index dependency as _INSERT_LLM_FINDING_SQL above —
+# see note there. Index lives in migration 025_maintenance_proposals.py.
 _INSERT_DEFERRED_SQL = text("""
     INSERT INTO maintenance_proposals (
         vault_id, lint_type, target_type, target_id,
