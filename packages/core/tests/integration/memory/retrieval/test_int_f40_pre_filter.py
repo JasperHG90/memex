@@ -205,14 +205,13 @@ class TestF40MwPreFilter:
                 f'{key!r}; missing from {result_ids}.'
             )
 
-    async def test_pre_filter_default_is_on(self, session: AsyncSession, embedder, seeded_bands):
+    async def test_pre_filter_default_is_on(
+        self, session: AsyncSession, engine_no_rerank, seeded_bands
+    ):
         """Default request constructor (no kwargs) must equal
         ``apply_pre_filter=True`` — preserves backward-compatible
         existing-caller semantics with the latency-reclaim default."""
-        engine = RetrievalEngine(
-            embedder=embedder,
-            retrieval_config=RetrievalConfig(exploration_epsilon=0.0, token_budget=0),
-        )
+        engine = engine_no_rerank
         request = RetrievalRequest(
             query='Postgres connection pooling',
             limit=20,

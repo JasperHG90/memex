@@ -1170,8 +1170,12 @@ class RetrievalEngine:
             PRE_FILTER_CANDIDATES_PRUNED,
         )
 
-        unit_ids = [row.id for row in ranked_items if row.type == 'unit']
-        model_ids = [row.id for row in ranked_items if row.type == 'model']
+        # Dedupe IDs (RRF fusion can produce duplicates across strategies);
+        # SQL ``IN`` already deduplicates the fetched set, so an undeduped
+        # ``unit_ids`` would inflate the ``pruned`` count below. Use
+        # ``dict.fromkeys`` to preserve insertion order.
+        unit_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'unit'))
+        model_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'model'))
 
         fetched_units = {}
         fetched_models = {}
@@ -1387,6 +1391,11 @@ class RetrievalEngine:
             return [item[0] for item in scored_results]
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
+            # F45 — close the observability gap: the early-return path
+            # observes 0, so the exception/fallback path must too. Without
+            # this, a reranker exception silently skips the histogram and
+            # the metric over-represents successful rerank counts.
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
     async def _compute_pairwise_cosine(

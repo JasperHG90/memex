@@ -787,7 +787,12 @@ class RetrievalConfig(BaseModel):
     )
     exploration_max_injections: int = Field(
         default=2,
-        description='Maximum number of exploration units to inject per retrieval call.',
+        description='Maximum number of exploration units to inject per retrieval call. '
+        'Note: when the outer ε-greedy roll succeeds (governed by '
+        '``exploration_epsilon``), ALL eligible units up to this cap are injected — '
+        'this is not per-unit independent sampling. Intentional for F44 self-correction: '
+        'once the engine commits to exploring, it explores fully rather than re-rolling '
+        'per candidate.',
     )
     exploration_low_mw_threshold: int = Field(
         default=5,
