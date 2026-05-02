@@ -316,6 +316,14 @@ class UnitsService(BaseService):
                 for lnk in fresh_links:
                     pred_unit = pred_units.get(lnk.to_unit_id)
                     if pred_unit is None:
+                        logger.warning(
+                            'cross-vault link in vault %s: link.from=%s link.to=%s '
+                            '— predecessor unit not in vault',
+                            scoped_vault_id,
+                            lnk.from_unit_id,
+                            lnk.to_unit_id,
+                        )
+                        node.truncated = True
                         continue
                     child = await _walk(
                         pred_unit,

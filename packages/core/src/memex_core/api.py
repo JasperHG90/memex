@@ -28,6 +28,7 @@ from memex_common.schemas import (
     RelatedNoteDTO,
     RiskClass,
     SurveyResponse,
+    UnitHistoryNodeDTO,
 )
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.models import NoteMetadata
@@ -1136,7 +1137,7 @@ class MemexAPI:
         *,
         max_depth: int = 10,
         vault_id: UUID | None = None,
-    ) -> Any:
+    ) -> UnitHistoryNodeDTO:
         """F49: walk the contradiction graph backward from ``unit_id``.
 
         Returns a ``UnitHistoryNodeDTO`` tree rooted at the queried unit
