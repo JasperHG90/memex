@@ -93,6 +93,9 @@ class DiagnosticsService(BaseService):
             # definition time (early binding). A bare closure would late-bind, which
             # is fragile if a future refactor mutates self/key between callback
             # creation and firing. See round-7/round-12 review notes.
+            # The default-arg pattern means the callback is callable as
+            # Callable[[Task], None] at runtime, but strict type checkers see the
+            # 3-param signature; the type-ignore on add_done_callback is required.
             def _on_done(
                 t: asyncio.Task[dict[str, Any]],
                 _service: 'DiagnosticsService' = self,
@@ -100,7 +103,7 @@ class DiagnosticsService(BaseService):
             ) -> None:
                 _handle_diagnostics_task_completion(_service, _key, t)
 
-            task.add_done_callback(_on_done)
+            task.add_done_callback(_on_done)  # type: ignore[arg-type]
             return 'computing', {'task_id': _task_id_for(task)}
 
     async def get_manifold_status(
