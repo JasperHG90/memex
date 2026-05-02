@@ -315,17 +315,25 @@ class LintService(BaseService):
         )
 
     async def count_pending(self, vault_id: UUID | None = None) -> int:
-        stmt = text(
-            'SELECT count(*) FROM maintenance_proposals '
-            "WHERE status = 'pending' AND ("
-            '    (CAST(:v AS uuid) IS NULL AND vault_id IS NULL) '
-            ' OR vault_id = CAST(:v AS uuid)'
-            ')'
-        )
+        """Count pending findings.
+
+        - ``vault_id is None`` → global scope (only ``vault_id IS NULL`` rows).
+        - ``vault_id is not None`` → that vault only.
+
+        Total-across-everything is intentionally not exposed here; the server
+        handles ``scope='all'`` with its own SQL.
+        """
         if vault_id is None:
-            stmt = text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
+            stmt = text(
+                'SELECT count(*) FROM maintenance_proposals '
+                "WHERE status = 'pending' AND vault_id IS NULL"
+            )
             params: dict[str, Any] = {}
         else:
+            stmt = text(
+                'SELECT count(*) FROM maintenance_proposals '
+                "WHERE status = 'pending' AND vault_id = :v"
+            )
             params = {'v': str(vault_id)}
 
         async with self.metastore.session() as session:

@@ -276,3 +276,41 @@ async def test_run_rules_is_read_only_on_inspected_tables(
     assert not write_violations, (
         'LintService.run_rules wrote to a non-ledger table:\n  ' + '\n  '.join(write_violations)
     )
+
+
+@pytest.mark.asyncio
+async def test_count_pending_global_excludes_vault_scoped_rows(session: AsyncSession, api) -> None:
+    """``count_pending(None)`` returns ONLY ``vault_id IS NULL`` pending rows.
+
+    Regression: previously, the ``vault_id is None`` branch counted EVERY
+    pending row (global + per-vault), which broke ``scope='global'`` on
+    ``GET /api/v1/lint/status``.
+    """
+    vault_id, _ = await _seed_all_rules_fire(session)
+
+    # Run the rules so we have some vault-scoped pending rows.
+    summary = await api.lint.run_rules(vault_id)
+    assert summary.total_findings == 4
+
+    # Insert one global (vault_id IS NULL) pending finding directly.
+    await session.execute(
+        text(
+            'INSERT INTO maintenance_proposals '
+            '(vault_id, lint_type, target_type, target_id, rule_name, '
+            ' evidence, suggested_action, status, source) '
+            "VALUES (NULL, 'structural', 'memory_unit', :tid, 'global_test_rule', "
+            "       CAST('{}' AS jsonb), 'noop', 'pending', 'rule')"
+        ),
+        {'tid': str(uuid4())},
+    )
+    await session.commit()
+
+    # Global count should be exactly 1 (only the NULL-vault row).
+    global_count = await api.lint.count_pending(None)
+    assert global_count == 1, (
+        f'count_pending(None) returned {global_count}; global scope must exclude vault-scoped rows'
+    )
+
+    # Vault count should be exactly 4 (the seeded rules; the global row excluded).
+    vault_count = await api.lint.count_pending(vault_id)
+    assert vault_count == 4
