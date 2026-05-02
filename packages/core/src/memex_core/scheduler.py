@@ -103,7 +103,7 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
                     logger.warning(
                         f'Scheduler: Manifold compute failed for vault {vault.name}: {e}'
                     )
-        except (OSError, RuntimeError, ValueError) as e:
+        except Exception as e:
             logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
 
 
