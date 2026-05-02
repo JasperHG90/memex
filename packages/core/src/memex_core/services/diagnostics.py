@@ -135,8 +135,10 @@ class DiagnosticsService(BaseService):
         # ``_handle_diagnostics_task_completion`` which is wired as an
         # asyncio.Task done-callback (sync context). An ``async def`` here
         # would silently return an unawaited coroutine. ``dict.pop`` is atomic
-        # in CPython under the GIL; the registry needs no async coordination
-        # for this single-statement mutation.
+        # in CPython's GIL-enabled build (default through 3.13); the registry
+        # needs no async coordination for this single-statement mutation.
+        # If/when the project adopts Python 3.13t (free-threaded, no GIL),
+        # revisit: registry mutation may need explicit locking.
         self._pending.pop(key, None)
 
     async def shutdown(self) -> None:

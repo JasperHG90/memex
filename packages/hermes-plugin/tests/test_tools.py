@@ -3625,8 +3625,13 @@ def test_summarize_node_none_target_vault_returns_internal_error(config, vault_i
     clean ``tool_error`` rather than letting ``None`` flow into
     ``api.summarize_node`` and produce a confusing call-site ``AttributeError``.
     The single ``not isinstance(target_vault, UUID)`` guard catches this because
-    ``isinstance(None, UUID)`` is ``False`` and ``type(None).__name__`` is
-    ``'NoneType'``.
+    ``isinstance(None, UUID)`` is ``False``.
+
+    Round-11: the user-facing message is intentionally generic (matches the
+    obfuscation policy of sibling ValueError/KeyError/TimeoutError/Exception
+    paths). The type name (``'NoneType'``) is logged for operators, not
+    returned to the caller — so the assertion checks for the generic string
+    only.
     """
     api = Mock()
     api.resolve_vault_identifier = AsyncMock(return_value=None)
@@ -3643,6 +3648,8 @@ def test_summarize_node_none_target_vault_returns_internal_error(config, vault_i
     data = json.loads(out)
     assert 'error' in data
     assert 'Internal error' in data['error']
-    assert 'NoneType' in data['error']
-    assert 'expected UUID' in data['error']
+    assert 'unexpected result' in data['error']
+    # Type-name detail is now logged, NOT user-facing. Confirm we don't leak
+    # 'NoneType' (information disclosure) in the response.
+    assert 'NoneType' not in data['error']
     api.summarize_node.assert_not_called()

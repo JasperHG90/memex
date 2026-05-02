@@ -3498,16 +3498,19 @@ def handle_memory_summarize_node(
     # protocol-level return is ``UUID | None``. ``None`` is not a valid downstream
     # value for this handler, and ``isinstance(None, UUID)`` is ``False`` — so a
     # single ``not isinstance`` check catches both ``None`` and any other unexpected
-    # type and yields a clear ``'NoneType'`` diagnostic. Returning ``tool_error``
-    # matches every other error path in this handler and keeps the diagnostic
-    # intact instead of letting ``None`` flow into a downstream ``AttributeError``.
-    # A regular ``if``/``return`` (not ``assert``) ensures the check survives
-    # ``python -O``.
+    # type. Keep the diagnostic detail in the operator log; return a generic
+    # user-facing message that matches the obfuscation policy of the surrounding
+    # ValueError / KeyError / TimeoutError / generic-Exception paths in this
+    # handler instead of leaking the type name to the caller. A regular
+    # ``if``/``return`` (not ``assert``) ensures the check survives ``python -O``.
     if not isinstance(target_vault, UUID):
-        return tool_error(
-            f'Internal error: vault resolution returned unexpected type '
-            f'{type(target_vault).__name__} (expected UUID)'
+        logger.error(
+            'memex_memory_summarize_node: vault resolution returned unexpected '
+            'type %s (expected UUID, raw_input=%r)',
+            type(target_vault).__name__,
+            raw_vault,
         )
+        return tool_error('Internal error: vault resolution returned unexpected result')
 
     try:
         result = run_sync(
