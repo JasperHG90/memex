@@ -99,7 +99,9 @@ class DiagnosticsService(BaseService):
                     return
                 if exc is not None:
                     logger.exception(
-                        'Diagnostics manifold compute failed for key %s', k, exc_info=exc
+                        'Diagnostics manifold compute failed for key %s',
+                        k,
+                        exc_info=(type(exc), exc, exc.__traceback__),
                     )
 
             task.add_done_callback(_on_done)
