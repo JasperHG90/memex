@@ -383,9 +383,13 @@ class KVService(BaseService):
         )
         params: dict[str, Any] = {'vid': vault_uuid, 'lim': limit}
         if context:
-            # context-tag is the segment after the last colon
-            sql += "AND split_part(po.kv_key, ':', 3) ILIKE :ctx "
-            params['ctx'] = f'%{context}%'
+            # context-tag is the segment after the last colon. Escape ILIKE
+            # metacharacters in the user-supplied value so '%' / '_' are
+            # treated literally; the ESCAPE clause uses '\' as the escape
+            # character (doubled in the Python string for SQL literal '\\').
+            escaped_context = context.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            sql += "AND split_part(po.kv_key, ':', 3) ILIKE :ctx ESCAPE '\\' "
+            params['ctx'] = f'%{escaped_context}%'
         sql += 'ORDER BY mw_score DESC, po.last_outcome_at DESC NULLS LAST, po.kv_key LIMIT :lim'
 
         async with self.metastore.session() as session:
