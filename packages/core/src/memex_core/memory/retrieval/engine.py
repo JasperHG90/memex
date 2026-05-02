@@ -52,9 +52,25 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.formatting import format_for_reranking
-from memex_core.metrics import CROSS_ENCODER_INPUT_COUNT_HISTOGRAM
+from memex_core.metrics import (
+    CONFIDENCE_BOOST_OBSERVED,
+    CONFIDENCE_SCORE_DISTRIBUTION,
+    CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
+    MW_BOOST_OBSERVED,
+)
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
+
+
+def _get_confidence(unit: Any) -> float:
+    """Resolve a unit's confidence with defensive fallback to 1.0.
+
+    Schema is NOT NULL DEFAULT 1.0; this guard handles stripped/stale model
+    objects (no attribute) and rows materialised with confidence=None before
+    the column default takes effect.
+    """
+    confidence = getattr(unit, 'confidence', 1.0)
+    return 1.0 if confidence is None else confidence
 
 
 # F40 — pre-reranker filter at hydration.
@@ -1214,6 +1230,11 @@ class RetrievalEngine:
             pruned = max(0, len(unit_ids) - len(fetched_units))
             PRE_FILTER_CANDIDATES_PRUNED.observe(pruned)
 
+            # F47 calibration signal: emit raw confidence values regardless of
+            # confidence_alpha so the pre-flip distribution accumulates.
+            for u in units:
+                CONFIDENCE_SCORE_DISTRIBUTION.observe(_get_confidence(u))
+
         if model_ids:
             models = (
                 await session.exec(
@@ -1303,6 +1324,10 @@ class RetrievalEngine:
         * **Memory Worth boost** -- scaled by
           ``RetrievalConfig.reranking_mw_alpha`` (Beta-Bernoulli posterior mean;
           cold-start mw_boost = 1.0, neutral)
+        * **F47 contradiction-derived confidence boost** -- scaled by
+          ``RetrievalConfig.confidence_alpha`` (uses ``unit.confidence``;
+          cold-start confidence = 1.0 → boost > 1.0 when alpha > 0; default
+          alpha = 0.0 ships boost = 1.0 for every unit)
 
         Set any alpha to 0 to disable that boost (backward compatible).
         """
@@ -1342,14 +1367,14 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, and MW boosts
-            from memex_core.metrics import MW_BOOST_OBSERVED
+            # Apply multiplicative recency, temporal proximity, MW, and F47 confidence boosts
             from memex_core.services.outcomes import compute_mw_boost
 
             now = datetime.now(timezone.utc)
             recency_alpha = self.retrieval_config.reranking_recency_alpha
             temporal_alpha = self.retrieval_config.reranking_temporal_alpha
             mw_alpha = self.retrieval_config.reranking_mw_alpha
+            confidence_alpha = self.retrieval_config.confidence_alpha
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1376,7 +1401,18 @@ class RetrievalEngine:
                 )
                 MW_BOOST_OBSERVED.observe(mw_boost)
 
-                boosted_scores.append(ce_score * recency_boost * temporal_boost * mw_boost)
+                # F47: contradiction-derived confidence boost.
+                # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
+                # Floor at 0.0 belt-and-suspenders with the config-level ge=0.0/le=2.0
+                # bounds — keeps boosted_score non-negative even if the constraint is
+                # later weakened.
+                confidence = _get_confidence(unit)
+                confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
+                CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
+
+                boosted_scores.append(
+                    ce_score * recency_boost * temporal_boost * mw_boost * confidence_boost
+                )
 
             scored_results = []
             for unit, boosted, raw_score in zip(results, boosted_scores, scores):
