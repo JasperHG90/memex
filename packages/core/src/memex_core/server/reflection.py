@@ -12,6 +12,7 @@ from memex_core.server.auth import require_delete, require_write
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     DeadLetterItemDTO,
+    ObservationDTO,
     ReflectionQueueDTO,
     ReflectionRequest as ReflectionDTO,
     ReflectionResultDTO,
@@ -124,8 +125,6 @@ async def summarize_node(
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summarize-node reflection failed')
-
-    from memex_common.schemas import ObservationDTO
 
     return ReflectionResultDTO(
         entity_id=result.entity_id,
