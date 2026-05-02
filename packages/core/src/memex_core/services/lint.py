@@ -501,8 +501,13 @@ class LintService(BaseService):
             if decoded is not None:
                 cursor_ts, cursor_id = decoded
 
+        # Fetch limit+1 so we can tell whether another page exists without a
+        # second round-trip count. Pre-compute the value rather than doing
+        # arithmetic on a bound parameter — `:limit + 1` inside SQL leaves the
+        # `+ 1` as a literal addition the driver may reject or interpret oddly.
+        fetch_limit = capped_limit + 1
         clauses: list[str] = ['status = :status']
-        params: dict[str, Any] = {'status': status, 'limit': capped_limit}
+        params: dict[str, Any] = {'status': status, 'fetch_limit': fetch_limit}
         if vault_id is not None:
             clauses.append('vault_id = CAST(:vault_id AS uuid)')
             params['vault_id'] = str(vault_id)
@@ -518,13 +523,11 @@ class LintService(BaseService):
             params['cursor_id'] = str(cursor_id)
 
         where_sql = ' AND '.join(clauses)
-        # Fetch limit+1 so we can tell whether another page exists without a
-        # second round-trip count.
         stmt = text(
             f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '
             f'evidence, suggested_action, status, source, created_at, resolved_at '
             f'FROM maintenance_proposals WHERE {where_sql} '
-            'ORDER BY created_at DESC, id DESC LIMIT :limit + 1'
+            'ORDER BY created_at DESC, id DESC LIMIT :fetch_limit'
         )
 
         async with self.metastore.session() as session:
