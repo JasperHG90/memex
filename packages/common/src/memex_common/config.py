@@ -800,7 +800,12 @@ class RetrievalConfig(BaseModel):
     )
     exploration_max_injections: int = Field(
         default=2,
-        description='Maximum number of exploration units to inject per retrieval call.',
+        description='Maximum number of exploration units to inject per retrieval call. '
+        'Note: when the outer ε-greedy roll succeeds (governed by '
+        '``exploration_epsilon``), ALL eligible units up to this cap are injected — '
+        'this is not per-unit independent sampling. Intentional for F44 self-correction: '
+        'once the engine commits to exploring, it explores fully rather than re-rolling '
+        'per candidate.',
     )
     exploration_low_mw_threshold: int = Field(
         default=5,
@@ -814,6 +819,16 @@ class RetrievalConfig(BaseModel):
     relations: RelationConfig = Field(
         default_factory=RelationConfig,
         description='Settings for note/unit relationship enrichment in search results.',
+    )
+    fsfm_branch_enabled: bool = Field(
+        default=False,
+        description=(
+            'F40 pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
+            'OFF by default because the columns it references (importance, stability, '
+            'last_outcome_at on memory_units) ship with F11. F11 flips this to True in the '
+            'same PR that lands the migration. The MW branch (success_co_count / '
+            'failure_co_count) ships ON unconditionally — those columns already exist.'
+        ),
     )
 
 

@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -12,8 +13,9 @@ import math
 import numpy as np
 import tiktoken
 from cachetools import TTLCache
-from sqlalchemy import func, literal, union_all
+from sqlalchemy import func, literal, text, union_all
 from sqlalchemy.orm import defer, selectinload
+from sqlalchemy.sql.elements import TextClause
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -53,6 +55,7 @@ from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
+    CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
     MW_BOOST_OBSERVED,
 )
 
@@ -68,6 +71,85 @@ def _get_confidence(unit: Any) -> float:
     """
     confidence = getattr(unit, 'confidence', 1.0)
     return 1.0 if confidence is None else confidence
+
+
+# F40 — pre-reranker filter at hydration.
+# Magic-number documentation: STABILITY_SECONDS_PER_DAY converts the
+# Postgres `EXTRACT(EPOCH ...)` output (seconds) to days for the FSFM
+# decay term. If F11 ever changes `stability`'s unit convention, this
+# divisor must change in lockstep.
+STABILITY_SECONDS_PER_DAY: float = 86400.0
+
+
+def _build_pre_filter_clause(
+    *,
+    apply_pre_filter: bool,
+    fsfm_branch_enabled: bool,
+) -> TextClause | None:
+    """Build the F40 pre-reranker predicate as a SQLAlchemy ``TextClause``.
+
+    Returns a ``TextClause`` already wrapped as ``NOT (...)`` so the caller
+    can pass it straight to ``stmt.where(...)``, or ``None`` when the
+    entire pre-filter must drop out (``apply_pre_filter=False`` or no
+    branches active).
+
+    SECURITY INVARIANT: this function MUST NEVER interpolate values
+    derived from user input or runtime data. Every interpolated value is
+    a module-level constant (currently only ``STABILITY_SECONDS_PER_DAY``
+    in the FSFM branch). If you add a new branch, the values you
+    interpolate MUST come from constants. The pinning tests in
+    ``tests/unit/retrieval/test_f40_sql_builder.py`` assert this at the
+    SQL-string level — touching that suite when adding a branch is
+    deliberate.
+
+    Implementation pitfall (round-3 review): the FSFM branch is included
+    via a **Python-level conditional**, NOT a SQL-side runtime flag like
+    ``(NOT :fsfm_enabled OR ...)``. SQL-side guards still reference the
+    missing column names at parse time and would crash on
+    ``column "importance" does not exist`` until F11's migration runs.
+
+    The pinning test in
+    ``tests/unit/retrieval/test_f40_sql_builder.py`` enforces this by
+    asserting that the generated SQL string does not contain
+    ``importance`` / ``stability`` / ``last_outcome_at`` substrings when
+    ``fsfm_branch_enabled=False``.
+    """
+    if not apply_pre_filter:
+        return None
+
+    branches: list[str] = []
+
+    # MW branch (always on — columns exist since F1a).
+    # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
+    branches.append(
+        '((memory_units.success_co_count + memory_units.failure_co_count) >= 5 '
+        'AND (memory_units.success_co_count + 1.0) / '
+        '(memory_units.success_co_count + memory_units.failure_co_count + 2.0) < 0.15)'
+    )
+
+    # FSFM branch (gated by config flag — columns ship with F11).
+    # COALESCE(..., FALSE) wraps the *branch result*, not individual columns,
+    # so SQL three-valued logic ``FALSE OR NULL OR FALSE -> NULL`` doesn't
+    # poison the surrounding ``NOT`` and exclude cold-start rows. NULLIF on
+    # ``stability`` keeps zero-stability rows from filtering (degenerate
+    # state — observability surfaces it).
+    if fsfm_branch_enabled:
+        branches.append(
+            'COALESCE('
+            'memory_units.importance * '
+            'exp(-EXTRACT(EPOCH FROM (now() - memory_units.last_outcome_at)) / '
+            f'{STABILITY_SECONDS_PER_DAY} / NULLIF(memory_units.stability, 0)) < 0.10, '
+            'FALSE)'
+        )
+
+    if not branches:
+        return None
+
+    # OR'd, not AND'd — either signal is sufficient grounds to skip the
+    # cross-encoder. Cold-start safeguards (MW >= 5 outcomes, FSFM exp(elapsed))
+    # are inside the individual branches.
+    pre_filter_clause = ' OR '.join(branches)
+    return text(f'NOT ({pre_filter_clause})')
 
 
 def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
@@ -175,6 +257,13 @@ class RetrievalEngine:
         self.ner_model = ner_model
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
+        # Per-engine RNG for the F33 ε-greedy roll. ``random.random()``
+        # would dispatch to CPython's module-global Mersenne Twister,
+        # which is guarded by a lock — under high concurrency that lock
+        # is contended. A per-instance ``random.Random()`` is unshared
+        # and lock-free, and keeps the global RNG free for callers that
+        # rely on it being seedable from outside.
+        self._rng = random.Random()
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
         self.concretizer: TemporalConcretizer | None = (
             TemporalConcretizer(lm=self.lm)
@@ -485,9 +574,11 @@ class RetrievalEngine:
         if not fused_items:
             return ([], None)
 
-        # 6. Hydrate Objects
+        # 6. Hydrate Objects (F40 pre-filter applies here when enabled).
         t0 = _t()
-        final_results = await self._hydrate_results(session, fused_items)
+        final_results = await self._hydrate_results(
+            session, fused_items, apply_pre_filter=request.apply_pre_filter
+        )
         t_hydrate = _t() - t0
 
         # 6b. Filter superseded units
@@ -551,18 +642,51 @@ class RetrievalEngine:
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
 
-        # 9b. Exploration floor: ε-greedy injection of low-MW units (F33)
+        # 9b. Exploration floor: ε-greedy injection of low-MW units (F33).
+        #
+        # F44 — F33 exploration must run on a separate retrieval path that
+        # bypasses F40's pre-filter; otherwise low-MW units (the very ones
+        # exploration is meant to re-validate) can never re-surface and MW
+        # becomes monotonic. The bypass query only fires when the
+        # ε-greedy roll succeeds *and* the pre-filter is active — paying
+        # the extra round-trip on every retrieve call would push the N+1
+        # budget over its threshold for the ~95% of calls (with default
+        # ε=0.05) that don't end up injecting.
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
+            from memex_core.metrics import F33_EXPLORATION_INJECTED_TOTAL
 
-            if hydrated_candidates:
-                final_results = inject_exploration_units(
-                    final_results,
-                    hydrated_candidates,
-                    epsilon=self.retrieval_config.exploration_epsilon,
-                    max_injections=self.retrieval_config.exploration_max_injections,
-                    low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
-                )
+            should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
+
+            if should_inject:
+                exploration_pool = hydrated_candidates
+                if request.apply_pre_filter:
+                    # Re-hydrate ALL fused items without the F40 predicate
+                    # so exploration sees units the main path filtered out.
+                    bypass_pool = await self._hydrate_results(
+                        session, fused_items, apply_pre_filter=False
+                    )
+                    if not request.include_superseded:
+                        threshold = self.retrieval_config.superseded_threshold
+                        bypass_pool = [
+                            u for u in bypass_pool if getattr(u, 'confidence', 1.0) >= threshold
+                        ]
+                    exploration_pool = bypass_pool
+
+                if exploration_pool:
+                    # Force inner ε=1.0: we already rolled the dice; the
+                    # inner roll would otherwise re-roll and could veto.
+                    pre_inject_count = len(final_results)
+                    final_results = inject_exploration_units(
+                        final_results,
+                        exploration_pool,
+                        epsilon=1.0,
+                        max_injections=self.retrieval_config.exploration_max_injections,
+                        low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
+                    )
+                    injected = len(final_results) - pre_inject_count
+                    if injected > 0:
+                        F33_EXPLORATION_INJECTED_TOTAL.inc(injected)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
@@ -1039,26 +1163,72 @@ class RetrievalEngine:
         return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
 
     async def _hydrate_results(
-        self, session: AsyncSession, ranked_items: Sequence[Any]
+        self,
+        session: AsyncSession,
+        ranked_items: Sequence[Any],
+        *,
+        apply_pre_filter: bool = True,
     ) -> list[MemoryUnit]:
-        """Fetches actual objects from DB and converts them to MemoryUnits."""
-        unit_ids = [row.id for row in ranked_items if row.type == 'unit']
-        model_ids = [row.id for row in ranked_items if row.type == 'model']
+        """Fetches actual objects from DB and converts them to MemoryUnits.
+
+        F40 — when ``apply_pre_filter`` is True, the unit hydration query
+        gains a ``WHERE NOT (...)`` predicate that drops obviously-failed
+        (low-MW) and (when ``fsfm_branch_enabled`` is True) decayed
+        candidates before they reach the cross-encoder.
+
+        F45 — emits ``HYDRATION_QUERY_DURATION_SECONDS`` and
+        ``PRE_FILTER_CANDIDATES_PRUNED``. Metrics emit when ``unit_ids`` is
+        non-empty. Empty-input retrievals (model-only results) skip the
+        hydration query entirely and so don't emit pre-filter metrics.
+        """
+        from memex_core.metrics import (
+            HYDRATION_QUERY_DURATION_SECONDS,
+            PRE_FILTER_CANDIDATES_PRUNED,
+        )
+
+        # Dedupe IDs (RRF fusion can produce duplicates across strategies);
+        # SQL ``IN`` already deduplicates the fetched set, so an undeduped
+        # ``unit_ids`` would inflate the ``pruned`` count below. Use
+        # ``dict.fromkeys`` to preserve insertion order.
+        unit_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'unit'))
+        model_ids = list(dict.fromkeys(row.id for row in ranked_items if row.type == 'model'))
 
         fetched_units = {}
         fetched_models = {}
 
         if unit_ids:
-            units = (
-                await session.exec(
-                    select(MemoryUnit)
-                    .where(col(MemoryUnit.id).in_(unit_ids))
-                    .options(defer(MemoryUnit.embedding))  # type: ignore
-                    .options(selectinload(MemoryUnit.note))
-                    .options(selectinload(MemoryUnit.unit_entities))
-                )
-            ).all()
+            stmt = (
+                select(MemoryUnit)
+                .where(col(MemoryUnit.id).in_(unit_ids))
+                .options(defer(MemoryUnit.embedding))  # type: ignore
+                .options(selectinload(MemoryUnit.note))
+                .options(selectinload(MemoryUnit.unit_entities))
+            )
+
+            # F40 — Python-level conditional pre-filter. The MW branch is
+            # always included; the FSFM branch is included only when the
+            # config flag is True. SQL-side runtime flags would still
+            # reference the missing columns at parse time. The builder
+            # owns the single ``text(...)`` boundary — see its docstring
+            # for the SECURITY INVARIANT pinning constants-only
+            # interpolation.
+            pre_filter_clause = _build_pre_filter_clause(
+                apply_pre_filter=apply_pre_filter,
+                fsfm_branch_enabled=self.retrieval_config.fsfm_branch_enabled,
+            )
+            if pre_filter_clause is not None:
+                stmt = stmt.where(pre_filter_clause)
+
+            t0 = time.monotonic()
+            units = (await session.exec(stmt)).all()
+            HYDRATION_QUERY_DURATION_SECONDS.observe(time.monotonic() - t0)
+
             fetched_units = {u.id: u for u in units}
+
+            # F45 — pruned-candidates histogram (always emits, even when
+            # the predicate is inactive — value is 0 in that case).
+            pruned = max(0, len(unit_ids) - len(fetched_units))
+            PRE_FILTER_CANDIDATES_PRUNED.observe(pruned)
 
             # F47 calibration signal: emit raw confidence values regardless of
             # confidence_alpha so the pre-flip distribution accumulates.
@@ -1162,6 +1332,10 @@ class RetrievalEngine:
         Set any alpha to 0 to disable that boost (backward compatible).
         """
         if not self.reranker or not results:
+            # F45 — emit zero-input observation so the histogram is always
+            # populated for the no-rerank case (observability comparisons
+            # need the denominator).
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
         try:
@@ -1176,6 +1350,10 @@ class RetrievalEngine:
                         occurred_end=unit.occurred_end,
                     )
                 )
+
+            # F45 — cross-encoder input count post-filter. Validates that
+            # the pre-filter shrinks the reranker working set.
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(len(formatted_texts))
 
             # Shared reranker cap across both reranker sites — one model,
             # one capacity budget. wait_for cancels the coroutine but the
@@ -1249,6 +1427,11 @@ class RetrievalEngine:
             return [item[0] for item in scored_results]
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
+            # F45 — close the observability gap: the early-return path
+            # observes 0, so the exception/fallback path must too. Without
+            # this, a reranker exception silently skips the histogram and
+            # the metric over-represents successful rerank counts.
+            CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
     async def _compute_pairwise_cosine(
