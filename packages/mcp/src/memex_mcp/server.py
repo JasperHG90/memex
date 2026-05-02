@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -1688,11 +1688,17 @@ async def memex_memory_search(
             RiskClass,
         )
 
-        if intent_class is not None and intent_class not in VALID_INTENT_CLASSES:
+        # Widen to ``str`` so mypy doesn't flag the membership check as unreachable.
+        # The Literal annotations on ``intent_class`` / ``risk_class`` constrain
+        # values for FastMCP+Pydantic callers, which would make mypy treat the
+        # ``not in`` branch as dead code; the cast preserves the defense-in-depth
+        # check for direct-call paths (tests, internal Python via ``.fn``) that
+        # bypass schema validation.
+        if intent_class is not None and cast(str, intent_class) not in VALID_INTENT_CLASSES:
             raise ToolError(
                 f'Invalid intent_class={intent_class!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}'
             )
-        if risk_class is not None and risk_class not in VALID_RISK_CLASSES:
+        if risk_class is not None and cast(str, risk_class) not in VALID_RISK_CLASSES:
             raise ToolError(
                 f'Invalid risk_class={risk_class!r}. Allowed: {sorted(VALID_RISK_CLASSES)}'
             )

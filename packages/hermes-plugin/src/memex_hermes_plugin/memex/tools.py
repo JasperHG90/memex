@@ -44,7 +44,13 @@ from memex_common.asset_cache import (
 )
 from memex_common.asset_resize import validate_and_resize
 from memex_common.revisit import reject_bool_quality
-from memex_common.schemas import IntentClass, NoteAppendRequest, RiskClass
+from memex_common.schemas import (
+    VALID_INTENT_CLASSES,
+    VALID_RISK_CLASSES,
+    IntentClass,
+    NoteAppendRequest,
+    RiskClass,
+)
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -1574,14 +1580,11 @@ def handle_memory_search(
     vault_ids = _resolve_vault_ids(api, args, vault_id)
 
     # Allowed sets are canonical in memex_common.schemas (derived from the
-    # IntentClass / RiskClass enums). ``IntentClass`` / ``RiskClass`` are
-    # already imported at module scope (used to derive the JSON-schema enum
-    # lists); only the ``VALID_*`` frozensets need a local import here.
-    # After the local string check we coerce to the enum so we satisfy
-    # ``RemoteMemexAPI.search``'s ``IntentClass | None`` / ``RiskClass | None``
-    # signature without relying on implicit Pydantic coercion downstream.
-    from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
-
+    # IntentClass / RiskClass enums). After the local string check we coerce
+    # to the enum so we satisfy ``RemoteMemexAPI.search``'s
+    # ``IntentClass | None`` / ``RiskClass | None`` signature without relying
+    # on implicit Pydantic coercion downstream.
+    #
     # Use ``is not None`` rather than truthiness — IntentClass / RiskClass
     # subclass ``str``, so a hypothetical enum member with value ``''`` would
     # be falsy and silently coerce to None. Matches the convention in

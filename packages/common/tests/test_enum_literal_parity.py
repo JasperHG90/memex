@@ -71,6 +71,12 @@ class TestMCPServerParity:
         """
         from memex_mcp.server import memex_memory_search
 
+        # FastMCP's ``FunctionTool`` exposes the original function via ``.fn``.
+        # This is FastMCP's documented accessor today, but it is an
+        # implementation detail of the wrapper — if FastMCP changes the API
+        # (e.g. renames ``.fn`` or moves the original callable behind a method),
+        # this test and any sibling test that uses ``.fn`` will need to be
+        # updated. Tracked: revisit if FastMCP exposes a stable accessor.
         underlying = getattr(memex_memory_search, 'fn', memex_memory_search)
         return get_type_hints(underlying, include_extras=True)
 

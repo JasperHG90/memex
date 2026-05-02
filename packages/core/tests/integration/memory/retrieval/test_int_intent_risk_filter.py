@@ -386,20 +386,25 @@ class TestIntentRiskNullSemantics:
         )
         await session.commit()
 
-        result = await session.execute(
-            text('SELECT intent_class, risk_class FROM memory_units WHERE id = CAST(:id AS uuid)'),
-            {'id': str(unit_id)},
-        )
-        row = result.one()
-        assert row.intent_class == 'durable'
-        assert row.risk_class == 'none'
-
-        await session.execute(
-            text('DELETE FROM memory_units WHERE id = CAST(:id AS uuid)'),
-            {'id': str(unit_id)},
-        )
-        await session.execute(
-            text('DELETE FROM notes WHERE id = CAST(:id AS uuid)'),
-            {'id': str(note_id)},
-        )
-        await session.commit()
+        try:
+            result = await session.execute(
+                text(
+                    'SELECT intent_class, risk_class FROM memory_units WHERE id = CAST(:id AS uuid)'
+                ),
+                {'id': str(unit_id)},
+            )
+            row = result.one()
+            assert row.intent_class == 'durable'
+            assert row.risk_class == 'none'
+        finally:
+            # Cleanup must run even if the assertions above fail, otherwise the
+            # committed rows leak into sibling tests.
+            await session.execute(
+                text('DELETE FROM memory_units WHERE id = CAST(:id AS uuid)'),
+                {'id': str(unit_id)},
+            )
+            await session.execute(
+                text('DELETE FROM notes WHERE id = CAST(:id AS uuid)'),
+                {'id': str(note_id)},
+            )
+            await session.commit()

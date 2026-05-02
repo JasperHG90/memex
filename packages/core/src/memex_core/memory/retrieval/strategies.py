@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Protocol, Any, runtime_checkable
 from uuid import UUID
 
@@ -34,6 +35,26 @@ from memex_core.memory.sql_models import (
 from memex_core.memory.sql_models import MentalModel
 
 logger = logging.getLogger('memex.core.memory.retrieval.strategies')
+
+
+# Warn-once helper for the mental-model strategy's intent/risk filter no-op.
+# ``lru_cache`` memoises by the argument tuple, so repeat calls with the same
+# (intent_class, risk_class) combination silently return None after the first
+# warning is emitted. A different combination warns again, since it is a new
+# cache key. ``maxsize=64`` comfortably bounds the realistic key space
+# (3 intent values x 4 risk values x None combinations = 20 distinct keys).
+# Defined at module scope (not as a method) because ``lru_cache`` on bound
+# methods retains ``self`` in the cache, which is a known footgun.
+@lru_cache(maxsize=64)
+def _warn_mental_model_filters_skipped(intent_class: str | None, risk_class: str | None) -> None:
+    logger.warning(
+        'Mental-model strategy ignores intent/risk filters (intent_class=%s, risk_class=%s); '
+        'results will mix unfiltered mental-model units with filtered units from other strategies. '
+        'Out-of-scope per issue #92.',
+        intent_class,
+        risk_class,
+    )
+
 
 # Maximum exponent magnitude for temporal decay to prevent Postgres NUMERIC underflow.
 # power(2, -996) ~ 1e-300 which is near the minimum representable NUMERIC value.
@@ -646,13 +667,9 @@ class MentalModelStrategy:
         intent_class = kwargs.get('intent_class')
         risk_class = kwargs.get('risk_class')
         if intent_class is not None or risk_class is not None:
-            logger.warning(
-                'Mental-model strategy ignores intent/risk filters (intent_class=%s, risk_class=%s); '
-                'results will mix unfiltered mental-model units with filtered units from other strategies. '
-                'Out-of-scope per issue #92 — see strategies.py for rationale.',
-                intent_class,
-                risk_class,
-            )
+            # Warn-once per (intent_class, risk_class) tuple — see
+            # ``_warn_mental_model_filters_skipped`` for caching rationale.
+            _warn_mental_model_filters_skipped(intent_class, risk_class)
 
         if query_embedding is None:
             # Fallback to name match if no embedding
