@@ -3011,7 +3011,7 @@ async def memex_get_memory_units(
             default=None,
             description=(
                 'Vault UUID or name. Required when `chunk_ids` is set; ignored '
-                'for the `unit_ids` path. Defaults to the active write vault.'
+                'for the `unit_ids` path. Defaults to the active read vault.'
             ),
         ),
     ] = None,
@@ -3053,7 +3053,11 @@ async def memex_get_memory_units(
         if not chunk_uuids:
             return []
 
-        vault_str = vault_id or _default_write_vault(ctx)
+        # Chunk traversal is a read operation — default to the active read
+        # vault (matches the convention used by other MCP read tools, e.g.
+        # memex_list_notes). Use the first read vault when multiple are
+        # configured; the agent can pass `vault_id` explicitly to override.
+        vault_str = vault_id or _default_read_vaults(ctx)[0]
         resolved_vault = await _resolve_vault_id(api, vault_str)
 
         units = await api.get_memory_units_by_chunks(chunk_uuids, resolved_vault)

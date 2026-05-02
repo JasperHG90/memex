@@ -797,7 +797,14 @@ class RemoteMemexAPI:
         chunk_ids: list[UUID | str],
         vault_id: UUID | str,
     ) -> list[MemoryUnitDTO]:
-        """F46: fetch memory units belonging to the named chunks (vault-scoped)."""
+        """F46: fetch memory units belonging to the named chunks (vault-scoped).
+
+        Mirrors the service-layer short-circuit (see
+        ``memex_core.services.stats.StatsService.get_memory_units_by_chunks``)
+        so an empty input list never costs a network round-trip.
+        """
+        if not chunk_ids:
+            return []
         body = {
             'chunk_ids': [str(c) for c in chunk_ids],
             'vault_id': str(vault_id),

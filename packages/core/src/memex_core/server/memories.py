@@ -62,7 +62,12 @@ async def get_memory_units_by_chunks(
     try:
         units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
         return [build_memory_unit_dto(u) for u in units]
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+    except (MemexError, ValueError) as e:
+        # Hermes round-1 MED: narrowed from (KeyError, RuntimeError, OSError)
+        # which can mask genuine bugs (bad DTO dict access, filesystem errors)
+        # rather than client-visible errors. Service-layer raises MemexError
+        # subclasses for known failure modes; ValueError covers UUID/typing
+        # validation. Anything else propagates as a 500 with a logged stack.
         raise _handle_error(e, 'Failed to get memory units by chunks')
 
 
