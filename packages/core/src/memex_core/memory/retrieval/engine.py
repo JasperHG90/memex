@@ -143,6 +143,14 @@ def _build_pre_filter_clause(
             'FALSE)'
         )
 
+    # F48 — confidence branch (always on; column is NOT NULL DEFAULT 1.0,
+    # so cold-start units never match). Strict ``<`` keeps the 0.2 boundary
+    # safe. No COALESCE wrap needed: unlike FSFM, ``confidence`` cannot be
+    # NULL by schema, so SQL three-valued logic does not arise. The
+    # contradiction engine's α-stepping is itself the evidence-accumulation
+    # threshold — adding a separate count gate would double-count.
+    branches.append('(memory_units.confidence < 0.2)')
+
     if not branches:
         return None
 
