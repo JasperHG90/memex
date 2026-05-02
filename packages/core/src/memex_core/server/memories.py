@@ -18,7 +18,7 @@ from memex_core.server.auth import (
     require_read,
     require_write,
 )
-from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO
+from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO, UnitHistoryNodeDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -403,3 +403,46 @@ async def get_memory_links(
         return links[:limit]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get links for memory unit {memory_id}')
+
+
+@router.get(
+    '/memories/{memory_id}/history',
+    response_model=UnitHistoryNodeDTO,
+    dependencies=[Depends(require_read)],
+)
+async def get_unit_history(
+    memory_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: UUID = Query(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+        ),
+    ),
+    max_depth: int = Query(
+        10,
+        ge=0,
+        le=50,
+        description='Maximum recursion depth for the contradiction-graph walk.',
+    ),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> UnitHistoryNodeDTO:
+    """F49: walk the contradiction graph backward from ``memory_id``.
+
+    Returns the supersession history (negative-evidence path: contradicts /
+    weakens links) as an ordered tree rooted at the queried unit (depth=0).
+    ``reinforces`` is excluded — it points forward in time. v1 returns
+    supersession history, NOT full confidence evolution.
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        return await api.get_unit_history(
+            memory_id,
+            max_depth=max_depth,
+            vault_id=vault_id,
+        )
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to get history for memory unit {memory_id}')

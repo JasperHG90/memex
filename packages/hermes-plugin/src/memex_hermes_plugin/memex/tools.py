@@ -114,6 +114,7 @@ class MemexAPIProtocol(Protocol):
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
     async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_unit_history(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_due_for_review(self, *args: Any, **kwargs: Any) -> Any: ...
     async def review_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -3383,6 +3384,8 @@ __all__ = [
     'MEMORY_RESTORE_SCHEMA',
     # --- F14 / F29 record_outcome (WS-quick-wins) ---
     'RECORD_OUTCOME_SCHEMA',
+    # --- F49 contradiction-graph timeline ---
+    'GET_UNIT_HISTORY_SCHEMA',
 ]
 
 
@@ -4213,3 +4216,83 @@ def handle_get_diagnostics_summary(
 
 
 HANDLERS['memex_get_diagnostics_summary'] = handle_get_diagnostics_summary
+
+
+# --- F49 contradiction-graph timeline ---
+
+GET_UNIT_HISTORY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_unit_history',
+    'description': (
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID to start the walk from (root, depth=0).',
+            },
+            'max_depth': {
+                'type': 'integer',
+                'description': (
+                    'Maximum recursion depth (default: 10). Nodes reached at '
+                    'the cap are returned with truncated=True.'
+                ),
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from the `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
+
+
+def handle_get_unit_history(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot walk history.')
+
+    raw_depth = args.get('max_depth')
+    try:
+        max_depth = int(raw_depth) if raw_depth is not None else 10
+    except (TypeError, ValueError):
+        return tool_error(f'Invalid max_depth: {raw_depth!r}')
+    if max_depth < 0:
+        return tool_error('max_depth must be >= 0.')
+
+    try:
+        result = run_sync(
+            api.get_unit_history(uuid_obj, vault_id=vault_id, max_depth=max_depth),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_unit_history failed: %s', e)
+        return tool_error(f'Get unit history failed: {e}')
+
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    return json.dumps(result)
+
+
+HANDLERS['memex_get_unit_history'] = handle_get_unit_history
+ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)

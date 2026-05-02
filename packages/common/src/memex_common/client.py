@@ -58,6 +58,7 @@ from memex_common.schemas import (
     SummaryRequest,
     SummaryResponse,
     SurveyRequest,
+    UnitHistoryNodeDTO,
     SurveyResponse,
 )
 
@@ -954,6 +955,24 @@ class RemoteMemexAPI:
             params['link_type'] = link_type
         result = await self._get(f'memories/{unit_id}/links', params=params)
         return [MemoryLinkDTO(**lnk) for lnk in result]
+
+    async def get_unit_history(
+        self,
+        unit_id: UUID,
+        *,
+        vault_id: UUID,
+        max_depth: int = 10,
+    ) -> UnitHistoryNodeDTO:
+        """F49: walk the contradiction graph backward from ``unit_id``.
+
+        Returns a ``UnitHistoryNodeDTO`` tree (root + nested predecessors).
+        """
+        params: dict[str, Any] = {
+            'vault_id': str(vault_id),
+            'max_depth': max_depth,
+        }
+        result = await self._get(f'memories/{unit_id}/history', params=params)
+        return UnitHistoryNodeDTO(**result)
 
     async def get_note_links(
         self,
