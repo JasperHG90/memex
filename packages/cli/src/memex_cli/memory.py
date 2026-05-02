@@ -638,7 +638,7 @@ async def search_memory(
     )
 
     intent_value: IntentClass | None = None
-    if intent:
+    if intent is not None:
         intent_str = intent.lower()
         if intent_str not in VALID_INTENT_CLASSES:
             console.print(
@@ -648,7 +648,7 @@ async def search_memory(
         intent_value = IntentClass(intent_str)
 
     risk_value: RiskClass | None = None
-    if risk:
+    if risk is not None:
         risk_str = risk.lower()
         if risk_str not in VALID_RISK_CLASSES:
             console.print(
