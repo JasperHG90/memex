@@ -183,6 +183,8 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         # Tier A WS-locks (F9)
         'memex_memory_reconsolidate',
         'memex_memory_consolidate',
+        # Tier A WS-history (F49 — contradiction-graph timeline)
+        'memex_get_unit_history',
     }
     assert names == expected
 
@@ -199,7 +201,8 @@ class TestGetToolSchemasBeforeInitialize:
         """The v0.1.13 bug was returning []; we now return the full set
         pre-init. After Stream 6 + asset disk-handoff + memex_append_note +
         Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint flags + F20 revisit
-        + F9 locks we register exactly 46 tools, and the assertion is strict equality.
+        + F9 locks + F49 history we register exactly 47 tools, and the
+        assertion is strict equality.
         """
         p = MemexMemoryProvider()
         # NOTE: no initialize() call.
@@ -263,6 +266,8 @@ class TestGetToolSchemasBeforeInitialize:
             # Tier A WS-locks (F9)
             'memex_memory_reconsolidate',
             'memex_memory_consolidate',
+            # Tier A WS-history (F49 — contradiction-graph timeline)
+            'memex_get_unit_history',
         }
         assert names == expected
 
@@ -277,9 +282,9 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 46-tool set (Stream 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint + F20 revisit + F9 locks).
+        # Pre-init: full 47-tool set (Stream 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint + F20 revisit + F9 locks + F49 history).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 46
+        assert len(p.get_tool_schemas()) == 47
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))
