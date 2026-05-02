@@ -1670,13 +1670,19 @@ def test_get_entities_all_invalid_short_circuits(config, vault_id):
 
 
 def test_get_memory_units_schema_shape():
-    """AC-064: ``GET_MEMORY_UNITS_SCHEMA`` requires ``unit_ids: list[str]``."""
+    """AC-064 + F46: ``unit_ids`` and ``chunk_ids`` are both array[str]; XOR enforced
+    at runtime, so neither is in ``required``."""
     props = GET_MEMORY_UNITS_SCHEMA['parameters']['properties']
     assert GET_MEMORY_UNITS_SCHEMA['name'] == 'memex_get_memory_units'
     assert 'unit_ids' in props
     assert props['unit_ids']['type'] == 'array'
     assert props['unit_ids']['items']['type'] == 'string'
-    assert GET_MEMORY_UNITS_SCHEMA['parameters']['required'] == ['unit_ids']
+    assert 'chunk_ids' in props
+    assert props['chunk_ids']['type'] == 'array'
+    assert props['chunk_ids']['items']['type'] == 'string'
+    assert 'vault_id' in props
+    assert props['vault_id']['type'] == 'string'
+    assert 'required' not in GET_MEMORY_UNITS_SCHEMA['parameters']
 
 
 # -- AC-065: singular loop --
@@ -1788,6 +1794,63 @@ def test_get_memory_units_contradictions_field_filters_by_relation(config, vault
     row = json.loads(out)['results'][0]
     assert len(row['contradictions']) == 1
     assert row['contradictions'][0]['relation'] == 'contradiction'
+
+
+# -- F46: chunk_ids path on memex_get_memory_units --
+
+
+def test_get_memory_units_chunk_ids_path_calls_batch_endpoint(config, vault_id):
+    """F46: ``chunk_ids`` routes to ``api.get_memory_units_by_chunks`` (vault-scoped)."""
+    api = Mock()
+    chunk_a = uuid4()
+    chunk_b = uuid4()
+    unit_a = _fake_memory_unit('from chunk A')
+    unit_b = _fake_memory_unit('from chunk B')
+    api.get_memory_units_by_chunks = AsyncMock(return_value=[unit_a, unit_b])
+
+    out = dispatch(
+        'memex_get_memory_units',
+        {'chunk_ids': [str(chunk_a), str(chunk_b)]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert len(data['results']) == 2
+    api.get_memory_units_by_chunks.assert_awaited_once()
+    args = api.get_memory_units_by_chunks.call_args.args
+    assert args[0] == [chunk_a, chunk_b]
+    assert args[1] == vault_id
+
+
+def test_get_memory_units_xor_both_paths_rejected(config, vault_id):
+    """F46: providing both ``unit_ids`` and ``chunk_ids`` is a validation error."""
+    api = Mock()
+    out = dispatch(
+        'memex_get_memory_units',
+        {'unit_ids': [str(uuid4())], 'chunk_ids': [str(uuid4())]},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert data['results'] == []
+
+
+def test_get_memory_units_xor_neither_path_rejected(config, vault_id):
+    """F46: providing neither ``unit_ids`` nor ``chunk_ids`` is a validation error."""
+    api = Mock()
+    out = dispatch(
+        'memex_get_memory_units',
+        {},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert data['results'] == []
 
 
 # -- AC-067: get_memory_links schema --

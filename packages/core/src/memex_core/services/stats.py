@@ -89,6 +89,31 @@ class StatsService(BaseService):
         async with self.metastore.session() as session:
             return await session.get(MemoryUnit, uid)
 
+    async def get_memory_units_by_chunks(
+        self,
+        chunk_ids: list[UUID],
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return all memory units whose ``chunk_id`` is in ``chunk_ids``, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — F46 chunk-traversal must not leak units
+        from sibling vaults that happen to reference the same chunk UUID.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not chunk_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                col(MemoryUnit.chunk_id).in_(chunk_ids),
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data.
 
