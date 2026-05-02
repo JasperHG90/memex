@@ -63,24 +63,6 @@ def _make_engine(
     )
 
 
-async def _rerank_and_get_score(engine: RetrievalEngine, unit: MemoryUnit) -> float:
-    """Helper: rerank a single unit and return the patched-out boosted score."""
-    captured: list[float] = []
-    real_sort = list.sort
-
-    def capture_sort(self, *args, **kwargs):
-        for item in self:
-            if isinstance(item, tuple) and len(item) == 2:
-                captured.append(item[1])
-        return real_sort(self, *args, **kwargs)
-
-    # Easier: derive the boosted score from formula post-rerank doesn't expose it.
-    # Instead drive through _rerank_results and recompute outside.
-    result = await engine._rerank_results('q', [unit])
-    assert len(result) == 1
-    return 0.0
-
-
 class TestConfidenceBoostFormula:
     """Spec: confidence_boost = 1.0 + confidence_alpha * (unit.confidence - 0.5)."""
 

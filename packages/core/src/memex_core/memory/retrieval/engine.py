@@ -50,6 +50,11 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.formatting import format_for_reranking
+from memex_core.metrics import (
+    CONFIDENCE_BOOST_OBSERVED,
+    CONFIDENCE_SCORE_DISTRIBUTION,
+    MW_BOOST_OBSERVED,
+)
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
@@ -1057,8 +1062,6 @@ class RetrievalEngine:
 
             # F47 calibration signal: emit raw confidence values regardless of
             # confidence_alpha so the pre-flip distribution accumulates.
-            from memex_core.metrics import CONFIDENCE_SCORE_DISTRIBUTION
-
             for u in units:
                 CONFIDENCE_SCORE_DISTRIBUTION.observe(_get_confidence(u))
 
@@ -1187,7 +1190,6 @@ class RetrievalEngine:
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
             # Apply multiplicative recency, temporal proximity, MW, and F47 confidence boosts
-            from memex_core.metrics import CONFIDENCE_BOOST_OBSERVED, MW_BOOST_OBSERVED
             from memex_core.services.outcomes import compute_mw_boost
 
             now = datetime.now(timezone.utc)

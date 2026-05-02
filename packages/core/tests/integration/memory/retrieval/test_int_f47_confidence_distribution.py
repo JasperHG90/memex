@@ -100,19 +100,19 @@ class TestF47ConfidenceDistribution:
             seeded_ids.append(uid)
         await session.commit()
 
-        sample_count_before = CONFIDENCE_SCORE_DISTRIBUTION._sum.get()
+        cumulative_sum_before = CONFIDENCE_SCORE_DISTRIBUTION._sum.get()
 
         results, _ = await engine_instance.retrieve(
             session,
             RetrievalRequest(query='service mesh sidecar tls', limit=10),
         )
 
-        sample_count_after = CONFIDENCE_SCORE_DISTRIBUTION._sum.get()
+        cumulative_sum_after = CONFIDENCE_SCORE_DISTRIBUTION._sum.get()
 
         assert len(results) > 0, 'retrieve returned no results — hydration not exercised'
-        assert sample_count_after > sample_count_before, (
+        assert cumulative_sum_after > cumulative_sum_before, (
             'CONFIDENCE_SCORE_DISTRIBUTION must observe each hydrated unit; '
-            f'before={sample_count_before} after={sample_count_after}'
+            f'before={cumulative_sum_before} after={cumulative_sum_after}'
         )
         # Sanity: at least one of our seeded units was returned.
         result_ids = {r.id for r in results}
