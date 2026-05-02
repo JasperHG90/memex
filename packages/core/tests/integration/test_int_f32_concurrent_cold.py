@@ -8,14 +8,17 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_common.types import FactTypes
-from memex_core.config import MemexConfig
-from memex_core.diagnostics import umap as umap_mod
-from memex_core.diagnostics.umap import cache_path_for
-from memex_core.memory.sql_models import MemoryUnit, Note, Vault
-from memex_core.services.diagnostics import DiagnosticsService
+pytest.importorskip('umap')
+
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
+
+from memex_common.types import FactTypes  # noqa: E402
+from memex_core.config import MemexConfig  # noqa: E402
+from memex_core.diagnostics import umap as umap_mod  # noqa: E402
+from memex_core.diagnostics.umap import cache_path_for  # noqa: E402
+from memex_core.memory.sql_models import MemoryUnit, Note, Vault  # noqa: E402
+from memex_core.services.diagnostics import DiagnosticsService  # noqa: E402
 
 
 async def _seed_minimal_vault(session: AsyncSession) -> Vault:
