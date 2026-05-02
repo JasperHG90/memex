@@ -50,9 +50,15 @@ class EntityLockTimeoutError(MemexError):
 
     Indicates concurrent reconsolidation on the same entity. Surface to the
     user as 'another reconsolidation is in progress; retry in a moment'.
+
+    Carries the configured ``timeout_seconds`` so HTTP handlers can derive a
+    sensible ``Retry-After`` value dynamically instead of hard-coding one
+    (Hermes round-4 MED).
     """
 
-    pass
+    def __init__(self, message: str, *, timeout_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.timeout_seconds = timeout_seconds
 
 
 class LockIdSplit(NamedTuple):
@@ -153,7 +159,8 @@ async def acquire_entity_lock(
                     ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='timeout').inc()
                     raise EntityLockTimeoutError(
                         f'could not acquire advisory lock for entity {entity_id} '
-                        f'within {timeout_seconds}s (lock_id={lock_id})'
+                        f'within {timeout_seconds}s (lock_id={lock_id})',
+                        timeout_seconds=timeout_seconds,
                     )
                 await asyncio.sleep(_RETRY_INTERVAL_SECONDS)
             yield
