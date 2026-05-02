@@ -165,8 +165,35 @@ class ConsolidateRequest(BaseModel):
     )
 
 
+class ReconsolidateResponse(BaseModel):
+    """F9: typed response envelope for /memory/reconsolidate.
+
+    Mirrors `LocksService.reconsolidate_entity` return shape (RFC-005 / RFC-008).
+    """
+
+    entity_id: UUID = Field(..., description='Entity UUID that was reconsolidated.')
+    vault_id: UUID = Field(..., description='Vault UUID the entity was scoped to.')
+    units_examined: int = Field(
+        ..., description='Number of memory units linked to the entity in this vault.'
+    )
+    contradictions_run: int = Field(
+        ..., description='Number of unit_ids passed to ContradictionEngine.detect_contradictions.'
+    )
+    mental_model_id: str | None = Field(
+        default=None,
+        description='ID of the updated MentalModel, if reflection produced one.',
+    )
+    observations_added: int = Field(
+        default=0, description='Number of new observations added to the mental model.'
+    )
+    error: str | None = Field(
+        default=None, description='Optional error string for non-fatal partial outcomes.'
+    )
+
+
 @router.post(
     '/memory/reconsolidate',
+    response_model=ReconsolidateResponse,
     dependencies=[Depends(require_write)],
     responses={
         409: {
@@ -180,7 +207,7 @@ async def reconsolidate_entity(
     request: Annotated[ReconsolidateRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
-) -> dict[str, Any]:
+) -> ReconsolidateResponse:
     """F9: re-evaluate memories for an entity under a per-entity advisory lock.
 
     Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
@@ -189,11 +216,12 @@ async def reconsolidate_entity(
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        return await api.reconsolidate_entity(
+        result = await api.reconsolidate_entity(
             request.entity_id,
             request.vault_id,
             timeout_seconds=request.timeout_seconds,
         )
+        return ReconsolidateResponse(**result)
     except EntityLockTimeoutError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -235,6 +263,8 @@ async def consolidate_vault(
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
+    except EntityLockTimeoutError as exc:
+        raise HTTPException(status_code=503, detail=f'Entity lock timeout: {exc}')
     except RateLimitExceededError as exc:
         retry_after = max(0, int(exc.retry_after_seconds + 0.999))
         return JSONResponse(

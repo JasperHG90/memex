@@ -51,7 +51,16 @@ def mock_api():
     api.deprioritize_memory_unit = AsyncMock()
     api.restore_memory_unit = AsyncMock()
     # F9 — locks/consolidate.
-    api.reconsolidate_entity = AsyncMock(return_value={'entity_id': str(ENTITY_ID)})
+    api.reconsolidate_entity = AsyncMock(
+        return_value={
+            'entity_id': str(ENTITY_ID),
+            'vault_id': str(ALLOWED_VAULT),
+            'units_examined': 0,
+            'contradictions_run': 0,
+            'mental_model_id': None,
+            'observations_added': 0,
+        }
+    )
     api.consolidate_vault = AsyncMock(return_value={'vault_id': str(ALLOWED_VAULT)})
     api.metastore = SimpleNamespace()
     return api
