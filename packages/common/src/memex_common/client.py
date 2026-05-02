@@ -5,7 +5,12 @@ Used by the CLI to interact with a running Memex server.
 
 import datetime as dt
 import logging
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
+
+if TYPE_CHECKING:
+    # Imported for type hints only; memex_common cannot depend on memex_core
+    # at runtime (memex_core depends on memex_common, not the reverse).
+    from memex_core.memory.revisit import Quality
 from uuid import UUID
 
 import httpx
@@ -828,7 +833,7 @@ class RemoteMemexAPI:
     async def review_memory_unit(
         self,
         unit_id: UUID,
-        quality: Any,
+        quality: 'Quality | int | str',
         *,
         vault_id: UUID | str,
     ) -> dict[str, Any]:
