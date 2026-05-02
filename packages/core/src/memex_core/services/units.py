@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from memex_common.exceptions import MemoryUnitNotFoundError
+from memex_common.schemas import UnitHistoryNodeDTO
 from memex_core.context import get_actor, get_session_id
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.units')
+
+DEFAULT_HISTORY_LINK_TYPES: tuple[str, ...] = ('contradicts', 'weakens')
+DEFAULT_HISTORY_MAX_DEPTH: int = 10
+_SENTINEL_OLD = datetime.min.replace(tzinfo=timezone.utc)
 
 
 class UnitsService(BaseService):
@@ -174,3 +180,165 @@ class UnitsService(BaseService):
                 background_tasks=background_tasks,
             )
         return unit
+
+    async def get_unit_history(
+        self,
+        unit_id: UUID,
+        *,
+        max_depth: int = DEFAULT_HISTORY_MAX_DEPTH,
+        vault_id: UUID | None = None,
+        link_types: tuple[str, ...] = DEFAULT_HISTORY_LINK_TYPES,
+    ) -> UnitHistoryNodeDTO:
+        """F49: walk the contradiction graph backward from ``unit_id``.
+
+        Starts at ``unit_id`` (depth=0) and recursively follows outgoing
+        ``contradicts`` / ``weakens`` MemoryLink rows — i.e., links where
+        ``from_unit_id == current_unit_id`` — collecting the ``to_unit_id``
+        targets as predecessors. The convention follows
+        ``packages/core/src/memex_core/memory/contradiction/engine.py:225-227``:
+        the contradiction engine writes ``MemoryLink(from=authoritative,
+        to=superseded)``, so a backward walk in time queries ``from_unit_id =
+        current`` and collects ``to_unit_id`` values.
+
+        v1 returns supersession history (negative-evidence path:
+        contradicts/weakens), NOT full confidence evolution. ``reinforces``
+        links are excluded because they point forward in time. A future
+        ``forward=True`` extension can walk ``reinforces`` separately.
+
+        **Cycle and DAG safety**:
+        - ``visited: set[UUID]`` prevents the same node from being processed
+          twice via different predecessor paths in branching DAGs (e.g.,
+          A weakened by B and C, both weakened by D → D is processed once).
+        - ``max_depth`` cap is the second line of defense against literal
+          cycles. Nodes hit at the cap are returned with ``truncated=True``.
+
+        **Vault scoping** (Wave 0 multi-tenant invariant): every link the walk
+        follows must belong to ``vault_id`` (when supplied) AND match the
+        starting unit's ``vault_id``. Cross-vault links are filtered out at
+        query time. When ``vault_id`` is None, the unit's own ``vault_id`` is
+        used (legacy CLI path).
+
+        Returns the root ``UnitHistoryNodeDTO`` (depth=0). The branching
+        structure is encoded as ``predecessors`` lists at each level. No
+        reranker, no boosts, no quality filtering — graph walk is for
+        completeness, not relevance. Pre-filters do NOT apply.
+        """
+        from memex_core.memory.sql_models import MemoryLink, MemoryUnit
+        from sqlmodel import col, select
+
+        if max_depth < 0:
+            raise ValueError('max_depth must be >= 0')
+
+        async with self.metastore.session() as session:
+            root_unit = await session.get(MemoryUnit, unit_id)
+            if root_unit is None:
+                raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
+            if vault_id is not None and root_unit.vault_id != vault_id:
+                raise MemoryUnitNotFoundError(
+                    f'Memory unit {unit_id} not found in vault {vault_id}.'
+                )
+
+            scoped_vault_id = vault_id if vault_id is not None else root_unit.vault_id
+
+            visited: set[UUID] = {unit_id}
+
+            async def _walk(
+                current_unit: MemoryUnit,
+                current_link_type: str | None,
+                current_link_metadata: dict[str, Any],
+                depth: int,
+            ) -> UnitHistoryNodeDTO:
+                event_date = current_unit.event_date or current_unit.mentioned_at
+                node = UnitHistoryNodeDTO(
+                    unit_id=current_unit.id,
+                    text=current_unit.text,
+                    note_id=current_unit.note_id,
+                    confidence=current_unit.confidence,
+                    event_date=event_date,
+                    link_type=current_link_type,
+                    link_metadata=current_link_metadata or {},
+                    depth=depth,
+                    predecessors=[],
+                    truncated=False,
+                )
+
+                if depth >= max_depth:
+                    if not link_types:
+                        return node
+                    probe_stmt = (
+                        select(MemoryLink.to_unit_id)
+                        .where(MemoryLink.from_unit_id == current_unit.id)
+                        .where(MemoryLink.vault_id == scoped_vault_id)
+                        .where(col(MemoryLink.link_type).in_(list(link_types)))
+                        .limit(1)
+                    )
+                    probe_result = await session.exec(probe_stmt)
+                    if probe_result.first() is not None:
+                        node.truncated = True
+                    return node
+
+                if not link_types:
+                    return node
+
+                link_stmt = (
+                    select(MemoryLink)
+                    .where(MemoryLink.from_unit_id == current_unit.id)
+                    .where(MemoryLink.vault_id == scoped_vault_id)
+                    .where(col(MemoryLink.link_type).in_(list(link_types)))
+                )
+                link_result = await session.exec(link_stmt)
+                outgoing_links = list(link_result.all())
+
+                predecessor_ids = [lnk.to_unit_id for lnk in outgoing_links]
+                fresh_ids: list[UUID] = []
+                fresh_links: list[MemoryLink] = []
+                for lnk in outgoing_links:
+                    if lnk.to_unit_id in visited:
+                        continue
+                    visited.add(lnk.to_unit_id)
+                    fresh_ids.append(lnk.to_unit_id)
+                    fresh_links.append(lnk)
+
+                if not fresh_ids:
+                    if predecessor_ids:
+                        node.truncated = True
+                    return node
+
+                pred_stmt = (
+                    select(MemoryUnit)
+                    .where(col(MemoryUnit.id).in_(fresh_ids))
+                    .where(MemoryUnit.vault_id == scoped_vault_id)
+                )
+                pred_result = await session.exec(pred_stmt)
+                pred_units = {u.id: u for u in pred_result.all()}
+
+                children: list[UnitHistoryNodeDTO] = []
+                for lnk in fresh_links:
+                    pred_unit = pred_units.get(lnk.to_unit_id)
+                    if pred_unit is None:
+                        continue
+                    child = await _walk(
+                        pred_unit,
+                        current_link_type=lnk.link_type,
+                        current_link_metadata=dict(lnk.link_metadata or {}),
+                        depth=depth + 1,
+                    )
+                    children.append(child)
+
+                children.sort(
+                    key=lambda c: (
+                        c.event_date or _SENTINEL_OLD,
+                        str(c.unit_id),
+                    )
+                )
+                node.predecessors = children
+                return node
+
+            root = await _walk(
+                root_unit,
+                current_link_type=None,
+                current_link_metadata={},
+                depth=0,
+            )
+
+        return root

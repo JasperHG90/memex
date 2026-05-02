@@ -3088,6 +3088,88 @@ async def memex_get_memory_links(
 
 
 @mcp.tool(
+    name='memex_get_unit_history',
+    description=(
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    tags={'storage'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_unit_history(
+    ctx: Context,
+    unit_id: Annotated[
+        str,
+        Field(description='Memory unit UUID to start the walk from (root, depth=0).'),
+    ],
+    vault_id: Annotated[
+        str,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. REQUIRED for per-vault '
+                'auth scoping (Wave 0 multi-tenant invariant). Cross-vault '
+                'links are filtered out.'
+            ),
+        ),
+    ],
+    max_depth: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(
+            description=(
+                'Maximum recursion depth for the contradiction walk. Nodes '
+                'reached at the cap are returned with truncated=True.'
+            ),
+        ),
+    ] = 10,
+) -> dict[str, Any]:
+    """Walk the contradiction graph backward from ``unit_id`` (newer -> older).
+
+    v1 returns supersession history (negative-evidence path:
+    contradicts/weakens links), NOT full confidence evolution. A future
+    ``forward=True`` extension can walk ``reinforces`` separately.
+
+    Returns a JSON-serialised ``UnitHistoryNodeDTO`` tree rooted at
+    ``unit_id`` (depth=0). Predecessors are nested under each node and
+    sorted oldest-first by ``event_date``. ``link_type`` on each
+    non-root node names the supersession edge from that node to its
+    parent (the newer authoritative unit).
+    """
+    try:
+        api = get_api(ctx)
+
+        try:
+            unit_uuid = UUID(unit_id)
+        except (ValueError, TypeError):
+            raise ToolError(f'Invalid unit_id: {unit_id!r}')
+
+        resolved_vault = await _resolve_vault_id(api, vault_id)
+
+        if max_depth < 0:
+            raise ToolError('max_depth must be >= 0.')
+
+        history = await api.get_unit_history(
+            unit_uuid,
+            max_depth=max_depth,
+            vault_id=resolved_vault,
+        )
+
+        return cast(dict[str, Any], history.model_dump(mode='json'))
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Get unit history failed: {e}', exc_info=True)
+        raise ToolError(f'Get unit history failed: {e}')
+
+
+@mcp.tool(
     name='memex_find_note',
     description=(
         'Lightweight fuzzy title search. Returns matching note titles, IDs, and scores. '

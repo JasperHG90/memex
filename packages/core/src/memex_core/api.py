@@ -1130,6 +1130,26 @@ class MemexAPI:
             background_tasks=background_tasks,
         )
 
+    async def get_unit_history(
+        self,
+        unit_id: UUID,
+        *,
+        max_depth: int = 10,
+        vault_id: UUID | None = None,
+    ) -> Any:
+        """F49: walk the contradiction graph backward from ``unit_id``.
+
+        Returns a ``UnitHistoryNodeDTO`` tree rooted at the queried unit
+        (depth=0). v1 walks ``contradicts`` and ``weakens`` links only —
+        ``reinforces`` is excluded because it points forward in time.
+        Delegates to ``UnitsService.get_unit_history``.
+        """
+        return await self._units.get_unit_history(
+            unit_id,
+            max_depth=max_depth,
+            vault_id=vault_id,
+        )
+
     async def get_due_for_review(
         self,
         vault_id: UUID,
