@@ -56,11 +56,7 @@ def _seed_unit_eligible(postgres_url: str) -> tuple[UUID, UUID]:
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_seed())
-    finally:
-        loop.close()
+    return asyncio.run(_seed())
 
 
 def _seed_secondary_vault(postgres_url: str) -> UUID:
@@ -80,11 +76,7 @@ def _seed_secondary_vault(postgres_url: str) -> UUID:
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_seed())
-    finally:
-        loop.close()
+    return asyncio.run(_seed())
 
 
 def _read_unit_review_state(
@@ -106,11 +98,7 @@ def _read_unit_review_state(
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_q())
-    finally:
-        loop.close()
+    return asyncio.run(_q())
 
 
 # ---------------------------------------------------------------------------
@@ -311,11 +299,7 @@ def test_due_for_review_returns_unit_after_back_dated_schedule(
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_back_date())
-    finally:
-        loop.close()
+    asyncio.run(_back_date())
 
     resp = client.get(
         '/api/v1/memory/due_for_review',

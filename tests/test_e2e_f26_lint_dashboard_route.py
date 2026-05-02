@@ -70,11 +70,7 @@ def _seed_vault_and_proposals(
         finally:
             await conn.close()
 
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(_seed())
-    finally:
-        loop.close()
+    return asyncio.run(_seed())
 
 
 @pytest.mark.integration
