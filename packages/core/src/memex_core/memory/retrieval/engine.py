@@ -42,6 +42,7 @@ from memex_core.memory.retrieval._offload import (
     get_reranker_call_timeout,
     get_reranker_semaphore,
 )
+from memex_core.memory.retrieval.rerank_cache import CrossEncoderScoreCache, hash_query
 from memex_core.memory.retrieval.temporal_extraction import extract_temporal_constraint
 from memex_core.memory.retrieval.temporal_concretizer import (
     TemporalConcretizer,
@@ -304,6 +305,16 @@ class RetrievalEngine:
         # Query embedding cache: avoids re-encoding recently seen queries
         self._embedding_cache: TTLCache[str, np.ndarray] = TTLCache(maxsize=256, ttl=300)
         self._embedding_cache_lock = asyncio.Lock()
+
+        # F41 — cross-encoder score cache (default-on; bypassed when flag is False)
+        self._rerank_cache: CrossEncoderScoreCache | None = (
+            CrossEncoderScoreCache(
+                max_size=self.retrieval_config.cross_encoder_cache_size,
+                ttl_seconds=self.retrieval_config.cross_encoder_cache_ttl_seconds,
+            )
+            if self.retrieval_config.cross_encoder_cache_enabled
+            else None
+        )
 
         from memex_core.memory.reflect.queue_service import ReflectionQueueService
 
@@ -1318,6 +1329,54 @@ class RetrievalEngine:
 
         return final_results
 
+    async def _reranker_score_uncached(self, query: str, texts: list[str]) -> list[float]:
+        """Direct cross-encoder call with the standard semaphore + timeout.
+
+        Shared reranker cap across both reranker sites — one model, one
+        capacity budget. wait_for cancels the coroutine but the underlying
+        thread keeps running.
+        """
+        if self.reranker is None:
+            raise RuntimeError('reranker required for _reranker_score_uncached')
+        reranker = self.reranker
+        async with get_reranker_semaphore(), _instrument('rerank'):
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(reranker.score, query, texts),
+                timeout=get_reranker_call_timeout(),
+            )
+        return [float(s) for s in raw]
+
+    async def _reranker_score(
+        self,
+        query: str,
+        results: list[MemoryUnit],
+        formatted_texts: list[str],
+    ) -> list[float]:
+        """Score *results* against *query*, serving cache hits where possible (F41).
+
+        When the cache is disabled the call falls through to the cross-encoder
+        directly. Cache key triple is ``(model_version, query_hash, unit_id)``;
+        ``unit_id`` is globally unique per Memex schema so the cache cannot
+        leak across vaults.
+        """
+        if self._rerank_cache is None or self.reranker is None:
+            return await self._reranker_score_uncached(query, formatted_texts)
+
+        # Defensive fallback for out-of-tree rerankers that pre-date F41 and
+        # don't define ``model_version`` (the protocol now ships a default
+        # but duck-typed implementations may not subclass it). With a constant
+        # version the cache still works; model upgrades will be invalidated
+        # by the TTL backstop rather than structurally.
+        model_version = getattr(self.reranker, 'model_version', 'unknown')
+        query_h = hash_query(query)
+        keys = [(model_version, query_h, unit.id) for unit in results]
+
+        async def _compute(missing_indices: Sequence[int]) -> Sequence[float]:
+            sub_texts = [formatted_texts[i] for i in missing_indices]
+            return await self._reranker_score_uncached(query, sub_texts)
+
+        return await self._rerank_cache.get_or_compute_batch(keys, _compute)
+
     async def _rerank_results(
         self, query: str, results: list[MemoryUnit], min_score: float | None = None
     ) -> list[MemoryUnit]:
@@ -1363,14 +1422,10 @@ class RetrievalEngine:
             # the pre-filter shrinks the reranker working set.
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(len(formatted_texts))
 
-            # Shared reranker cap across both reranker sites — one model,
-            # one capacity budget. wait_for cancels the coroutine but the
-            # underlying thread keeps running.
-            async with get_reranker_semaphore(), _instrument('rerank'):
-                scores = await asyncio.wait_for(
-                    asyncio.to_thread(self.reranker.score, query, formatted_texts),
-                    timeout=get_reranker_call_timeout(),
-                )
+            # F41 — score via cache wrapper. Cache misses fall through to
+            # _reranker_score_uncached, which holds the shared reranker
+            # semaphore and timeout.
+            scores = await self._reranker_score(query, results, formatted_texts)
 
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]

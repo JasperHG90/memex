@@ -3167,6 +3167,7 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
     { name = "trafilatura" },
+    { name = "xxhash" },
 ]
 
 [package.optional-dependencies]
@@ -3252,6 +3253,7 @@ requires-dist = [
     { name = "trafilatura", specifier = ">=2.0.0,<3" },
     { name = "umap-learn", marker = "extra == 'diagnostics'", specifier = ">=0.5,<1.0" },
     { name = "uvicorn", marker = "extra == 'dev-server'", specifier = ">=0.40.0" },
+    { name = "xxhash", specifier = ">=3.0" },
 ]
 provides-extras = ["cloud", "dev-server", "diagnostics", "gcs", "gpu", "s3", "tracing"]
 
