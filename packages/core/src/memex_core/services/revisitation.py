@@ -217,6 +217,9 @@ class RevisitationService(BaseService):
         audit-log signal IS the integration seam.
         """
         review_at = now or datetime.now(timezone.utc)
+        # OutcomeService is intentionally stateless: it has no metastore/filestore
+        # dependency and accepts the session per call (see services/outcomes.py).
+        # The no-arg constructor is correct here, not a missing-deps bug.
         outcome_service = OutcomeService()
         async with self.metastore.session() as session:
             unit = await session.get(MemoryUnit, unit_id, with_for_update=True)
