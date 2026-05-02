@@ -26,7 +26,10 @@ depends_on: str | list[str] | None = None
 def _table_exists(conn, table: str) -> bool:
     result = conn.execute(
         sa.text(
-            'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :table)'
+            'SELECT EXISTS ('
+            '  SELECT 1 FROM information_schema.tables'
+            '  WHERE table_schema = current_schema() AND table_name = :table'
+            ')'
         ),
         {'table': table},
     )
