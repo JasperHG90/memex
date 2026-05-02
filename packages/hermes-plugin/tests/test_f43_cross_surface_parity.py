@@ -1,0 +1,111 @@
+"""F43 — cross-surface parity test.
+
+Asserts that the canonical §3.5 / §3.4.2 concepts appear in ALL THREE agent
+surfaces:
+
+  1. MCP tool descriptions (``memex_mcp._f43_descriptions``)
+  2. Hermes session-briefing primer (``memex_hermes_plugin.memex.briefing``)
+  3. Claude Code plugin rule (``packages/claude-code-plugin/rules/memory-resolution-flow.md``)
+
+Per CLAUDE.md rule 24 (agent-surface parity): the resolution-flow guidance must
+not drift between surfaces. A failing assertion here indicates a real surface
+drift — fix the surface, do not relax the assertion.
+
+Source: cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2
+(added 2026-05-02).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from memex_hermes_plugin.memex.briefing import _RESOLUTION_FLOW_PRIMER
+from memex_mcp._f43_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_RECORD_OUTCOME_DESCRIPTION,
+)
+
+_CC_RULE_PATH = (
+    Path(__file__).parents[2] / 'claude-code-plugin' / 'rules' / 'memory-resolution-flow.md'
+)
+
+
+def _surfaces() -> dict[str, str]:
+    """Return the three surface texts keyed by surface name.
+
+    The MCP surface concatenates both descriptions because some concepts
+    naturally appear on only one of the two verbs in some phrasings — the
+    parity contract is "present somewhere in the verb pair", not "present
+    in each verb individually" (the per-verb parity is enforced by
+    test_f43_descriptions.py).
+    """
+    return {
+        'mcp': MEMEX_RECORD_OUTCOME_DESCRIPTION + '\n' + MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+        'hermes': _RESOLUTION_FLOW_PRIMER,
+        'claude_code': _CC_RULE_PATH.read_text(),
+    }
+
+
+# Each entry is (concept_id, list-of-acceptable-phrasings, mode).
+#   - mode='any': at least one phrasing must appear in the surface text.
+#   - mode='all': every phrasing must appear (used for paired concepts where
+#     both verbs / both phrases must co-occur).
+_CONCEPTS: list[tuple[str, list[str], str]] = [
+    ('options_abc_a', ['Option A'], 'any'),
+    ('options_abc_b', ['Option B'], 'any'),
+    ('options_abc_c', ['Option C'], 'any'),
+    (
+        'top_k_at_least_30',
+        ['top_k=30', 'top_k>=30', 'top_k >= 30', 'top_k must be ≥30', '`top_k` must be **≥30**'],
+        'any',
+    ),
+    (
+        'paired_writes',
+        ['memex_record_outcome', 'memex_memory_deprioritize'],
+        'all',
+    ),
+    (
+        'f33_safety_net',
+        ['F33 exploration is the safety net', 'F33 exploration', 'exploration safety net'],
+        'any',
+    ),
+    (
+        'apply_pre_filter_false',
+        ['apply_pre_filter=False', 'apply_pre_filter = False'],
+        'any',
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    'concept,phrase_options,mode',
+    _CONCEPTS,
+    ids=[c[0] for c in _CONCEPTS],
+)
+def test_concept_present_in_all_three_surfaces(
+    concept: str, phrase_options: list[str], mode: str
+) -> None:
+    """Every canonical concept must appear in every agent surface.
+
+    A failure here means a surface drifted from the §3.5 / §3.4.2 spec.
+    Update the offending surface; do NOT relax the assertion.
+    """
+    surfaces = _surfaces()
+    failures: list[str] = []
+    for surface_name, text in surfaces.items():
+        if mode == 'all':
+            missing = [p for p in phrase_options if p not in text]
+            if missing:
+                failures.append(f'{surface_name!r}: missing all-of phrases {missing!r}')
+        else:  # mode == 'any'
+            if not any(p in text for p in phrase_options):
+                failures.append(
+                    f'{surface_name!r}: none of the phrasings {phrase_options!r} appeared'
+                )
+    assert not failures, (
+        f'F43 cross-surface parity broke for concept {concept!r}:\n'
+        + '\n'.join('  - ' + f for f in failures)
+        + '\nSee cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2.'
+    )

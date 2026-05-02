@@ -17,6 +17,10 @@ Both descriptions teach the same flow because both verbs participate in it.
 
 from __future__ import annotations
 
+from memex_mcp._f4_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F4_DEPRIORITIZE_DESCRIPTION,
+)
+
 # ---------------------------------------------------------------------------
 # Shared section blocks (composed into both tool descriptions verbatim).
 # ---------------------------------------------------------------------------
@@ -184,21 +188,10 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
 # F4's deprioritize verb. The original short F4 description (kept as the
 # preamble so deprioritize discoverability for misleading/outdated/noise
 # units is unchanged) is followed by the same §3.5 flow + axes + history.
-_DEPRIORITIZE_PREAMBLE = (
-    "memory_deprioritize — Lower a memory unit's retrieval rank without deleting it.\n"
-    'Use when a memory is misleading, outdated, or noise that contaminates retrieval.\n'
-    '\n'
-    '- unit_id: the unit to deprioritize\n'
-    '- reason: brief text explanation (logged to maintenance ledger). Use this field\n'
-    '  liberally to capture WHY (e.g., "user confirmed issue fixed", "superseded by\n'
-    '  v2.3 release", "was wrong about deploy target"). Free text is sufficient — no\n'
-    '  enum needed.\n'
-    '\n'
-    'The unit remains accessible via include_deprioritized=true retrieval. To restore,\n'
-    'the user runs `memex memory restore <id>`. This is non-destructive — prefer it\n'
-    'over hard delete in almost all cases. Use sparingly: a small number of high-quality\n'
-    'deprioritizations is more valuable than aggressive pruning.\n'
-)
+# Imported from `_f4_descriptions` so there is a single source of truth; F4's
+# verbatim test (test_f4_tool_descriptions.py) pins the constant against the
+# spec, and F43 just appends a trailing newline for clean section separation.
+_DEPRIORITIZE_PREAMBLE = _F4_DEPRIORITIZE_DESCRIPTION + '\n'
 
 MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (
     _DEPRIORITIZE_PREAMBLE
