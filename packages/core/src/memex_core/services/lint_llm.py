@@ -538,13 +538,28 @@ class LintLLMService(BaseService):
         rows = await self.list_deferred(vault_id, limit=budget, session=session)
         processed = 0
         for proposal_id, unit_id, _evidence in rows:
-            admitted = await self.check_and_increment_quota(vault_id, session=session)
-            if not admitted:
-                break
-            finding = await run_llm_check(unit_id, vault_id, session)
-            if finding is not None:
-                await self.write_finding(finding, vault_id, session=session)
-            await self.dismiss_deferred(proposal_id, session=session)
+            # Per-row try/except so a single LLM/storage failure does not
+            # poison the rest of the queue (PR #101 c4 HIGH-2). Use a
+            # SAVEPOINT so an exception leaves the outer transaction usable
+            # for subsequent rows; otherwise the failed statement would
+            # abort the surrounding tx and every later iteration would no-op.
+            try:
+                async with session.begin_nested():
+                    admitted = await self.check_and_increment_quota(vault_id, session=session)
+                    if not admitted:
+                        break
+                    finding = await run_llm_check(unit_id, vault_id, session)
+                    if finding is not None:
+                        await self.write_finding(finding, vault_id, session=session)
+                    await self.dismiss_deferred(proposal_id, session=session)
+            except Exception:
+                logger.exception(
+                    'F10 process_deferred: LLM check failed for deferred unit %s '
+                    '(proposal %s) — skipping and continuing',
+                    unit_id,
+                    proposal_id,
+                )
+                continue
             processed += 1
         return processed
 
