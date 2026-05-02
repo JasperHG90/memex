@@ -35,6 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from memex_core.memory._lint_utils import enum_value as _enum_value
 from memex_core.memory.sql_models import LintType
 from memex_core.services.base import BaseService
 
@@ -114,11 +115,6 @@ class LintFindingsPage(BaseModel):
 
     findings: list[LintFindingDTO]
     next_cursor: str | None
-
-
-def _enum_value(v: Any) -> str:
-    """Coerce SQLModel enum / raw string to its string value."""
-    return v.value if hasattr(v, 'value') else str(v)
 
 
 def _encode_cursor(created_at: datetime, finding_id: UUID) -> str:

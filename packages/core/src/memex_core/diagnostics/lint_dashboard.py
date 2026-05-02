@@ -19,6 +19,7 @@ from uuid import UUID
 
 from sqlalchemy import desc, func, select
 
+from memex_core.memory._lint_utils import enum_value as _enum_value
 from memex_core.memory.sql_models import LintStatus, MaintenanceProposal
 
 if TYPE_CHECKING:
@@ -148,15 +149,3 @@ async def pending_by_type(
     async with metastore.session() as sess:
         rows = (await sess.exec(stmt)).all()
     return {_enum_value(row.lint_type): int(row.count) for row in rows}
-
-
-def _enum_value(v: Any) -> str:
-    """Normalise SQLModel enum field reads to plain strings.
-
-    F6 stores lint_type/status/source as Text columns but the SQLModel
-    declarations type them as enums (LintType/LintStatus/LintSource). Reads
-    can come back as either the enum instance or the raw string depending
-    on driver path; this collapses both to the string form the dashboard
-    JSON expects.
-    """
-    return v.value if hasattr(v, 'value') else str(v)
