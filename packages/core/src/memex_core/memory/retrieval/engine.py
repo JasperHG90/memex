@@ -54,6 +54,17 @@ from memex_core.memory.formatting import format_for_reranking
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 
+def _get_confidence(unit: Any) -> float:
+    """Resolve a unit's confidence with defensive fallback to 1.0.
+
+    Schema is NOT NULL DEFAULT 1.0; this guard handles stripped/stale model
+    objects (no attribute) and rows materialised with confidence=None before
+    the column default takes effect.
+    """
+    confidence = getattr(unit, 'confidence', 1.0)
+    return 1.0 if confidence is None else confidence
+
+
 def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
     """Derive note-level status from unit confidences."""
     if not units:
@@ -1049,10 +1060,7 @@ class RetrievalEngine:
             from memex_core.metrics import CONFIDENCE_SCORE_DISTRIBUTION
 
             for u in units:
-                conf_val = getattr(u, 'confidence', 1.0)
-                if conf_val is None:
-                    conf_val = 1.0
-                CONFIDENCE_SCORE_DISTRIBUTION.observe(conf_val)
+                CONFIDENCE_SCORE_DISTRIBUTION.observe(_get_confidence(u))
 
         if model_ids:
             models = (
@@ -1215,14 +1223,10 @@ class RetrievalEngine:
 
                 # F47: contradiction-derived confidence boost.
                 # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
-                # Schema is NOT NULL DEFAULT 1.0; the `is None` guard is defensive
-                # for stripped/stale model objects.
                 # Floor at 0.0 belt-and-suspenders with the config-level ge=0.0/le=2.0
                 # bounds — keeps boosted_score non-negative even if the constraint is
                 # later weakened.
-                confidence = getattr(unit, 'confidence', 1.0)
-                if confidence is None:
-                    confidence = 1.0
+                confidence = _get_confidence(unit)
                 confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
                 CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
 

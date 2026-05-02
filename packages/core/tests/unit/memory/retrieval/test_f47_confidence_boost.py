@@ -95,12 +95,22 @@ class TestConfidenceBoostFormula:
 
     @pytest.mark.asyncio
     async def test_cold_start_alpha_nonzero_yields_lift(self) -> None:
-        """confidence=1.0, alpha=0.3 → boost = 1.0 + 0.3 * 0.5 = 1.15."""
+        """confidence=1.0, alpha=0.3 → boost = 1.0 + 0.3 * 0.5 = 1.15.
+
+        Pins the engine-emitted boost factor to the spec formula by reading
+        the ``CONFIDENCE_BOOST_OBSERVED`` histogram's ``_sum`` delta — connects
+        the pure-formula table (``TestCompositionFormulaValues``) to the live
+        engine wiring.
+        """
+        from memex_core.metrics import CONFIDENCE_BOOST_OBSERVED
+
         unit = _make_unit(confidence=1.0)
         engine = _make_engine([0.0], confidence_alpha=0.3)
-        # Composition: 0.5 * 1.15 = 0.575 (recency/temporal/mw all 1.0 with alpha=0).
+        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
         result = await engine._rerank_results('q', [unit])
+        sum_after = CONFIDENCE_BOOST_OBSERVED._sum.get()
         assert len(result) == 1
+        assert math.isclose(sum_after - sum_before, 1.15, abs_tol=1e-6)
 
     @pytest.mark.asyncio
     async def test_single_contradiction_dampens_boost(self) -> None:
@@ -112,11 +122,20 @@ class TestConfidenceBoostFormula:
 
     @pytest.mark.asyncio
     async def test_heavily_contradicted_unit_penalised(self) -> None:
-        """confidence=0.0, alpha=0.3 → boost = 1.0 + 0.3 * (-0.5) = 0.85."""
+        """confidence=0.0, alpha=0.3 → boost = 1.0 + 0.3 * (-0.5) = 0.85.
+
+        Pins the engine-emitted boost factor to the spec formula via the
+        ``CONFIDENCE_BOOST_OBSERVED`` histogram ``_sum`` delta.
+        """
+        from memex_core.metrics import CONFIDENCE_BOOST_OBSERVED
+
         unit = _make_unit(confidence=0.0)
         engine = _make_engine([0.0], confidence_alpha=0.3)
+        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
         result = await engine._rerank_results('q', [unit])
+        sum_after = CONFIDENCE_BOOST_OBSERVED._sum.get()
         assert len(result) == 1
+        assert math.isclose(sum_after - sum_before, 0.85, abs_tol=1e-6)
 
     @pytest.mark.asyncio
     async def test_alpha_zero_is_invariant_across_confidence(self) -> None:
