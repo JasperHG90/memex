@@ -52,6 +52,38 @@ that contaminates retrieval, prefer the **NON-DESTRUCTIVE** verb:
   it removes the unit from the entity graph and is irreversible. Prefer
   deprioritize unless the unit MUST leave the graph entirely.
 
+## When the user reports an issue resolved (§3.5 5-step flow)
+
+When the user says "the X bug is fixed", "we shipped Y", "issue Z is no longer
+relevant", apply the **5-step resolution flow** — see
+`.claude/rules/memory-resolution-flow.md` for the canonical text. The
+short version:
+
+1. **Disambiguate first** — if scope is ambiguous, ASK before writing.
+2. **Route by info quality + pick a coverage path**:
+   - Title fragment → `memex_find_note`; content only → `memex_memory_search`
+   - **(A) entity-anchored**: `memex_list_entities` → `memex_get_entity_mentions`
+   - **(B) cross-note semantic**: `memex_memory_search(top_k>=30, after=...)`
+     — `top_k` MUST be ≥30, default 5 misses cross-note matches
+   - **(C) single-note PageIndex**: `memex_get_page_indices` →
+     `memex_get_memory_units(chunk_ids=[...])`
+3. **Mandatory LLM judgment** — read candidate unit bodies, pick the
+   fix-relevant subset. Never bulk-write the raw candidate set.
+4. **+5. Paired writes against the LLM-judged-relevant subset only**:
+   `memex_record_outcome(unit_ids=[...], success=false, reason="...")` AND
+   `memex_memory_deprioritize(unit_id=..., reason="...")` against the
+   SAME subset.
+
+The two verbs are orthogonal axes (MW gradient vs binary surface state);
+user-confirmed-fix is BOTH signals at once. Imperfect cross-note recall is by
+design — F33 exploration is the safety net.
+
+For "how has my view on X evolved" / "what did I used to think about Y" /
+audit queries, do NOT use the resolution flow — use
+`memex_get_unit_history(unit_id)` for ordered chains, or
+`memex_memory_search(apply_pre_filter=False)` for broader audit. See
+`.claude/rules/memory-resolution-flow.md` for the full historical-routing rule.
+
 ## Capturing a learned procedure (procedure: KV namespace, F14)
 
 Some kinds of "remembering" are NOT a note — they are a compact, learned

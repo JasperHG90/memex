@@ -88,6 +88,79 @@ class BriefingCache:
             self._ready.clear()
 
 
+_RESOLUTION_FLOW_PRIMER = """### When the user reports an issue resolved (§3.5 5-step flow)
+
+The 5-step flow turns a vague "X is fixed" into precise paired writes:
+
+1. **Disambiguate first.** If the scope is ambiguous — multiple candidate
+   notes, multiple candidate topics, or a topic that may span notes — ASK
+   before writing. Examples that warrant a clarification turn: "telegram
+   issues from yesterday" with three Telegram-mentioning notes; "the auth
+   bug we discussed" with no temporal anchor; "the issues are fixed" with
+   multiple distinct issues conflated.
+
+2. **Route by info quality.** Title-fragment known →
+   `memex_find_note(query="...")` (indexed, cheap). Title unknown, content
+   only → `memex_memory_search` (full pipeline, expensive but right). Then
+   pick a coverage path:
+   - **Option A — entity-anchored** (highest recall when topic ↔ entity):
+     `memex_list_entities(query="...")` → `memex_get_entity_mentions(entity_id=...)`.
+     Structural; no semantic-rank miss.
+   - **Option B — cross-note semantic** (no entity anchor):
+     `memex_memory_search(query="...", after="...", top_k=30)`. CRITICAL:
+     `top_k` must be **≥30** — the default 5 is too narrow.
+   - **Option C — single-note PageIndex traversal** (provably one note):
+     `memex_get_page_indices(note_id)` → pick fix-relevant chunk_ids →
+     `memex_get_memory_units(chunk_ids=[...])`. Captures every unit in the
+     chunk; semantic top-k can miss paraphrased mentions.
+
+3. **Mandatory LLM judgment over the candidate set.** READ the unit bodies
+   and judge which ones actually correspond to the user's claim. Memory
+   units are short (~1–3 sentences); reading does not blow up context. The
+   judgment cannot be skipped — daily-reflection notes contain episodic
+   observations ("worked on memex 3h today") that look superficially
+   relevant but are not fix-targets. NEVER bulk-write against the raw
+   candidate set.
+
+4. **+5. Paired writes against the LLM-judged-relevant subset only.** For
+   each unit the LLM judged relevant, issue BOTH writes:
+   `memex_record_outcome(unit_ids=[...], success=false, reason="...")` AND
+   `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
+
+**Orthogonal axes (MW is the gradient; deprioritize is the binary):**
+
+| Tool | Question it answers | Cardinality | Reversible? |
+|------|---------------------|-------------|-------------|
+| `memex_record_outcome(success=...)` | "Did this memory help when retrieved?" | Append-only counter | No (audit log) |
+| `memex_memory_deprioritize(reason)` | "Should this surface by default at all?" | Binary state | Yes (memory_restore) |
+
+User-confirmed-fix is BOTH signals at once. Don't collapse them into one
+combined call — keep the primitives orthogonal.
+
+**Imperfect recall is by design.** None of Options A/B/C give *provable*
+100% recall. F33 exploration is the safety net — units that slip past
+will re-surface, the user re-confirms, another `record_outcome(success=false)`
+compounds the MW penalty. User-driven resolution is a GRADIENT across many
+turns, not a one-shot delete.
+
+**Historical / audit-query routing rule (separate path).** When the user
+asks HOW THINGS CHANGED — "how has my view on X evolved", "what did I used
+to think about Y", "show me everything I believed about Z including the
+wrong stuff", or any of: "evolved", "used to", "history of", "what
+changed", "audit", "show me everything", "show me the hidden ones" — DO
+NOT use the resolution flow. Route differently:
+- Ordered chain on a specific unit → `memex_get_unit_history(unit_id)`
+  (graph walk through contradiction links, oldest → newest).
+- Broader audit / "show me everything including hidden stuff" →
+  `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses
+  MW + FSFM + confidence pre-filters so contradicted, behaviorally-failed,
+  and decayed units appear. Post-reranker boosts still apply, so
+  contradicted units rank below clean ones — correct for audit queries.
+
+Disambiguation between resolution-flow and historical-routing is the
+agent's responsibility."""
+
+
 _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
 
 Three layers:
@@ -236,6 +309,7 @@ def format_briefing_block(
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
     lines.append('\n' + _STORAGE_MODEL_PRIMER)
+    lines.append('\n' + _RESOLUTION_FLOW_PRIMER)
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '

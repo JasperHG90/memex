@@ -20,6 +20,24 @@ You have been invoked via the `/recall` slash command.
    c. If still no results, call `memex_list_entities` to browse the knowledge graph.
    d. If nothing is found after all three strategies, say so — do not guess.
 
+   **Historical / audit-query routing rule (§3.4.2)** — when the user asks
+   HOW THINGS CHANGED rather than "what is true *now*", route differently.
+   Triggers: "evolved", "used to", "history of", "what changed", "what did I
+   think before", "audit", "show me everything", "show me the hidden ones".
+   - **Ordered-chain timeline on a specific unit**: call
+     `memex_get_unit_history(unit_id)` (F49) — graph walk through
+     contradiction links, oldest → newest. Cleaner than ranked search.
+   - **Broader audit / "show me everything including hidden stuff"**: call
+     `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses
+     MW + FSFM + confidence pre-filters so contradicted, behaviorally-
+     failed, and decayed units appear. Post-reranker boosts (F47, F1c)
+     still apply, so contradicted units rank below clean ones — correct
+     for audit queries.
+
+   When the user says "the X issue is resolved", do NOT use this rule —
+   that's the resolution flow (see `/remember` skill +
+   `.claude/rules/memory-resolution-flow.md`).
+
 3. **Present results.**
    - Summarize the findings in a clear, readable format.
    - Include source Note IDs so the user can drill deeper with `memex_read_note`.

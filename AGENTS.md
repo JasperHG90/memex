@@ -187,3 +187,26 @@ Async mode: `asyncio_mode = "auto"` — all async tests run automatically.
 - Use `patch.dict(os.environ, ...)` for config tests.
 - Ensure `ensure_db_env_vars` fixture is active for E2E tests.
 </constraint>
+
+## When the user reports an issue resolved (§3.5 5-step flow)
+
+When the user says "the X bug is fixed" / "we shipped Y" / "issue Z is no
+longer relevant", apply the **5-step resolution flow**: (1) disambiguate
+first if scope is ambiguous; (2) route by info quality (`memex_find_note`
+for title fragment, `memex_memory_search` only when title is unknown) AND
+pick a coverage path — Option A entity-anchored, Option B cross-note
+semantic with `top_k>=30`, or Option C single-note PageIndex traversal;
+(3) mandatory LLM judgment over candidates — never bulk-write; (4+5) paired
+writes (`memex_record_outcome(success=false)` AND
+`memex_memory_deprioritize`) against the LLM-judged-relevant subset only.
+The two verbs are orthogonal axes (MW gradient vs binary surface state).
+
+Authoritative agent guidance lives in three places (parity required per
+the agent-surface rule): the MCP tool descriptions
+(`packages/mcp/src/memex_mcp/_f43_descriptions.py`), the Hermes session
+briefing (`packages/hermes-plugin/.../briefing.py`
+`_RESOLUTION_FLOW_PRIMER`), and the Claude Code plugin rule
+(`packages/claude-code-plugin/rules/memory-resolution-flow.md`). For
+"how has my view on X evolved" / audit queries, use
+`memex_get_unit_history` or `memex_memory_search(apply_pre_filter=False)`
+— see the historical-routing rule in any of the three sources.

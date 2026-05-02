@@ -3423,7 +3423,16 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
         "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE). "
         'Use when a memory is misleading, outdated, or noise that contaminates retrieval. '
         'Companion to memex_memory_restore. Contrast with archive (destructive) — '
-        'prefer deprioritize unless the unit must leave the entity graph entirely.'
+        'prefer deprioritize unless the unit must leave the entity graph entirely. '
+        '\n\n'
+        'When the user reports an issue resolved, follow the §3.5 5-step flow '
+        '(see briefing): disambiguate first, route by info quality (Options A/B/C), '
+        'mandatory LLM judgment over candidates, then PAIRED writes — '
+        'memex_record_outcome(success=false) AND memex_memory_deprioritize against '
+        'the LLM-judged-relevant subset only. The two verbs are orthogonal axes '
+        '(MW gradient vs binary surface state); user-confirmed-fix is BOTH signals '
+        'at once. Imperfect cross-note recall is by design — F33 exploration is '
+        'the safety net.'
     ),
     'parameters': {
         'type': 'object',
@@ -3703,7 +3712,14 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
         "unit_ids=[...]); set target_type='kv_key' with kv_key="
         "'procedure:<verb>:<context-tag>' to score a stored procedure. Call "
         'after you actually used the retrieved memory or the procedure.\n\n'
-        'Call generously. Silence provides no learning signal.'
+        'Call generously. Silence provides no learning signal.\n\n'
+        'When the user reports an issue resolved, follow the §3.5 5-step flow '
+        '(see briefing): disambiguate first, route by info quality (Options '
+        'A/B/C), mandatory LLM judgment over candidates, then PAIRED writes — '
+        'memex_record_outcome(success=false) AND memex_memory_deprioritize '
+        'against the LLM-judged-relevant subset only. The two verbs are '
+        'orthogonal axes (MW gradient vs binary surface state); user-confirmed-'
+        'fix is BOTH signals at once.'
     ),
     'parameters': {
         'type': 'object',
