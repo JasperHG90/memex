@@ -25,6 +25,7 @@ from memex_common.config import Permission, Policy, POLICY_PERMISSIONS
 from memex_core.server import app
 from memex_core.server.auth import AuthContext, get_auth_context
 from memex_core.server.common import get_api
+from memex_core.services.locks import EntityLockTimeoutError
 
 
 ALLOWED_VAULT = uuid4()
@@ -266,3 +267,75 @@ class TestMemoriesReadExtras:
         )
         assert resp.status_code == 403, resp.text
         mock_api.deprioritize_memory_unit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Error envelope contracts: 503 with Retry-After header on lock timeout.
+# ---------------------------------------------------------------------------
+
+
+class TestConsolidateLockTimeoutEnvelope:
+    """``consolidate_vault`` translates ``EntityLockTimeoutError`` into a 503
+    with a ``Retry-After`` header so clients can back off (mirrors the F5
+    summarize-node 429 contract and the note-append 503 contract).
+    """
+
+    def test_consolidate_lock_timeout_returns_503_with_retry_after(self, mock_api):
+        mock_api.consolidate_vault.side_effect = EntityLockTimeoutError(
+            'could not acquire advisory lock'
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/consolidate',
+            json={'vault_id': str(ALLOWED_VAULT), 'dry_run': False},
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') is not None
+        assert int(resp.headers['retry-after']) > 0
+
+
+class TestReconsolidateMentalModelIdTyping:
+    """``ReconsolidateResponse.mental_model_id`` is typed ``UUID | None`` —
+    Pydantic must coerce the service-layer ``str`` UUID into a UUID instance
+    in the JSON response (parity with ``entity_id`` and ``vault_id``).
+    """
+
+    def test_mental_model_id_is_returned_as_uuid_string(self, mock_api):
+        mm_id = uuid4()
+        mock_api.reconsolidate_entity = AsyncMock(
+            return_value={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'units_examined': 1,
+                'contradictions_run': 1,
+                'mental_model_id': str(mm_id),
+                'observations_added': 2,
+            }
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 5.0,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['mental_model_id'] == str(mm_id)
+        # Round-trips back through UUID() — proves Pydantic accepted/serialized as UUID.
+        assert UUID(body['mental_model_id']) == mm_id
+
+    def test_mental_model_id_none_serializes_as_null(self, mock_api):
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 5.0,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()['mental_model_id'] is None

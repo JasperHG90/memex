@@ -179,7 +179,7 @@ class ReconsolidateResponse(BaseModel):
     contradictions_run: int = Field(
         ..., description='Number of unit_ids passed to ContradictionEngine.detect_contradictions.'
     )
-    mental_model_id: str | None = Field(
+    mental_model_id: UUID | None = Field(
         default=None,
         description='ID of the updated MentalModel, if reflection produced one.',
     )
@@ -264,7 +264,11 @@ async def consolidate_vault(
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
     except EntityLockTimeoutError as exc:
-        raise HTTPException(status_code=503, detail=f'Entity lock timeout: {exc}')
+        raise HTTPException(
+            status_code=503,
+            detail=f'Entity lock timeout: {exc}',
+            headers={'Retry-After': '5'},
+        )
     except RateLimitExceededError as exc:
         retry_after = max(0, int(exc.retry_after_seconds + 0.999))
         return JSONResponse(
