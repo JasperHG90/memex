@@ -654,7 +654,11 @@ class TestF45Observability:
         return await get_embedding_model()
 
     async def test_hydration_duration_histogram_emits(self, session: AsyncSession, embedder):
-        from memex_core.metrics import HYDRATION_QUERY_DURATION_SECONDS
+        # Public Prometheus API (round-3 review): query the registry by
+        # sample name instead of touching ``Histogram._sum``. The private
+        # attribute is a CPython implementation detail of
+        # ``prometheus_client`` and not part of its semver contract.
+        from prometheus_client import REGISTRY
 
         engine = RetrievalEngine(
             embedder=embedder,
@@ -686,15 +690,15 @@ class TestF45Observability:
         session.add(UnitEntity(unit_id=uid, entity_id=entity.id, vault_id=GLOBAL_VAULT_ID))
         await session.commit()
 
-        before = HYDRATION_QUERY_DURATION_SECONDS._sum.get()
+        before = REGISTRY.get_sample_value('memex_hydration_query_duration_seconds_sum') or 0.0
         await engine.retrieve(
             session,
             RetrievalRequest(query=topic, limit=5, vault_ids=[GLOBAL_VAULT_ID]),
         )
-        after = HYDRATION_QUERY_DURATION_SECONDS._sum.get()
+        after = REGISTRY.get_sample_value('memex_hydration_query_duration_seconds_sum') or 0.0
         assert after >= before, (
-            'HYDRATION_QUERY_DURATION_SECONDS histogram must receive at least '
-            'one observation per retrieve call.'
+            'memex_hydration_query_duration_seconds histogram must receive at '
+            'least one observation per retrieve call.'
         )
 
     async def test_pruned_candidates_histogram_emits_when_pre_filter_off(
@@ -702,7 +706,7 @@ class TestF45Observability:
     ):
         """Even when apply_pre_filter=False (no pruning) the histogram MUST
         emit a value (0) so observability comparisons are possible."""
-        from memex_core.metrics import PRE_FILTER_CANDIDATES_PRUNED
+        from prometheus_client import REGISTRY
 
         engine = RetrievalEngine(
             embedder=embedder,
@@ -734,16 +738,19 @@ class TestF45Observability:
         session.add(UnitEntity(unit_id=uid, entity_id=entity.id, vault_id=GLOBAL_VAULT_ID))
         await session.commit()
 
-        before = PRE_FILTER_CANDIDATES_PRUNED._sum.get()
+        # ``_count`` rather than ``_sum`` — even a 0-valued observation
+        # increments the histogram count, which is the public-API way to
+        # detect emission-when-the-value-is-zero.
+        before = REGISTRY.get_sample_value('memex_pre_filter_candidates_pruned_count') or 0.0
         await engine.retrieve(
             session,
             RetrievalRequest(
                 query=topic, limit=5, vault_ids=[GLOBAL_VAULT_ID], apply_pre_filter=False
             ),
         )
-        after = PRE_FILTER_CANDIDATES_PRUNED._sum.get()
-        assert after >= before, (
-            'PRE_FILTER_CANDIDATES_PRUNED must observe even when the '
+        after = REGISTRY.get_sample_value('memex_pre_filter_candidates_pruned_count') or 0.0
+        assert after > before, (
+            'memex_pre_filter_candidates_pruned must observe even when the '
             'pre-filter is disabled (value=0) so observability comparisons '
             'with/without the filter are possible.'
         )

@@ -802,7 +802,6 @@ class RetrievalConfig(BaseModel):
         default_factory=RelationConfig,
         description='Settings for note/unit relationship enrichment in search results.',
     )
-
     fsfm_branch_enabled: bool = Field(
         default=False,
         description=(
