@@ -1083,6 +1083,14 @@ class MemexAPI:
         """Get a memory unit by ID. Delegates to StatsService."""
         return await self._stats.get_memory_unit(unit_id)
 
+    async def get_memory_units_by_chunks(
+        self,
+        chunk_ids: list[UUID],
+        vault_id: UUID,
+    ) -> list[Any]:
+        """F46: get memory units belonging to the named chunks (vault-scoped)."""
+        return await self._stats.get_memory_units_by_chunks(chunk_ids, vault_id)
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit. Delegates to StatsService."""
         return await self._stats.delete_memory_unit(unit_id)

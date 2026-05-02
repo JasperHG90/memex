@@ -2977,7 +2977,12 @@ async def memex_get_lineage(
 
 @mcp.tool(
     name='memex_get_memory_units',
-    description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+    description=(
+        'Batch lookup of memory units. Provide exactly one of '
+        '`unit_ids` (direct ID lookup) or `chunk_ids` (returns all units '
+        'extracted from the named chunks, vault-scoped). Includes '
+        'contradiction links and supersession info.'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -2985,31 +2990,84 @@ async def memex_get_lineage(
 async def memex_get_memory_units(
     ctx: Context,
     unit_ids: Annotated[
-        list[str], BeforeValidator(_coerce_list), Field(description='List of memory unit UUIDs.')
-    ],
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(default=None, description='List of memory unit UUIDs.'),
+    ] = None,
+    chunk_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'List of chunk UUIDs. Returns all memory units extracted from '
+                'these chunks, scoped to `vault_id`. Mutually exclusive with `unit_ids`.'
+            ),
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Vault UUID or name. Required when `chunk_ids` is set; ignored '
+                'for the `unit_ids` path. Defaults to the active read vault.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Retrieve multiple memory units with their contradiction context."""
+    if (unit_ids is None) == (chunk_ids is None):
+        raise ToolError('Provide exactly one of `unit_ids` or `chunk_ids` (not both, not neither).')
+
     try:
         api = get_api(ctx)
         output: list[McpFact | McpEvent | McpObservation] = []
-        for uid_str in unit_ids:
+
+        if unit_ids is not None:
+            for uid_str in unit_ids:
+                try:
+                    uuid_obj = UUID(uid_str)
+                except ValueError:
+                    continue
+
+                try:
+                    unit = await api.get_memory_unit(uuid_obj)
+                except Exception:
+                    continue
+
+                if unit is None:
+                    continue
+
+                output.append(_build_memory_unit_model(unit))
+
+            return output
+
+        chunk_uuids: list[UUID] = []
+        for cid_str in chunk_ids or []:
             try:
-                uuid_obj = UUID(uid_str)
+                chunk_uuids.append(UUID(cid_str))
             except ValueError:
                 continue
 
-            try:
-                unit = await api.get_memory_unit(uuid_obj)
-            except Exception:
-                continue
+        if not chunk_uuids:
+            return []
 
-            if unit is None:
-                continue
+        # Chunk traversal is a read operation — default to the active read
+        # vault (matches the convention used by other MCP read tools, e.g.
+        # memex_list_notes). Use the first read vault when multiple are
+        # configured; the agent can pass `vault_id` explicitly to override.
+        vault_str = vault_id or _default_read_vaults(ctx)[0]
+        resolved_vault = await _resolve_vault_id(api, vault_str)
 
+        units = await api.get_memory_units_by_chunks(chunk_uuids, resolved_vault)
+        for unit in units:
             output.append(_build_memory_unit_model(unit))
 
         return output
 
+    except ToolError:
+        raise
     except Exception as e:
         logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
