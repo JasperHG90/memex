@@ -3591,6 +3591,12 @@ def test_summarize_node_unexpected_exception_returns_generic_resolution_error(co
     api.summarize_node.assert_not_called()
 
 
+# NOTE: This test verifies the EXCEPTION-PATH handling — that a TimeoutError
+# raised from inside resolve_vault_identifier is caught and produces the
+# distinct 'Vault resolution timed out' tool_error. It does NOT exercise
+# run_sync's own timeout-after-N-seconds cancellation mechanism, which
+# would require a 10s slow-coroutine setup. The exception path is the
+# load-bearing assertion (run_sync is third-party / std-lib).
 def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, vault_id):
     """``TimeoutError`` from ``run_sync`` (10s budget exhausted) MUST surface a
     distinct 'timed out' message — it must NOT masquerade as either the
