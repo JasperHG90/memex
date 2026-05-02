@@ -30,9 +30,17 @@ class RerankerModel(Protocol):
     style) that distinguishes one cross-encoder weight set from another.
     The retrieval-side score cache (F41) keys on this so a model upgrade
     invalidates entries structurally rather than waiting for the TTL.
+
+    **Backwards compatibility (F41).** A default body returning ``'unknown'``
+    is provided so out-of-tree implementations from before F41 still satisfy
+    the protocol. The cache continues to function with a constant
+    ``model_version``, but model upgrades will silently keep stale entries
+    until the 24h TTL expires — the structural invalidation path requires a
+    stable, version-changing identifier. Implementations SHOULD override.
     """
 
     @property
-    def model_version(self) -> str: ...
+    def model_version(self) -> str:
+        return 'unknown'
 
     def score(self, query: str, texts: list[str]) -> Any: ...

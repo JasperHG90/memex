@@ -773,16 +773,20 @@ class RetrievalConfig(BaseModel):
     )
     cross_encoder_cache_size: int = Field(
         default=10000,
-        ge=0,
+        ge=1,
         description='Maximum number of (model_version, query_hash, unit_id) entries in the '
-        'cross-encoder score cache. Lock pool uses the same cap.',
+        'cross-encoder score cache. Lock pool uses the same cap. '
+        'To disable the cache, set `cross_encoder_cache_enabled=False` — '
+        'do not set size to 0 (TTLCache rejects zero-sized maps).',
     )
     cross_encoder_cache_ttl_seconds: int = Field(
         default=86400,
-        ge=0,
+        ge=1,
         description='TTL for cross-encoder score cache entries in seconds. Default 24h. '
         'Backstops other invalidation paths; model upgrades are invalidated structurally '
-        'via the model_version key component.',
+        'via the model_version key component. '
+        'To disable the cache, set `cross_encoder_cache_enabled=False` — '
+        'do not set TTL to 0 (TTLCache rejects zero TTLs).',
     )
     causal_weight_threshold: float = Field(
         default=0.3,

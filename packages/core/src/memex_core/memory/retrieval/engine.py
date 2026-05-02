@@ -1353,7 +1353,12 @@ class RetrievalEngine:
         if self._rerank_cache is None or self.reranker is None:
             return await self._reranker_score_uncached(query, formatted_texts)
 
-        model_version = self.reranker.model_version
+        # Defensive fallback for out-of-tree rerankers that pre-date F41 and
+        # don't define ``model_version`` (the protocol now ships a default
+        # but duck-typed implementations may not subclass it). With a constant
+        # version the cache still works; model upgrades will be invalidated
+        # by the TTL backstop rather than structurally.
+        model_version = getattr(self.reranker, 'model_version', 'unknown')
         query_h = hash_query(query)
         keys = [(model_version, query_h, unit.id) for unit in results]
 
