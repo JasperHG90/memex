@@ -173,7 +173,8 @@ async def test_procedure_outcomes_fk_cascades_on_kv_entry_delete(fresh_db_url: s
 
 @pytest.mark.asyncio
 async def test_procedure_outcomes_secondary_index(fresh_db_url: str) -> None:
-    """Secondary btree index ``idx_procedure_outcomes_vault_key`` covers (vault_id, kv_key)."""
+    """The unique constraint ``uq_procedure_outcomes_vault_key`` auto-creates a
+    btree index covering (vault_id, kv_key); no separate ``idx_*`` is needed."""
     with neutralized_stub_revisions(_STUBS_BETWEEN):
         await _alembic_upgrade(fresh_db_url, target='028_procedure_outcomes')
 
@@ -184,13 +185,14 @@ async def test_procedure_outcomes_secondary_index(fresh_db_url: str) -> None:
                 await conn.execute(
                     text(
                         'SELECT indexdef FROM pg_indexes '
-                        "WHERE indexname = 'idx_procedure_outcomes_vault_key' "
+                        "WHERE indexname = 'uq_procedure_outcomes_vault_key' "
                         "AND tablename = 'procedure_outcomes'"
                     )
                 )
             ).first()
         assert row is not None, (
-            'Expected idx_procedure_outcomes_vault_key for cheap per-vault counter lookups.'
+            'Expected uq_procedure_outcomes_vault_key index '
+            '(auto-created by the unique constraint) for per-vault counter lookups.'
         )
         defn = row[0].lower()
         assert 'vault_id' in defn and 'kv_key' in defn
@@ -222,11 +224,11 @@ async def test_028_round_trip_clean(fresh_db_url: str) -> None:
                 await conn.execute(
                     text(
                         'SELECT 1 FROM pg_indexes '
-                        "WHERE indexname = 'idx_procedure_outcomes_vault_key'"
+                        "WHERE indexname = 'uq_procedure_outcomes_vault_key'"
                     )
                 )
             ).scalar()
-            assert idx is None, 'index should be gone after downgrade.'
+            assert idx is None, 'unique-constraint index should be gone after downgrade.'
     finally:
         await engine.dispose()
 

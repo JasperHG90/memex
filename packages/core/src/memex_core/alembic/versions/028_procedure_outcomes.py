@@ -36,14 +36,6 @@ def _table_exists(conn, table: str) -> bool:
     return bool(result.scalar())
 
 
-def _index_exists(conn, index: str) -> bool:
-    result = conn.execute(
-        sa.text('SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = :index)'),
-        {'index': index},
-    )
-    return bool(result.scalar())
-
-
 def upgrade() -> None:
     conn = op.get_bind()
 
@@ -102,19 +94,12 @@ def upgrade() -> None:
             ),
         )
 
-    if not _index_exists(conn, 'idx_procedure_outcomes_vault_key'):
-        op.create_index(
-            'idx_procedure_outcomes_vault_key',
-            'procedure_outcomes',
-            ['vault_id', 'kv_key'],
-        )
+    # Note: ``UniqueConstraint('vault_id', 'kv_key')`` already creates a
+    # btree index on those columns; no separate ``CREATE INDEX`` is needed.
 
 
 def downgrade() -> None:
     conn = op.get_bind()
-
-    if _index_exists(conn, 'idx_procedure_outcomes_vault_key'):
-        op.drop_index('idx_procedure_outcomes_vault_key', table_name='procedure_outcomes')
 
     if _table_exists(conn, 'procedure_outcomes'):
         op.drop_table('procedure_outcomes')
