@@ -1045,7 +1045,7 @@ class BatchJob(SQLModel, table=True):  # type: ignore
 
     status: BatchJobStatus = Field(
         default=BatchJobStatus.PENDING,
-        sa_column=Column(Text, nullable=False, server_default='pending'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
         description='Current status of the batch job.',
     )
 
@@ -1161,7 +1161,7 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
 
     status: ReflectionStatus = Field(
         default=ReflectionStatus.PENDING,
-        sa_column=Column(Text, nullable=False, server_default='pending'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
         description='Current status of the reflection task.',
     )
 
@@ -1612,6 +1612,8 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
     )
 
     __table_args__ = (
+        # The unique constraint below auto-creates a btree index on
+        # (vault_id, kv_key); no separate Index(...) is needed.
         UniqueConstraint('vault_id', 'kv_key', name='uq_procedure_outcomes_vault_key'),
         ForeignKeyConstraint(
             ['kv_key'],
@@ -1619,7 +1621,6 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
             ondelete='CASCADE',
             name='fk_procedure_outcomes_kv_key',
         ),
-        Index('idx_procedure_outcomes_vault_key', 'vault_id', 'kv_key'),
     )
 
 
@@ -1697,12 +1698,12 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
     )
     status: LintStatus = Field(
         default=LintStatus.PENDING,
-        sa_column=Column(Text, nullable=False, server_default='pending'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'pending'")),
         description='Lifecycle state of the finding.',
     )
     source: LintSource = Field(
         default=LintSource.RULE,
-        sa_column=Column(Text, nullable=False, server_default='rule'),
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'rule'")),
         description='Whether the finding came from a SQL rule or an LLM check (F10).',
     )
     created_at: datetime = created_at_field()
