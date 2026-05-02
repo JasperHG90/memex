@@ -238,6 +238,13 @@ async def lifespan(app: FastAPI):
 
     shutdown_watchdog()
 
+    # Release service-owned async resources (asyncpg pools, etc.) before
+    # disposing the SQLAlchemy engine so connections drain cleanly.
+    try:
+        await api.aclose()
+    except Exception:
+        logger.exception('MemexAPI.aclose failed during server shutdown')
+
     await metastore.close()
 
     # Clean up app.state to prevent cross-test pollution when the app

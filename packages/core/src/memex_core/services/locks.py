@@ -92,28 +92,6 @@ def split_for_pg_locks(lock_id: int) -> LockIdSplit:
 
 _RETRY_INTERVAL_SECONDS: Final[float] = 0.1
 
-# CRIT-1 mitigation: bound concurrent asyncpg connections opened by
-# acquire_entity_lock so a burst of reconsolidate/consolidate calls cannot
-# exhaust Postgres ``max_connections``. Sized to match the SQLAlchemy pool
-# default (``pool_size=5`` in metastore.py). Module-level so it covers both
-# the LocksService and ConsolidationService callers. The full fix (a shared
-# asyncpg pool reused across acquisitions) is tracked as a follow-up.
-_MAX_CONCURRENT_LOCK_CONNECTIONS: Final[int] = 5
-_lock_connection_semaphore: asyncio.Semaphore | None = None
-
-
-def _get_lock_connection_semaphore() -> asyncio.Semaphore:
-    """Lazily create the connection semaphore on first use.
-
-    Created lazily so the running event loop is the one that owns the
-    semaphore; constructing it at module import would bind to whatever
-    loop happens to be active (or none) at import time.
-    """
-    global _lock_connection_semaphore
-    if _lock_connection_semaphore is None:
-        _lock_connection_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOCK_CONNECTIONS)
-    return _lock_connection_semaphore
-
 
 @asynccontextmanager
 async def acquire_entity_lock(
@@ -121,30 +99,47 @@ async def acquire_entity_lock(
     entity_id: uuid.UUID,
     *,
     timeout_seconds: float = 30.0,
+    pool: asyncpg.Pool | None = None,
 ) -> AsyncIterator[None]:
     """Acquire a per-entity Postgres advisory lock for the duration of the
     context.
 
-    Uses a dedicated short-lived asyncpg connection so the lock survives the
-    SQLAlchemy session lifecycle of any work performed inside the body
-    (validated in POC-F9 / RFC-005). Spins on `pg_try_advisory_lock` with a
-    bounded wait — blocking `pg_advisory_lock` would hang an MCP request
-    indefinitely if the lock is contended.
+    Uses a dedicated asyncpg connection so the lock survives the SQLAlchemy
+    session lifecycle of any work performed inside the body (validated in
+    POC-F9 / RFC-005). Spins on `pg_try_advisory_lock` with a bounded wait —
+    blocking `pg_advisory_lock` would hang an MCP request indefinitely if the
+    lock is contended.
 
-    Connection acquisition is gated by a process-level semaphore so a burst
-    of concurrent callers cannot exhaust Postgres ``max_connections``.
+    When ``pool`` is supplied (the LocksService / ConsolidationService path),
+    the connection is acquired from and released back to the pool — bounded
+    concurrency is enforced by ``Pool.max_size``. CRIT-1 fix replacing the
+    earlier process-level semaphore. When ``pool`` is None, a fresh
+    short-lived asyncpg connection is opened for the duration of the lock —
+    used by cross-process callers (concurrency tests, CLI one-shots) where a
+    pool cannot be shared across event loops.
 
     Raises EntityLockTimeoutError when timeout_seconds elapses without
     acquiring. On context exit (success OR exception), the lock is released
-    and the connection closed; if the process crashes before exit, Postgres
-    auto-releases on backend termination (POC TC-12-5).
+    and the connection released/closed; if the process crashes before exit,
+    Postgres auto-releases on backend termination (POC TC-12-5).
     """
     from memex_core.metrics import ENTITY_LOCK_ACQUIRES_TOTAL
 
     lock_id = entity_lock_id(entity_id)
-    semaphore = _get_lock_connection_semaphore()
-    async with semaphore:
-        conn = await asyncpg.connect(dsn)
+
+    @asynccontextmanager
+    async def _conn_ctx() -> AsyncIterator[asyncpg.Connection]:
+        if pool is not None:
+            async with pool.acquire() as conn:
+                yield conn
+        else:
+            conn = await asyncpg.connect(dsn)
+            try:
+                yield conn
+            finally:
+                await conn.close()
+
+    async with _conn_ctx() as conn:
         acquired = False
         try:
             deadline = monotonic() + timeout_seconds
@@ -172,7 +167,6 @@ async def acquire_entity_lock(
                         'connection close to release',
                         entity_id,
                     )
-            await conn.close()
 
 
 _DEFAULT_RECONSOLIDATE_TIMEOUT_S: Final[float] = 30.0
@@ -195,13 +189,26 @@ class LocksService:
         reflection: 'ReflectionService',
         contradiction: 'ContradictionEngine | None',
         units: 'UnitsService | None' = None,
+        *,
+        dsn: str | None = None,
     ) -> None:
         self.metastore = metastore
         self.config = config
         self.reflection = reflection
         self.contradiction = contradiction
         self.units = units
-        self._dsn = dsn_from_config(config)
+        self._dsn = dsn if dsn is not None else dsn_from_config(config)
+        # CRIT-1: shared asyncpg pool for all entity-lock connections opened
+        # by this service. Lazily created on first use so it binds to the
+        # running event loop; ``max_size=10`` matches the SQLAlchemy default
+        # pool size (metastore.py) so the two pools cannot together exhaust
+        # Postgres ``max_connections`` even at saturation.
+        self._pool: asyncpg.Pool | None = None
+        # MED: cached at first use so we don't re-introspect on every
+        # consolidate_vault call. The schema cannot change at runtime within a
+        # single process, so caching is safe; tests that monkey-patch the
+        # attribute can override it directly.
+        self._has_maintenance_proposals_table_cache: bool | None = None
         # F9 / RFC-008 line 125: per-vault rate limit on memex_memory_consolidate.
         # Reuses F5's TokenBucketRateLimiter primitive. Default 1 call per vault
         # per hour (LLM-intensive + mass-mutation guard).
@@ -212,6 +219,36 @@ class LocksService:
             max_keys=consolidate_cfg.max_keys,
             enabled=consolidate_cfg.enabled,
         )
+
+    async def _get_pool(self) -> asyncpg.Pool:
+        """Return (creating on first call) the shared asyncpg pool.
+
+        ``min_size=1`` keeps a single warmed connection for the common case;
+        ``max_size=10`` matches the SQLAlchemy default so the bound on total
+        Postgres connections stays predictable. ``command_timeout=60`` is a
+        defence in depth: the lock spin loop has its own bounded wait, but a
+        runaway Postgres call (e.g., autovacuum lock) shouldn't block the
+        entity-lock connection forever.
+        """
+        if self._pool is None:
+            self._pool = await asyncpg.create_pool(
+                self._dsn,
+                min_size=1,
+                max_size=10,
+                command_timeout=60,
+            )
+        return self._pool
+
+    async def close(self) -> None:
+        """Close the shared asyncpg pool. Safe to call multiple times.
+
+        Wired into the FastAPI lifespan shutdown via ``MemexAPI.aclose`` so
+        connections are returned to Postgres on graceful server stop. CLI
+        one-shots that build a transient ``MemexAPI`` should also call this.
+        """
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
 
     async def _resolve_entity_to_unit_ids(
         self,
@@ -256,8 +293,14 @@ class LocksService:
         from memex_core.metrics import RECONSOLIDATE_TOTAL
 
         log = logger.getChild(str(entity_id))
+        pool = await self._get_pool()
         try:
-            async with acquire_entity_lock(self._dsn, entity_id, timeout_seconds=timeout_seconds):
+            async with acquire_entity_lock(
+                self._dsn, entity_id, timeout_seconds=timeout_seconds, pool=pool
+            ):
+                # `_resolve_entity_to_unit_ids` returns bare UUIDs (verified):
+                # `select(UnitEntity.unit_id)` is `SelectOfScalar`, so sqlmodel's
+                # `session.exec` auto-applies `.scalars()` (sqlmodel/orm/session.py:89).
                 unit_ids = await self._resolve_entity_to_unit_ids(entity_id, vault_id)
                 log.info(
                     'reconsolidate.start',
@@ -397,12 +440,10 @@ class LocksService:
         exception is a service-layer signal — surface translation to
         MCP/HTTP belongs to the calling layer (mirrors F5 summarize_node).
         """
-        from sqlalchemy import inspect as sa_inspect
-
         from memex_core.metrics import CONSOLIDATE_TOTAL
 
         if not dry_run:
-            self._consolidate_limiter.acquire(vault_id)
+            await self._consolidate_limiter.acquire(vault_id)
 
         try:
             candidates = await self._select_consolidate_candidates(vault_id)
@@ -426,7 +467,7 @@ class LocksService:
                     'proposals_written': 0,
                 }
 
-            has_proposals_table = await self._has_maintenance_proposals_table(sa_inspect)
+            has_proposals_table = await self._has_maintenance_proposals_table()
             proposals_written = 0
             reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
 
@@ -473,12 +514,24 @@ class LocksService:
             CONSOLIDATE_TOTAL.labels(outcome='error').inc()
             raise
 
-    async def _has_maintenance_proposals_table(self, sa_inspect: Any) -> bool:
-        engine = self.metastore.engine
-        async with engine.connect() as conn:
-            return await conn.run_sync(
-                lambda sync_conn: sa_inspect(sync_conn).has_table('maintenance_proposals')
-            )
+    async def _has_maintenance_proposals_table(self) -> bool:
+        """Cached `has_table('maintenance_proposals')` lookup.
+
+        Inspecting the schema on every consolidate_vault call was wasted work
+        (the schema cannot change at runtime within a process). The cached
+        bool is set on first lookup and reused thereafter; tests that need
+        to override the result can assign ``self._has_maintenance_proposals_table_cache``
+        directly or monkey-patch this method.
+        """
+        if self._has_maintenance_proposals_table_cache is None:
+            from sqlalchemy import inspect as sa_inspect
+
+            engine = self.metastore.engine
+            async with engine.connect() as conn:
+                self._has_maintenance_proposals_table_cache = await conn.run_sync(
+                    lambda sync_conn: sa_inspect(sync_conn).has_table('maintenance_proposals')
+                )
+        return self._has_maintenance_proposals_table_cache
 
     async def _write_consolidate_proposal(
         self,
