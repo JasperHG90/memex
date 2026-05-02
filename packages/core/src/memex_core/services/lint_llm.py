@@ -112,6 +112,40 @@ _UPSERT_HOUR_BUCKET_SQL = text("""
 """)
 
 
+# Atomic check-and-increment for the rolling 24h cost cap. The CTE first
+# computes the current rolling sum (over the partial-index range) and then
+# attempts an INSERT ... ON CONFLICT keyed on (vault_id, hour_bucket) ONLY
+# when that sum is strictly below the cap. Because Postgres serialises
+# ON CONFLICT resolution on `uq_lint_llm_quota_vault_hour`, two writers
+# observing the same `used` value cannot both increment past the cap: the
+# loser's UPDATE branch sees the post-increment row and the WHERE predicate
+# `lint_llm_quota.count < (cap - other_buckets)` rejects the second write.
+# The RETURNING clause is empty when neither INSERT nor UPDATE fires, which
+# the caller treats as "over cap".
+_ATOMIC_CHECK_AND_INCREMENT_SQL = text("""
+    WITH other_buckets AS (
+        SELECT COALESCE(SUM(count), 0) AS used
+        FROM lint_llm_quota
+        WHERE vault_id = :vault_id
+          AND hour_bucket >= :cutoff
+          AND hour_bucket < :hour_bucket
+    ),
+    ins AS (
+        INSERT INTO lint_llm_quota (id, vault_id, hour_bucket, count)
+        SELECT gen_random_uuid(), :vault_id, :hour_bucket, 1
+        FROM other_buckets
+        WHERE other_buckets.used < :cap
+        ON CONFLICT (vault_id, hour_bucket)
+        DO UPDATE SET count = lint_llm_quota.count + 1
+        WHERE lint_llm_quota.count + (
+            SELECT used FROM other_buckets
+        ) < :cap
+        RETURNING count
+    )
+    SELECT count FROM ins
+""")
+
+
 # NOTE: The ON CONFLICT clauses below rely on the partial unique index
 # `uq_maintenance_proposals_pending` on
 # `maintenance_proposals (rule_name, target_type, target_id, vault_id)
@@ -260,33 +294,33 @@ class LintLLMService(BaseService):
         the cap was exhausted. Caller is responsible for committing the
         session — ``maybe_run`` does so, the integration tests do too.
 
-        Concurrency: Postgres serialises the per-row conflict resolution on
-        ``uq_lint_llm_quota_vault_hour``, so two concurrent writers always
-        agree on a single, monotonic count for the bucket. The check-then-
-        UPSERT race is acceptable under our single-leader scheduler
-        (RFC-006 §"Single-leader scheduler integration") — the cap is a soft
-        budget, not a hard ceiling.
+        Atomicity: implemented as a single SQL statement that combines the
+        rolling-window sum and the ON CONFLICT increment. Two concurrent
+        writers cannot both push the rolling count past ``cap`` because
+        Postgres serialises ON CONFLICT resolution on
+        ``uq_lint_llm_quota_vault_hour`` and the UPDATE branch's WHERE
+        predicate re-checks the (now post-increment) total against the cap.
+        Eliminates the read-then-write TOCTOU window present in the prior
+        implementation (PR #101 c4 HIGH-1).
         """
         cap = self._settings.cost_cap_per_24h
         if cap <= 0:
             return False
 
-        # NOTE: This read-then-UPSERT pattern admits a race under concurrent
-        # ticks. It is safe ONLY under single-leader scheduling
-        # (MEMEX_LEADER_LOCK_ID advisory lock guarantees one writer).
-        # If scheduler parallelism is introduced, replace with an atomic
-        # INSERT ... ON CONFLICT DO UPDATE that computes the comparison
-        # server-side (e.g. WHERE clause on the UPDATE branch).
-        used = await self.quota_used(vault_id, session=session)
-        if used >= cap:
-            return False
-
         now = datetime.now(timezone.utc)
-        await session.execute(
-            _UPSERT_HOUR_BUCKET_SQL,
-            {'vault_id': str(vault_id), 'hour_bucket': _truncate_to_hour(now)},
+        hour_bucket = _truncate_to_hour(now)
+        cutoff = now - timedelta(hours=24)
+
+        result = await session.execute(
+            _ATOMIC_CHECK_AND_INCREMENT_SQL,
+            {
+                'vault_id': str(vault_id),
+                'hour_bucket': hour_bucket,
+                'cutoff': cutoff,
+                'cap': cap,
+            },
         )
-        return True
+        return result.first() is not None
 
     # -- defer queue -----------------------------------------------------
 
