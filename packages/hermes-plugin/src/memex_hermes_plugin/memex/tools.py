@@ -3796,7 +3796,15 @@ def handle_memory_review(
 
     from memex_core.memory.revisit import Quality
 
-    if isinstance(raw_quality, int) and not isinstance(raw_quality, bool):
+    # bool is a subclass of int in Python; reject it explicitly so True doesn't
+    # fall through to the str branch as 'true' (which would KeyError on
+    # Quality['TRUE']) and False doesn't get coerced into Quality(0).
+    if isinstance(raw_quality, bool):
+        return tool_error(
+            f'Invalid quality {raw_quality!r}; must be one of 1-4 or '
+            "'again', 'hard', 'good', 'easy'."
+        )
+    if isinstance(raw_quality, int):
         try:
             quality_enum = Quality(raw_quality)
         except ValueError:
