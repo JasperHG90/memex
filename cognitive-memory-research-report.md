@@ -410,10 +410,10 @@ Until those conditions trigger: **on-the-fly. F40 ships with no schema change.**
 **Other latency levers worth catalog entries** (for the same Tier A optimization arc):
 
 - **Cross-encoder score cache** keyed on `(query_embedding_hash, unit_id)` with TTL (e.g., 24h). Repeat queries get free reranking; biggest single lever for narrow query patterns (a daily "morning briefing" loop hits it hard).
-- **Smaller reranker model** if quality tolerates — biggest absolute saving but quality regression risk; gate behind an A/B with a recall-impact metric.
-- **Quantize / int8-batch the cross-encoder** if not already done — typically 2× speedup without recall loss.
+- ~~**Smaller reranker model** if quality tolerates~~ — **Rejected (2026-05-02, F42 strike)**: deferred to a Tier B trigger ("if reranker latency dominates after F40+F41 ship and observability shows it"). Quality-regression risk is real and an A/B is only worth the spend once the lever is on the critical path.
+- ~~**Quantize / int8-batch the cross-encoder**~~ — **Rejected (2026-05-02, F42 strike)**: the bundled reranker is already QAT-trained (quantization-aware training) and runs int8 at inference. There is no meaningful fp32 baseline to A/B against, so the toggle premise is moot.
 
-These are pre-reranker (filter), per-query (cache), and intra-reranker (model size, quantization) optimizations respectively. They compose. Sequence the pre-filter first because it requires no ML work and the guardrails are well-defined.
+These are pre-reranker (filter) and per-query (cache) optimizations respectively. They compose. Sequence the pre-filter first because it requires no ML work and the guardrails are well-defined.
 
 **Summary.** MW lifts retrieval quality by adding a behavioral axis to a previously content-and-time-only ranking, without penalizing cold-start units, without replacing the cross-encoder, and self-correcting via F33 against rich-get-richer. It's the signal that lets the system learn from its own retrieval history — which pure similarity-based systems structurally cannot do. At measured production reranker latency (~1.5 s @ 70 candidates), a guarded pre-reranker MW filter is a **Tier A optimization**, not a Tier B defer — it preserves §3.4 composition invariants while reclaiming ~30% of reranker compute.
 
