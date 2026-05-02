@@ -156,21 +156,26 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
     )
     session.add(ue)
     await session.commit()
+    # Commit the DROP CONSTRAINT in its own transaction so a later rollback on
+    # the DELETE path cannot undo it. If the DROP and DELETE shared a
+    # transaction, ``session.rollback()`` in the except branch would also
+    # discard the DROP, leaving the FK in place — and the finally's ADD
+    # CONSTRAINT would then raise (duplicate constraint), masking the
+    # original DELETE failure. The intermediate "FK temporarily missing"
+    # state between commits is acceptable for a test fixture; the finally
+    # always restores it.
     await session.execute(
         text('ALTER TABLE unit_entities DROP CONSTRAINT unit_entities_entity_id_fkey')
     )
+    await session.commit()
     try:
         await session.execute(
             text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)}
         )
         await session.commit()
     except Exception:
-        # Only roll back on the error path. SQLAlchemy puts the session in a
-        # "needs rollback" state when the DELETE/commit fails, and a
-        # subsequent ALTER would itself raise, silently dropping the
-        # FK-restore. An unconditional rollback in ``finally`` would discard
-        # any uncommitted work the caller had pending if the DELETE
-        # succeeded — restrict it to the failure case only.
+        # SQLAlchemy puts the session in a "needs rollback" state when the
+        # DELETE/commit fails; clear it so the finally's ALTER can run.
         await session.rollback()
         raise
     finally:
