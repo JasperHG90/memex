@@ -243,6 +243,22 @@ class RetrievalRequest(BaseModel):
         ),
     )
 
+    # Intent / risk class filtering (write-time classifier; F25)
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by intent_class (permanent | durable | ephemeral). '
+            'None disables the filter.'
+        ),
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by risk_class (none | sensitive | private | safety). '
+            'None disables the filter.'
+        ),
+    )
+
     # Query expansion
     expand_query: bool = Field(
         default=False,

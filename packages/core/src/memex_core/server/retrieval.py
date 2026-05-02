@@ -55,6 +55,8 @@ async def search_memories(
             source_context=request.source_context,
             reference_date=request.reference_date,
             expand_query=request.expand_query,
+            intent_class=request.intent_class.value if request.intent_class else None,
+            risk_class=request.risk_class.value if request.risk_class else None,
         )
         t_search = time.monotonic() - t0
 

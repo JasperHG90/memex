@@ -72,6 +72,8 @@ class SearchService:
         source_context: str | None = None,
         reference_date: dt.datetime | None = None,
         expand_query: bool = False,
+        intent_class: str | None = None,
+        risk_class: str | None = None,
     ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
@@ -108,6 +110,8 @@ class SearchService:
             source_context=source_context,
             reference_date=reference_date,
             expand_query=expand_query,
+            intent_class=intent_class,
+            risk_class=risk_class,
         )
 
         async with self.metastore.session() as session:

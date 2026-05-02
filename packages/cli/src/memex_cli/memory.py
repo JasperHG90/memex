@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import pathlib as plb
-import sys
 from typing import Annotated
 from uuid import UUID
 import itertools
@@ -626,6 +625,26 @@ async def search_memory(
 
     ref_dt = _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
 
+    # Validate intent / risk against allowed values BEFORE the API call so
+    # users see a clean error instead of a server 422.
+    intent_value: str | None = None
+    if intent:
+        allowed_intents = {'permanent', 'durable', 'ephemeral'}
+        intent_value = intent.lower()
+        if intent_value not in allowed_intents:
+            console.print(
+                f'[red]Invalid --intent {intent!r}. Allowed: {sorted(allowed_intents)}[/red]'
+            )
+            return
+
+    risk_value: str | None = None
+    if risk:
+        allowed_risks = {'none', 'sensitive', 'private', 'safety'}
+        risk_value = risk.lower()
+        if risk_value not in allowed_risks:
+            console.print(f'[red]Invalid --risk {risk!r}. Allowed: {sorted(allowed_risks)}[/red]')
+            return
+
     async with get_api_context(config) as api:
         try:
             results = await api.search(
@@ -638,46 +657,14 @@ async def search_memory(
                 source_context=source_context,
                 reference_date=ref_dt,
                 expand_query=expand,
+                intent_class=intent_value,
+                risk_class=risk_value,
             )
         except Exception as e:
             handle_api_error(e)
 
-        unfiltered_count = len(results)
-        filter_active = bool(intent or risk)
-
-        if intent:
-            allowed_intents = {'permanent', 'durable', 'ephemeral'}
-            wanted = intent.lower()
-            if wanted not in allowed_intents:
-                console.print(
-                    f'[red]Invalid --intent {intent!r}. Allowed: {sorted(allowed_intents)}[/red]'
-                )
-                return
-            results = [u for u in results if getattr(u, 'intent_class', 'durable') == wanted]
-
-        if risk:
-            allowed_risks = {'none', 'sensitive', 'private', 'safety'}
-            wanted_risk = risk.lower()
-            if wanted_risk not in allowed_risks:
-                console.print(
-                    f'[red]Invalid --risk {risk!r}. Allowed: {sorted(allowed_risks)}[/red]'
-                )
-                return
-            results = [u for u in results if getattr(u, 'risk_class', 'none') == wanted_risk]
-
         if not results:
-            if filter_active and unfiltered_count == limit:
-                # Client-side filter may have eliminated everything from a
-                # truncated page. Warn so the user can widen the search.
-                # Server-side filter is tracked as a follow-up (PR #91 cycle3 MED-2).
-                print(
-                    f'No results matched filter, but {unfiltered_count} unfiltered hits '
-                    'returned (filter applied client-side, results may be truncated; '
-                    'consider --limit to expand search)',
-                    file=sys.stderr,
-                )
-            else:
-                console.print('[yellow]No results found.[/yellow]')
+            console.print('[yellow]No results found.[/yellow]')
             return
 
         if minimal:

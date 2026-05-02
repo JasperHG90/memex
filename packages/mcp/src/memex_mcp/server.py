@@ -1638,6 +1638,25 @@ async def memex_memory_search(
             ),
         ),
     ] = False,
+    intent_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by intent class: permanent | durable | ephemeral. None disables the filter.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by risk class: none | sensitive | private | safety. '
+                'None disables the filter.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1666,6 +1685,8 @@ async def memex_memory_search(
             source_context=source_context,
             reference_date=ref_dt,
             expand_query=expand_query,
+            intent_class=intent_class,
+            risk_class=risk_class,
         )
 
         if not results:

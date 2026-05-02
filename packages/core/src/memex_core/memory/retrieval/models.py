@@ -5,6 +5,8 @@ from pydantic import Field, model_validator
 from sqlmodel import SQLModel
 
 VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'mental_model'})
+VALID_INTENT_CLASSES = frozenset({'permanent', 'durable', 'ephemeral'})
+VALID_RISK_CLASSES = frozenset({'none', 'sensitive', 'private', 'safety'})
 
 
 class RetrievalRequest(SQLModel):
@@ -112,6 +114,22 @@ class RetrievalRequest(SQLModel):
         ),
     )
 
+    # Intent / risk class filtering (write-time classifier; F25)
+    intent_class: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by intent_class (permanent | durable | ephemeral). '
+            'None disables the filter.'
+        ),
+    )
+    risk_class: str | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by risk_class (none | sensitive | private | safety). '
+            'None disables the filter.'
+        ),
+    )
+
     # Tag filtering
     tags: list[str] | None = Field(
         default=None, description='Only return results from notes with ALL of these tags.'
@@ -128,4 +146,14 @@ class RetrievalRequest(SQLModel):
                     f'Invalid strategy names: {sorted(invalid)}. '
                     f'Valid strategies: {sorted(VALID_STRATEGIES)}'
                 )
+        if self.intent_class is not None and self.intent_class not in VALID_INTENT_CLASSES:
+            raise ValueError(
+                f'Invalid intent_class: {self.intent_class!r}. '
+                f'Valid values: {sorted(VALID_INTENT_CLASSES)}'
+            )
+        if self.risk_class is not None and self.risk_class not in VALID_RISK_CLASSES:
+            raise ValueError(
+                f'Invalid risk_class: {self.risk_class!r}. '
+                f'Valid values: {sorted(VALID_RISK_CLASSES)}'
+            )
         return self

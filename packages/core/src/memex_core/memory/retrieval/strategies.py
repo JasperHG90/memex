@@ -105,6 +105,22 @@ def apply_context_filter(statement: Select, **kwargs: Any) -> Select:
     return statement
 
 
+def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
+    """Filter MemoryUnits by ``intent_class`` and ``risk_class`` when set.
+
+    Both filters are independent and additive — pass either, both, or neither.
+    Values are not validated here (validation happens at the API/CLI boundary
+    against the ``IntentClass`` / ``RiskClass`` enums).
+    """
+    intent_class = kwargs.get('intent_class')
+    if intent_class:
+        statement = statement.where(col(MemoryUnit.intent_class) == intent_class)
+    risk_class = kwargs.get('risk_class')
+    if risk_class:
+        statement = statement.where(col(MemoryUnit.risk_class) == risk_class)
+    return statement
+
+
 def _apply_as_of_filter(statement: Select, **kwargs: Any) -> Select:
     """Filter EntityCooccurrence rows by temporal validity when ``as_of`` is set.
 
@@ -153,6 +169,7 @@ class SemanticStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         if query_embedding is None:
             # If no embedding, this strategy is effectively disabled
@@ -193,6 +210,7 @@ class KeywordStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         return (
             statement.add_columns(rank.label('score'))
@@ -503,11 +521,13 @@ class EntityCooccurrenceGraphStrategy:
         select_first = apply_vault_filters(select_first, MemoryUnit.vault_id, **kwargs)
         select_first = apply_generic_filters(select_first, **kwargs)
         select_first = apply_context_filter(select_first, **kwargs)
+        select_first = apply_intent_risk_filter(select_first, **kwargs)
 
         select_second = apply_date_filters(select_second, MemoryUnit.event_date, **kwargs)
         select_second = apply_vault_filters(select_second, MemoryUnit.vault_id, **kwargs)
         select_second = apply_generic_filters(select_second, **kwargs)
         select_second = apply_context_filter(select_second, **kwargs)
+        select_second = apply_intent_risk_filter(select_second, **kwargs)
 
         # 2. 1st Order Memories (Direct Link)
         # V2 Scoring: 1.0 + Temporal Decay
@@ -638,6 +658,7 @@ class TemporalStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
 

@@ -264,6 +264,16 @@ RECALL_SCHEMA: dict[str, Any] = {
                     'level (default: false).'
                 ),
             },
+            'intent_class': {
+                'type': 'string',
+                'enum': ['permanent', 'durable', 'ephemeral'],
+                'description': ('Filter by intent class. Omit to return all classes.'),
+            },
+            'risk_class': {
+                'type': 'string',
+                'enum': ['none', 'sensitive', 'private', 'safety'],
+                'description': ('Filter by risk class. Omit to return all classes.'),
+            },
         },
         'required': ['query'],
     },
@@ -1556,6 +1566,17 @@ def handle_memory_search(
     tags = args.get('tags') or None
     vault_ids = _resolve_vault_ids(api, args, vault_id)
 
+    intent_class = args.get('intent_class') or None
+    if intent_class is not None and intent_class not in {'permanent', 'durable', 'ephemeral'}:
+        return tool_error(
+            f'Invalid intent_class: {intent_class!r}. Valid values: permanent | durable | ephemeral'
+        )
+    risk_class = args.get('risk_class') or None
+    if risk_class is not None and risk_class not in {'none', 'sensitive', 'private', 'safety'}:
+        return tool_error(
+            f'Invalid risk_class: {risk_class!r}. Valid values: none | sensitive | private | safety'
+        )
+
     try:
         results = run_sync(
             api.search(
@@ -1569,6 +1590,8 @@ def handle_memory_search(
                 after=_parse_iso(args.get('after')),
                 before=_parse_iso(args.get('before')),
                 tags=tags,
+                intent_class=intent_class,
+                risk_class=risk_class,
             ),
             timeout=60.0,
         )
