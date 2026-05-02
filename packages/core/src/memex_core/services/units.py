@@ -51,6 +51,56 @@ class UnitsService(BaseService):
             background_tasks=background_tasks,
         )
 
+    async def batch_set_unit_deprioritized(
+        self,
+        unit_ids: list[UUID],
+        reason: str,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> list[UUID]:
+        """Flip ``is_deprioritized`` to True for many units in a single UPDATE.
+
+        Returns the list of unit IDs whose row was actually updated (i.e.
+        existed and were not already deprioritized — the predicate
+        ``is_deprioritized = false`` makes the call idempotent).
+
+        Audit log entries are emitted per-unit so the per-row reason and
+        cascade semantics match the single-row path; batching the audit
+        emission is tracked as a follow-up.
+        """
+        from sqlalchemy import update as sa_update
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not unit_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = (
+                sa_update(MemoryUnit)
+                .where(MemoryUnit.id.in_(unit_ids))  # type: ignore[attr-defined]
+                .where(MemoryUnit.is_deprioritized.is_(False))
+                .values(is_deprioritized=True)
+                .returning(MemoryUnit.id)
+            )
+            result = await session.execute(stmt)
+            updated_ids = [row[0] for row in result.all()]
+            await session.commit()
+
+        if self._audit_service is not None and updated_ids:
+            for uid in updated_ids:
+                self._audit_service.log(
+                    action='memory_deprioritize',
+                    actor=actor if actor is not None else get_actor(),
+                    resource_type='memory_unit',
+                    resource_id=str(uid),
+                    session_id=get_session_id(),
+                    details={'reason': reason},
+                    background_tasks=background_tasks,
+                )
+        return updated_ids
+
     async def restore_unit(
         self,
         unit_id: UUID,

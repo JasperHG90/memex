@@ -427,7 +427,6 @@ class LocksService:
                 }
 
             has_proposals_table = await self._has_maintenance_proposals_table(sa_inspect)
-            units_deprioritized = 0
             proposals_written = 0
             reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
 
@@ -437,10 +436,15 @@ class LocksService:
                     'LocksService(..., units=...) at construction'
                 )
 
-            for unit_id in candidates:
-                await self.units.set_unit_deprioritized(unit_id, reason, actor=actor)
-                units_deprioritized += 1
-                if has_proposals_table:
+            # Single batched UPDATE per vault rather than one transaction per
+            # unit (HIGH-6). Audit-log emission stays per-unit so cascade
+            # semantics match the single-row path.
+            updated_ids = await self.units.batch_set_unit_deprioritized(
+                candidates, reason, actor=actor
+            )
+            units_deprioritized = len(updated_ids)
+            if has_proposals_table:
+                for unit_id in updated_ids:
                     await self._write_consolidate_proposal(
                         unit_id=unit_id,
                         vault_id=vault_id,
