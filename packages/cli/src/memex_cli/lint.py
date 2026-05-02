@@ -81,6 +81,7 @@ async def lint_status(
             payload = await api.lint_status(scope=scope, vault_id=vault_id)
         except Exception as e:
             handle_api_error(e)
+            return
 
     pending = payload.get('pending', 0)
     if scope == 'vault':
@@ -133,6 +134,7 @@ async def lint_findings(
             )
         except Exception as e:
             handle_api_error(e)
+            return
 
     findings = payload.get('findings', [])
     if not findings:
@@ -172,6 +174,7 @@ async def lint_dismiss_cmd(
             payload = await api.lint_dismiss(finding_id)
         except Exception as e:
             handle_api_error(e)
+            return
     console.print(f'[green]dismissed:[/green] {payload["finding_id"]}')
 
 
@@ -189,4 +192,5 @@ async def lint_resolve_cmd(
             payload = await api.lint_resolve(finding_id)
         except Exception as e:
             handle_api_error(e)
+            return
     console.print(f'[green]resolved:[/green] {payload["finding_id"]}')
