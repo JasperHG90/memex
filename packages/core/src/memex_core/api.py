@@ -1163,9 +1163,9 @@ class MemexAPI:
 
         if scope not in ('incremental', 'full'):
             raise ValueError(f"scope must be 'incremental' or 'full', got {scope!r}")
-        return await self._reflection.summarize_node(
-            entity_id, scope=cast(SummarizeScope, scope), vault_id=vault_id
-        )
+        # The preceding guard validates scope at runtime; narrow to SummarizeScope (Literal) for mypy.
+        narrowed: SummarizeScope = scope  # type: ignore[assignment]
+        return await self._reflection.summarize_node(entity_id, scope=narrowed, vault_id=vault_id)
 
     async def record_outcome(
         self,
