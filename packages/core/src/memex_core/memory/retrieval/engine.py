@@ -13,8 +13,9 @@ import math
 import numpy as np
 import tiktoken
 from cachetools import TTLCache
-from sqlalchemy import func, literal, union_all
+from sqlalchemy import func, literal, text, union_all
 from sqlalchemy.orm import defer, selectinload
+from sqlalchemy.sql.elements import TextClause
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -64,18 +65,26 @@ logger = logging.getLogger('memex.core.memory.retrieval.engine')
 STABILITY_SECONDS_PER_DAY: float = 86400.0
 
 
-# SECURITY: all interpolated values in pre_filter_clause must be module-level constants
-# (e.g., STABILITY_SECONDS_PER_DAY), NEVER user input. SQL injection vector if violated.
 def _build_pre_filter_clause(
     *,
     apply_pre_filter: bool,
     fsfm_branch_enabled: bool,
-) -> str | None:
-    """Build the F40 pre-reranker predicate string.
+) -> TextClause | None:
+    """Build the F40 pre-reranker predicate as a SQLAlchemy ``TextClause``.
 
-    Returns a SQL fragment intended to be embedded inside a
-    ``WHERE NOT (...)`` clause, or ``None`` when the entire pre-filter
-    must drop out (``apply_pre_filter=False`` or no branches active).
+    Returns a ``TextClause`` already wrapped as ``NOT (...)`` so the caller
+    can pass it straight to ``stmt.where(...)``, or ``None`` when the
+    entire pre-filter must drop out (``apply_pre_filter=False`` or no
+    branches active).
+
+    SECURITY INVARIANT: this function MUST NEVER interpolate values
+    derived from user input or runtime data. Every interpolated value is
+    a module-level constant (currently only ``STABILITY_SECONDS_PER_DAY``
+    in the FSFM branch). If you add a new branch, the values you
+    interpolate MUST come from constants. The pinning tests in
+    ``tests/unit/retrieval/test_f40_sql_builder.py`` assert this at the
+    SQL-string level — touching that suite when adding a branch is
+    deliberate.
 
     Implementation pitfall (round-3 review): the FSFM branch is included
     via a **Python-level conditional**, NOT a SQL-side runtime flag like
@@ -123,7 +132,8 @@ def _build_pre_filter_clause(
     # OR'd, not AND'd — either signal is sufficient grounds to skip the
     # cross-encoder. Cold-start safeguards (MW >= 5 outcomes, FSFM exp(elapsed))
     # are inside the individual branches.
-    return ' OR '.join(branches)
+    pre_filter_clause = ' OR '.join(branches)
+    return text(f'NOT ({pre_filter_clause})')
 
 
 def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
@@ -231,6 +241,13 @@ class RetrievalEngine:
         self.ner_model = ner_model
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
+        # Per-engine RNG for the F33 ε-greedy roll. ``random.random()``
+        # would dispatch to CPython's module-global Mersenne Twister,
+        # which is guarded by a lock — under high concurrency that lock
+        # is contended. A per-instance ``random.Random()`` is unshared
+        # and lock-free, and keeps the global RNG free for callers that
+        # rely on it being seedable from outside.
+        self._rng = random.Random()
         self.expander = QueryExpander(lm=self.lm) if self.lm else None
         self.concretizer: TemporalConcretizer | None = (
             TemporalConcretizer(lm=self.lm)
@@ -623,7 +640,7 @@ class RetrievalEngine:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import F33_EXPLORATION_INJECTED_TOTAL
 
-            should_inject = random.random() < self.retrieval_config.exploration_epsilon
+            should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
 
             if should_inject:
                 exploration_pool = hydrated_candidates
@@ -1171,17 +1188,16 @@ class RetrievalEngine:
             # F40 — Python-level conditional pre-filter. The MW branch is
             # always included; the FSFM branch is included only when the
             # config flag is True. SQL-side runtime flags would still
-            # reference the missing columns at parse time.
+            # reference the missing columns at parse time. The builder
+            # owns the single ``text(...)`` boundary — see its docstring
+            # for the SECURITY INVARIANT pinning constants-only
+            # interpolation.
             pre_filter_clause = _build_pre_filter_clause(
                 apply_pre_filter=apply_pre_filter,
                 fsfm_branch_enabled=self.retrieval_config.fsfm_branch_enabled,
             )
             if pre_filter_clause is not None:
-                from sqlalchemy import text as _sa_text
-
-                # SECURITY: all interpolated values in pre_filter_clause must be module-level constants
-                # (e.g., STABILITY_SECONDS_PER_DAY), NEVER user input. SQL injection vector if violated.
-                stmt = stmt.where(_sa_text(f'NOT ({pre_filter_clause})'))
+                stmt = stmt.where(pre_filter_clause)
 
             t0 = time.monotonic()
             units = (await session.exec(stmt)).all()

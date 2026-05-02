@@ -18,11 +18,17 @@ These tests lock down two invariants the round-3 review settled:
 The third invariant tested here is the bypass: when ``apply_pre_filter``
 is False, the builder returns ``None`` so the whole ``WHERE NOT (...)``
 clause drops out — every branch bypassed in one go.
+
+Round-3 review note: the builder now returns a SQLAlchemy ``TextClause``
+already wrapped as ``NOT (...)`` (single ``text(...)`` boundary in the
+codebase). The string-level assertions below stringify the clause to
+inspect the rendered SQL.
 """
 
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.sql.elements import TextClause
 
 from memex_core.memory.retrieval.engine import (
     STABILITY_SECONDS_PER_DAY,
@@ -41,15 +47,17 @@ class TestF40PreFilterBuilder:
             fsfm_branch_enabled=False,
         )
         assert clause is not None
-        assert 'success_co_count' in clause
-        assert 'failure_co_count' in clause
-        assert 'importance' not in clause, (
+        assert isinstance(clause, TextClause)
+        sql = str(clause)
+        assert 'success_co_count' in sql
+        assert 'failure_co_count' in sql
+        assert 'importance' not in sql, (
             'F11 column leaked into F40-only SQL — SQL-side runtime flag regression. '
             'The FSFM branch must be omitted via a Python-level conditional, not '
             'guarded by a runtime SQL clause.'
         )
-        assert 'stability' not in clause
-        assert 'last_outcome_at' not in clause
+        assert 'stability' not in sql
+        assert 'last_outcome_at' not in sql
 
     def test_fsfm_enabled_emits_coalesce_branch(self) -> None:
         """With ``fsfm_branch_enabled=True`` the FSFM expression must be
@@ -61,40 +69,54 @@ class TestF40PreFilterBuilder:
             fsfm_branch_enabled=True,
         )
         assert clause is not None
+        assert isinstance(clause, TextClause)
+        sql = str(clause)
 
-        assert 'success_co_count' in clause
-        assert 'importance' in clause
-        assert 'stability' in clause
-        assert 'last_outcome_at' in clause
+        assert 'success_co_count' in sql
+        assert 'importance' in sql
+        assert 'stability' in sql
+        assert 'last_outcome_at' in sql
 
-        assert 'COALESCE' in clause, 'FSFM branch must be wrapped in COALESCE(..., FALSE)'
+        assert 'COALESCE' in sql, 'FSFM branch must be wrapped in COALESCE(..., FALSE)'
 
-        coalesce_idx = clause.find('COALESCE')
-        importance_idx = clause.find('importance')
+        coalesce_idx = sql.find('COALESCE')
+        importance_idx = sql.find('importance')
         assert coalesce_idx < importance_idx, (
             'COALESCE must wrap the FSFM expression (importance * exp(...) < 0.10), '
             'not appear after it'
         )
 
-        assert 'COALESCE(memory_units.stability,' not in clause, (
+        assert 'COALESCE(memory_units.stability,' not in sql, (
             'Column-level COALESCE on stability detected. The round-3 review '
             'settled on BRANCH-level COALESCE only — wrapping individual columns '
             'masks real values with synthetic defaults.'
         )
-        assert 'COALESCE(memory_units.last_outcome_at,' not in clause
+        assert 'COALESCE(memory_units.last_outcome_at,' not in sql
         # The COALESCE wrap is allowed on the FSFM branch result (which starts
         # with ``memory_units.importance * exp(...)``) — that's the round-3
         # NULL-handling fix. What's forbidden is column-level fallback like
         # ``COALESCE(stability, 1.0)`` that masks real values.
-        assert ', 1.0)' not in clause
-        assert ', 0.5)' not in clause
+        assert ', 1.0)' not in sql
+        assert ', 0.5)' not in sql
 
         # The unit-conversion divisor must come from the named constant.
-        assert str(STABILITY_SECONDS_PER_DAY) in clause
+        assert str(STABILITY_SECONDS_PER_DAY) in sql
 
         # NULLIF guards zero-stability rows from filtering (degenerate state
         # that observability surfaces).
-        assert 'NULLIF(memory_units.stability, 0)' in clause
+        assert 'NULLIF(memory_units.stability, 0)' in sql
+
+    def test_clause_is_wrapped_as_not(self) -> None:
+        """Round-3 review: the builder owns the ``text(...)`` boundary
+        and emits the predicate already wrapped as ``NOT (...)`` so the
+        caller is just ``stmt.where(clause)``."""
+        clause = _build_pre_filter_clause(
+            apply_pre_filter=True,
+            fsfm_branch_enabled=False,
+        )
+        assert clause is not None
+        sql = str(clause)
+        assert sql.startswith('NOT ('), f'Builder must return NOT-wrapped clause; got {sql!r}'
 
     def test_apply_pre_filter_false_returns_none(self) -> None:
         """``apply_pre_filter=False`` drops the entire ``WHERE NOT (...)``
@@ -120,8 +142,9 @@ class TestF40PreFilterBuilder:
             fsfm_branch_enabled=True,
         )
         assert clause is not None
-        assert ' OR ' in clause
-        assert ' AND COALESCE' not in clause
+        sql = str(clause)
+        assert ' OR ' in sql
+        assert ' AND COALESCE' not in sql
 
     def test_mw_threshold_is_five_outcomes(self) -> None:
         """Cold-start safeguard: the MW branch is gated on
@@ -131,8 +154,9 @@ class TestF40PreFilterBuilder:
             fsfm_branch_enabled=False,
         )
         assert clause is not None
-        assert '>= 5' in clause
-        assert '< 0.15' in clause
+        sql = str(clause)
+        assert '>= 5' in sql
+        assert '< 0.15' in sql
 
     def test_mw_uses_beta_bernoulli_closed_form(self) -> None:
         """``mw_score = (succ + 1) / (succ + fail + 2)`` — the
@@ -143,8 +167,9 @@ class TestF40PreFilterBuilder:
             fsfm_branch_enabled=False,
         )
         assert clause is not None
-        assert '(memory_units.success_co_count + 1.0)' in clause
-        assert '(memory_units.success_co_count + memory_units.failure_co_count + 2.0)' in clause
+        sql = str(clause)
+        assert '(memory_units.success_co_count + 1.0)' in sql
+        assert '(memory_units.success_co_count + memory_units.failure_co_count + 2.0)' in sql
 
 
 class TestStabilitySecondsPerDayConstant:
@@ -176,4 +201,4 @@ def test_builder_truth_table(
         assert clause is None
     else:
         assert clause is not None
-        assert 'success_co_count' in clause
+        assert 'success_co_count' in str(clause)
