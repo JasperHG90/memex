@@ -96,12 +96,12 @@ def test_recall_does_not_advertise_kv_write_for_procedures():
 
 
 def test_recall_step_numbering_is_consecutive():
-    """Visible numbered steps (outside HTML comments) are 1, 2, 3, 4 in order.
+    """Visible numbered steps (outside HTML comments) are consecutive starting at 1.
 
     F14 inserted step 4 (procedure recall) per team-lead's renumber call.
-    F32's step (currently inside an HTML comment, awaiting WS-diagnostics
-    activation) is renumbered to 5 so it becomes consecutive when
-    uncommented.
+    Subsequent workstreams (F8, F32, ...) append steps as they activate;
+    the invariant is that visible step numbers are monotonically
+    increasing from 1 with no gaps, not a fixed length.
     """
     import re
 
@@ -111,7 +111,12 @@ def test_recall_step_numbering_is_consecutive():
     visible = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
 
     step_nums = [int(m) for m in re.findall(r'^(\d+)\.\s', visible, flags=re.MULTILINE)]
-    assert step_nums == [1, 2, 3, 4], (
-        f'visible steps in recall/SKILL.md must be 1-4 consecutive (post-F14 '
-        f'renumber); got {step_nums}'
+    expected = list(range(1, len(step_nums) + 1))
+    assert step_nums == expected, (
+        f'visible steps in recall/SKILL.md must be consecutive starting at 1 '
+        f'(post-F14 renumber, with F8/F32/... appended in order); got {step_nums}'
+    )
+    # Sanity: at least the F14 baseline of 4 steps must be present.
+    assert len(step_nums) >= 4, (
+        f'recall/SKILL.md must have at least the 4 F14 baseline steps; got {len(step_nums)}'
     )

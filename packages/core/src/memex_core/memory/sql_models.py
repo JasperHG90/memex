@@ -599,6 +599,42 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Confidence score (0.0-1.0). Decreased when contradicted by newer information.',
     )
 
+    revisit_due_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='F20: when this unit is next due for FSRS-5 review (NULL if not scheduled).',
+    )
+
+    revisit_stability: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='F20: FSRS-5 stability state (NULL until first review).',
+    )
+
+    revisit_difficulty: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='F20: FSRS-5 difficulty state (NULL until first review).',
+    )
+
+    revisit_review_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'F20: consecutive Again-rating count for the sticky auto-deprioritize gate. '
+            'Resets to 0 on Hard/Good/Easy.'
+        ),
+    )
+
+    revisit_last_reviewed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'F20: wall-clock timestamp of the most recent review. Distinct from '
+            'revisit_due_at (next-due); FSRS-5 elapsed-days uses this column.'
+        ),
+    )
+
     unit_metadata: dict[str, Any] = Field(
         default={},
         sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
@@ -1824,4 +1860,53 @@ class ConsolidationTick(SQLModel, table=True):  # type: ignore
             'vault_id',
             sql_text('completed_at DESC NULLS LAST'),
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# F10 — LLM lint quota (rolling-24h cost cap)
+# ---------------------------------------------------------------------------
+
+
+class LintLLMQuota(SQLModel, table=True):  # type: ignore
+    """Hour-bucket counter for the F10 24h-rolling cost cap.
+
+    One row per (vault_id, hour_bucket). The 24h rolling window is computed by
+    summing the last 24 hour-buckets via the indexed range scan
+    ``idx_lint_llm_quota_vault_hour``. UPSERT is idempotent through the
+    ``uq_lint_llm_quota_vault_hour`` constraint.
+    """
+
+    __tablename__ = 'lint_llm_quota'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            nullable=False,
+        ),
+        description='Vault this quota row belongs to.',
+    )
+    hour_bucket: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='UTC timestamp truncated to the hour. Clients MUST normalise.',
+    )
+    count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+        description='Number of LLM lint calls made in this hour for this vault.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'hour_bucket', name='uq_lint_llm_quota_vault_hour'),
+        CheckConstraint('count >= 0', name='ck_lint_llm_quota_count_non_negative'),
+        Index('idx_lint_llm_quota_vault_hour', 'vault_id', 'hour_bucket'),
     )

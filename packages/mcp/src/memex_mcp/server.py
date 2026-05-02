@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 
 from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
 from memex_common.asset_resize import validate_and_resize
+from memex_common.revisit import reject_bool_quality
 from fastmcp.utilities.logging import configure_logging
 import json
 
@@ -3747,9 +3748,190 @@ async def memex_memory_summarize_node(
 
 # --- F8 ---  (filled by WS-linter)
 
+from memex_mcp._f8_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_get_lint_flags',
+    description=MEMEX_GET_LINT_FLAGS_DESCRIPTION,
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_lint_flags(
+    ctx: Context,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID; omit for all-vault view.'),
+    ] = None,
+    lint_type: Annotated[
+        str | None,
+        Field(description='structural | quality | governance | schema'),
+    ] = None,
+    status: Annotated[
+        str,
+        Field(description='pending | resolved | dismissed (default: pending)'),
+    ] = 'pending',
+    limit: Annotated[int, Field(description='Page size (default 20, max 200).')] = 20,
+    cursor: Annotated[
+        str | None,
+        Field(description='Opaque cursor from a prior page; omit on first call.'),
+    ] = None,
+) -> dict[str, Any]:
+    """F8 read-only surface: list pending memory-hygiene findings."""
+    try:
+        api = get_api(ctx)
+        resolved_vault: str | None = None
+        if vault_id is not None:
+            resolved_vault = str(await _resolve_vault_id(api, vault_id))
+        try:
+            return await api.lint_get_flags(
+                vault_id=resolved_vault,
+                lint_type=lint_type,
+                status=status,
+                limit=limit,
+                cursor=cursor,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 503:
+                # AC-F8-5 — translate the server's structured envelope.
+                detail = exc.response.json().get('detail', {})
+                if (
+                    isinstance(detail, dict)
+                    and detail.get('error') == 'lint_subsystem_not_initialized'
+                ):
+                    return detail
+            raise
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_get_lint_flags failed: {e}', exc_info=True)
+        raise ToolError(f'memex_get_lint_flags failed: {e}')
+
+
 # --- F9 ---  (filled by WS-locks)
 
 # --- F20 --- (filled by WS-revisit)
+
+from memex_mcp._f20_descriptions import (
+    MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
+    MEMEX_MEMORY_REVIEW_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_get_due_for_review',
+    description=MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
+    tags={'read', 'storage'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_due_for_review(
+    ctx: Context,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name (defaults to active vault if omitted).'),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(ge=1, le=200, description='Maximum due units to return (default 20).'),
+    ] = 20,
+) -> list[dict[str, Any]]:
+    """List memory units due for FSRS-5 revisit in a vault."""
+    try:
+        api = get_api(ctx)
+        config = get_config(ctx)
+        if vault_id is None:
+            resolved_vault_id = await api.resolve_vault_identifier(
+                config.server.default_active_vault
+            )
+        else:
+            resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        due = await api.get_due_for_review(resolved_vault_id, limit=limit)
+        return [
+            {
+                'unit_id': str(d.unit_id),
+                'text_preview': d.text_preview,
+                'revisit_due_at': d.revisit_due_at.isoformat(),
+                'intent_class': d.intent_class,
+            }
+            for d in due
+        ]
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_get_due_for_review failed: {e}', exc_info=True)
+        raise ToolError(f'memex_get_due_for_review failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_review',
+    description=MEMEX_MEMORY_REVIEW_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=30.0,
+)
+async def memex_memory_review(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID being reviewed.')],
+    quality: Annotated[
+        int | str,
+        BeforeValidator(reject_bool_quality),
+        Field(
+            description=(
+                'Review rating. Accepts the FSRS-5 IntEnum value (1=again, 2=hard, '
+                "3=good, 4=easy) or the case-insensitive string ('again' / 'hard' / "
+                "'good' / 'easy'). AGAIN/HARD record a failure outcome; GOOD/EASY "
+                'record a success outcome.'
+            ),
+        ),
+    ],
+    vault_id: Annotated[
+        str,
+        Field(
+            description=(
+                'Vault UUID or name the memory unit belongs to. REQUIRED — '
+                'the service rejects cross-vault review (Wave 0 vault-scoping invariant).'
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Record a review outcome on a memory unit (FSRS-5 advance + outcome + audit)."""
+    try:
+        from memex_core.memory.revisit import Quality
+
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+
+        if isinstance(quality, int):
+            try:
+                quality_enum = Quality(quality)
+            except ValueError:
+                raise ToolError(
+                    f'Invalid quality {quality!r}; must be 1 (again), 2 (hard), '
+                    '3 (good), or 4 (easy).'
+                )
+        else:
+            quality_lc = quality.strip().lower()
+            try:
+                quality_enum = Quality[quality_lc.upper()]
+            except KeyError:
+                raise ToolError(
+                    f"Invalid quality {quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
+                )
+
+        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        return await api.review_memory_unit(uuid_obj, quality_enum, vault_id=resolved_vault_id)
+    except ToolError:
+        raise
+    except PermissionError as exc:
+        raise ToolError(str(exc))
+    except Exception as e:
+        logger.error(f'memex_memory_review failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_review failed: {e}')
 
 
 # --- F32 --- (filled by WS-diagnostics)

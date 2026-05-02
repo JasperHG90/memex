@@ -21,15 +21,21 @@ Drift between the two forms is guarded by a unit test.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from memex_core.memory._lint_utils import enum_value as _enum_value
 from memex_core.memory.sql_models import LintType
 from memex_core.services.base import BaseService
 
@@ -41,6 +47,96 @@ except Exception:  # pragma: no cover — OTel optional at import time
     _tracer = None
 
 logger = logging.getLogger('memex.core.services.lint')
+
+
+# ---------------------------------------------------------------------------
+# F8 — Read-side DTOs, cursor codec, and table-not-found signal
+# ---------------------------------------------------------------------------
+
+
+_MAX_LIMIT = 200
+
+
+class LintSubsystemNotInitializedError(RuntimeError):
+    """Signals AC-F8-5: ``maintenance_proposals`` table is missing.
+
+    The MCP/HTTP layer translates this into the documented error envelope
+    so the agent gets a clear, actionable message ("run alembic upgrade").
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            'F6 maintenance_proposals table is missing. '
+            'Run `alembic upgrade head` to initialize the lint ledger.'
+        )
+
+
+class LintFindingDTO(BaseModel):
+    """Shape-stable read view over a :class:`MaintenanceProposal` row."""
+
+    finding_id: UUID
+    target_id: str
+    target_type: str
+    lint_type: str
+    rule_name: str
+    evidence: dict[str, Any]
+    suggested_action: str
+    status: str
+    source: str
+    vault_id: UUID | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+    @classmethod
+    def from_row(cls, row: Any) -> LintFindingDTO:
+        return cls(
+            finding_id=row['id'],
+            target_id=row['target_id'],
+            target_type=row['target_type'],
+            lint_type=_enum_value(row['lint_type']),
+            rule_name=row['rule_name'],
+            evidence=row['evidence'] or {},
+            suggested_action=row['suggested_action'],
+            status=_enum_value(row['status']),
+            source=_enum_value(row['source']),
+            vault_id=row['vault_id'],
+            created_at=row['created_at'],
+            resolved_at=row['resolved_at'],
+        )
+
+
+class LintFindingsPage(BaseModel):
+    """Shape-stable page envelope returned by :meth:`LintService.get_findings`.
+
+    ``findings`` is always present (possibly empty); ``next_cursor`` is
+    always present (string or None). The agent surface (F8) MUST round-trip
+    these fields verbatim — never collapse to a bare list or null.
+    """
+
+    findings: list[LintFindingDTO]
+    next_cursor: str | None
+
+
+def _encode_cursor(created_at: datetime, finding_id: UUID) -> str:
+    """Opaque base64 of ``{ts, id}`` — total-order across concurrent inserts."""
+    payload = json.dumps({'ts': created_at.isoformat(), 'id': str(finding_id)})
+    return base64.urlsafe_b64encode(payload.encode('utf-8')).decode('ascii')
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID] | None:
+    """Decode an opaque cursor; return None on any malformed input.
+
+    Returning None lets ``get_findings`` treat junk cursors as "page 1"
+    rather than 500-ing — the cursor is opaque so agents can't reason
+    about its shape, and a stale cursor (e.g. across F8 redeploys)
+    should degrade gracefully.
+    """
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode('ascii')).decode('utf-8')
+        data = json.loads(raw)
+        return datetime.fromisoformat(data['ts']), UUID(data['id'])
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -364,6 +460,89 @@ class LintService(BaseService):
             )
             await session.commit()
             return bool(result.rowcount)
+
+    async def get_findings(
+        self,
+        *,
+        vault_id: UUID | None = None,
+        lint_type: str | None = None,
+        target_type: str | None = None,
+        status: str = 'pending',
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> LintFindingsPage:
+        """Query the maintenance ledger with filters + cursor pagination.
+
+        Read-only. Returns a :class:`LintFindingsPage` with shape-stable
+        fields: ``findings`` is always a list (possibly empty) and
+        ``next_cursor`` is always a string-or-None (never missing). Ordered
+        by ``(created_at DESC, id DESC)`` so the cursor is total-order under
+        concurrent inserts.
+
+        AC-F8-5 path — when the ``maintenance_proposals`` table is missing
+        (e.g. F8 ran before F6's migration applied) raises
+        :class:`LintSubsystemNotInitializedError`; the MCP/HTTP layer maps
+        that to the documented error envelope.
+        """
+        if status not in ('pending', 'resolved', 'dismissed'):
+            raise ValueError(f'status must be one of pending|resolved|dismissed, got {status!r}')
+        if limit < 1:
+            raise ValueError(f'limit must be >= 1, got {limit}')
+        capped_limit = min(limit, _MAX_LIMIT)
+
+        cursor_ts: datetime | None = None
+        cursor_id: UUID | None = None
+        if cursor:
+            decoded = _decode_cursor(cursor)
+            if decoded is not None:
+                cursor_ts, cursor_id = decoded
+
+        # Fetch limit+1 so we can tell whether another page exists without a
+        # second round-trip count. Pre-compute the value rather than doing
+        # arithmetic on a bound parameter — `:limit + 1` inside SQL leaves the
+        # `+ 1` as a literal addition the driver may reject or interpret oddly.
+        fetch_limit = capped_limit + 1
+        clauses: list[str] = ['status = :status']
+        params: dict[str, Any] = {'status': status, 'fetch_limit': fetch_limit}
+        if vault_id is not None:
+            clauses.append('vault_id = CAST(:vault_id AS uuid)')
+            params['vault_id'] = str(vault_id)
+        if lint_type is not None:
+            clauses.append('lint_type = :lint_type')
+            params['lint_type'] = lint_type
+        if target_type is not None:
+            clauses.append('target_type = :target_type')
+            params['target_type'] = target_type
+        if cursor_ts is not None and cursor_id is not None:
+            clauses.append('(created_at, id) < (:cursor_ts, CAST(:cursor_id AS uuid))')
+            params['cursor_ts'] = cursor_ts
+            params['cursor_id'] = str(cursor_id)
+
+        where_sql = ' AND '.join(clauses)
+        stmt = text(
+            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '
+            f'evidence, suggested_action, status, source, created_at, resolved_at '
+            f'FROM maintenance_proposals WHERE {where_sql} '
+            'ORDER BY created_at DESC, id DESC LIMIT :fetch_limit'
+        )
+
+        async with self.metastore.session() as session:
+            try:
+                result = await session.execute(stmt, params)
+                rows = result.mappings().all()
+            except ProgrammingError as exc:
+                if 'maintenance_proposals' in str(exc).lower():
+                    raise LintSubsystemNotInitializedError() from exc
+                raise
+
+        findings = [LintFindingDTO.from_row(r) for r in rows[:capped_limit]]
+        has_more = len(rows) > capped_limit
+        next_cursor = (
+            _encode_cursor(findings[-1].created_at, findings[-1].finding_id)
+            if has_more and findings
+            else None
+        )
+        return LintFindingsPage(findings=findings, next_cursor=next_cursor)
 
 
 def _json_dumps(value: Any) -> str:

@@ -5,7 +5,12 @@ Used by the CLI to interact with a running Memex server.
 
 import datetime as dt
 import logging
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
+
+if TYPE_CHECKING:
+    # Imported for type hints only; memex_common cannot depend on memex_core
+    # at runtime (memex_core depends on memex_common, not the reverse).
+    from memex_core.memory.revisit import Quality
 from uuid import UUID
 
 import httpx
@@ -22,6 +27,7 @@ from memex_common.schemas import (
     CreateVaultRequest,
     DeadLetterItemDTO,
     DefaultVaultsResponse,
+    DueUnitDTO,
     FindNoteResult,
     MemoryLinkDTO,
     NoteAppendRequest,
@@ -531,6 +537,15 @@ class RemoteMemexAPI:
         """Fetch the F32 diagnostics summary for a vault."""
         return await self._get(f'diagnostics/summary/{vault_id}')
 
+    async def get_diagnostics_lint(self, vault_id: UUID | str) -> dict[str, Any]:
+        """F26 — Fetch the lint dashboard pivot for a vault.
+
+        Returns ``{vault_id, counts_by_type_status_source, pending_by_type,
+        top_5_pending}``. Operator/observability view; orthogonal to F6's
+        ``/lint/status`` (single count) and ``/lint/findings`` (paginated rows).
+        """
+        return await self._get(f'diagnostics/lint/{vault_id}')
+
     async def get_diagnostics_retrieval(
         self, vault_id: UUID | str, top_n: int = 50
     ) -> dict[str, Any]:
@@ -784,6 +799,50 @@ class RemoteMemexAPI:
         """Restore a previously-deprioritized memory unit. See F4."""
         result = await self._post(f'memories/{unit_id}/restore', {})
         return MemoryUnitDTO(**result)
+
+    async def get_due_for_review(
+        self,
+        vault_id: UUID | str,
+        *,
+        limit: int = 20,
+    ) -> list[DueUnitDTO]:
+        """List memory units due for FSRS-5 revisit in a vault. See F20.
+
+        Returns a list of :class:`DueUnitDTO` with attributes ``unit_id``,
+        ``text_preview``, ``revisit_due_at``, and ``intent_class``. The DTO
+        mirrors the in-process ``memex_core.services.revisitation.DueUnit``
+        so callers can use attribute access symmetrically across the
+        in-process and remote APIs.
+        """
+        params = {'vault_id': str(vault_id), 'limit': limit}
+        result = await self._get('memory/due_for_review', params=params)
+        return [DueUnitDTO(**r) for r in result]
+
+    async def review_memory_unit(
+        self,
+        unit_id: UUID,
+        quality: 'Quality | int | str',
+        *,
+        vault_id: UUID | str,
+    ) -> dict[str, Any]:
+        """Record a review outcome on a memory unit (F20).
+
+        Mirrors :meth:`memex_core.api.MemexAPI.review_memory_unit`.
+        ``quality`` accepts the FSRS-5 IntEnum, its int value (1-4), or the
+        case-insensitive string ('again'/'hard'/'good'/'easy'). ``vault_id``
+        is REQUIRED — the server enforces cross-vault rejection (returns
+        HTTP 403 if the unit's vault does not match).
+        """
+        if hasattr(quality, 'name'):
+            quality_payload: int | str = quality.name.lower()
+        else:
+            quality_payload = quality
+        body = {
+            'unit_id': str(unit_id),
+            'quality': quality_payload,
+            'vault_id': str(vault_id),
+        }
+        return await self._post('memory/review', body)
 
     async def get_memory_links(
         self,
@@ -1163,3 +1222,28 @@ class RemoteMemexAPI:
     async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
         """Flip a pending finding to ``resolved``."""
         return await self._post(f'lint/findings/{finding_id}/resolve', {})
+
+    async def lint_get_flags(
+        self,
+        *,
+        vault_id: str | None = None,
+        lint_type: str | None = None,
+        target_type: str | None = None,
+        status: str = 'pending',
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """F8 agent surface — cursor-paginated, shape-stable findings list.
+
+        Returns ``{findings: [...], next_cursor: str|null}``.
+        """
+        params: dict[str, Any] = {'status': status, 'limit': limit}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        if lint_type is not None:
+            params['lint_type'] = lint_type
+        if target_type is not None:
+            params['target_type'] = target_type
+        if cursor is not None:
+            params['cursor'] = cursor
+        return await self._get('lint/flags', params=params)
