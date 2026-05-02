@@ -23,7 +23,7 @@ The 500-units-per-tick budget (oldest-first by ``mentioned_at`` /
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -54,6 +54,12 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 logger = logging.getLogger('memex.core.services.consolidation')
 
 DEFAULT_TICK_BUDGET = 500
+
+# Safety bound for the first-tick path (no prior `consolidation_ticks` row).
+# Without this, `select_diff_units` would scan the entire `audit_logs` table on
+# mature vaults with millions of outcome rows. One year is comfortably wider
+# than any plausible reflection horizon while still keeping the scan bounded.
+FIRST_TICK_LOOKBACK = timedelta(days=365)
 
 
 class ConsolidationService:
@@ -325,27 +331,37 @@ class ConsolidationService:
 
         Reads ``AuditLog`` rows where ``action='outcome.record'``,
         ``resource_type='memory_unit'``, ``details->>'vault_id' = vault_id``,
-        and ``timestamp > last_tick_timestamp`` (or all rows if no prior tick).
-        Distinct on ``resource_id``; oldest-first by AuditLog.timestamp;
-        capped to ``budget`` rows via SQL ``LIMIT``.
+        and ``timestamp > last_tick_timestamp``. On the first-tick path
+        (``last_tick_timestamp is None``) the lower bound falls back to
+        ``now() - FIRST_TICK_LOOKBACK`` so the scan is always bounded —
+        without this, mature vaults with millions of outcome rows would do a
+        full ``audit_logs`` table scan (issue #98). Distinct on
+        ``resource_id``; oldest-first by AuditLog.timestamp; capped to
+        ``budget`` rows via SQL ``LIMIT``.
 
         Returns parsed UUIDs; rows whose ``resource_id`` is unparseable are
         dropped (defensive — should not happen since record_outcome writes
         ``str(uuid)``).
         """
+        # Always apply a lower bound on `timestamp` to keep the audit_logs scan
+        # bounded. Falls back to a 1-year window for the first-tick path.
+        lower_bound = (
+            last_tick_timestamp
+            if last_tick_timestamp is not None
+            else datetime.now(timezone.utc) - FIRST_TICK_LOOKBACK
+        )
         stmt = (
             select(AuditLog.resource_id, sa_func.min(AuditLog.timestamp).label('first_seen'))
             .where(
                 AuditLog.action == 'outcome.record',
                 AuditLog.resource_type == 'memory_unit',
                 AuditLog.details['vault_id'].astext == str(vault_id),
+                AuditLog.timestamp > lower_bound,
             )
             .group_by(AuditLog.resource_id)
             .order_by(sa_func.min(AuditLog.timestamp))
             .limit(budget)
         )
-        if last_tick_timestamp is not None:
-            stmt = stmt.where(AuditLog.timestamp > last_tick_timestamp)
 
         result = await session.exec(stmt)  # type: ignore[call-overload]
         out: list[UUID] = []
