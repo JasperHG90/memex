@@ -75,11 +75,13 @@ async def procedure_list(
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
+            vault_id = await api.resolve_vault_identifier(vault)
             rows = await api.list_top_procedure_outcomes(
-                vault_id=vault, context=context, limit=limit
+                vault_id=vault_id, context=context, limit=limit
             )
         except Exception as e:
             handle_api_error(e)
+            return
 
     if json_output:
         console.print_json(data=[r.model_dump(mode='json') for r in rows])
@@ -137,6 +139,7 @@ async def procedure_show(
             entry = await api.kv_get(key=key, include_history=history)
         except Exception as e:
             handle_api_error(e)
+            return
 
     if entry is None:
         console.print(f'[yellow]Key not found: {key}[/yellow]')
@@ -185,6 +188,7 @@ async def procedure_add(
             entry = await api.kv_put(value=value, key=key)
         except Exception as e:
             handle_api_error(e)
+            return
 
     console.print(f'[green]Wrote:[/green] {entry.key}')
     # Server stores the JSON envelope; show only the active value for legibility.
