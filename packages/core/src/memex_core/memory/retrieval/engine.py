@@ -354,9 +354,9 @@ class RetrievalEngine:
             filters['source_context'] = request.source_context
 
         # Thread intent_class / risk_class filters (write-time classifier; F25)
-        if request.intent_class:
+        if request.intent_class is not None:
             filters['intent_class'] = request.intent_class
-        if request.risk_class:
+        if request.risk_class is not None:
             filters['risk_class'] = request.risk_class
 
         # Pre-compute NER entities off the event loop so graph strategies don't block

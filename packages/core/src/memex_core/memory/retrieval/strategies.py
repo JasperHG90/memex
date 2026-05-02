@@ -113,10 +113,10 @@ def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
     against the ``IntentClass`` / ``RiskClass`` enums).
     """
     intent_class = kwargs.get('intent_class')
-    if intent_class:
+    if intent_class is not None:
         statement = statement.where(col(MemoryUnit.intent_class) == intent_class)
     risk_class = kwargs.get('risk_class')
-    if risk_class:
+    if risk_class is not None:
         statement = statement.where(col(MemoryUnit.risk_class) == risk_class)
     return statement
 

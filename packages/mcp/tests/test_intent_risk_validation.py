@@ -64,7 +64,8 @@ async def test_memory_search_invalid_risk_class_raises_tool_error():
 
 @pytest.mark.asyncio
 async def test_memory_search_valid_intent_class_passes_through():
-    """A valid intent_class must be forwarded to api.search verbatim."""
+    """A valid intent_class must be coerced to IntentClass before reaching api.search."""
+    from memex_common.schemas import IntentClass
     from memex_mcp.server import memex_memory_search
 
     mock_api = AsyncMock()
@@ -82,12 +83,13 @@ async def test_memory_search_valid_intent_class_passes_through():
 
     mock_api.search.assert_called_once()
     kwargs = mock_api.search.call_args.kwargs
-    assert kwargs['intent_class'] == 'ephemeral'
+    assert kwargs['intent_class'] == IntentClass.EPHEMERAL
 
 
 @pytest.mark.asyncio
 async def test_memory_search_valid_risk_class_passes_through():
-    """A valid risk_class must be forwarded to api.search verbatim."""
+    """A valid risk_class must be coerced to RiskClass before reaching api.search."""
+    from memex_common.schemas import RiskClass
     from memex_mcp.server import memex_memory_search
 
     mock_api = AsyncMock()
@@ -105,4 +107,4 @@ async def test_memory_search_valid_risk_class_passes_through():
 
     mock_api.search.assert_called_once()
     kwargs = mock_api.search.call_args.kwargs
-    assert kwargs['risk_class'] == 'sensitive'
+    assert kwargs['risk_class'] == RiskClass.SENSITIVE

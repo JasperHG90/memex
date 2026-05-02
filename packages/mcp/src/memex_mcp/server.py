@@ -1674,7 +1674,12 @@ async def memex_memory_search(
         # Validate intent_class / risk_class locally so MCP callers see a
         # clean ToolError instead of a server 422. Mirrors the CLI and
         # Hermes-plugin pattern; canonical sets live in memex_common.schemas.
-        from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+        from memex_common.schemas import (
+            VALID_INTENT_CLASSES,
+            VALID_RISK_CLASSES,
+            IntentClass,
+            RiskClass,
+        )
 
         if intent_class is not None and intent_class not in VALID_INTENT_CLASSES:
             raise ToolError(
@@ -1699,8 +1704,8 @@ async def memex_memory_search(
             source_context=source_context,
             reference_date=ref_dt,
             expand_query=expand_query,
-            intent_class=intent_class,
-            risk_class=risk_class,
+            intent_class=IntentClass(intent_class) if intent_class is not None else None,
+            risk_class=RiskClass(risk_class) if risk_class is not None else None,
         )
 
         if not results:

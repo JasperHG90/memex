@@ -644,7 +644,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --intent {intent!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}[/red]'
             )
-            return
+            raise typer.Exit(1)
         intent_value = IntentClass(intent_str)
 
     risk_value: RiskClass | None = None
@@ -654,7 +654,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --risk {risk!r}. Allowed: {sorted(VALID_RISK_CLASSES)}[/red]'
             )
-            return
+            raise typer.Exit(1)
         risk_value = RiskClass(risk_str)
 
     async with get_api_context(config) as api:
