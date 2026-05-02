@@ -1336,7 +1336,8 @@ class RetrievalEngine:
         capacity budget. wait_for cancels the coroutine but the underlying
         thread keeps running.
         """
-        assert self.reranker is not None, 'reranker required'
+        if self.reranker is None:
+            raise RuntimeError('reranker required for _reranker_score_uncached')
         reranker = self.reranker
         async with get_reranker_semaphore(), _instrument('rerank'):
             raw = await asyncio.wait_for(

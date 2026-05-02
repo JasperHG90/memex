@@ -234,18 +234,28 @@ class TestCacheUnit:
     async def test_repeated_key_in_single_call_does_not_self_deadlock(self) -> None:
         """A query may legitimately reference the same unit twice (RRF dedupe
         runs *after* this layer). Acquiring the same lock twice in one
-        coroutine would deadlock — the dedupe must collapse it."""
+        coroutine would deadlock — the dedupe must collapse it.
+
+        Hermes round-2 MED — dedup must also reach the *compute* path so the
+        cross-encoder is not asked to score identical texts repeatedly. We
+        record each `missing` list passed in and assert it carried a single
+        index (one representative per unique key)."""
         cache = CrossEncoderScoreCache(max_size=10, ttl_seconds=60)
         u1 = uuid4()
         key = ('m', 'q', u1)
 
+        compute_calls: list[Sequence[int]] = []
+
         async def compute(missing: Sequence[int]) -> Sequence[float]:
+            compute_calls.append(list(missing))
             return [7.0 for _ in missing]
 
         out = await asyncio.wait_for(
             cache.get_or_compute_batch([key, key, key], compute), timeout=2.0
         )
         assert out == [7.0, 7.0, 7.0]
+        assert len(compute_calls) == 1
+        assert len(compute_calls[0]) == 1
 
     @pytest.mark.asyncio
     async def test_weak_lock_pool_drops_unheld_entries(self) -> None:

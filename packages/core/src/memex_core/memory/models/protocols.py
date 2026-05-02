@@ -31,12 +31,21 @@ class RerankerModel(Protocol):
     The retrieval-side score cache (F41) keys on this so a model upgrade
     invalidates entries structurally rather than waiting for the TTL.
 
-    **Backwards compatibility (F41).** A default body returning ``'unknown'``
-    is provided so out-of-tree implementations from before F41 still satisfy
-    the protocol. The cache continues to function with a constant
-    ``model_version``, but model upgrades will silently keep stale entries
-    until the 24h TTL expires — the structural invalidation path requires a
-    stable, version-changing identifier. Implementations SHOULD override.
+    Implementations SHOULD return a stable identifier that changes when the
+    underlying model is upgraded — e.g. ``'onnx:<repo_id>:<revision>'`` or
+    ``'litellm:<model_id>'`` — so the F41 score cache can invalidate entries
+    structurally on a swap rather than waiting on the TTL.
+
+    **Backwards compatibility note (F41).** ``Protocol`` is structural, so the
+    body of ``model_version`` below is *not* what makes pre-F41 backends
+    satisfy this contract — Python never calls it. The actual runtime
+    backwards-compat mechanism is the ``getattr(reranker, 'model_version',
+    'unknown')`` guard on the cache call site (``retrieval/engine.py`` —
+    ``_reranker_score``). Out-of-tree backends that simply lack the attribute
+    fall back to the literal ``'unknown'`` constant. The default value here
+    documents that fallback in one place; if it ever returned a real value,
+    you'd disable structural cache invalidation across the fleet on a model
+    upgrade and have to wait for the 24h TTL to flush stale entries.
     """
 
     @property

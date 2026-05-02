@@ -150,13 +150,29 @@ class CrossEncoderScoreCache:
                     still_missing.append(i)
 
             if still_missing:
-                fresh = await batch_compute_fn(still_missing)
-                if len(fresh) != len(still_missing):
+                # Hermes round-2 MED — dedupe before dispatching to the
+                # cross-encoder. The same key may appear at multiple positions
+                # in *keys* (RRF dedupe runs after this layer); locks already
+                # collapse to one acquisition per unique key (above), but the
+                # compute path would still send duplicate texts to the model
+                # and pay the GPU cost N times. Pick one representative index
+                # per unique key, compute once, fan the score back to every
+                # position sharing that key.
+                key_to_rep_index: dict[CacheKey, int] = {}
+                for i in still_missing:
+                    key_to_rep_index.setdefault(keys[i], i)
+                rep_indices = list(key_to_rep_index.values())
+
+                fresh = await batch_compute_fn(rep_indices)
+                if len(fresh) != len(rep_indices):
                     raise RuntimeError(
                         f'batch_compute_fn returned {len(fresh)} scores, '
-                        f'expected {len(still_missing)}'
+                        f'expected {len(rep_indices)}'
                     )
-                for i, score in zip(still_missing, fresh):
+
+                key_to_score: dict[CacheKey, float] = dict(zip(key_to_rep_index, fresh))
+                for i in still_missing:
+                    score = key_to_score[keys[i]]
                     scores[i] = score
                     self._values[keys[i]] = score
                     CROSS_ENCODER_CACHE_MISSES_TOTAL.inc()
