@@ -370,6 +370,8 @@ WHERE NOT (
 
 **Sequencing.** F40 (MW branch) ships first as Tier A — claims the ~30% latency win immediately. The FSFM clause is a no-op placeholder until F11 (FSFM-lite decay scoring, currently Tier B) ships and adds the `stability` and `last_outcome_at` columns + the importance signal from F25. When F11 lands, the FSFM clause activates with no breaking change to F40.
 
+**FSFM branch ships inert at F40 ship time.** Concretely: the SQL clause is gated by a feature flag (`fsfm_branch_enabled: bool = False` on `RetrievalConfig`), default OFF. F11 ships the column migration (`stability`, `importance`) AND flips the default ON in the same PR. Until F11, the WHERE-clause builder skips the FSFM branch entirely — no SQL referencing missing columns is emitted, so F40 cannot break a vault that hasn't yet had F11's migration applied.
+
 **Compute model: on-the-fly at hydration, NOT precomputed columns.**
 
 Question worth answering up front: should `mw_score` and the FSFM-decayed score be **stored as columns** (precomputed, indexed, maintained by triggers) or **computed in the WHERE clause** at query time?
@@ -511,7 +513,7 @@ The contradiction engine already creates `MemoryLink` rows with `link_type IN ('
 memex_get_unit_history(unit_id, max_depth=10)
 ```
 
-Starts at a unit, walks backward via incoming `contradicts` / `weakens` / `reinforces` links, returns `(predecessor_unit, link_type, link_metadata.reasoning, timestamp)` per hop in chronological order. No reranker, no boosts, no quality filtering — graph walk is for completeness, not relevance. Cycles capped by `max_depth`; branching predecessors return as parallel chains.
+Starts at a unit, walks backward via incoming `contradicts` / `weakens` links, returns `(predecessor_unit, link_type, link_metadata.reasoning, timestamp)` per hop in chronological order. No reranker, no boosts, no quality filtering — graph walk is for completeness, not relevance. Cycles capped by `max_depth`; branching predecessors return as parallel chains. *`reinforces` links are excluded from the default backward traversal because they point forward in time (a newer unit reinforcing an older one) — walking them backward inverts the timeline. A future extension can add a `forward=True` mode that walks `reinforces` separately, but the v1 timeline is strict supersession history.*
 
 `confidence_boost` is **not** applied — confidence is itself the artifact the timeline is exploring, so multiplying by it would be circular.
 

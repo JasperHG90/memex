@@ -137,6 +137,8 @@ Don't mark units stale at all. Just set `note.status = 'archived'` and exclude a
 
 ### 3.1 Current status filter inventory
 
+*Note: §3.3 below resolves the 12-site count to 4 effective change surfaces — `apply_generic_filters` centralizes the 8 in-scope strategy sites; `document_search.py` (4 sites) and `engine.py:1357` are explicitly excluded.*
+
 I found **12 hardcoded `status == ACTIVE` filters** across two files:
 
 **`strategies.py` (8 sites):**
