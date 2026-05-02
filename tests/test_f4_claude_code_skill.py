@@ -21,14 +21,30 @@ def _candidate_skill_files() -> list[Path]:
 def test_deprioritize_skill_describes_non_destructive_verb():
     """At least one CC plugin skill mentions the verb + the non-destructive
     contrast vs archive (Wave 0 §6 #12).
+
+    Multiple skills may mention `memex_memory_deprioritize` (e.g. /recall
+    surfaces it as a low-MW lint auto-resolve action), but the
+    deprioritize-vs-archive verb-pair contrast lives on the write-side
+    (/remember). Find any skill that contains BOTH the verb AND the
+    contrast — do not stop at the first file that just names the verb.
     """
     found_in: Path | None = None
     for p in _candidate_skill_files():
-        if p.exists() and 'memex_memory_deprioritize' in p.read_text():
+        if not p.exists():
+            continue
+        text = p.read_text()
+        if 'memex_memory_deprioritize' not in text:
+            continue
+        lower = text.lower()
+        has_contrast = ('non-destructive' in lower and 'archive' in lower) or (
+            'deprioritize' in lower and 'destructive' in lower
+        )
+        if has_contrast:
             found_in = p
             break
     assert found_in is not None, (
-        'memex_memory_deprioritize verb not described in any CC plugin skill'
+        'No CC plugin skill mentions memex_memory_deprioritize AND explicitly '
+        'contrasts it with archive (Wave 0 §6 #12)'
     )
 
     text = found_in.read_text()
