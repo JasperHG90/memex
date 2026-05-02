@@ -748,6 +748,21 @@ class MemexAPI:
         except Exception as e:
             logger.warning(f'Failed to reconcile batch jobs during initialization: {e}')
 
+    async def aclose(self) -> None:
+        """Release service-owned async resources (asyncpg pools, etc.).
+
+        Called from the FastAPI lifespan shutdown so connections are returned
+        cleanly on graceful server stop. Idempotent — safe to call multiple
+        times. Currently closes:
+
+          * ``LocksService._pool`` — shared asyncpg pool used by F9 entity
+            locks (CRIT-1 fix).
+        """
+        try:
+            await self._locks.close()
+        except Exception:
+            logger.exception('LocksService.close failed during MemexAPI.aclose')
+
     async def validate_vault_exists(self, vault_id: UUID) -> bool:
         """Check if a vault exists. Delegates to VaultService."""
         return await self._vaults.validate_vault_exists(vault_id)
