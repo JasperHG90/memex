@@ -54,7 +54,6 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 logger = logging.getLogger('memex.core.services.consolidation')
 
 DEFAULT_TICK_BUDGET = 500
-DEFAULT_ENTITY_LOCK_TIMEOUT_SECONDS = 5.0
 
 
 class ConsolidationService:
@@ -73,7 +72,7 @@ class ConsolidationService:
         reflection: ReflectionService,
         contradiction: ContradictionEngine | None,
         *,
-        entity_lock_timeout_seconds: float = DEFAULT_ENTITY_LOCK_TIMEOUT_SECONDS,
+        entity_lock_timeout_seconds: float | None = None,
     ) -> None:
         self.metastore = metastore
         self.config = config
@@ -83,6 +82,13 @@ class ConsolidationService:
         # connection string (mirrors `services/locks.py::_dsn_from_config`).
         sa_url = make_url(config.server.meta_store.instance.connection_string)
         self._dsn = sa_url.set(drivername='postgresql').render_as_string(hide_password=False)
+        # Pull the per-tick lock timeout from config so operators can tune it
+        # without a redeploy. The kwarg override is kept for tests that need a
+        # tighter bound; ``None`` means use the configured value.
+        if entity_lock_timeout_seconds is None:
+            entity_lock_timeout_seconds = (
+                config.server.memory.consolidation.entity_lock_timeout_seconds
+            )
         self._entity_lock_timeout_seconds = entity_lock_timeout_seconds
 
     # ------------------------------------------------------------------

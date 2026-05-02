@@ -850,6 +850,16 @@ class ConsolidationConfig(BaseModel):
         ge=1,
         description='Per-tick budget (oldest-first). Saturation signalled by units_processed=cap.',
     )
+    entity_lock_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=60.0,
+        description=(
+            'Per-entity advisory-lock timeout the F38 tick uses when racing with '
+            'F9 reconsolidate; entities whose lock cannot be acquired in this '
+            'window are deferred to the next tick.'
+        ),
+    )
 
 
 class ConsolidateRateLimitConfig(BaseModel):
