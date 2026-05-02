@@ -187,7 +187,16 @@ class ReconsolidateResponse(BaseModel):
         default=0, description='Number of new observations added to the mental model.'
     )
     error: str | None = Field(
-        default=None, description='Optional error string for non-fatal partial outcomes.'
+        default=None,
+        description=(
+            'Optional error string for non-fatal partial outcomes. Reserved for '
+            'future partial-outcome reporting from the service layer (RFC-008 '
+            'v6.9 plan): when a reconsolidation completes with degraded results '
+            '(e.g., reflection succeeded but contradiction detection skipped a '
+            'subset of units), the service may surface a non-fatal explanation '
+            'here without raising. Currently always ``None`` — populated when '
+            'partial-outcome reporting lands.'
+        ),
     )
 
 
@@ -216,9 +225,10 @@ async def reconsolidate_entity(
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
     `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
 
-    Translates ``EntityLockTimeoutError`` into a 503 with ``Retry-After: 5``
-    (parity with ``consolidate_vault``). The internal exception text is
-    logged server-side and never surfaced to the client.
+    Translates ``EntityLockTimeoutError`` into a 503 with a ``Retry-After``
+    header derived from ``request.timeout_seconds`` (parity with
+    ``consolidate_vault``). The internal exception text is logged
+    server-side and never surfaced to the client.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
@@ -235,10 +245,14 @@ async def reconsolidate_entity(
             exc,
             exc_info=True,
         )
+        # Hermes round-4 MED: derive Retry-After from the request's configured
+        # timeout (the canonical value the caller asked us to wait). Falls
+        # back to '5' only if the request somehow lacks a positive timeout.
+        retry_after = max(1, int(request.timeout_seconds)) if request.timeout_seconds else 5
         raise HTTPException(
             status_code=503,
             detail='Entity lock timeout — please retry shortly',
-            headers={'Retry-After': '5'},
+            headers={'Retry-After': str(retry_after)},
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reconsolidate failed')
@@ -302,10 +316,21 @@ async def consolidate_vault(
             exc,
             exc_info=True,
         )
+        # Hermes round-4 MED: derive Retry-After from the exception's
+        # carried timeout (set by acquire_entity_lock). ConsolidateRequest
+        # has no client-supplied timeout field — RFC-008 says consolidate
+        # does NOT acquire a per-entity lock — so the only timeout context
+        # available is whatever the underlying lock context used. Falls
+        # back to '5' if absent.
+        retry_after = (
+            max(1, int(exc.timeout_seconds))
+            if exc.timeout_seconds is not None and exc.timeout_seconds > 0
+            else 5
+        )
         raise HTTPException(
             status_code=503,
             detail='Entity lock timeout — please retry shortly',
-            headers={'Retry-After': '5'},
+            headers={'Retry-After': str(retry_after)},
         )
     except RateLimitExceededError as exc:
         retry_after = max(0, int(exc.retry_after_seconds + 0.999))

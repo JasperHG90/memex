@@ -300,6 +300,33 @@ class TestConsolidateLockTimeoutEnvelope:
         assert body['detail'] == 'Entity lock timeout — please retry shortly'
         assert self._INTERNAL_LEAK_NEEDLE not in body['detail']
 
+    def test_consolidate_retry_after_derived_from_exception_timeout(self, mock_api):
+        """Hermes round-4 MED: when ``EntityLockTimeoutError`` carries a
+        ``timeout_seconds`` attribute, ``consolidate_vault`` MUST derive
+        the ``Retry-After`` header from it (not hardcode ``'5'``)."""
+        mock_api.consolidate_vault.side_effect = EntityLockTimeoutError(
+            'could not acquire lock', timeout_seconds=12.0
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/consolidate',
+            json={'vault_id': str(ALLOWED_VAULT), 'dry_run': False},
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') == '12'
+
+    def test_consolidate_retry_after_falls_back_when_exception_lacks_timeout(self, mock_api):
+        """Hermes round-4 MED: when the exception has no ``timeout_seconds``
+        (legacy callsites), fall back to the ``'5'`` default."""
+        mock_api.consolidate_vault.side_effect = EntityLockTimeoutError('could not acquire lock')
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/consolidate',
+            json={'vault_id': str(ALLOWED_VAULT), 'dry_run': False},
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') == '5'
+
 
 class TestReconsolidateLockTimeoutEnvelope:
     """``reconsolidate_entity`` translates ``EntityLockTimeoutError`` into a
@@ -323,12 +350,53 @@ class TestReconsolidateLockTimeoutEnvelope:
             },
         )
         assert resp.status_code == 503, resp.text
+        # Hermes round-4 MED: Retry-After is derived from
+        # request.timeout_seconds (not hardcoded). Here the request asked
+        # for a 5s timeout, so Retry-After must be '5'.
         assert resp.headers.get('retry-after') == '5'
         body = resp.json()
         assert body['detail'] == 'Entity lock timeout — please retry shortly'
         # Hermes round-3 MED: internal exception text MUST NOT leak to the
         # HTTP client.
         assert self._INTERNAL_LEAK_NEEDLE not in body['detail']
+
+    def test_reconsolidate_retry_after_matches_request_timeout(self, mock_api):
+        """Hermes round-4 MED: ``Retry-After`` reflects the caller's
+        ``timeout_seconds`` (e.g., a 30s request yields ``'30'``)."""
+        mock_api.reconsolidate_entity = AsyncMock(
+            side_effect=EntityLockTimeoutError('could not acquire lock', timeout_seconds=30.0)
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 30.0,
+            },
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') == '30'
+
+    def test_reconsolidate_retry_after_uses_request_default_when_omitted(self, mock_api):
+        """Hermes round-4 MED: when the client omits ``timeout_seconds``,
+        Pydantic supplies the model default (30.0) and Retry-After reflects
+        that — confirming the derivation is grounded in the request value
+        and not the exception value when the request carries one."""
+        mock_api.reconsolidate_entity = AsyncMock(
+            side_effect=EntityLockTimeoutError('could not acquire lock')
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                # timeout_seconds omitted — should default to 30.0
+            },
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') == '30'
 
     def test_reconsolidate_lock_timeout_logs_full_exception(self, mock_api, caplog):
         """Server-side log MUST include the full exception so on-call can
