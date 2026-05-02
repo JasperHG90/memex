@@ -357,6 +357,10 @@ class LocksService:
                 .where(MemoryUnit.status == 'active')
                 .where(MemoryUnit.is_deprioritized.is_(False))
                 .where((MemoryUnit.success_co_count + MemoryUnit.failure_co_count) >= 5)
+                # The ``+ 1.0`` Python literal is bound as a numeric, so
+                # Postgres evaluates the division in floating point — verified
+                # by ``tests/unit/test_lint_mw_score_sql.py`` against the
+                # canonical ``compute_mw_score`` Beta-Bernoulli formula.
                 .where(
                     (
                         (MemoryUnit.success_co_count + 1.0)
