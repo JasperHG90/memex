@@ -3458,9 +3458,19 @@ def handle_memory_summarize_node(
                 raw_vault,
             )
             return tool_error('Vault not found or invalid identifier')
+        except TimeoutError:
+            # `run_sync` raises `concurrent.futures.TimeoutError` (aliased to
+            # the built-in `TimeoutError` in 3.11+) when the 10s budget is
+            # exhausted. Surface a distinct message so a stuck backend doesn't
+            # masquerade as a generic resolution failure.
+            logger.warning(
+                'memex_memory_summarize_node: vault resolution timed out for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Vault resolution timed out')
         except Exception:
             # Catch-all for infrastructure failures (HTTP errors, network
-            # timeouts, backend exceptions). Surface a distinct message so
+            # errors, backend exceptions). Surface a distinct message so
             # genuine connectivity issues don't masquerade as missing-vault
             # errors.
             logger.exception(

@@ -3589,3 +3589,31 @@ def test_summarize_node_unexpected_exception_returns_generic_resolution_error(co
     assert 'Failed to resolve vault identifier' in data['error']
     assert 'Vault not found' not in data['error']
     api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, vault_id):
+    """``TimeoutError`` from ``run_sync`` (10s budget exhausted) MUST surface a
+    distinct 'timed out' message — it must NOT masquerade as either the
+    'Vault not found' typo path or the generic 'Failed to resolve vault
+    identifier' infrastructure-failure path. ``run_sync`` raises
+    ``concurrent.futures.TimeoutError`` which is aliased to the built-in
+    ``TimeoutError`` in Python 3.11+, so the side_effect uses the built-in.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=TimeoutError('vault resolve > 10s'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'slow-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'timed out' in data['error'].lower()
+    assert 'Vault not found' not in data['error']
+    assert 'Failed to resolve vault identifier' not in data['error']
+    api.summarize_node.assert_not_called()
