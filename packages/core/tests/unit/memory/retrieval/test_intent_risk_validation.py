@@ -14,10 +14,10 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 
 
 class TestIntentRiskValidation:
-    async def test_invalid_intent_class_rejected(self):
+    def test_invalid_intent_class_rejected(self):
         with pytest.raises(ValueError, match='Invalid intent_class'):
             RetrievalRequest(query='x', intent_class='not-a-real-class')
 
-    async def test_invalid_risk_class_rejected(self):
+    def test_invalid_risk_class_rejected(self):
         with pytest.raises(ValueError, match='Invalid risk_class'):
             RetrievalRequest(query='x', risk_class='not-a-real-class')

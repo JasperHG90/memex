@@ -121,8 +121,14 @@ class TestClassifierParity:
     """The DSPy classifier signature must derive its Literal types from the canonical aliases."""
 
     def test_classifier_intent_literal_is_canonical(self) -> None:
-        from memex_common.schemas import IntentLiteral as CanonicalIntentLiteral
-        from memex_core.memory.extraction.classifier import IntentLiteral
+        try:
+            from memex_common.schemas import IntentLiteral as CanonicalIntentLiteral
+        except ImportError:
+            pytest.skip('memex_common not installed in this environment')
+        try:
+            from memex_core.memory.extraction.classifier import IntentLiteral
+        except ImportError:
+            pytest.skip('memex_core not installed in this environment')
 
         assert IntentLiteral is CanonicalIntentLiteral, (
             'Classifier IntentLiteral is not the canonical alias from '
@@ -130,19 +136,37 @@ class TestClassifierParity:
         )
 
     def test_classifier_risk_literal_is_canonical(self) -> None:
-        from memex_common.schemas import RiskLiteral as CanonicalRiskLiteral
-        from memex_core.memory.extraction.classifier import RiskLiteral
+        try:
+            from memex_common.schemas import RiskLiteral as CanonicalRiskLiteral
+        except ImportError:
+            pytest.skip('memex_common not installed in this environment')
+        try:
+            from memex_core.memory.extraction.classifier import RiskLiteral
+        except ImportError:
+            pytest.skip('memex_core not installed in this environment')
 
         assert RiskLiteral is CanonicalRiskLiteral
 
     def test_classifier_intent_values_matches_canonical(self) -> None:
-        from memex_common.schemas import IntentClass
-        from memex_core.memory.extraction.classifier import INTENT_VALUES
+        try:
+            from memex_common.schemas import IntentClass
+        except ImportError:
+            pytest.skip('memex_common not installed in this environment')
+        try:
+            from memex_core.memory.extraction.classifier import INTENT_VALUES
+        except ImportError:
+            pytest.skip('memex_core not installed in this environment')
 
         assert INTENT_VALUES == tuple(c.value for c in IntentClass)
 
     def test_classifier_risk_values_matches_canonical(self) -> None:
-        from memex_common.schemas import RiskClass
-        from memex_core.memory.extraction.classifier import RISK_VALUES
+        try:
+            from memex_common.schemas import RiskClass
+        except ImportError:
+            pytest.skip('memex_common not installed in this environment')
+        try:
+            from memex_core.memory.extraction.classifier import RISK_VALUES
+        except ImportError:
+            pytest.skip('memex_core not installed in this environment')
 
         assert RISK_VALUES == tuple(c.value for c in RiskClass)
