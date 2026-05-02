@@ -3450,10 +3450,12 @@ def handle_memory_summarize_node(
         try:
             target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
         except (ValueError, KeyError):
+            # Routine "not found" / typo — the %r-formatted identifier in the
+            # message is sufficient for diagnosis. Skip exc_info to avoid
+            # noisy tracebacks for expected control-flow outcomes.
             logger.warning(
                 'memex_memory_summarize_node: vault not found for identifier %r',
                 raw_vault,
-                exc_info=True,
             )
             return tool_error('Vault not found or invalid identifier')
         except Exception:

@@ -9,9 +9,11 @@ The callback is registered against the in-flight UMAP compute task. It must:
   task is normally done by the time the callback fires, but a hostile scheduler
   could in theory drop us in before completion).
 
-These tests exercise the callback directly by re-creating the closure shape
-used in ``DiagnosticsService.get_or_compute_manifold`` so we don't need a
-running compute or DB.
+The first three tests drive the real ``get_or_compute_manifold`` path so the
+production callback registered via ``task.add_done_callback(_on_done)`` is the
+one being exercised. The InvalidStateError test calls the registered callback
+directly with a fake task because that scheduler-race condition cannot be
+reproduced via the public API.
 """
 
 from __future__ import annotations
@@ -24,56 +26,46 @@ from uuid import uuid4
 import pytest
 
 
-def _build_callback(service):
-    """Re-create the ``_on_done`` closure for direct unit testing.
+def _make_service():
+    """Construct a ``DiagnosticsService`` without invoking the real ``__init__``.
 
-    Mirrors the body in
-    :meth:`memex_core.services.diagnostics.DiagnosticsService.get_or_compute_manifold`.
-    Updates here MUST track that source.
+    Bypasses the dependency wiring (metastore/filestore/config) — only the
+    registry state needed by ``get_or_compute_manifold`` and ``_on_done`` is
+    populated.
     """
-    from memex_core.services.diagnostics import logger as diag_logger  # noqa: F401
+    from memex_core.services.diagnostics import DiagnosticsService
 
-    key = 'test-key'
-
-    def _on_done(_t, k=key):
-        service._clear_registry(k)
-        if _t.cancelled():
-            return
-        try:
-            exc = _t.exception()
-        except asyncio.InvalidStateError:
-            return
-        if exc is not None:
-            from memex_core.services.diagnostics import logger as _logger
-
-            _logger.exception('Diagnostics manifold compute failed for key %s', k, exc_info=exc)
-
-    return _on_done, key
+    service = DiagnosticsService.__new__(DiagnosticsService)
+    service._pending = {}
+    service._registry_lock = asyncio.Lock()
+    return service
 
 
 @pytest.mark.asyncio
 async def test_on_done_logs_exception_for_failed_task(caplog):
-    """Real callback in get_or_compute_manifold must log on task failure."""
-    from memex_core.services.diagnostics import DiagnosticsService
+    """Real callback registered by get_or_compute_manifold must log on failure."""
+    service = _make_service()
+    vault_id = uuid4()
+    key = str(vault_id)
 
-    service = MagicMock(spec=DiagnosticsService)
-    service._clear_registry = MagicMock()
-
-    async def _boom():
+    async def _boom(_vault_id):
         raise RuntimeError('umap exploded')
 
-    task = asyncio.create_task(_boom())
-    try:
-        await task
-    except RuntimeError:
-        pass
-
-    callback, key = _build_callback(service)
+    service._compute_and_cache = _boom  # type: ignore[method-assign]
 
     with caplog.at_level(logging.ERROR, logger='memex.core.services.diagnostics'):
-        callback(task)
+        status, payload = await service.get_or_compute_manifold(vault_id, force_refresh=True)
+        assert status == 'computing'
+        # Drain the just-scheduled task so the registered _on_done fires.
+        task = service._pending.get(key)
+        assert task is not None, 'task must be registered before completion'
+        try:
+            await task
+        except RuntimeError:
+            pass
+        await asyncio.sleep(0)
 
-    service._clear_registry.assert_called_once_with(key)
+    assert key not in service._pending, 'registry must be cleared on completion'
     assert any(
         'Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records
     ), 'Failed task must be logged'
@@ -83,96 +75,87 @@ async def test_on_done_logs_exception_for_failed_task(caplog):
 @pytest.mark.asyncio
 async def test_on_done_skips_cancelled_task(caplog):
     """Cancelled tasks must clear registry but skip exception fetch + log."""
-    from memex_core.services.diagnostics import DiagnosticsService
+    service = _make_service()
+    vault_id = uuid4()
+    key = str(vault_id)
 
-    service = MagicMock(spec=DiagnosticsService)
-    service._clear_registry = MagicMock()
-
-    async def _slow():
+    async def _slow(_vault_id):
         await asyncio.sleep(60)
 
-    task = asyncio.create_task(_slow())
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-    callback, key = _build_callback(service)
+    service._compute_and_cache = _slow  # type: ignore[method-assign]
 
     with caplog.at_level(logging.ERROR, logger='memex.core.services.diagnostics'):
-        callback(task)
+        status, _ = await service.get_or_compute_manifold(vault_id, force_refresh=True)
+        assert status == 'computing'
+        task = service._pending.get(key)
+        assert task is not None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0)
 
-    service._clear_registry.assert_called_once_with(key)
+    assert key not in service._pending, 'registry must be cleared on cancellation'
     assert not any(
         'Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records
     ), 'Cancelled task must NOT log a failure message'
 
 
-def test_on_done_swallows_invalid_state_error(caplog):
-    """If ``_t.exception()`` raises InvalidStateError, the callback returns
-    without crashing or logging."""
-    from memex_core.services.diagnostics import DiagnosticsService
-
-    service = MagicMock(spec=DiagnosticsService)
-    service._clear_registry = MagicMock()
-
-    fake_task = MagicMock()
-    fake_task.cancelled = MagicMock(return_value=False)
-    fake_task.exception = MagicMock(side_effect=asyncio.InvalidStateError)
-
-    callback, key = _build_callback(service)
-
-    with caplog.at_level(logging.ERROR, logger='memex.core.services.diagnostics'):
-        callback(fake_task)
-
-    service._clear_registry.assert_called_once_with(key)
-    fake_task.exception.assert_called_once()
-    assert not any(
-        'Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records
-    ), 'InvalidStateError path must not emit a failure log'
-
-
 @pytest.mark.asyncio
-async def test_on_done_real_callback_in_get_or_compute_manifold(caplog):
-    """End-to-end: register a failing task on the real service and confirm the
-    real ``_on_done`` callback (not a copy) clears the registry and logs."""
-    from memex_core.services.diagnostics import DiagnosticsService
+async def test_on_done_swallows_invalid_state_error(caplog):
+    """If ``_t.exception()`` raises InvalidStateError, the registered callback
+    returns without crashing or logging.
 
-    service = DiagnosticsService.__new__(DiagnosticsService)
-    service._pending = {}
-    service._registry_lock = asyncio.Lock()
-
+    This race (callback fires before task is in a terminal state) cannot be
+    reproduced via the public API — the asyncio scheduler always marks the
+    task done before invoking done-callbacks. Instead we extract the real
+    callback the production code registered, then invoke it with a fake task
+    whose ``exception()`` raises ``InvalidStateError``.
+    """
+    service = _make_service()
     vault_id = uuid4()
     key = str(vault_id)
 
-    async def _boom():
-        raise RuntimeError('boom from real path')
+    real_task_callbacks: list = []
 
-    task = asyncio.create_task(_boom())
-    service._pending[key] = task
+    async def _slow(_vault_id):
+        await asyncio.sleep(60)
 
-    def _on_done(_t, k=key):
-        service._pending.pop(k, None)
-        if _t.cancelled():
-            return
+    service._compute_and_cache = _slow  # type: ignore[method-assign]
+
+    status, _ = await service.get_or_compute_manifold(vault_id, force_refresh=True)
+    assert status == 'computing'
+    real_task = service._pending[key]
+    try:
+        # Steal the registered callback. asyncio doesn't expose this directly,
+        # but `_callbacks` is the documented attribute used by `remove_done_callback`.
+        callbacks = list(getattr(real_task, '_callbacks', []))
+        for cb_entry in callbacks:
+            cb = cb_entry[0] if isinstance(cb_entry, tuple) else cb_entry
+            if getattr(cb, '__name__', '') == '_on_done':
+                real_task_callbacks.append(cb)
+        assert real_task_callbacks, 'production code must register an _on_done callback'
+
+        fake_task = MagicMock()
+        fake_task.cancelled = MagicMock(return_value=False)
+        fake_task.exception = MagicMock(side_effect=asyncio.InvalidStateError)
+
+        # Pre-populate the registry so we can confirm the callback clears it
+        # even when the task is in an InvalidState.
+        service._pending[key] = real_task
+
+        with caplog.at_level(logging.ERROR, logger='memex.core.services.diagnostics'):
+            real_task_callbacks[0](fake_task)
+
+        fake_task.exception.assert_called_once()
+        assert key not in service._pending, 'registry must be cleared even on InvalidStateError'
+        assert not any(
+            'Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records
+        ), 'InvalidStateError path must not emit a failure log'
+    finally:
+        real_task.cancel()
         try:
-            exc = _t.exception()
-        except asyncio.InvalidStateError:
-            return
-        if exc is not None:
-            from memex_core.services.diagnostics import logger as _logger
-
-            _logger.exception('Diagnostics manifold compute failed for key %s', k, exc_info=exc)
-
-    task.add_done_callback(_on_done)
-
-    with caplog.at_level(logging.ERROR, logger='memex.core.services.diagnostics'):
-        try:
-            await task
-        except RuntimeError:
+            await real_task
+        except asyncio.CancelledError:
             pass
-        await asyncio.sleep(0)
-
-    assert key not in service._pending, 'registry must be cleared on completion'
-    assert any('Diagnostics manifold compute failed' in rec.getMessage() for rec in caplog.records)
