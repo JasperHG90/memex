@@ -744,6 +744,14 @@ class RetrievalConfig(BaseModel):
         description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
         '0 = no MW influence. Default 0.3 matches recency/temporal magnitude.',
     )
+    confidence_alpha: float = Field(
+        default=0.0,
+        description='F47: Multiplicative contradiction-derived confidence boost strength for '
+        'cross-encoder reranking. Default 0.0 (off) at ship time — flip to non-zero '
+        '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
+        'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
+        'unit a multiplicative lift before calibration justifies it.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',

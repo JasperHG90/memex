@@ -147,6 +147,25 @@ MW_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# F47: Contradiction-derived confidence reranker composition metrics
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_SCORE_DISTRIBUTION = Histogram(
+    'memex_confidence_score',
+    'Distribution of MemoryUnit.confidence values observed at retrieval hydration. '
+    'Independent of confidence_alpha — accumulates calibration data even when the '
+    'F47 boost is off (default).',
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+CONFIDENCE_BOOST_OBSERVED = Histogram(
+    'memex_confidence_boost',
+    'F47 confidence boost factors applied during reranking. Neutral is 1.0 '
+    '(cold-start unit OR confidence_alpha=0).',
+    buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
+)
+
+# ---------------------------------------------------------------------------
 # Write-time classifier metrics (F25)
 # ---------------------------------------------------------------------------
 
