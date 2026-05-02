@@ -364,6 +364,7 @@ WHERE NOT (
 
 1. **MW branch protects cold-start via the evidence threshold.** A unit with 0 outcomes (`mw_score = 0.5`) has zero evidence to act on, so the `>= 5 outcomes` clause keeps it in the candidate set. Cross-encoder ranks it on content alone. Same protection the additive-marginal MW boost provides at the post-reranker stage.
 2. **FSFM branch protects cold-start via the elapsed-time term.** A fresh unit has `last_outcome_at = now()` → `elapsed = 0` → `exp(0) = 1` → score = `importance × 1` ≈ neutral or high (importance is bounded ≥ a floor by F25). Decay only erodes the score after meaningful time passes; new units are never pruned.
+   - **NULL-handling cold-start commitment**: when `stability` or `importance` is NULL on unclassified units (pre-F25/F11), the FSFM predicate evaluates to NULL → treated FALSE in WHERE → unit is kept (cold-start safe by design). Implementations MUST NOT add `COALESCE(stability, <default>)` or `COALESCE(importance, <default>)` — that would inadvertently filter cold-start units. Tests must assert NULL inputs propagate through to "kept".
 3. **F33 exploration runs on a separate retrieval path that bypasses this filter.** The whole point of F33 is to occasionally re-validate low-MW (and low-FSFM) units; if the pre-filter blocks them, the system loses its self-correction property. Implementation: F33's candidate fetch issues a separate query without the pre-filter, marks results as exploration-injected, and reuses MMR for diversity at the merge.
 
 **Why OR'd, not AND'd.** A unit can be behaviorally failed but recent (low MW, fresh) — MW branch prunes it. A unit can be temporally stale but never retrieved (low FSFM, neutral MW with `< 5` outcomes) — FSFM branch prunes it. Either reason is sufficient grounds to skip the cross-encoder; requiring both would underprune.
@@ -466,7 +467,7 @@ Post-F47 the reranker composition becomes `final = ce_score × recency_boost × 
 
 **The fix: pre-reranker confidence filter (F48).**
 
-Confidence < 0.2 means the unit has accumulated multiple contradiction events (≥4 contradicts at default α, or ≥10 weakens). Paying full reranker cost on such units only to multiply them down by `confidence_boost ≈ 0.91` is wasteful. F48 adds a third OR'd branch to F40's predicate:
+Confidence < 0.2 means the unit has accumulated multiple contradiction events (≥5 contradicts at default α, or ≥9 weakens). Paying full reranker cost on such units only to multiply them down by `confidence_boost ≈ 0.91` is wasteful. F48 adds a third OR'd branch to F40's predicate:
 
 ```sql
 WHERE NOT (
@@ -481,7 +482,7 @@ WHERE NOT (
 )
 ```
 
-No separate evidence-amount threshold for the confidence branch — the contradiction engine's α-stepping already requires multiple events to reach the floor (default α=0.1 means at least four `contradict` events or ten `weaken` events). Adding a count threshold would double-count.
+No separate evidence-amount threshold for the confidence branch — the contradiction engine's α-stepping already requires multiple events to reach the floor (default α=0.1 means at least five `contradict` events or nine `weaken` events). Adding a count threshold would double-count.
 
 **Pre-filter reversibility — single `apply_pre_filter` flag.**
 
