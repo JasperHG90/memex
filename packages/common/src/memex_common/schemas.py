@@ -1041,6 +1041,8 @@ class UnitHistoryNodeDTO(BaseModel):
     )
     confidence: float = Field(
         default=1.0,
+        ge=0.0,
+        le=1.0,
         description='Current confidence on the unit (0.0-1.0).',
     )
     event_date: dt.datetime | None = Field(
@@ -1069,8 +1071,9 @@ class UnitHistoryNodeDTO(BaseModel):
     truncated: bool = Field(
         default=False,
         description=(
-            'True when ``max_depth`` was reached at this node — further '
-            'predecessors may exist but were not walked.'
+            'True when further predecessors exist but were not expanded — '
+            'either because ``max_depth`` was reached or the node was already '
+            'visited via another path.'
         ),
     )
 
