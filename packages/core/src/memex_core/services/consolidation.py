@@ -41,7 +41,6 @@ from memex_core.memory.sql_models import (
     MemoryUnit,
     UnitEntity,
 )
-from sqlalchemy.engine.url import make_url
 
 from memex_core.services.locks import (
     EntityLockTimeoutError,
@@ -49,6 +48,7 @@ from memex_core.services.locks import (
 )
 from memex_core.services.mental_model_cleanup import prune_stale_evidence
 from memex_core.services.reflection import ReflectionService
+from memex_core.storage.dsn import dsn_from_config
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
 logger = logging.getLogger('memex.core.services.consolidation')
@@ -78,10 +78,7 @@ class ConsolidationService:
         self.config = config
         self.reflection = reflection
         self.contradiction = contradiction
-        # Derive a plain `postgresql://` DSN for asyncpg from the SQLAlchemy
-        # connection string (mirrors `services/locks.py::_dsn_from_config`).
-        sa_url = make_url(config.server.meta_store.instance.connection_string)
-        self._dsn = sa_url.set(drivername='postgresql').render_as_string(hide_password=False)
+        self._dsn = dsn_from_config(config)
         # Pull the per-tick lock timeout from config so operators can tune it
         # without a redeploy. The kwarg override is kept for tests that need a
         # tighter bound; ``None`` means use the configured value.

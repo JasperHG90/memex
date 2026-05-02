@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 from uuid import UUID
 
 import asyncpg
-from sqlalchemy.engine.url import make_url
 from sqlmodel import select
 
 from memex_common.exceptions import MemexError
 from memex_core.services.rate_limit import TokenBucketRateLimiter
+from memex_core.storage.dsn import dsn_from_config
 
 if TYPE_CHECKING:
     from memex_core.config import MemexConfig
@@ -178,16 +178,6 @@ async def acquire_entity_lock(
 _DEFAULT_RECONSOLIDATE_TIMEOUT_S: Final[float] = 30.0
 
 
-def _dsn_from_config(config: 'MemexConfig') -> str:
-    """Derive a plain `postgresql://` DSN for asyncpg from the meta_store config.
-
-    Mirrors `scheduler.py:150-151` — strip the `+asyncpg` driver suffix that
-    SQLAlchemy uses, since asyncpg wants the bare scheme.
-    """
-    sa_url = make_url(config.server.meta_store.instance.connection_string)
-    return sa_url.set(drivername='postgresql').render_as_string(hide_password=False)
-
-
 class LocksService:
     """Per-entity advisory-lock orchestration for reconsolidate / consolidate.
 
@@ -211,7 +201,7 @@ class LocksService:
         self.reflection = reflection
         self.contradiction = contradiction
         self.units = units
-        self._dsn = _dsn_from_config(config)
+        self._dsn = dsn_from_config(config)
         # F9 / RFC-008 line 125: per-vault rate limit on memex_memory_consolidate.
         # Reuses F5's TokenBucketRateLimiter primitive. Default 1 call per vault
         # per hour (LLM-intensive + mass-mutation guard).
