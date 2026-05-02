@@ -343,6 +343,8 @@ class LintService(BaseService):
             for spec in rules:
                 # Per-rule SAVEPOINT so a failing rule rolls back only its own
                 # findings — successful rules still persist on the outer commit.
+                # Fallback timer for the error path; happy-path uses the
+                # ``duration_seconds`` value computed inside ``_run_one``.
                 start = time.perf_counter()
                 try:
                     async with session.begin_nested():

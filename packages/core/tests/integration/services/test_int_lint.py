@@ -169,6 +169,11 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
         # schema with a dropped constraint that bleeds into other tests.
         # NOT VALID is required because the dangling row deliberately
         # remains for the lint rule to detect.
+        # Roll back first: if the DELETE above raised, SQLAlchemy puts the
+        # session in a "needs rollback" state and the subsequent ALTER would
+        # itself raise, silently dropping the FK-restore and bleeding schema
+        # corruption into other tests.
+        await session.rollback()
         await session.execute(
             text(
                 'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
