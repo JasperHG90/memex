@@ -487,7 +487,7 @@ WHERE NOT (
 )
 ```
 
-No separate evidence-amount threshold for the confidence branch — the contradiction engine's α-stepping already requires multiple events to reach the floor (default α=0.1 means at least five `contradict` events or nine `weaken` events). Adding a count threshold would double-count.
+No separate evidence-amount threshold for the confidence branch — the contradiction engine's α-stepping already requires multiple events to reach the floor (reaching `confidence < 0.2` requires at least 5 contradict-only events, at least 9 weaken-only events, or a mixed sequence of 5–9 events depending on composition — α-stepping already accounts for evidence accumulation, so a separate count threshold would double-count).
 
 **Pre-filter reversibility — single `apply_pre_filter` flag.**
 
