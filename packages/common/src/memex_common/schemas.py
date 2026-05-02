@@ -342,6 +342,16 @@ class RetrievalRequest(BaseModel):
         default=False,
         description='Whether to include deprioritized memory units in results.',
     )
+    apply_pre_filter: bool = Field(
+        default=True,
+        description=(
+            'F40: pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
+            'or decayed candidates before the cross-encoder runs (~30% reranker latency '
+            'reduction with cold-start safeguards intact). Set False for historical / audit / '
+            'lineage queries that need to see contradicted, behaviorally-failed, or decayed '
+            'units — every branch (MW + FSFM + future confidence) is bypassed in one go.'
+        ),
+    )
     debug: bool = Field(
         default=False,
         description=(

@@ -116,9 +116,13 @@ class TestMwBoostComposition:
         )
         await session.commit()
 
+        # apply_pre_filter=False — this test exercises BOOST composition,
+        # not pre-filter pruning. With the F40 pre-filter on (default), the
+        # failure-heavy unit (mw_score < 0.15 at >= 5 outcomes) would never
+        # reach the reranker, so the boost-rank invariant cannot be tested.
         results, _ = await engine_instance.retrieve(
             session,
-            RetrievalRequest(query='kubernetes rolling update', limit=5),
+            RetrievalRequest(query='kubernetes rolling update', limit=5, apply_pre_filter=False),
         )
 
         result_ids = [r.id for r in results]
@@ -172,9 +176,16 @@ class TestMwBoostComposition:
         )
         await session.commit()
 
+        # apply_pre_filter=False — this test exercises BOOST composition,
+        # not pre-filter pruning. F40 (default-on) prunes the failure-heavy
+        # unit before the reranker; bypass to keep all three bands visible.
         results, _ = await engine_instance.retrieve(
             session,
-            RetrievalRequest(query='postgres logical replication', limit=5),
+            RetrievalRequest(
+                query='postgres logical replication',
+                limit=5,
+                apply_pre_filter=False,
+            ),
         )
         result_ids = [r.id for r in results]
         for uid in (high_success_id, cold_id, high_failure_id):

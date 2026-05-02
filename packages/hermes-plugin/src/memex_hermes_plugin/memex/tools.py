@@ -287,6 +287,17 @@ RECALL_SCHEMA: dict[str, Any] = {
                 'enum': _RISK_ENUM_VALUES,
                 'description': ('Filter by risk class. Omit to return all classes.'),
             },
+            'apply_pre_filter': {
+                'type': 'boolean',
+                'description': (
+                    'F40 pre-reranker MW/FSFM filter at hydration. Default true drops '
+                    'obviously-failed (low Memory Worth) or decayed candidates before '
+                    'the cross-encoder. Set false for HISTORICAL / AUDIT / LINEAGE '
+                    'queries ("how has my view on X evolved", "show me everything I '
+                    'used to think about Y") so contradicted, behaviorally-failed, '
+                    'and decayed units appear.'
+                ),
+            },
         },
         'required': ['query'],
     },
@@ -1604,6 +1615,10 @@ def handle_memory_search(
     intent_class = IntentClass(raw_intent) if raw_intent is not None else None
     risk_class = RiskClass(raw_risk) if raw_risk is not None else None
 
+    # F40 — default True. Set False for historical / audit / lineage queries
+    # so contradicted, behaviorally-failed, and decayed units appear.
+    apply_pre_filter = bool(args.get('apply_pre_filter', True))
+
     try:
         results = run_sync(
             api.search(
@@ -1614,6 +1629,7 @@ def handle_memory_search(
                 strategies=config.recall.strategies,
                 include_stale=bool(args.get('include_stale', config.recall.include_stale)),
                 include_superseded=config.recall.include_superseded,
+                apply_pre_filter=apply_pre_filter,
                 after=_parse_iso(args.get('after')),
                 before=_parse_iso(args.get('before')),
                 tags=tags,

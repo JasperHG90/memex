@@ -324,6 +324,7 @@ class RemoteMemexAPI:
         expand_query: bool = False,
         intent_class: IntentClass | None = None,
         risk_class: RiskClass | None = None,
+        apply_pre_filter: bool = True,
     ) -> list[MemoryUnitDTO]:
         """Search for memories.
 
@@ -349,6 +350,7 @@ class RemoteMemexAPI:
             expand_query=expand_query,
             intent_class=intent_class,
             risk_class=risk_class,
+            apply_pre_filter=apply_pre_filter,
         )
         result = await self._post('memories/search', request)
         return [MemoryUnitDTO(**r) for r in result]

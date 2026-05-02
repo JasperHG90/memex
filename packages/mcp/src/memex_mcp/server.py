@@ -1659,6 +1659,22 @@ async def memex_memory_search(
             ),
         ),
     ] = None,
+    apply_pre_filter: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=True,
+            description=(
+                'F40 pre-reranker MW/FSFM filter at hydration. Default True drops '
+                'obviously-failed (low Memory Worth) or decayed candidates before the '
+                'cross-encoder runs. Set False for HISTORICAL / AUDIT / LINEAGE queries '
+                '("how has my view on X evolved", "show me everything I used to think '
+                'about Y") — every pre-filter branch is bypassed in one go so '
+                'contradicted, behaviorally-failed, and decayed units appear. Post-'
+                'reranker boosts still apply, so contradicted units rank below clean ones.'
+            ),
+        ),
+    ] = True,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1711,6 +1727,7 @@ async def memex_memory_search(
             strategies=strategies,
             include_superseded=include_superseded,
             include_deprioritized=include_deprioritized,
+            apply_pre_filter=apply_pre_filter,
             after=after_dt,
             before=before_dt,
             tags=tags,

@@ -147,6 +147,44 @@ MW_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# F40 / F44 / F45 — pre-reranker filter observability
+# ---------------------------------------------------------------------------
+# All four metrics emit on every retrieval call (regardless of apply_pre_filter)
+# so observability comparisons (with/without filter) are always possible.
+
+HYDRATION_QUERY_DURATION_SECONDS = Histogram(
+    'memex_hydration_query_duration_seconds',
+    'Duration of the main hydration query (with the F40 pre-filter when active). '
+    'p95 is the re-evaluation gate from §3.4.1 — > 5 ms suggests precomputed '
+    'columns become justified.',
+    buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+PRE_FILTER_CANDIDATES_PRUNED_TOTAL = Histogram(
+    'memex_pre_filter_candidates_pruned',
+    'F40 — count of RRF candidates that the pre-reranker filter dropped per query. '
+    'Validates the ~30% reclaim assumption empirically. Always emits 0 when '
+    'apply_pre_filter is False or when nothing was pruned.',
+    buckets=(0, 1, 2, 5, 10, 20, 30, 40, 50, 75, 100),
+)
+
+CROSS_ENCODER_INPUT_COUNT_HISTOGRAM = Histogram(
+    'memex_cross_encoder_input_count',
+    'F45 — number of candidates the cross-encoder reranker actually scored, '
+    'post pre-filter. Should drop from ~70 (cap) to ~50 in the typical case '
+    'when the F40 pre-filter is active.',
+    buckets=(0, 5, 10, 20, 30, 40, 50, 60, 70, 75),
+)
+
+F33_EXPLORATION_INJECTED_TOTAL = Counter(
+    'memex_f33_exploration_injected_total',
+    'F44 — count of low-MW candidates that the separate F33 hydration query '
+    'surfaced for exploration injection (i.e., units the F40 pre-filter would '
+    'have removed but the F33 path bypasses). Validates that the F33 bypass '
+    'actually fires.',
+)
+
+# ---------------------------------------------------------------------------
 # Write-time classifier metrics (F25)
 # ---------------------------------------------------------------------------
 
