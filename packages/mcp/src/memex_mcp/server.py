@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -66,12 +66,14 @@ from memex_mcp.models import (
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
+    IntentLiteral,
     LineageDirection,
     LineageResponse,
     NoteAppendRequest,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
+    RiskLiteral,
     TOCNodeDTO,
     filter_toc,
 )
@@ -1638,6 +1640,25 @@ async def memex_memory_search(
             ),
         ),
     ] = False,
+    intent_class: Annotated[
+        IntentLiteral | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by intent class: permanent | durable | ephemeral. None disables the filter.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        RiskLiteral | None,
+        Field(
+            default=None,
+            description=(
+                'Filter by risk class: none | sensitive | private | safety. '
+                'None disables the filter.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
@@ -1651,6 +1672,36 @@ async def memex_memory_search(
         after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
         before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
         ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
+
+        # Defense-in-depth: FastMCP+Pydantic rejects invalid Literal values
+        # upstream (the IntentLiteral / RiskLiteral annotations on the
+        # parameters above), so this check is unreachable for real MCP
+        # callers. We keep it as a safety net for direct-call paths that
+        # bypass schema validation — tests that pass raw strings, internal
+        # Python callers invoking the underlying ``.fn``, etc. — and to
+        # surface a clean ToolError (not a 422) at the boundary. Mirrors
+        # the CLI/Hermes-plugin pattern; canonical sets in memex_common.schemas.
+        from memex_common.schemas import (
+            VALID_INTENT_CLASSES,
+            VALID_RISK_CLASSES,
+            IntentClass,
+            RiskClass,
+        )
+
+        # Widen to ``str`` so mypy doesn't flag the membership check as unreachable.
+        # The Literal annotations on ``intent_class`` / ``risk_class`` constrain
+        # values for FastMCP+Pydantic callers, which would make mypy treat the
+        # ``not in`` branch as dead code; the cast preserves the defense-in-depth
+        # check for direct-call paths (tests, internal Python via ``.fn``) that
+        # bypass schema validation.
+        if intent_class is not None and cast(str, intent_class) not in VALID_INTENT_CLASSES:
+            raise ToolError(
+                f'Invalid intent_class={intent_class!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}'
+            )
+        if risk_class is not None and cast(str, risk_class) not in VALID_RISK_CLASSES:
+            raise ToolError(
+                f'Invalid risk_class={risk_class!r}. Allowed: {sorted(VALID_RISK_CLASSES)}'
+            )
 
         results = await api.search(
             query=query,
@@ -1666,6 +1717,8 @@ async def memex_memory_search(
             source_context=source_context,
             reference_date=ref_dt,
             expand_query=expand_query,
+            intent_class=IntentClass(intent_class) if intent_class is not None else None,
+            risk_class=RiskClass(risk_class) if risk_class is not None else None,
         )
 
         if not results:

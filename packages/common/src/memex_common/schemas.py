@@ -3,7 +3,7 @@
 import datetime as dt
 import re
 from enum import Enum
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 from uuid import UUID
 from pydantic import (
     BaseModel,
@@ -78,6 +78,26 @@ class RiskClass(str, Enum):
     SENSITIVE = 'sensitive'
     PRIVATE = 'private'
     SAFETY = 'safety'
+
+
+VALID_INTENT_CLASSES: frozenset[str] = frozenset(c.value for c in IntentClass)
+VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
+
+
+# Canonical ``Literal`` aliases for use as type annotations across packages
+# (MCP tool params, DSPy classifier signatures, etc.). mypy requires
+# ``Literal[...]`` arguments to be compile-time string literals — we cannot
+# unpack a runtime expression like ``Literal[*tuple(c.value for c in IntentClass)]``
+# without losing static-type narrowing — so the values are still hand-listed here.
+# However, divergence between these aliases and the ``IntentClass`` /
+# ``RiskClass`` enums is caught at test time (see
+# ``packages/common/tests/test_enum_literal_parity.py``) which asserts
+# ``typing.get_args(IntentLiteral) == tuple(c.value for c in IntentClass)``.
+# This collapses three+ duplicate definitions (MCP server, DSPy classifier,
+# Hermes JSON schema) into ONE canonical definition; downstream importers
+# reference these names instead of re-typing the value tuple.
+IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
+RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
 
 
 class LineageDirection(str, Enum):
@@ -194,6 +214,31 @@ class RetainContent(VaultMixin):
 class RetrievalRequest(BaseModel):
     """
     Unified request object for memory retrieval.
+
+    NOTE — dual-model architecture (intentional):
+    There are TWO ``RetrievalRequest`` classes in the codebase:
+
+    1. ``memex_common.schemas.RetrievalRequest`` (this class) — the
+       **wire / protocol** model. It is the public Pydantic schema used by
+       the FastAPI server (request body), the ``RemoteMemexAPI`` HTTP client,
+       and the OpenAPI spec. Enum-typed fields (``intent_class: IntentClass``,
+       ``risk_class: RiskClass``) act as a self-documenting contract for
+       external callers.
+    2. ``memex_core.memory.retrieval.models.RetrievalRequest`` — the
+       **internal / storage** model (SQLModel). It is built inside the
+       ``SearchService`` from already-validated primitives, so it carries
+       ``intent_class: str | None`` / ``risk_class: str | None`` and
+       enforces the same value set via a ``model_validator`` against the
+       canonical ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` frozensets.
+
+    The boundary conversion happens in
+    ``memex_core/server/retrieval.py::search_memories`` which unpacks the
+    enum via ``request.intent_class.value if request.intent_class else None``
+    before calling ``MemexAPI.search``.
+
+    If you need to add or rename a class value, update ``IntentClass`` /
+    ``RiskClass`` in this module — both ``VALID_INTENT_CLASSES`` (here) and
+    the model_validator in the core model derive from those enums.
     """
 
     query: str = Field(..., description='The search query or context string.')
@@ -240,6 +285,22 @@ class RetrievalRequest(BaseModel):
         description=(
             'Filter MemoryUnits by their context field (e.g. "user_notes"). '
             'When set, only units with matching context are returned.'
+        ),
+    )
+
+    # Intent / risk class filtering (write-time classifier; F25)
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by intent_class (permanent | durable | ephemeral). '
+            'None disables the filter.'
+        ),
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description=(
+            'Filter MemoryUnits by risk_class (none | sensitive | private | safety). '
+            'None disables the filter.'
         ),
     )
 

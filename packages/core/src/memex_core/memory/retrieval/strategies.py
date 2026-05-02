@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Protocol, Any, runtime_checkable
 from uuid import UUID
 
@@ -34,6 +35,26 @@ from memex_core.memory.sql_models import (
 from memex_core.memory.sql_models import MentalModel
 
 logger = logging.getLogger('memex.core.memory.retrieval.strategies')
+
+
+# Warn-once helper for the mental-model strategy's intent/risk filter no-op.
+# ``lru_cache`` memoises by the argument tuple, so repeat calls with the same
+# (intent_class, risk_class) combination silently return None after the first
+# warning is emitted. A different combination warns again, since it is a new
+# cache key. ``maxsize=64`` comfortably bounds the realistic key space
+# (3 intent values x 4 risk values x None combinations = 20 distinct keys).
+# Defined at module scope (not as a method) because ``lru_cache`` on bound
+# methods retains ``self`` in the cache, which is a known footgun.
+@lru_cache(maxsize=64)
+def _warn_mental_model_filters_skipped(intent_class: str | None, risk_class: str | None) -> None:
+    logger.warning(
+        'Mental-model strategy ignores intent/risk filters (intent_class=%s, risk_class=%s); '
+        'results will mix unfiltered mental-model units with filtered units from other strategies. '
+        'Out-of-scope per issue #92.',
+        intent_class,
+        risk_class,
+    )
+
 
 # Maximum exponent magnitude for temporal decay to prevent Postgres NUMERIC underflow.
 # power(2, -996) ~ 1e-300 which is near the minimum representable NUMERIC value.
@@ -105,6 +126,36 @@ def apply_context_filter(statement: Select, **kwargs: Any) -> Select:
     return statement
 
 
+def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
+    """Filter MemoryUnits by ``intent_class`` and ``risk_class`` when set.
+
+    Both filters are independent and additive — pass either, both, or neither.
+    Values are not validated here (validation happens at the API/CLI boundary
+    against the ``IntentClass`` / ``RiskClass`` enums).
+
+    NULL semantics: this filter uses strict SQL equality (``column = :value``),
+    so rows with ``NULL`` in ``intent_class`` or ``risk_class`` are excluded
+    when the corresponding filter is active. This is by design and matches
+    the legacy client-side filter (``getattr(u, 'intent_class', 'durable') ==
+    wanted`` likewise excluded ``None`` values, because the attribute exists
+    on the model — ``getattr``'s default is only returned when the attribute
+    is missing entirely). In production, NULLs cannot occur: the F25
+    migration (``024_intent_risk_classifier``) adds both columns as
+    ``NOT NULL`` with ``server_default`` (``'durable'`` / ``'none'``) and a
+    CHECK constraint pinning values to the enum domain, so existing rows
+    are backfilled and new rows are rejected if NULL is attempted. A persistent
+    NULL would therefore indicate genuinely-unclassified data that should not
+    silently match a specific intent/risk query.
+    """
+    intent_class = kwargs.get('intent_class')
+    if intent_class is not None:
+        statement = statement.where(col(MemoryUnit.intent_class) == intent_class)
+    risk_class = kwargs.get('risk_class')
+    if risk_class is not None:
+        statement = statement.where(col(MemoryUnit.risk_class) == risk_class)
+    return statement
+
+
 def _apply_as_of_filter(statement: Select, **kwargs: Any) -> Select:
     """Filter EntityCooccurrence rows by temporal validity when ``as_of`` is set.
 
@@ -153,6 +204,7 @@ class SemanticStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         if query_embedding is None:
             # If no embedding, this strategy is effectively disabled
@@ -193,6 +245,7 @@ class KeywordStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         return (
             statement.add_columns(rank.label('score'))
@@ -503,11 +556,13 @@ class EntityCooccurrenceGraphStrategy:
         select_first = apply_vault_filters(select_first, MemoryUnit.vault_id, **kwargs)
         select_first = apply_generic_filters(select_first, **kwargs)
         select_first = apply_context_filter(select_first, **kwargs)
+        select_first = apply_intent_risk_filter(select_first, **kwargs)
 
         select_second = apply_date_filters(select_second, MemoryUnit.event_date, **kwargs)
         select_second = apply_vault_filters(select_second, MemoryUnit.vault_id, **kwargs)
         select_second = apply_generic_filters(select_second, **kwargs)
         select_second = apply_context_filter(select_second, **kwargs)
+        select_second = apply_intent_risk_filter(select_second, **kwargs)
 
         # 2. 1st Order Memories (Direct Link)
         # V2 Scoring: 1.0 + Temporal Decay
@@ -601,6 +656,20 @@ class MentalModelStrategy:
         # Generic filters generally don't apply to MentalModels in the same way (no fact_type),
         # so we skip apply_generic_filters here or check column existence.
         # MentalModels don't have 'fact_type', so we skip it.
+        #
+        # NOTE: apply_context_filter / apply_intent_risk_filter are intentionally
+        # NOT applied here. ``context``, ``intent_class`` and ``risk_class`` are
+        # MemoryUnit columns (set at write time per F25); MentalModel rows are
+        # synthesised by reflection across many memory units and don't carry
+        # those facets. If a write-time risk/intent filter must constrain
+        # mental-model retrieval in the future, the join would need to fan out
+        # through the contributing MemoryUnits — out of scope for issue #92.
+        intent_class = kwargs.get('intent_class')
+        risk_class = kwargs.get('risk_class')
+        if intent_class is not None or risk_class is not None:
+            # Warn-once per (intent_class, risk_class) tuple — see
+            # ``_warn_mental_model_filters_skipped`` for caching rationale.
+            _warn_mental_model_filters_skipped(intent_class, risk_class)
 
         if query_embedding is None:
             # Fallback to name match if no embedding
@@ -638,6 +707,7 @@ class TemporalStrategy:
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
+        statement = apply_intent_risk_filter(statement, **kwargs)
 
         return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
 
