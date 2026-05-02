@@ -188,6 +188,20 @@ _ORPHAN_MENTAL_MODEL_SQL = """
 """
 
 
+# Safety invariant for S608: the only interpolations in this f-string are
+# ``_MW_SCORE_EXPR`` (a module-private literal at line 166 — a fixed
+# arithmetic expression with no user input). ``vault_id`` is bound via the
+# :name placeholder and never interpolated. No user-controlled value is ever
+# spliced into the SQL text.
+#
+# noqa placement: ruff 0.14.x anchors S608 on the FIRST physical line of a
+# multi-line concatenated string, but for triple-quoted strings the
+# diagnostic span covers BOTH the opening and closing ``"""`` lines, and an
+# inline comment on the opening line would become part of the string body.
+# The noqa therefore sits on the closing ``"""`` line — verified empirically
+# by stripping the marker (ruff reports the diagnostic anchored at the
+# opening line and underlines through the closing line, and the
+# closing-line noqa successfully suppresses).
 _COLD_LOW_MW_UNIT_SQL = f"""
     SELECT
         mu.id::text AS target_id,
@@ -204,7 +218,7 @@ _COLD_LOW_MW_UNIT_SQL = f"""
       AND (mu.success_co_count + mu.failure_co_count) >= 5
       AND {_MW_SCORE_EXPR} < 0.3
       AND mu.updated_at < (now() - interval '30 days')
-"""  # noqa: S608
+"""  # noqa: S608 — see invariant above (anchor verified at this line)
 
 
 _SENSITIVE_UNREVIEWED_UNIT_SQL = """

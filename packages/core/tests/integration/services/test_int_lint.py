@@ -164,16 +164,20 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
             text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)}
         )
         await session.commit()
+    except Exception:
+        # Only roll back on the error path. SQLAlchemy puts the session in a
+        # "needs rollback" state when the DELETE/commit fails, and a
+        # subsequent ALTER would itself raise, silently dropping the
+        # FK-restore. An unconditional rollback in ``finally`` would discard
+        # any uncommitted work the caller had pending if the DELETE
+        # succeeded — restrict it to the failure case only.
+        await session.rollback()
+        raise
     finally:
         # Always restore the FK so a mid-fixture failure can't leave the
         # schema with a dropped constraint that bleeds into other tests.
         # NOT VALID is required because the dangling row deliberately
         # remains for the lint rule to detect.
-        # Roll back first: if the DELETE above raised, SQLAlchemy puts the
-        # session in a "needs rollback" state and the subsequent ALTER would
-        # itself raise, silently dropping the FK-restore and bleeding schema
-        # corruption into other tests.
-        await session.rollback()
         await session.execute(
             text(
                 'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
