@@ -373,7 +373,7 @@ WHERE NOT (
 
 **Sequencing.** F40 (MW branch) ships first as Tier A — claims the ~30% latency win immediately. The FSFM clause is a no-op placeholder until F11 (FSFM-lite decay scoring, currently Tier B) ships and adds the `stability` and `last_outcome_at` columns + the importance signal from F25. When F11 lands, the FSFM clause activates with no breaking change to F40.
 
-**FSFM branch ships inert at F40 ship time.** Concretely: the SQL clause is gated by a feature flag (`fsfm_branch_enabled: bool = False` on `RetrievalConfig`), default OFF. F11 ships the column migration (`stability`, `importance`) AND flips the default ON in the same PR. Until F11, the WHERE-clause builder skips the FSFM branch entirely — no SQL referencing missing columns is emitted, so F40 cannot break a vault that hasn't yet had F11's migration applied.
+**FSFM branch ships inert at F40 ship time.** Concretely: the SQL clause is gated by a feature flag (`fsfm_branch_enabled: bool = False` on `RetrievalConfig`), default OFF. F11 ships the column migration (`stability`, `importance`, and `last_outcome_at` on `memory_units`) AND flips the default ON in the same PR. Until F11, the WHERE-clause builder skips the FSFM branch entirely — no SQL referencing missing columns is emitted, so F40 cannot break a vault that hasn't yet had F11's migration applied. **`last_outcome_at` migration provenance**: the column does NOT exist on `memory_units` today — F1a's migration scope was `success_co_count`, `failure_co_count`, `is_deprioritized`, and the `record_outcome` write API only. Migration `028_procedure_outcomes.py` adds a `last_outcome_at` column on the *separate* `procedure_outcomes` table (KV procedural memory, not `memory_units`), so it does not satisfy F40's reference. F11 owns the `memory_units.last_outcome_at` migration alongside `stability` and the `importance` signal from F25.
 
 **Compute model: on-the-fly at hydration, NOT precomputed columns.**
 
@@ -394,7 +394,7 @@ Question worth answering up front: should `mw_score` and the FSFM-decayed score 
 **Concrete implementation:**
 - Integrate the `WHERE NOT (...)` clause into the **hydration query** (the SELECT that fetches full unit bodies for the RRF top-K). The query already filters by `unit_id IN (...)`; add the MW + FSFM predicate alongside.
 - `mw_score` — derive inline as a SQL expression: `(success_co_count + 1.0) / (success_co_count + failure_co_count + 2.0)` (Beta-Bernoulli α=β=1 closed form). Same formula `compute_mw_score()` uses in Python; no helper function needed at the SQL layer.
-- `stability` and `last_outcome_at` — both already required columns by F20 (FSRS) and F1a respectively. No new schema for the FSFM branch beyond what F11 adds.
+- `stability` and `last_outcome_at` on `memory_units` — neither column exists yet. F20 (FSRS-5) added `revisit_stability` (migration `026_revisit_columns.py`), not `stability`; F1a added MW counters but not `last_outcome_at` on `memory_units` (migration `028_procedure_outcomes.py` adds `last_outcome_at` only on the unrelated `procedure_outcomes` table). Both `memory_units.stability` and `memory_units.last_outcome_at` ship as part of F11's migration alongside `importance`. No new schema for the FSFM branch beyond what F11 adds.
 
 **When precomputation would become justified** (re-evaluate, don't pre-build):
 - If profiling shows hydration-time evaluation > 5 ms p95 over a representative workload (unlikely at 200 rows; more likely if the hard cap rises to 500+ or the vault has unusual MW score distributions).
