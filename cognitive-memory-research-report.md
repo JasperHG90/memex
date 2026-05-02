@@ -350,10 +350,11 @@ WHERE NOT (
     )
     OR
     -- FSFM branch: temporal/importance decay (ships when F11 lands; no-op until then)
-    (
+    COALESCE(
         importance * exp(
             -EXTRACT(EPOCH FROM (now() - last_outcome_at)) / 86400.0 / NULLIF(stability, 0)
-        ) < 0.10
+        ) < 0.10,
+        FALSE
     )
 )
 -- AND lifecycle filters (already there)
@@ -364,7 +365,8 @@ WHERE NOT (
 
 1. **MW branch protects cold-start via the evidence threshold.** A unit with 0 outcomes (`mw_score = 0.5`) has zero evidence to act on, so the `>= 5 outcomes` clause keeps it in the candidate set. Cross-encoder ranks it on content alone. Same protection the additive-marginal MW boost provides at the post-reranker stage.
 2. **FSFM branch protects cold-start via the elapsed-time term.** A fresh unit has `last_outcome_at = now()` → `elapsed = 0` → `exp(0) = 1` → score = `importance × 1` ≈ neutral or high (importance is bounded ≥ a floor by F25). Decay only erodes the score after meaningful time passes; new units are never pruned.
-   - **NULL-handling cold-start commitment**: when `stability` or `importance` is NULL on unclassified units (pre-F25/F11), the FSFM predicate evaluates to NULL → treated FALSE in WHERE → unit is kept (cold-start safe by design). Implementations MUST NOT add `COALESCE(stability, <default>)` or `COALESCE(importance, <default>)` — that would inadvertently filter cold-start units. Tests must assert NULL inputs propagate through to "kept".
+   - **NULL-handling cold-start commitment**: when `stability` or `importance` is NULL on unclassified units (pre-F25/F11), the inner FSFM expression evaluates to NULL. Under SQL three-valued logic, `FALSE OR NULL OR FALSE → NULL`, then `NOT NULL → NULL`, then `WHERE NULL` excludes the row — the *opposite* of cold-start safety. The FSFM branch MUST therefore evaluate to FALSE (not NULL) on NULL-column rows so the filter keeps them. Two equivalent guards land the branch correctly: (1) wrap the branch in `COALESCE(..., FALSE)` (the form used in the SQL above — shorter); or (2) prefix with `importance IS NOT NULL AND stability IS NOT NULL AND last_outcome_at IS NOT NULL AND <expr> < 0.10`. Implementations MUST NOT COALESCE individual columns (e.g., `COALESCE(stability, 1.0)`) — that masks real values with synthetic defaults; the two guards above operate on the *branch-result* level, not the column level. Tests MUST assert that NULL-column rows pass through unfiltered when only the FSFM branch is active (i.e., MW + Confidence branches FALSE). The same TVL concern would apply to F48's confidence branch if `confidence` were ever NULL — but `confidence` has a NOT NULL DEFAULT 1.0 in the schema, so TVL never arises there and the F48 branch needs no COALESCE wrapper.
+   - **Edge case — zero `stability`**: `NULLIF(stability, 0)` returns NULL when `stability = 0`, propagating to a NULL branch result; the `COALESCE(..., FALSE)` wrap then treats this as "do not filter," so zero-stability units are NOT pruned by the FSFM branch. Semantically debatable (`stability = 0` ≈ instant decay → arguably should filter), but acceptable because (a) F11 should not produce zero-stability values via legitimate decay paths, and (b) zero-stability is a degenerate state that observability (F45) will surface for diagnosis. If F11 finds this happens in practice, add an explicit `OR stability = 0` clause in a follow-up.
 3. **F33 exploration runs on a separate retrieval path that bypasses this filter.** The whole point of F33 is to occasionally re-validate low-MW (and low-FSFM) units; if the pre-filter blocks them, the system loses its self-correction property. Implementation: F33's candidate fetch issues a separate query without the pre-filter, marks results as exploration-injected, and reuses MMR for diversity at the merge.
 
 **Why OR'd, not AND'd.** A unit can be behaviorally failed but recent (low MW, fresh) — MW branch prunes it. A unit can be temporally stale but never retrieved (low FSFM, neutral MW with `< 5` outcomes) — FSFM branch prunes it. Either reason is sufficient grounds to skip the cross-encoder; requiring both would underprune.
@@ -474,10 +476,10 @@ WHERE NOT (
     -- MW branch (F40)
     ((success_co_count + failure_co_count) >= 5 AND (success_co_count + 1.0) / (success_co_count + failure_co_count + 2.0) < 0.15)
     OR
-    -- FSFM branch (F40, no-op until F11 ships)
-    (importance × exp(-elapsed/stability) < 0.10)
+    -- FSFM branch (F40, no-op until F11 ships) — COALESCE wrap defends NULL-column cold-start (see §3.4.1 NULL-handling commitment)
+    COALESCE(importance × exp(-elapsed/stability) < 0.10, FALSE)
     OR
-    -- Confidence branch (F48)
+    -- Confidence branch (F48) — no COALESCE needed; `confidence` has NOT NULL DEFAULT 1.0 in the schema, so TVL never arises here
     confidence < 0.2
 )
 ```
