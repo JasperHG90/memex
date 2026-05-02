@@ -305,6 +305,18 @@ class OutcomeService:
 
         from sqlalchemy import text as sql_text
 
+        # Pre-check that the referenced kv_key exists. Without this, the
+        # downstream INSERT into ``procedure_outcomes`` (which has a FK to
+        # ``kv_entries.key``) would raise a raw asyncpg
+        # ``ForeignKeyViolationError`` — surface a clean ``ValueError``
+        # instead so callers can distinguish bad input from infra errors.
+        existence_check = await session.execute(
+            sql_text('SELECT 1 FROM kv_entries WHERE key = :k'),
+            {'k': kv_key},
+        )
+        if existence_check.scalar_one_or_none() is None:
+            raise ValueError(f'Cannot record outcome for unknown kv_key: {kv_key!r}')
+
         success_inc = 1 if success else 0
         failure_inc = 0 if success else 1
         # Upsert: INSERT ... ON CONFLICT (vault_id, kv_key) DO UPDATE.
