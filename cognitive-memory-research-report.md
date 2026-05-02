@@ -346,7 +346,7 @@ WHERE NOT (
     -- MW branch: behavioral failure (ships in F40)
     (
         (success_co_count + failure_co_count) >= 5    -- enough evidence to act on
-        AND mw_score < 0.15                            -- strongly failed
+        AND (success_co_count + 1.0) / (success_co_count + failure_co_count + 2.0) < 0.15  -- strongly failed (mw_score derived inline; no column)
     )
     OR
     -- FSFM branch: temporal/importance decay (ships when F11 lands; no-op until then)
@@ -472,7 +472,7 @@ Confidence < 0.2 means the unit has accumulated multiple contradiction events (�
 ```sql
 WHERE NOT (
     -- MW branch (F40)
-    ((success_co_count + failure_co_count) >= 5 AND mw_score < 0.15)
+    ((success_co_count + failure_co_count) >= 5 AND (success_co_count + 1.0) / (success_co_count + failure_co_count + 2.0) < 0.15)
     OR
     -- FSFM branch (F40, no-op until F11 ships)
     (importance × exp(-elapsed/stability) < 0.10)
@@ -514,7 +514,7 @@ The contradiction engine already creates `MemoryLink` rows with `link_type IN ('
 memex_get_unit_history(unit_id, max_depth=10)
 ```
 
-Starts at a unit, walks backward via incoming `contradicts` / `weakens` links, returns `(predecessor_unit, link_type, link_metadata.reasoning, timestamp)` per hop in chronological order. No reranker, no boosts, no quality filtering — graph walk is for completeness, not relevance. Cycles capped by `max_depth`; branching predecessors return as parallel chains. *`reinforces` links are excluded from the default backward traversal because they point forward in time (a newer unit reinforcing an older one) — walking them backward inverts the timeline. A future extension can add a `forward=True` mode that walks `reinforces` separately, but the v1 timeline is strict supersession history.*
+Starts at a unit, walks backward via incoming `contradicts` / `weakens` links, returns `(predecessor_unit, link_type, link_metadata.reasoning, timestamp)` per hop in chronological order. No reranker, no boosts, no quality filtering — graph walk is for completeness, not relevance. Cycles capped by `max_depth`; branching predecessors return as parallel chains. *`reinforces` links are excluded from the default backward traversal because they point forward in time (a newer unit reinforcing an older one) — walking them backward inverts the timeline. A future extension can add a `forward=True` mode that walks `reinforces` separately, but the v1 timeline is strict supersession history.* The v1 timeline shows **supersession history** (negative-evidence path: contradicts/weakens), not full **confidence evolution** (which would also include positive-evidence `reinforces` events). A future `forward=True` extension can walk `reinforces` separately for the full evolution view.
 
 `confidence_boost` is **not** applied — confidence is itself the artifact the timeline is exploring, so multiplying by it would be circular.
 
