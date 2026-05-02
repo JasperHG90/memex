@@ -9,7 +9,7 @@ Reusable across F5, F9, F10, F20 per RFC-002.
 
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -44,8 +44,10 @@ class TokenBucketRateLimiter:
     ``burst / per_seconds`` tokens per second. ``acquire(key)`` consumes
     one token or raises ``RateLimitExceededError``.
 
-    Thread-safe via a single mutex (in-process; multi-worker leakage is
-    documented in RFC-002 and acknowledged in PR body per AC-F5-4).
+    Mutual exclusion uses ``asyncio.Lock`` to honour the project-wide
+    asyncio convention (multi-worker leakage is documented in RFC-002 and
+    acknowledged in the PR body per AC-F5-4). Hold time is microseconds —
+    dict lookup plus arithmetic — so contention is negligible.
     """
 
     def __init__(
@@ -69,15 +71,15 @@ class TokenBucketRateLimiter:
         self._max_keys = max_keys
         self._enabled = enabled
         self._clock = clock
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self._buckets: OrderedDict[object, _Bucket] = OrderedDict()
 
-    def acquire(self, key: object) -> None:
+    async def acquire(self, key: object) -> None:
         """Consume one token for ``key`` or raise ``RateLimitExceededError``."""
         if not self._enabled:
             return
         now = self._clock()
-        with self._lock:
+        async with self._lock:
             bucket = self._buckets.get(key)
             if bucket is None:
                 bucket = _Bucket(tokens=self._burst, last_refill=now)

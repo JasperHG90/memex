@@ -163,7 +163,7 @@ class ReflectionService:
         the calling layer.
         """
         effective_vault = vault_id or GLOBAL_VAULT_ID
-        self._summarize_node_limiter.acquire((entity_id, effective_vault))
+        await self._summarize_node_limiter.acquire((entity_id, effective_vault))
 
         limit_recent = None if scope == 'full' else 20
         request = ReflectionRequest(
