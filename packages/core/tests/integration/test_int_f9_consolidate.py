@@ -236,7 +236,7 @@ async def test_branch_b_fallback_when_table_missing(
     vault_id = GLOBAL_VAULT_ID
     candidates = await _seed_candidate_units(session, vault_id=vault_id, count=2)
 
-    async def _fake_has_table(self: LocksService, sa_inspect: object) -> bool:
+    async def _fake_has_table(self: LocksService) -> bool:
         return False
 
     monkeypatch.setattr(LocksService, '_has_maintenance_proposals_table', _fake_has_table)

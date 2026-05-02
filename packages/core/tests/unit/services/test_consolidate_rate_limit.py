@@ -67,6 +67,8 @@ def _make_locks_service(*, enabled: bool, clock: _FrozenClock) -> LocksService:
     svc.contradiction = contradiction
     svc.units = units
     svc._dsn = 'postgresql://stub'  # never opened in these tests
+    svc._pool = None
+    svc._has_maintenance_proposals_table_cache = False
     svc._consolidate_limiter = TokenBucketRateLimiter(
         per_seconds=3600.0,
         burst=1,
@@ -80,10 +82,6 @@ def _make_locks_service(*, enabled: bool, clock: _FrozenClock) -> LocksService:
 
     svc._select_consolidate_candidates = _no_candidates  # type: ignore[method-assign]
 
-    async def _has_table(_self: LocksService, _inspect: object) -> bool:
-        return False
-
-    svc._has_maintenance_proposals_table = _has_table.__get__(svc, LocksService)  # type: ignore[method-assign]
     return svc
 
 
