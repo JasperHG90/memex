@@ -3476,6 +3476,9 @@ def handle_memory_summarize_node(
             # the built-in `TimeoutError` in 3.11+) when the 10s budget is
             # exhausted. Surface a distinct message so a stuck backend doesn't
             # masquerade as a generic resolution failure.
+            # ORDERING INVARIANT: `TimeoutError` is a subclass of `OSError`
+            # (Python 3.3+). This handler MUST stay above any `except OSError:`
+            # branch — otherwise OSError would silently intercept timeouts.
             logger.warning(
                 'memex_memory_summarize_node: vault resolution timed out for identifier %r',
                 raw_vault,
