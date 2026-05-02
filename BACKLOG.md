@@ -1,8 +1,8 @@
 # Memex Cognitive Memory — Backlog
 
-Source: [cognitive-memory-research-report.md](./cognitive-memory-research-report.md) (v6.9) · Wave 0 output: [WAVE-0-PREWORK.md](./WAVE-0-PREWORK.md) · **Agent rules: [BACKLOG-AGENT-RULES.md](./BACKLOG-AGENT-RULES.md) — read before picking up an item**
-Last updated: 2026-05-01
-Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
+Source: [cognitive-memory-research-report.md](./cognitive-memory-research-report.md) (v6.9 + 2026-05-02 §3.4.1 latency-optimization addendum) · Wave 0 output: [WAVE-0-PREWORK.md](./WAVE-0-PREWORK.md) · **Agent rules: [BACKLOG-AGENT-RULES.md](./BACKLOG-AGENT-RULES.md) — read before picking up an item**
+Last updated: 2026-05-02 (added Tier-A new tickets from §3.4.1 + §3.5 + §3.4.2 design discussions: F40 pre-reranker filter, F41 score cache, F42 model-size/quantization, F43 agent-surface codification (now also covers historical-query routing), F44 F33 bypass path, F45 F40 observability, F46 chunk→MU traversal, F47 contradiction-confidence post-reranker boost, F48 contradiction-confidence pre-reranker filter (single `apply_pre_filter` flag covers MW+FSFM+confidence branches), F49 contradiction-graph timeline tool; cross-refs from shipped F1a/F4 tightened so forward-looking work is on its own ticket, not described in finished items). **Rule**: PR-review findings on in-flight PRs are NOT backlog material — they must be fixed in the PR before merge.
+Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~4-6w for Tier-A latency optimization (F40, F41, F42, F44, F45) + ~1-2w for F43 agent-surface codification + ~3-5d for F46 chunk→MU traversal + ~2-3w for F47/F48/F49 reranker composition extensions (contradiction-confidence boost + pre-filter + graph-walk timeline)
 
 ---
 
@@ -25,14 +25,14 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
 
 **4 features (F1 split into 3 sub-PRs), ~7-10 weeks. Build first.**
 
-- [x] **F1a** — Schema + outcome API + DTO + API symmetry + `access_count` removal
+- [x] **F1a** — Schema + outcome API + DTO + API symmetry + `access_count` removal — see report §4 F1a + §3.4 (composition site). F1a ships the `success_co_count` / `failure_co_count` columns + `record_outcome` write API. **Forward-looking work tracked separately** (do NOT conflate with F1a): pre-reranker filter that READS these counters → F40; F33's bypass path for that filter → F44; observability for the latency reclaim → F45.
   - Size: M (1.5-2w) · Effort: Moderate
   - Adds `success_co_count` / `failure_co_count` / `is_deprioritized` columns; new `memex_record_outcome` MCP tool; API symmetry: `reference_date` on `memex_note_search`, date params on `memex_survey`
   - **Removes dead `MemoryUnit.access_count` column + index** (Mn8 verified)
   - Default retrieval behavior unchanged (columns exist; no SQL site reads them yet)
   - F4 only depends on F1a (the `is_deprioritized` column)
 
-- [x] **F1b** — Retrieval scope via `apply_generic_filters`
+- [x] **F1b** — Retrieval scope via `apply_generic_filters` — see report §4 F1b
   - Size: S-M (1-1.5w) · Effort: Low (centralized, not per-site)
   - One branch in `apply_generic_filters` covers all 8 strategy sites; flag defaults false → no behavior change unless caller opts in
   - 4 surfaces total: function + RetrievalRequest + MCP tool + DTO
@@ -40,23 +40,23 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
   - Resolves Appendix B C3
   - Stacks on F1a; can ship before F1c
 
-- [x] **F1c** — MW soft-factor (additive-marginal) at reranker
+- [x] **F1c** — MW soft-factor (additive-marginal) at reranker — see report §4 F1c + §3.4 (composition formula) + §3.4.1 (cold-start neutrality, additive-marginal rationale)
   - Size: S (~1.5w) · Effort: Low (composition lands at `engine.py:1140`)
   - `mw_boost = 1.0 + mw_alpha × (mw_score − 0.5)` with `mw_alpha = 0.3` and Beta-Bernoulli α=β=1 prior; cold-start units get `mw_boost = 1.0` (neutral, no warm-up gate needed)
   - +0.5w over v6.8 estimate to budget for before/after benchmark
   - Stacks on F1a; F1b is independent
 
-- [x] **F2** — D-MEM Z-score embedding anisotropy correction
+- [x] **F2** — D-MEM Z-score embedding anisotropy correction — see report §4 F2
   - Size: XS (~1w) · Effort: Low
   - Pure retrieval-precision fix; ships fastest
   - No dependencies; can ship anytime (parallel to Wave 0 or F1a)
 
-- [x] **F25** — Write-time importance + intent + risk classifier
+- [x] **F25** — Write-time importance + intent + risk classifier — see report §4 F25
   - Size: M (4-6w) · Effort: Moderate
   - Subsumes F26; affects every future extraction
   - LLM cost per ingest — needs per-vault rate-limit
 
-- [x] **F33** — MW exploration floor
+- [x] **F33** — MW exploration floor — see report §4 F33 + §3.4.1 (rich-get-richer counter-pressure)
   - Size: S (1-2w) · Effort: Low
   - Prevents rich-get-richer; depends only on F1a (data) — F1c makes injection meaningful
   - Can roll in alongside F1c in same wave
@@ -69,25 +69,130 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0)
 
 ### Quick wins (~3-5w bundled)
 
-- [x] **F5** — `memory_summarize_node` MCP exposure (~3d) — wraps existing reflection endpoint (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F4** — `memory_deprioritize` MCP tool (1-2w) — direct curation verb; depends on **F1a's** `is_deprioritized` column (not the full F1 stack) (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F38** — Consolidation orchestration (1-2w) — nightly batch over reflection + contradiction + cleanup (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F14** — Procedural observations via KV namespace (1-2w) — cross-agent value via Hermes briefings; collision policy: last-writer-wins + version + capped history (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F5** — `memory_summarize_node` MCP exposure (~3d) — wraps existing reflection endpoint — see report §4 F5 (shipped 2026-05-01 via memory_augmentation)
+- [x] **F4** — `memory_deprioritize` MCP tool (1-2w) — direct curation verb; depends on **F1a's** `is_deprioritized` column (not the full F1 stack) — see report §4 F4 (shipped 2026-05-01 via memory_augmentation). **Forward-looking work tracked separately** (do NOT conflate with F4): agent-side codification of the §3.5 5-step flow + §3.4.1 gradient-vs-binary axes table → F43; chunk → memory_units traversal needed for §3.5 Option C → F46.
+- [x] **F38** — Consolidation orchestration (1-2w) — nightly batch over reflection + contradiction + cleanup — see report §4 F38 (shipped 2026-05-01 via memory_augmentation)
+- [x] **F14** — Procedural observations via KV namespace (1-2w) — cross-agent value via Hermes briefings; collision policy: last-writer-wins + version + capped history — see report §4 F14 + §2.3.1 (procedural memory rationale) (shipped 2026-05-01 via memory_augmentation)
 
 ### Linter cluster (~5-7w bundled)
 
-- [x] **F6** — Maintenance ledger + rule-based linter (4-6w) — runs under existing `MEMEX_LEADER_LOCK_ID` (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F8** — `memex_get_lint_flags` MCP (1-2w) — depends on F6 (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F10** — Surprise-gated LLM lint (3-5w) — depends on F2 + F6; LLM cost-capped per vault (shipped 2026-05-01 via memory_augmentation, see final-report.md; polarity discrimination deferred to F10b)
+- [x] **F6** — Maintenance ledger + rule-based linter (4-6w) — runs under existing `MEMEX_LEADER_LOCK_ID` — see report §4 F6 (shipped 2026-05-01 via memory_augmentation)
+- [x] **F8** — `memex_get_lint_flags` MCP (1-2w) — depends on F6 — see report §4 F8 (shipped 2026-05-01 via memory_augmentation)
+- [x] **F10** — Surprise-gated LLM lint (3-5w) — depends on F2 + F6; LLM cost-capped per vault — see report §4 F10 (shipped 2026-05-01 via memory_augmentation; polarity discrimination deferred to F10b)
 
 ### Active learning (~7-10w)
 
-- [x] **F20** — FSRS-based memory revisitation (4-6w) — depends on F1 + F25; Ebbinghaus heritage explicit (shipped 2026-05-01 via memory_augmentation, see final-report.md)
-- [x] **F9** — `memory_reconsolidate` + per-entity advisory lock (4-6w) — new locking infra in `services/locks.py` (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F20** — FSRS-based memory revisitation (4-6w) — depends on F1 + F25; Ebbinghaus heritage explicit — see report §4 F20 (shipped 2026-05-01 via memory_augmentation)
+- [x] **F9** — `memory_reconsolidate` + per-entity advisory lock (4-6w) — new locking infra in `services/locks.py` — see report §4 F9 (shipped 2026-05-01 via memory_augmentation)
 
 ### Diagnostics
 
-- [x] **F32** — Memory diagnostics (4-6w) — UMAP, heatmap, lint dashboard (shipped 2026-05-01 via memory_augmentation, see final-report.md)
+- [x] **F32** — Memory diagnostics (4-6w) — UMAP, heatmap, lint dashboard — see report §4 F32 (shipped 2026-05-01 via memory_augmentation)
+
+### Agent-surface codification (~1-2w, added 2026-05-02 from §3.5 rewrite)
+
+**Source: report §3.5 "User-driven memory resolution: how should agents invoke F4?".** F4 (`memory_deprioritize`) and F1's `record_outcome` shipped as *tools* but the agent-side **flow** that uses them (disambiguate-first → cross-note coverage → mandatory LLM judgment → paired writes) is not yet documented anywhere agents will read it. Without this codification, agents will continue to dump every loosely-related MU into `record_outcome`/`deprioritize` on a vague resolution prompt, defeating the gradient-vs-binary axes design. **Per `feedback_use_memex_for_persistent_memory.md` and CLAUDE.md rule 24, this is not a single-surface fix — MCP, Hermes plugin, and Claude Code plugin must all carry the same guidance.**
+
+- [ ] **F43** — Codify §3.5 5-step agent flow + axes-table guidance across MCP/Hermes/Claude Code surfaces (1-2w) — see report §3.5 (worked example, 5-step flow, axes table, "What's genuinely adjacent work" enumeration) + §3.4.1 "MW is the gradient; deprioritize is the binary" subsection. **Scope (per CLAUDE.md rule 24, parity across all three agent surfaces — single PR touching all three; partial updates are non-mergeable):**
+  1. **MCP server** (`packages/mcp/src/memex_mcp/server.py`): expand `memex_record_outcome` and `memex_memory_deprioritize` tool docstrings to teach the 5-step flow (Step 1: disambiguate when ambiguous → ask before writing; Step 2: route by info quality (`memex_find_note` for title-fragment, `memex_memory_search` only when title unknown) AND choose Option A/B/C for cross-note coverage; Step 3: mandatory LLM judgment over candidate set; Step 4+5: paired writes — `record_outcome(success=false)` AND `memory_deprioritize` against the *judged-relevant subset only*). Include the orthogonal-axes table verbatim.
+  2. **Hermes plugin** (concrete files: `packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py`, `templates.py`, `tools.py`): add the 5-step flow + axes-table to the session-briefing primer (already carries the storage-model primer; this slots beside it). The verb-pair scaffolding belongs in `templates.py` so a Hermes turn can lean on a structured prompt rather than free-form generation.
+  3. **Claude Code plugin** (concrete dirs: `packages/claude-code-plugin/rules/`, `packages/claude-code-plugin/skills/`, `packages/claude-code-plugin/hooks/`): update existing skills (e.g., `/remember`, `/recall`) AND add a new rule file teaching the disambiguate-first / Options-A/B/C / paired-writes pattern. Hooks may carry the imperfect-recall-by-design framing as a session-start reminder.
+  4. **CLAUDE.md** (root): add a short "When the user reports an issue resolved" section pointing to the three above.
+  - **Option A/B/C routing** (Step 2 of the flow):
+    - **Option A** — entity-anchored: `memex_list_entities(query=…)` → `memex_get_entity_mentions(entity_id=…)`. Use when topic ↔ entity.
+    - **Option B** — cross-note semantic: `memex_memory_search(query=…, after=…, top_k=30)`. **Note: top_k must be ≥30, not the default 5** — narrow top_k will miss cross-note matches.
+    - **Option C** — single-note PageIndex traversal: `memex_get_page_indices(note_id)` → `memex_get_memory_units(chunk_ids=[…])` (or equivalent). Use when scope is provably one note.
+  - **Imperfect-recall-by-design framing**: explicit statement that none of Options A/B/C give *provable* 100% recall, and that this is fine because **F33 exploration is the safety net** — units that slip past resolution will re-surface, the user re-confirms, and another `record_outcome(success=false)` compounds the MW penalty. User-driven resolution is a *gradient* across many turns, not a one-shot delete.
+  - **Historical / audit-query routing rule (added 2026-05-02 from §3.4.2 investigation)**: the same five-step flow assumes the user is asking "what's true *now*". For queries about *how things changed* — "how has my view on X evolved", "what did I used to think about Y", "show me everything I've believed about Z including the wrong stuff" — the agent must route differently:
+    - For ordered-chain timelines on a specific unit: call **F49** `memex_get_unit_history(unit_id)` — graph walk through contradiction links, returns predecessors in temporal order. Cleaner semantics than ranked search for "evolution" queries.
+    - For broader audit / "show me everything including hidden stuff": call `memex_memory_search(query=…, apply_pre_filter=False)` — bypasses F40 + F48 (MW + FSFM + confidence pre-filters) so contradicted, behaviorally-failed, and decayed units appear. Post-reranker boosts (F47 confidence_boost, F1c MW) still apply, so contradicted units rank below clean ones — which is the right ordering for audit queries.
+    - **Disambiguation triggers** the agent should learn: "evolved", "used to", "history of", "what changed", "what did I think before", "audit", "show me everything", "show me the hidden ones", explicit time-window-with-no-filter intent.
+    - This is a *separate routing path* from the resolution flow (Steps 1–5). When the user says "the X issue is resolved", apply the resolution flow. When the user says "how has my position on X changed", apply the historical routing rule. Disambiguation is the agent's responsibility.
+  - **What is *not* a gap** (resisted scope creep — keep out of F43, codify in agent guidance as "do NOT add"): combined `memex_resolve(unit_ids, reason)` endpoint; `resolved_at` timestamp column; `resolution_type` enum on deprioritize; `bulk-by-source` parameter on deprioritize; note-level deprioritize. The free-text `reason` field carries all needed information.
+  - **Out of scope (separate adjacent work, not memory-core)**: Telegram cron-response handler — translates user chat replies into the right MCP calls. Lives in Hermes/Telegram integration code per §7.5. Not a memory-core ticket; called out here so it isn't silently expected of F43.
+  - **Test plan (per `feedback_llm_output_validation.md`)**: drive a real-LLM agent turn ("Telegram notifications are now resolved") against each of the three surfaces (MCP direct, Hermes briefing, Claude Code session) and assert: (a) agent disambiguates first when scope is ambiguous; (b) calls `find_note` (or `note_search` only if title unknown) BEFORE any write; (c) for cross-note scope, calls one of Options A/B/C with `top_k>=30` if Option B; (d) issues paired writes (`record_outcome=false` AND `memory_deprioritize`) only against the LLM-judged-relevant subset, not every candidate. Use `pytest -m llm` markers; reuse golden-response patterns from existing real-LLM tests.
+  - **Depends on**: F1a (`record_outcome`) + F4 (`memory_deprioritize`) — both shipped via memory_augmentation. No new code in core; pure agent-facing prompt work + tests.
+  - **Acceptance**: real-LLM golden test passes on all three surfaces; single PR touching MCP + Hermes + Claude Code + CLAUDE.md (parity rule — partial PR is non-mergeable).
+
+### Reranker composition extensions (~1-2w, added 2026-05-02 from architectural-asymmetry investigation)
+
+**Source: report §3.4.2 (added 2026-05-02) "Contradiction-derived confidence: completing the reranker composition".** Investigation prompted by user observation: F1c/recency/temporal compose explicitly as multipliers at `engine.py:1195`, but contradiction-derived `unit.confidence` is *not* in the composition. The contradiction engine adjusts `confidence` (α=0.1 weaken, 2α=0.2 contradict, per `packages/core/src/memex_core/memory/contradiction/engine.py:211-219`) and that confidence is loaded for display metadata (`unit.unit_metadata['superseded_by']`, engine.py:1051-1091) — but it has *no path into the reranker boost*. A contradicted unit and a non-contradicted unit, all else equal, get the same final reranker score today. The "downranking from contradiction" is folklore, not code.
+
+- [ ] **F47** — Compose contradiction-derived confidence at the reranker site (1-2w) — see report §3.4.2 + §3.4 (KinthAI principle) + §3.4.1 (MW precedent — same architectural slot, different evidence type). **Concrete scope:**
+  - Add a fourth multiplicative boost at `engine.py:1195` alongside MW / recency / temporal:
+    ```python
+    confidence_boost = 1.0 + confidence_alpha × (unit.confidence − 0.5)
+    final = ce_score × recency_boost × temporal_boost × mw_boost × confidence_boost
+    ```
+  - **Cold-start / non-contradicted** (`confidence = 1.0`): boost > 1.0 (mild lift for clean units, mirrors MW's high-evidence success case).
+  - **Single weakening** (`confidence = 0.9`): boost ≈ 1.0 (near-neutral).
+  - **Single contradiction** (`confidence = 0.8`): boost < 1.0 (mild penalty).
+  - **Repeatedly contradicted** (`confidence → 0.0`): boost → `1.0 − 0.5 × confidence_alpha` (substantial penalty).
+  - `confidence_alpha` config field on `RetrievalConfig` (analogous to `reranking_mw_alpha`); tune empirically — start at 0.3 for parity with MW, validate via before/after benchmark.
+  - Add `CONFIDENCE_BOOST_OBSERVED` Prometheus histogram analogous to `MW_BOOST_OBSERVED` (engine.py:1162).
+  - **Reranker stays content-only**: do NOT add `[CONTRADICTED]` text labels to `format_for_reranking` (the cross-encoder wasn't trained on Memex's marker; it would be hallucinating a meaning). All behavioral/structural signals compose at the same site.
+  - **Tradeoffs to document and validate**:
+    - α calibration risk: too aggressive → buries genuinely-contradictory observations the user wants to see surface. Too mild → no behavioral change. Pin to a benchmark query set, mirror F1c's calibration approach.
+    - Behavioral change: existing retrieval results will shift (some currently-surfaced contradicted units drop). Run before/after on a representative workload before flipping the default-on.
+    - Double-counting check: confirm `confidence` isn't already used to FILTER candidates upstream (e.g., at hydration). Currently engine.py:1052 only loads supersession metadata for `confidence < 1.0` — that's a display path, not a filter, so no double-count. Verify no other site silently filters on confidence before promoting F47 to default-on.
+    - Per the Memory Worth paper precedent (2604.12007v1 Theorem 4.1 caveat in §2.1): do NOT claim convergence guarantees for `confidence_boost` either — it's a useful Bayesian-flavored ranking signal in practice, not provably-convergent under non-stationary multi-tenant ingestion.
+  - **Depends on**: nothing new — `unit.confidence` is already being adjusted by the contradiction engine; the column already exists; the composition site is the same one F1c uses.
+  - **Acceptance**: before/after benchmark shows quality lift on contradicted-unit queries; observability metric (`CONFIDENCE_BOOST_OBSERVED` histogram) shows boost distribution matches expectations from the contradiction-frequency in the test vault; all existing tests still pass with `confidence_alpha=0.3` default.
+
+- [ ] **F48** — Confidence pre-reranker filter (third OR'd branch in F40's predicate) (~3-5d) — see report §3.4.2 ("Pre-reranker confidence filter: parallel to F40's MW filter"). **Pattern**: same architecture as F40 (MW pre-filter) and F47 (confidence post-reranker boost) — strongly-contradicted units that get heavily multiplied down by F47's boost are paying full reranker cost only to be downweighted past usefulness. Filter them before the cross-encoder.
+  - **SQL extension to F40's predicate** (third OR'd clause):
+    ```sql
+    WHERE NOT (
+        -- MW branch (F40)
+        ((success_co_count + failure_co_count) >= 5 AND mw_score < 0.15)
+        OR
+        -- FSFM branch (F40, no-op until F11 ships)
+        (importance × exp(-elapsed/stability) < 0.10)
+        OR
+        -- Confidence branch (F48 — strongly-contradicted units)
+        (confidence < 0.2 AND <evidence_threshold>)
+    )
+    ```
+  - **Cold-start protection**: a never-contradicted unit has `confidence = 1.0` (the schema default) — never excluded by this branch. Only units with multiple repeated contradictions (each `-2α = -0.2`) drop below the threshold. The evidence-threshold sub-condition needs design — options:
+    - (a) Count of incoming `contradicts` / `weakens` `MemoryLink` rows ≥ 2 (i.e., needs at least two corroborating contradictions before pruning, parallel to F40's `>= 5 outcomes` threshold).
+    - (b) No evidence threshold — just `confidence < 0.2`. Simpler; relies on the contradiction engine's α-step already requiring multiple events to reach that floor (default α=0.1 means ≥4 contradict events or ≥10 weaken events).
+    - **Recommendation: (b) initially**. The α-stepping IS the evidence accumulation — adding a count threshold is double-counting. Re-evaluate if false-prunes appear.
+  - **F33 exploration runs on the same separate retrieval path that bypasses F40's filter** (per F44) — so F48's pruned units also get re-validation cycles. F44 doesn't need extension; the bypass already covers any predicate added to the main hydration query.
+  - **Compute model: on-the-fly at hydration** (same as F40) — `confidence` is already a column on `MemoryUnit`, no new schema, no new index needed beyond what F40 adds.
+  - **Expected savings**: marginal additional latency win on top of F40 — depends on contradicted-unit frequency in the vault. In a vault with active contradiction detection, expect another ~5–10% of candidates dropped pre-rerank.
+  - **Sequencing**: ship F48 *with* F40 (same hydration-query change) OR immediately after. Since F47 (post-reranker boost) and F48 (pre-reranker filter) compose, ship F47 first to validate the signal direction, then F48 once observability metrics confirm low false-prune rate.
+  - **Per-query bypass**: F48's branch sits inside F40's `WHERE NOT (...)` predicate, so it inherits F40's `apply_pre_filter: bool = True` flag — no separate parameter. When the user/agent is auditing contradiction history, `apply_pre_filter=False` returns contradicted units alongside everything else. The post-reranker `confidence_boost` (F47) still applies in that mode — i.e., contradicted units appear but rank below clean ones, which is the right behavior for audit queries.
+  - **Depends on**: F40 (filter infrastructure + bypass flag) + F47 (validates that confidence is a useful ranking signal before relying on it as a filter); F44 (F33 bypass, already covers this filter via the same path).
+  - **Acceptance**: F48-pruned-candidate-count metric ≤ 10% of typical hydration set; F47's `CONFIDENCE_BOOST_OBSERVED` histogram shows that pruned units would have been multiplied down by ≥50% had they reached the reranker; before/after retrieval-quality benchmark shows no regression on contradicted-but-recoverable units (those should be re-surfaced via F33 bypass).
+
+- [ ] **F49** — Contradiction-graph timeline traversal tool (~3-5d) — see report §3.4.2 ("Dedicated path: contradiction-graph traversal for timeline queries"). The `apply_pre_filter=False` bypass on `memex_memory_search` (F40 + F48) lets historical/audit queries see contradicted units, but it returns a *ranked semantic set*, not an *ordered chain*. For "how has my view on X evolved" queries, walking the contradiction graph directly gives cleaner semantics. **Concrete scope:**
+  - New MCP tool `memex_get_unit_history(unit_id, max_depth=10)` — starts from a unit, walks backward via `MemoryLink` rows where `link_type IN ('contradicts', 'weakens', 'reinforces')` and `to_unit_id = current_unit_id`. Each hop returns `(predecessor_unit, link_type, link_metadata.reasoning, timestamp_inferred_from_authoritative_unit_id_or_link_created_at)`.
+  - Returns an ordered chain (oldest → newest), NOT a ranked set. No reranker, no boosts, no quality filtering. Pre-filters do NOT apply — graph walk is for completeness, not relevance.
+  - Vault-scoped via the standard mechanism. Per CLAUDE.md rule 24, expose on all three agent surfaces (MCP server, Hermes plugin, Claude Code plugin / docs).
+  - **Edge cases to handle**: cycles (cap by `max_depth`); branching predecessors (a unit weakened by two distinct contradictions — return both as parallel chains); orphan starting units (no contradiction links — return `[unit_only]`).
+  - **Composition with F47**: the timeline doesn't apply `confidence_boost`. Confidence is *itself* the artifact the timeline is exploring — multiplying by it would be circular.
+  - **Depends on**: nothing new — `MemoryLink` rows of the relevant types are already created by the contradiction engine (`packages/core/src/memex_core/memory/contradiction/engine.py:225-235`). Pure read-side tool.
+  - **Acceptance**: real-LLM golden test with a vault containing 3+ contradiction events on a single conceptual chain; tool returns the chain in correct order; agents in F43 codification know to route "how has my view on X evolved" / "what did I used to think about X" to this tool, not to `memex_memory_search`.
+
+### Latency optimization (~3-5w bundled, promoted from Tier B by 2026-05-02 measurement)
+
+**Source: report §3.4.1 "Compute cost considerations: pre-reranker filtering as a Tier A optimization".** Cross-encoder reranker measured at **~1.5 s @ 70-candidate cap** in production (May 2026). At observed worst case ~30/70 candidates are deeply low-MW or low-FSFM — ~640 ms of reranker compute spent on units that get multiplicatively downweighted past usefulness. Promoted from Tier B because the latency cost (>40% reranker budget wasted) outweighs the architectural-simplicity argument.
+
+- [ ] **F40** — Guarded pre-reranker MW/FSFM filter (1-2w) — see report §3.4.1 ("The guarded pre-filter design" + "Compute model: on-the-fly at hydration"). **Concrete scope:**
+  - Add `WHERE NOT (...)` clause to the **hydration query** that fetches full unit bodies for the RRF top-K (alongside the existing `unit_id IN (...)` and `is_deprioritized = false` filters).
+  - **MW branch (ships in F40):** `(success_co_count + failure_co_count) >= 5 AND mw_score < 0.15`, where `mw_score` is derived inline as the SQL closed-form `(success_co_count + 1.0) / (success_co_count + failure_co_count + 2.0)` (Beta-Bernoulli α=β=1).
+  - **FSFM branch (no-op until F11 ships):** `importance * exp(-EXTRACT(EPOCH FROM (now() - last_outcome_at)) / 86400.0 / NULLIF(stability, 0)) < 0.10`. F11 adds `stability` and the importance signal from F25; F40 ships the predicate inactive-by-default and F11 activates it with no breaking change.
+  - **OR'd, not AND'd** — either signal is sufficient grounds to skip the cross-encoder (a behaviorally-failed-but-recent unit is pruned by MW; a temporally-stale-but-never-retrieved unit is pruned by FSFM; AND'ing would underprune).
+  - **Cold-start safeguards** (load-bearing — must not regress): MW branch's `>= 5 outcomes` clause keeps zero-outcome units in the candidate set; FSFM branch's `exp(elapsed)` term keeps fresh units neutral; F33's exploration path bypasses the filter entirely (see F44).
+  - **On-the-fly compute, NOT precomputed columns**: filter scope is ~200 RRF candidates → `exp()` per row <1 ms total. Precomputing would add migration + trigger + drift-reconciliation surface for a sub-millisecond gain. Re-evaluate only if profiling shows hydration-time evaluation > 5 ms p95 OR if FSFM surfaces in user-facing query paths beyond pre-filter.
+  - **Expected savings**: ~30% reranker latency reduction (~1.5 s → ~1.05 s) with no quality loss on the obviously-failed tail.
+  - **Per-query bypass**: add `apply_pre_filter: bool = True` to `RetrievalRequest`, plumbed via `apply_generic_filters` (F1b's pattern). Default ON for everyday recall. When `False`, the entire `WHERE NOT (...)` clause drops out — every branch (MW + FSFM + the F48-added confidence branch) is bypassed in one go. Single flag because the three filter signals share one cognitive model ("things the system normally hides"); user/agent isn't reasoning about MW vs FSFM independently. F43 codification teaches the rule: historical / audit / lineage queries → `apply_pre_filter=False`.
+  - **Depends on**: F1a (counters); F33 + F44 (exploration bypass path); FSFM clause is no-op until F11 (Tier B) ships.
+- [ ] **F44** — F33 exploration retrieval-path: pre-filter bypass (~3-5d) — see report §3.4.1 safeguard 3 ("F33 exploration runs on a separate retrieval path that bypasses this filter"). F33 was shipped without this concept because the pre-filter didn't yet exist; F40 introduces the filter and depends on F33's path bypassing it for the self-correction property to hold. **Concrete scope**: F33's candidate fetch must (a) issue a separate hydration query that omits the F40 `WHERE NOT (...)` clause, (b) mark results as exploration-injected (existing F33 infrastructure), (c) reuse MMR for diversity at the merge with the main path's candidates. Without F44, F40 silently breaks F33 — a low-MW unit can never re-surface, and MW becomes monotonic. **Depends on**: F40 (filter) + F33 (already shipped). Can ship in same PR as F40, or separately if smaller PR is preferred — F40 should be shipped behind a feature flag if F44 lags.
+- [ ] **F45** — F40 observability + re-evaluation gate metrics (~3d) — see report §3.4.1 ("When precomputation would become justified"). Emit metrics that drive the re-evaluation decision and validate the latency-reclaim claim: (a) hydration-query p95 (re-evaluation gate at >5 ms); (b) candidates-pruned histogram per query (validates the ~30% reclaim assumption empirically); (c) cross-encoder candidate count post-filter (should drop from 70 to ~50 in the typical case); (d) F33 vs main-path candidate count (validates F44 bypass is actually firing). Per cross-cutting requirement #3 (Prometheus metrics + OpenTelemetry traces). **Depends on**: F40 + F44.
+- [ ] **F46** — Chunk → memory_units traversal MCP tool (~3-5d) — see report §3.5 Option C ("PageIndex traversal" — `memex_get_memory_units(chunk_ids=[…])`). The §3.5 worked example calls this primitive but it doesn't exist today: `memex_get_memory_units` only accepts `unit_ids`, and there's no MCP/Hermes/Claude-Code tool that returns all memory units belonging to one or more chunks. The schema supports it cheaply — `MemoryUnit.chunk_id` FK + `idx_memory_units_chunk_id` btree index already exist (`packages/core/src/memex_core/memory/sql_models.py:690,710`). **Concrete scope**: either (a) add a `chunk_ids: list[UUID] | None` parameter to `memex_get_memory_units` (preferred — single tool, mirrors `unit_ids` ergonomics), OR (b) add a new tool `memex_list_chunk_memory_units(chunk_ids)`. SQL is `SELECT * FROM memory_units WHERE chunk_id = ANY(:chunk_ids)` with vault-scoping filter. Per CLAUDE.md rule 24 (agent-surface parity), expose on all three surfaces (MCP server, Hermes plugin tools, Claude Code plugin if it has its own surface). **Depends on**: nothing (independent). **Unblocks**: F43's Option C path actually being callable end-to-end — without F46, F43's PageIndex-traversal guidance is aspirational.
+- [ ] **F41** — Cross-encoder score cache (1-2w) — see report §3.4.1 (latency levers list). Keyed on `(query_embedding_hash, unit_id)` with 24h TTL. Repeat queries (e.g., daily morning briefing loop, recurring user templates) get free reranking. Biggest single lever for narrow query patterns; effectiveness depends on workload. Independent of F40 — they compose. Add cache-hit-rate metric to validate impact.
+- [ ] **F42** — Cross-encoder model-size / quantization tuning (1-2w) — see report §3.4.1 (latency levers list). Int8-batched inference (typically 2× speedup, low recall risk) and/or smaller reranker model behind an A/B with recall-impact metric. Sequence after F40+F41 since this is the only lever with quality regression risk.
 
 ### Subsumed
 
@@ -169,6 +274,10 @@ Six follow-ups surfaced during Phase 3 adversarial review and close-out. All Tie
 | 5 — Procedural observations | ~1w | F14 |
 | 6 — Active learning | 3-4w | F20 |
 | 7 — Diagnostics | 3-4w | F32, F9 |
+| 8 — Agent-surface codification | 1-2w | F43 (depends on F1a + F4 + F46 — F46 unblocks Option C path; F1a/F4 already shipped) |
+| 9 — Latency optimization | 4-6w | F40, F44, F45 bundled (F40 + F44 must ship together or behind feature flag; F45 lands with them). F41 + F42 sequence after. F11 (Tier B) needed only for the FSFM clause inside F40 to activate. |
+| 10 — Tooling gap (PageIndex traversal) | 3-5d | F46 (independent, can ship anytime; unblocks F43's Option C guidance) |
+| 11 — Reranker composition extensions | 2-3w | F47 (post-reranker confidence boost) → F48 (pre-reranker confidence filter, riding F40's `apply_pre_filter` flag) → F49 (graph-walk timeline). Sequence F47 first to validate the signal direction, then F48 once observability confirms low false-prune rate, then F49 (independent). All three feed into F43's historical-routing-rule extension. |
 
 **Tight MVP:** F1a + F2 + F4 (~5-7 weeks) — F1a delivers the deprioritization column + outcome write API; F2 ships independently; F4 stacks on F1a. Adds the curation verb on top of MW data + the anisotropy fix without requiring F1b/F1c to be in production.
 
