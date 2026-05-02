@@ -15,6 +15,7 @@ EXPECTED_TAGS = {
     'assets',
     'storage',
     'templates',
+    'diagnostics',
 }
 
 # Natural-language queries mapped to expected tool(s) — used for BM25 recall testing.

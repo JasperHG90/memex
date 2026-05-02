@@ -4,13 +4,15 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.server.auth import require_delete, require_write
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
     DeadLetterItemDTO,
+    ObservationDTO,
     ReflectionQueueDTO,
     ReflectionRequest as ReflectionDTO,
     ReflectionResultDTO,
@@ -25,8 +27,26 @@ from memex_core.server.common import (
     ndjson_response,
     resolve_vault_ids,
 )
+from memex_core.services.rate_limit import RateLimitExceededError
 
 router = APIRouter(prefix='/api/v1')
+
+
+class SummarizeNodeRequest(BaseModel):
+    """F5: synchronous summarize-node endpoint body."""
+
+    entity_id: UUID = Field(..., description='Entity UUID to reflect on.')
+    scope: Literal['incremental', 'full'] = Field(
+        default='incremental',
+        description=(
+            "'incremental' (default — only new evidence) or 'full' "
+            '(re-evaluate all evidence; engine caps at MAX_FULL_SCOPE_UNITS=1000).'
+        ),
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        description='Vault UUID; defaults to the global vault when omitted.',
+    )
 
 
 @router.post(
@@ -54,6 +74,63 @@ async def reflect(
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reflection failed')
+
+
+@router.post(
+    '/memories/summarize-node',
+    response_model=ReflectionResultDTO,
+    dependencies=[Depends(require_write)],
+    responses={
+        429: {
+            'description': 'Rate limit exceeded for this (entity_id, vault_id).',
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'rate_limit_exceeded',
+                        'retry_after_seconds': 42.5,
+                        'message': 'Rate limit exceeded; retry after 42.50s.',
+                    }
+                }
+            },
+        }
+    },
+)
+async def summarize_node(
+    request: Annotated[SummarizeNodeRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """F5: synchronously consolidate memories on an entity into its mental model.
+
+    Mirrors §4 F5's synchronous contract — does NOT use BackgroundTasks. Per RFC-002,
+    rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
+    thin transport that translates ``RateLimitExceededError`` into a 429 envelope
+    with a ``Retry-After`` header.
+    """
+    try:
+        result = await api.summarize_node(
+            request.entity_id,
+            scope=request.scope,
+            vault_id=request.vault_id,
+        )
+    except RateLimitExceededError as exc:
+        retry_after = max(0, int(exc.retry_after_seconds + 0.999))
+        return JSONResponse(
+            status_code=429,
+            content={
+                'error': 'rate_limit_exceeded',
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            },
+            headers={'Retry-After': str(retry_after)},
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Summarize-node reflection failed')
+
+    return ReflectionResultDTO(
+        entity_id=result.entity_id,
+        new_observations=[ObservationDTO(**obs.model_dump()) for obs in result.new_observations],
+        status='completed',
+    )
 
 
 @router.post(

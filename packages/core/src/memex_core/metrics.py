@@ -70,6 +70,16 @@ CIRCUIT_BREAKER_REJECTIONS_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
+# Audit-log metrics (cross-cutting; populated by AuditService._persist)
+# ---------------------------------------------------------------------------
+
+MEMEX_AUDIT_LOG_TOTAL = Counter(
+    'memex_audit_log_total',
+    'Audit log entries written, by action.',
+    ['action'],
+)
+
+# ---------------------------------------------------------------------------
 # Extraction-pipeline in-flight gauges (wedge diagnostics)
 # ---------------------------------------------------------------------------
 
@@ -161,5 +171,28 @@ CLASSIFIER_RISK_DISTRIBUTION = Counter(
 CLASSIFIER_BLOCKED_TOTAL = Counter(
     'memex_classifier_blocked_total',
     'Facts refused at ingestion because the classifier flagged risk_class=safety.',
+    ['vault_id'],
+)
+
+# ---------------------------------------------------------------------------
+# Diagnostics metrics (F32)
+# ---------------------------------------------------------------------------
+
+DIAGNOSTICS_MANIFOLD_COMPUTE_SECONDS = Histogram(
+    'memex_diagnostics_manifold_compute_seconds',
+    'Wall-clock duration of UMAP manifold compute (seconds), per vault.',
+    ['vault_id'],
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+
+DIAGNOSTICS_CACHE_HITS_TOTAL = Counter(
+    'memex_diagnostics_cache_hits_total',
+    'Manifold cache hits (cache_key matched live signature) by vault.',
+    ['vault_id'],
+)
+
+DIAGNOSTICS_CACHE_MISSES_TOTAL = Counter(
+    'memex_diagnostics_cache_misses_total',
+    'Manifold cache misses (no cache or cache_key drift) by vault.',
     ['vault_id'],
 )

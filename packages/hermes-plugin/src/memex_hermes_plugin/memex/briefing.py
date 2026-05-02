@@ -162,7 +162,29 @@ Match the tool to the query type:
 - **Templates for structured captures** → `memex_list_templates` to see slugs,
   `memex_get_template(slug)` for the markdown scaffold, then `memex_add_note(...,
   template=slug)` so the note is tagged for filtering. Prefer a template for
-  ADRs, retros, technical briefs, RFCs, or any note with clear sections."""
+  ADRs, retros, technical briefs, RFCs, or any note with clear sections.
+- **Curating memory** — when a memory unit turns out to be misleading, outdated,
+  or noise that contaminates retrieval:
+    - `memex_memory_deprioritize(unit_id, reason=...)` is the NON-DESTRUCTIVE
+      verb. The unit stays on the entity graph and remains recallable via
+      `include_deprioritized=true`; only its retrieval rank drops. Pair with
+      `memex_record_outcome(success=false, ...)` when the agent itself
+      discovered the unit was wrong. Reversible via `memex_memory_restore`.
+    - Archive (CLI-only) is the DESTRUCTIVE counterpart — it removes the unit
+      from the entity graph and is irreversible. Prefer deprioritize unless
+      the unit MUST leave the graph entirely (e.g. PII the user wants gone).
+- **Synchronously consolidating mid-conversation** — when retrieved facts about
+  a topic are conflicting, incomplete, or scattered, you can ask Memex to
+  consolidate them BEFORE continuing:
+    - `memex_memory_summarize_node(entity_id, scope='incremental'|'full')` is
+      the SYNCHRONOUS counterpart to background `reflect`. `'incremental'`
+      (default) consolidates only new evidence; `'full'` re-evaluates all
+      evidence (capped at the most-recent 1000 units). Returns the updated
+      mental model in the same turn so the agent can act on it.
+    - Background `reflect` (scheduler-driven) is the cheaper default. Reach
+      for `summarize_node` only with an in-session reason.
+    - Rate-limited per (entity, vault). On rejection the response includes
+      `retry_after_seconds`; do NOT retry-loop."""
 
 
 def format_briefing_block(
@@ -172,12 +194,14 @@ def format_briefing_block(
     project_id: str,
     session_note_key: str,
     kv_instructions_if_no_vault: bool,
+    diagnostics_summary: dict[str, Any] | None = None,
 ) -> str:
     """Compose the Memex system-prompt block.
 
     Includes vault/project metadata, the session note key, routing guidance
-    for tool selection, and the fetched briefing markdown. If no vault is
-    resolved, appends guidance on how to bind one via the KV store.
+    for tool selection, the fetched briefing markdown, and (optionally) the
+    F32 diagnostics summary block. If no vault is resolved, appends guidance
+    on how to bind one via the KV store.
     """
     lines = ['## Memex Memory']
     if vault_id:
@@ -207,6 +231,9 @@ def format_briefing_block(
 
     lines.append('\n' + _ROUTING_GUIDE)
 
+    if diagnostics_summary:
+        lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
+
     if briefing:
         lines.append('\n---\n')
         lines.append(briefing)
@@ -215,3 +242,50 @@ def format_briefing_block(
 
 
 __all__ = ['BriefingCache', 'format_briefing_block']
+
+
+# ============================================================
+# Tier A — Briefing blocks
+# F6:  pending lint count                 (WS-linter)
+# F14: procedural observations            (WS-quick-wins)
+# F20: N memories due for review          (WS-revisit)
+# F32: diagnostic summary                 (WS-diagnostics)
+# ============================================================
+
+# --- F6 ---  (filled by WS-linter)
+
+# --- F14 --- (filled by WS-quick-wins)
+
+# --- F20 --- (filled by WS-revisit)
+
+
+# --- F32 --- (filled by WS-diagnostics)
+def _render_diagnostics_block(summary: dict[str, Any]) -> str:
+    """Render the F32 diagnostics summary as a compact markdown block.
+
+    Includes manifold_status, unit_counts, avg_mw_score, and top entity names —
+    at least three documented fields per AC-F32-6.
+    """
+    counts = summary.get('unit_counts') or {}
+    active = counts.get('active', 0)
+    stale = counts.get('stale', 0)
+    deprioritized = counts.get('deprioritized', 0)
+    manifold_status = summary.get('manifold_status', 'absent')
+    avg_mw = summary.get('avg_mw_score', 0.0)
+    cluster_count = summary.get('cluster_count')
+    top_entities = summary.get('top_5_retrieved_entities') or []
+    names = [e.get('name', '?') for e in top_entities[:5]]
+
+    lines = [
+        '### Memex diagnostics',
+        f'- Manifold status: `{manifold_status}` · cluster_count: `{cluster_count}`',
+        f'- Units: `{active}` active · `{stale}` stale · `{deprioritized}` deprioritized',
+        f'- Avg MW score: `{avg_mw:.2f}`',
+    ]
+    if names:
+        lines.append('- Top entities: ' + ', '.join(f'`{n}`' for n in names))
+    lines.append(
+        'Surface via `memex_get_diagnostics_summary(vault_id=...)` for details, '
+        'or run `memex diagnostics manifold|retrieval|summary --vault X` for full JSON.'
+    )
+    return '\n'.join(lines)

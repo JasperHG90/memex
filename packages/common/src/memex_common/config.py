@@ -385,6 +385,35 @@ class DocSearchStrategiesConfig(BaseModel):
     temporal: bool = Field(default=True, description='Enable temporal search strategy.')
 
 
+class SummarizeNodeRateLimitConfig(BaseModel):
+    """F5: rate-limit config for memex_memory_summarize_node.
+
+    Token bucket per (entity_id, vault_id), in-process LRU. Multi-worker
+    leakage is accepted in v1 (advisory limit, not security gate); F9's
+    distributed lock will close the cross-process gap.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description='When False, summarize_node calls are never rate-limited (set False in tests).',
+    )
+    per_entity_per_seconds: int = Field(
+        default=60,
+        gt=0,
+        description='Window in seconds across which `burst` calls are allowed per (entity, vault).',
+    )
+    burst: int = Field(
+        default=1,
+        gt=0,
+        description='Token-bucket capacity. Default 1 = no bursting (1 call per window).',
+    )
+    max_keys: int = Field(
+        default=10000,
+        gt=0,
+        description='LRU eviction cap on tracked (entity_id, vault_id) keys.',
+    )
+
+
 class ReflectionConfig(BaseModel):
     """Configuration for the Hindsight Reflection Engine."""
 
@@ -457,6 +486,10 @@ class ReflectionConfig(BaseModel):
             'Seconds after which a PROCESSING item is considered stale and reset to PENDING. '
             'Prevents items from being stuck forever when reflection fails mid-flight.'
         ),
+    )
+    summarize_node_rate_limit: 'SummarizeNodeRateLimitConfig' = Field(
+        default_factory=lambda: SummarizeNodeRateLimitConfig(),
+        description='F5: per-(entity, vault) rate limit for memex_memory_summarize_node.',
     )
 
     @model_validator(mode='after')

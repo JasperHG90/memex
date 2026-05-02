@@ -59,6 +59,7 @@ from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.processing.files import FileContentProcessor
 from memex_core.processing.batch import JobManager
+from memex_core.services.diagnostics import DiagnosticsService
 from memex_core.services.entities import EntityService
 from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
@@ -68,6 +69,7 @@ from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
+from memex_core.services.units import UnitsService
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService, _VAULT_RESOLUTION_CACHE
 
@@ -497,6 +499,16 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._diagnostics = DiagnosticsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._units = UnitsService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
 
         from memex_core.services.session_briefing import SessionBriefingService
 
@@ -531,6 +543,7 @@ class MemexAPI:
             self._ingestion,
             self._search,
             self._lineage,
+            self._units,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -540,6 +553,10 @@ class MemexAPI:
         resolve note identifiers prior to invoking a higher-level facade
         (e.g. for vault-access auth checks)."""
         return self._notes
+
+    @property
+    def diagnostics(self) -> DiagnosticsService:
+        return self._diagnostics
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -965,6 +982,36 @@ class MemexAPI:
         """Delete a memory unit. Delegates to StatsService."""
         return await self._stats.delete_memory_unit(unit_id)
 
+    async def deprioritize_memory_unit(
+        self,
+        unit_id: UUID,
+        reason: str,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService."""
+        return await self._units.set_unit_deprioritized(
+            unit_id,
+            reason,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
+
+    async def restore_memory_unit(
+        self,
+        unit_id: UUID,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> Any:
+        """Restore a deprioritized memory unit. Delegates to UnitsService."""
+        return await self._units.restore_unit(
+            unit_id,
+            actor=actor,
+            background_tasks=background_tasks,
+        )
+
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""
         return await self._search.retrieve(request)
@@ -1098,6 +1145,27 @@ class MemexAPI:
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
+
+    async def summarize_node(
+        self,
+        entity_id: UUID,
+        *,
+        scope: str = 'incremental',
+        vault_id: UUID | None = None,
+    ) -> ReflectionResult:
+        """F5: synchronous on-demand reflection (rate-limited per entity, vault).
+
+        Delegates to :meth:`ReflectionService.summarize_node`. Surfaces a
+        ``RateLimitExceededError`` upward; surface adapters (MCP/Hermes/HTTP)
+        translate to their own envelope.
+        """
+        from memex_core.services.reflection import SummarizeScope
+
+        if scope not in ('incremental', 'full'):
+            raise ValueError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        # The preceding guard validates scope at runtime; narrow to SummarizeScope (Literal) for mypy.
+        narrowed: SummarizeScope = scope  # type: ignore[assignment]
+        return await self._reflection.summarize_node(entity_id, scope=narrowed, vault_id=vault_id)
 
     async def record_outcome(
         self,

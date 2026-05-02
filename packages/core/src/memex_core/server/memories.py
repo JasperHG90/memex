@@ -4,10 +4,11 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from memex_common.exceptions import MemexError
-from memex_core.server.auth import require_delete, require_read
+from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
+from memex_core.server.auth import require_delete, require_read, require_write
 from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO
 
 from memex_core.api import MemexAPI
@@ -43,6 +44,57 @@ async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Memory unit deletion failed')
+
+
+class DeprioritizeRequest(BaseModel):
+    reason: str = Field(..., description='Why this unit was deprioritized (logged to audit_logs).')
+
+
+@router.post(
+    '/memories/{id}/deprioritize',
+    response_model=MemoryUnitDTO,
+    dependencies=[Depends(require_write)],
+)
+async def deprioritize_memory_unit(
+    id: UUID,
+    request: DeprioritizeRequest,
+    background_tasks: BackgroundTasks,
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Deprioritize a memory unit (non-destructive — flips ``is_deprioritized=True``).
+
+    Per Wave 0 §6 #12: this is the NON-destructive curation verb. Archive
+    remains the destructive counterpart.
+    """
+    try:
+        unit = await api.deprioritize_memory_unit(
+            id, reason=request.reason, background_tasks=background_tasks
+        )
+        return build_memory_unit_dto(unit)
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to deprioritize memory unit {id}')
+
+
+@router.post(
+    '/memories/{id}/restore',
+    response_model=MemoryUnitDTO,
+    dependencies=[Depends(require_write)],
+)
+async def restore_memory_unit(
+    id: UUID,
+    background_tasks: BackgroundTasks,
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """Restore a deprioritized memory unit (flips ``is_deprioritized=False``)."""
+    try:
+        unit = await api.restore_memory_unit(id, background_tasks=background_tasks)
+        return build_memory_unit_dto(unit)
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to restore memory unit {id}')
 
 
 @router.get(

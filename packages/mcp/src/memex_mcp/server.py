@@ -3537,3 +3537,198 @@ def entrypoint():
 
 if __name__ == '__main__':
     entrypoint()
+
+
+# ============================================================
+# Tier A — Tool registry (peer-reviewed conventions)
+# F4 (deprioritize, restore):       WS-quick-wins
+# F5 (summarize_node):              WS-quick-wins
+# F8 (get_lint_flags):              WS-linter
+# F9 (reconsolidate, consolidate):  WS-locks
+# F20 (get_due_for_review, review): WS-revisit
+# F32 (get_diagnostics_summary):    WS-diagnostics
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+from memex_mcp._f4_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_MEMORY_RESTORE_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_memory_deprioritize',
+    description=MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_deprioritize(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+    reason: Annotated[
+        str,
+        Field(description='Why this unit is being deprioritized. Free text; logged to audit_logs.'),
+    ],
+) -> dict[str, Any]:
+    """Deprioritize a memory unit (non-destructive)."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        try:
+            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Deprioritize failed: {e}', exc_info=True)
+        raise ToolError(f'Deprioritize failed: {e}')
+
+
+@mcp.tool(
+    name='memex_memory_restore',
+    description=MEMEX_MEMORY_RESTORE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_memory_restore(
+    ctx: Context,
+    unit_id: Annotated[str, Field(description='Memory unit UUID.')],
+) -> dict[str, Any]:
+    """Restore a deprioritized memory unit."""
+    try:
+        api = get_api(ctx)
+        try:
+            uuid_obj = UUID(unit_id)
+        except ValueError:
+            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
+        try:
+            unit = await api.restore_memory_unit(uuid_obj)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ToolError(f'Memory unit {unit_id} not found.')
+            raise
+        return {'unit_id': str(unit.id), 'is_deprioritized': False}
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Restore failed: {e}', exc_info=True)
+        raise ToolError(f'Restore failed: {e}')
+
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+from memex_mcp._f5_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+
+
+@mcp.tool(
+    name='memex_memory_summarize_node',
+    description=MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION,
+    tags={'write', 'storage'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
+    timeout=120.0,
+)
+async def memex_memory_summarize_node(
+    ctx: Context,
+    entity_id: Annotated[str, Field(description='Entity UUID to reflect on.')],
+    scope: Annotated[
+        str,
+        Field(
+            description=(
+                "'incremental' (default — only new evidence) or 'full' "
+                '(re-evaluate all evidence; capped at MAX_FULL_SCOPE_UNITS=1000).'
+            ),
+        ),
+    ] = 'incremental',
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID; defaults to the global vault when None.'),
+    ] = None,
+) -> dict[str, Any]:
+    """Synchronously consolidate memories on an entity into its mental model."""
+    from memex_common.client import RateLimitExceeded
+
+    try:
+        api = get_api(ctx)
+        try:
+            entity_uuid = UUID(entity_id)
+        except ValueError:
+            raise ToolError(f'Invalid entity UUID: {entity_id}')
+        vault_uuid: UUID | None
+        if vault_id is None:
+            vault_uuid = None
+        else:
+            try:
+                vault_uuid = UUID(vault_id)
+            except ValueError:
+                raise ToolError(f'Invalid vault UUID: {vault_id}')
+        if scope not in ('incremental', 'full'):
+            raise ToolError(f"scope must be 'incremental' or 'full', got {scope!r}")
+        try:
+            result = await api.summarize_node(entity_uuid, scope=scope, vault_id=vault_uuid)
+        except RateLimitExceeded as exc:
+            return {
+                'error': 'rate_limit_exceeded',
+                'entity_id': entity_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        return {
+            'entity_id': str(result.entity_id),
+            'observation_count': len(result.new_observations),
+            'status': result.status,
+            'scope': scope,
+        }
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_memory_summarize_node failed: {e}', exc_info=True)
+        raise ToolError(f'memex_memory_summarize_node failed: {e}')
+
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F20 --- (filled by WS-revisit)
+
+
+# --- F32 --- (filled by WS-diagnostics)
+@mcp.tool(
+    name='memex_get_diagnostics_summary',
+    description=(
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
+        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces F32 manifold '
+        'status without waiting on compute.'
+    ),
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_diagnostics_summary(
+    ctx: Context,
+    vault_id: Annotated[
+        str,
+        Field(description='Vault UUID or name.'),
+    ],
+) -> dict[str, Any]:
+    """Return the F32 diagnostics summary for a vault."""
+    try:
+        api = get_api(ctx)
+        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        return await api.get_diagnostics_summary(resolved_vault_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Diagnostics summary failed: {e}', exc_info=True)
+        raise ToolError(f'Diagnostics summary failed: {e}')

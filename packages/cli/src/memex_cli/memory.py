@@ -166,6 +166,55 @@ async def view_memory(
                 console.print(f'[dim]Source:[/dim] {source}')
 
 
+@app.command('deprioritize')
+@async_command
+async def deprioritize_memory(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
+    reason: Annotated[
+        str,
+        typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
+    ] = 'manual',
+):
+    """
+    Deprioritize a memory unit (non-destructive). The unit remains accessible via
+    `include_deprioritized=true` retrieval. Use `memex memory restore <id>` to undo.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+
+    async with get_api_context(config) as api:
+        try:
+            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(
+        f'[green]Memory unit {unit.id} deprioritized.[/green]  reason=[dim]{reason}[/dim]'
+    )
+
+
+@app.command('restore')
+@async_command
+async def restore_memory(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
+):
+    """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+
+    async with get_api_context(config) as api:
+        try:
+            unit = await api.restore_memory_unit(uuid_obj)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(f'[green]Memory unit {unit.id} restored.[/green]')
+
+
 @app.command('delete')
 @async_command
 async def delete_memory(

@@ -97,6 +97,9 @@ class MemexAPIProtocol(Protocol):
     async def get_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_links(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Vaults
     async def list_vaults(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -113,6 +116,9 @@ class MemexAPIProtocol(Protocol):
     async def kv_get(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_list(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_search(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # F32 — Diagnostics
+    async def get_diagnostics_summary(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -1260,6 +1266,28 @@ KV_LIST_SCHEMA: dict[str, Any] = {
     },
 }
 
+# --- F32 — Diagnostics ---
+
+GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_diagnostics_summary',
+    'description': (
+        'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
+        'and top-5 retrieved entities. Synchronous — surfaces F32 manifold status without '
+        'waiting on UMAP compute.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID or name.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
 
 ALL_SCHEMAS: list[dict[str, Any]] = [
     # --- Vault-scoped (Stream 1) ---
@@ -1304,6 +1332,9 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     KV_GET_SCHEMA,
     KV_SEARCH_SCHEMA,
     KV_LIST_SCHEMA,
+    # --- F32 diagnostics ---
+    GET_DIAGNOSTICS_SUMMARY_SCHEMA,
+    # --- Tier A schemas appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 ]
 
 
@@ -3100,6 +3131,7 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     'memex_kv_get': handle_kv_get,
     'memex_kv_search': handle_kv_search,
     'memex_kv_list': handle_kv_list,
+    # --- Tier A handlers appended at module bottom (F4 / F5 / F8 / F9 / F20 / F32) ---
 }
 
 
@@ -3172,4 +3204,258 @@ __all__ = [
     'KV_LIST_SCHEMA',
     'KV_SEARCH_SCHEMA',
     'KV_WRITE_SCHEMA',
+    # --- F32 diagnostics ---
+    'GET_DIAGNOSTICS_SUMMARY_SCHEMA',
+    # --- F4 (WS-quick-wins) ---
+    'MEMORY_DEPRIORITIZE_SCHEMA',
+    'MEMORY_RESTORE_SCHEMA',
 ]
+
+
+# ============================================================
+# Tier A — Hermes sync wrappers
+# F4:  WS-quick-wins  (handle_memory_deprioritize, handle_memory_restore)
+# F5:  WS-quick-wins  (handle_memory_summarize_node)
+# F8:  WS-linter      (handle_get_lint_flags)
+# F9:  WS-locks       (handle_memory_reconsolidate, handle_memory_consolidate)
+# F20: WS-revisit     (handle_get_due_for_review, handle_memory_review)
+# F32: WS-diagnostics (handle_get_diagnostics_summary)
+# ============================================================
+
+# --- F4 ---  (filled by WS-quick-wins)
+
+MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_deprioritize',
+    'description': (
+        "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE). "
+        'Use when a memory is misleading, outdated, or noise that contaminates retrieval. '
+        'Companion to memex_memory_restore. Contrast with archive (destructive) — '
+        'prefer deprioritize unless the unit must leave the entity graph entirely.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+            'reason': {
+                'type': 'string',
+                'description': (
+                    'Brief text explanation logged to audit_logs (e.g., '
+                    "'user confirmed issue fixed', 'superseded by v2.3 release')."
+                ),
+            },
+        },
+        'required': ['unit_id', 'reason'],
+    },
+}
+
+MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_restore',
+    'description': (
+        'Restore a previously-deprioritized memory unit. Flips is_deprioritized '
+        'back to false; the unit re-enters default-scope retrieval. Writes an '
+        'audit_logs row.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID.',
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+
+
+def handle_memory_deprioritize(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+        reason = _require(args, 'reason')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    try:
+        result = run_sync(api.deprioritize_memory_unit(uuid_obj, reason=reason), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_memory_deprioritize failed: %s', e)
+        return tool_error(f'Deprioritize failed: {e}')
+    return json.dumps(
+        {
+            'unit_id': str(getattr(result, 'id', uuid_obj)),
+            'is_deprioritized': True,
+            'reason': reason,
+        }
+    )
+
+
+def handle_memory_restore(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except ValueError:
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    try:
+        result = run_sync(api.restore_memory_unit(uuid_obj), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_memory_restore failed: %s', e)
+        return tool_error(f'Restore failed: {e}')
+    return json.dumps({'unit_id': str(getattr(result, 'id', uuid_obj)), 'is_deprioritized': False})
+
+
+HANDLERS['memex_memory_deprioritize'] = handle_memory_deprioritize
+HANDLERS['memex_memory_restore'] = handle_memory_restore
+ALL_SCHEMAS.extend([MEMORY_DEPRIORITIZE_SCHEMA, MEMORY_RESTORE_SCHEMA])
+
+
+# --- F5 ---  (filled by WS-quick-wins)
+
+MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_summarize_node',
+    'description': (
+        'Trigger reflection synchronously on an entity to consolidate scattered or '
+        'conflicting memories into a coherent mental model BEFORE continuing. '
+        'Synchronous in-session counterpart to background reflect (queued, scheduler-driven). '
+        'Rate-limited per (entity, vault); on rejection the response carries '
+        "'retry_after_seconds' — do not retry-loop. Use sparingly; reflection is LLM-intensive."
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reflect on.',
+            },
+            'scope': {
+                'type': 'string',
+                'enum': ['incremental', 'full'],
+                'description': (
+                    "'incremental' (default — only new evidence) or 'full' "
+                    '(re-evaluate all evidence; capped at 1000 most-recent units).'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID; defaults to the global vault when omitted.',
+            },
+        },
+        'required': ['entity_id'],
+    },
+}
+
+
+def handle_memory_summarize_node(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    from memex_common.client import RateLimitExceeded
+
+    try:
+        raw_entity_id = _require(args, 'entity_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity_id))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity_id}')
+
+    scope = args.get('scope', 'incremental')
+    if scope not in ('incremental', 'full'):
+        return tool_error(f"scope must be 'incremental' or 'full', got {scope!r}")
+
+    raw_vault = args.get('vault_id')
+    target_vault: UUID | None
+    if raw_vault is None:
+        target_vault = vault_id
+    else:
+        try:
+            target_vault = UUID(str(raw_vault))
+        except ValueError:
+            return tool_error(f'Invalid vault UUID: {raw_vault}')
+
+    try:
+        result = run_sync(
+            api.summarize_node(entity_uuid, scope=scope, vault_id=target_vault),
+            timeout=120.0,
+        )
+    except RateLimitExceeded as exc:
+        return json.dumps(
+            {
+                'error': 'rate_limit_exceeded',
+                'entity_id': str(entity_uuid),
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        )
+    except Exception as e:
+        logger.warning('memex_memory_summarize_node failed: %s', e)
+        return tool_error(f'summarize_node failed: {e}')
+
+    return json.dumps(
+        {
+            'entity_id': str(getattr(result, 'entity_id', entity_uuid)),
+            'observation_count': len(getattr(result, 'new_observations', []) or []),
+            'status': getattr(result, 'status', 'completed'),
+            'scope': scope,
+        }
+    )
+
+
+HANDLERS['memex_memory_summarize_node'] = handle_memory_summarize_node
+ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
+
+
+# --- F8 ---  (filled by WS-linter)
+
+# --- F9 ---  (filled by WS-locks)
+
+# --- F20 --- (filled by WS-revisit)
+
+
+# --- F32 --- (filled by WS-diagnostics)
+def handle_get_diagnostics_summary(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.get_diagnostics_summary."""
+    raw = args.get('vault_id')
+    if not raw and vault_id is None:
+        return tool_error('No vault specified and no session-bound vault.')
+
+    try:
+        if raw:
+            target = run_sync(api.resolve_vault_identifier(raw), timeout=10.0)
+        else:
+            target = vault_id
+        summary = run_sync(api.get_diagnostics_summary(target), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_get_diagnostics_summary failed: %s', e)
+        return tool_error(f'Diagnostics summary failed: {e}')
+
+    return json.dumps(summary)
+
+
+HANDLERS['memex_get_diagnostics_summary'] = handle_get_diagnostics_summary

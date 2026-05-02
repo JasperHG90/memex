@@ -54,6 +54,18 @@ from memex_common.schemas import (
 logger = logging.getLogger('memex.common.client')
 
 
+class RateLimitExceeded(Exception):
+    """Raised when a rate-limited Memex endpoint returns HTTP 429.
+
+    Carries ``retry_after_seconds`` parsed from the server's envelope so
+    surface adapters (MCP/Hermes) can present a structured back-off hint.
+    """
+
+    def __init__(self, retry_after_seconds: float, message: str) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
 class RemoteMemexAPI:
     """
     Client for interacting with a remote Memex server via REST.
@@ -512,6 +524,34 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    # --- Diagnostics (F32) ---
+    async def get_diagnostics_summary(self, vault_id: UUID | str) -> dict[str, Any]:
+        """Fetch the F32 diagnostics summary for a vault."""
+        return await self._get(f'diagnostics/summary/{vault_id}')
+
+    async def get_diagnostics_retrieval(
+        self, vault_id: UUID | str, top_n: int = 50
+    ) -> dict[str, Any]:
+        """Fetch the F32 retrieval heatmap (top-N entities by outcome volume)."""
+        return await self._get(f'diagnostics/retrieval/{vault_id}', params={'top_n': top_n})
+
+    async def get_diagnostics_manifold(
+        self,
+        vault_id: UUID | str,
+        force_refresh: bool = False,
+    ) -> tuple[int, dict[str, Any]]:
+        """Fetch the F32 UMAP manifold. Returns (status_code, payload).
+
+        200 → warm cache hit (payload is the manifold).
+        202 → cold compute kicked off (payload contains task_id).
+        501 → umap-learn not installed.
+        """
+        params = {'force_refresh': 'true'} if force_refresh else None
+        response = await self.client.get(f'diagnostics/manifold/{vault_id}', params=params)
+        if response.status_code == 501:
+            response.raise_for_status()
+        return response.status_code, response.json()
+
     # --- Stats & Overview ---
     async def get_stats_counts(
         self,
@@ -677,6 +717,16 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    async def deprioritize_memory_unit(self, unit_id: UUID, reason: str) -> MemoryUnitDTO:
+        """Deprioritize a memory unit (non-destructive). See F4."""
+        result = await self._post(f'memories/{unit_id}/deprioritize', {'reason': reason})
+        return MemoryUnitDTO(**result)
+
+    async def restore_memory_unit(self, unit_id: UUID) -> MemoryUnitDTO:
+        """Restore a previously-deprioritized memory unit. See F4."""
+        result = await self._post(f'memories/{unit_id}/restore', {})
+        return MemoryUnitDTO(**result)
+
     async def get_memory_links(
         self,
         unit_id: UUID,
@@ -716,6 +766,32 @@ class RemoteMemexAPI:
             {'requests': [r.model_dump(mode='json') for r in requests]},
         )
         return [ReflectionResultDTO(**r) for r in result]
+
+    async def summarize_node(
+        self,
+        entity_id: UUID,
+        *,
+        scope: str = 'incremental',
+        vault_id: UUID | None = None,
+    ) -> ReflectionResultDTO:
+        """F5: synchronous on-demand reflection (rate-limited per (entity, vault)).
+
+        On HTTP 429, raises a structured ``RateLimitExceeded`` carrying
+        ``retry_after_seconds`` so callers can surface the back-off time
+        without re-parsing the body.
+        """
+        body: dict[str, Any] = {'entity_id': str(entity_id), 'scope': scope}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        response = await self.client.post('memories/summarize-node', json=body)
+        if response.status_code == 429:
+            payload = response.json()
+            raise RateLimitExceeded(
+                retry_after_seconds=float(payload.get('retry_after_seconds', 0.0)),
+                message=str(payload.get('message', 'Rate limit exceeded.')),
+            )
+        response.raise_for_status()
+        return ReflectionResultDTO(**response.json())
 
     async def get_reflection_queue_batch(self, limit: int = 10) -> list[ReflectionQueueDTO]:
         """Fetch items from the reflection queue."""
