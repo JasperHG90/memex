@@ -26,7 +26,14 @@ import pytest
 # becomes ``timeout × (1 + num_retries)`` which is litellm's retry budget, not
 # the underlying socket deadline this test is verifying.
 TIMEOUT_S = 2.0
-THRESHOLD_S = 3.0
+# Slack budget over TIMEOUT_S. The original 3.0s ceiling produced flake on slow
+# CI runners (observed 3.24s on aarch64 dev container — within DSPy's plumbing
+# but outside a 1.0s slack budget). 4.0s keeps the assertion meaningful: a
+# missed timeout is still caught (the next failure mode is litellm's retry
+# budget at TIMEOUT × (1 + num_retries), and num_retries=0 here so any wall-
+# clock ≥ 4.0 s indicates the socket deadline is not reaching httpx) while
+# absorbing GC + scheduling jitter at the tail.
+THRESHOLD_S = 4.0
 
 
 def _start_hang_server() -> tuple[socket.socket, int, threading.Event]:

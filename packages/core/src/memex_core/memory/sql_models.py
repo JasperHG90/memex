@@ -1748,6 +1748,15 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
         description='Set when status flips to resolved or dismissed.',
     )
+    resolved_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description=(
+            'Free-text actor that resolved the proposal (e.g. agent name '
+            'or operator id). NULL while the proposal is pending; set '
+            'alongside resolved_at when status flips to resolved/dismissed.'
+        ),
+    )
 
     __table_args__ = (
         CheckConstraint(

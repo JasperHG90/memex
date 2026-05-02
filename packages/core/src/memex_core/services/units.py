@@ -26,10 +26,16 @@ class UnitsService(BaseService):
         unit_id: UUID,
         reason: str,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
         """Flip ``MemoryUnit.is_deprioritized`` to True and record an audit event.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant: if
+        supplied and the unit's vault does not match, raises
+        ``MemoryUnitNotFoundError`` (the route caller maps this to 404). When
+        None, no vault check is applied (legacy CLI path).
 
         Does NOT cascade to MentalModels; does NOT call ``prune_stale_evidence``.
         The retrieval-time filter (F1b) honours the flag — see
@@ -40,23 +46,81 @@ class UnitsService(BaseService):
             value=True,
             action='memory_deprioritize',
             details={'reason': reason},
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )
+
+    async def batch_set_unit_deprioritized(
+        self,
+        unit_ids: list[UUID],
+        reason: str,
+        *,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> list[UUID]:
+        """Flip ``is_deprioritized`` to True for many units in a single UPDATE.
+
+        Returns the list of unit IDs whose row was actually updated (i.e.
+        existed and were not already deprioritized — the predicate
+        ``is_deprioritized = false`` makes the call idempotent).
+
+        Audit log entries are emitted per-unit so the per-row reason and
+        cascade semantics match the single-row path; batching the audit
+        emission is tracked as a follow-up.
+        """
+        from sqlalchemy import update as sa_update
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not unit_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = (
+                sa_update(MemoryUnit)
+                .where(MemoryUnit.id.in_(unit_ids))  # type: ignore[attr-defined]
+                .where(MemoryUnit.is_deprioritized.is_(False))
+                .values(is_deprioritized=True)
+                .returning(MemoryUnit.id)
+            )
+            result = await session.execute(stmt)
+            updated_ids = [row[0] for row in result.all()]
+            await session.commit()
+
+        if self._audit_service is not None and updated_ids:
+            for uid in updated_ids:
+                self._audit_service.log(
+                    action='memory_deprioritize',
+                    actor=actor if actor is not None else get_actor(),
+                    resource_type='memory_unit',
+                    resource_id=str(uid),
+                    session_id=get_session_id(),
+                    details={'reason': reason},
+                    background_tasks=background_tasks,
+                )
+        return updated_ids
 
     async def restore_unit(
         self,
         unit_id: UUID,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
-        """Flip ``MemoryUnit.is_deprioritized`` back to False (restore) and audit."""
+        """Flip ``MemoryUnit.is_deprioritized`` back to False (restore) and audit.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant: if
+        supplied and the unit's vault does not match, raises
+        ``MemoryUnitNotFoundError``. When None, no vault check is applied.
+        """
         return await self._flip_deprioritized(
             unit_id,
             value=False,
             action='memory_restore',
             details=None,
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )
@@ -68,6 +132,7 @@ class UnitsService(BaseService):
         value: bool,
         action: str,
         details: dict[str, Any] | None,
+        vault_id: UUID | None,
         actor: str | None,
         background_tasks: Any | None,
     ) -> Any:
@@ -77,6 +142,17 @@ class UnitsService(BaseService):
             unit = await session.get(MemoryUnit, unit_id)
             if unit is None:
                 raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
+            if vault_id is not None and unit.vault_id != vault_id:
+                # Wave 0 vault-scoping invariant: cross-vault mutation rejected.
+                # Use 404 (not 403) so we don't leak whether the unit_id
+                # exists in another vault — same disclosure stance as the
+                # not-found path. The route layer's `check_vault_access` is
+                # the principal-vault gate; this is the per-row scope check
+                # that backstops the route when an in-scope key supplies a
+                # mismatched (unit_id, vault_id) pair.
+                raise MemoryUnitNotFoundError(
+                    f'Memory unit {unit_id} not found in vault {vault_id}.'
+                )
             unit.is_deprioritized = value
             session.add(unit)
             await session.commit()

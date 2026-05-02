@@ -790,14 +790,39 @@ class RemoteMemexAPI:
                 return False
             raise
 
-    async def deprioritize_memory_unit(self, unit_id: UUID, reason: str) -> MemoryUnitDTO:
-        """Deprioritize a memory unit (non-destructive). See F4."""
-        result = await self._post(f'memories/{unit_id}/deprioritize', {'reason': reason})
+    async def deprioritize_memory_unit(
+        self,
+        unit_id: UUID,
+        reason: str,
+        *,
+        vault_id: UUID | str | None = None,
+    ) -> MemoryUnitDTO:
+        """Deprioritize a memory unit (non-destructive). See F4.
+
+        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        optional here only so legacy callers get a clear server-side 422.
+        """
+        body: dict[str, Any] = {'reason': reason}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        result = await self._post(f'memories/{unit_id}/deprioritize', body)
         return MemoryUnitDTO(**result)
 
-    async def restore_memory_unit(self, unit_id: UUID) -> MemoryUnitDTO:
-        """Restore a previously-deprioritized memory unit. See F4."""
-        result = await self._post(f'memories/{unit_id}/restore', {})
+    async def restore_memory_unit(
+        self,
+        unit_id: UUID,
+        *,
+        vault_id: UUID | str | None = None,
+    ) -> MemoryUnitDTO:
+        """Restore a previously-deprioritized memory unit. See F4.
+
+        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        optional here only so legacy callers get a clear server-side 422.
+        """
+        body: dict[str, Any] = {}
+        if vault_id is not None:
+            body['vault_id'] = str(vault_id)
+        result = await self._post(f'memories/{unit_id}/restore', body)
         return MemoryUnitDTO(**result)
 
     async def get_due_for_review(
@@ -843,6 +868,47 @@ class RemoteMemexAPI:
             'vault_id': str(vault_id),
         }
         return await self._post('memory/review', body)
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """F9: re-evaluate memories for an entity under a per-entity lock."""
+        return await self._post(
+            'memory/reconsolidate',
+            {
+                'entity_id': str(entity_id),
+                'vault_id': str(vault_id),
+                'timeout_seconds': timeout_seconds,
+            },
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """F9: vault-wide low-MW unit consolidation.
+
+        On HTTP 429 (per-vault rate limit, RFC-008 line 125), raises a
+        structured ``RateLimitExceeded`` carrying ``retry_after_seconds``
+        so callers can surface the back-off time without re-parsing the
+        body. Mirrors :meth:`summarize_node`.
+        """
+        body = {'vault_id': str(vault_id), 'dry_run': dry_run}
+        response = await self.client.post('memory/consolidate', json=body)
+        if response.status_code == 429:
+            payload = response.json()
+            raise RateLimitExceeded(
+                retry_after_seconds=float(payload.get('retry_after_seconds', 0.0)),
+                message=str(payload.get('message', 'Rate limit exceeded.')),
+            )
+        response.raise_for_status()
+        return response.json()
 
     async def get_memory_links(
         self,

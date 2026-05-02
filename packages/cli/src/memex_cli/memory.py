@@ -171,6 +171,14 @@ async def view_memory(
 async def deprioritize_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
+    vault: Annotated[
+        str,
+        typer.Option(
+            '--vault',
+            '-v',
+            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+        ),
+    ],
     reason: Annotated[
         str,
         typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
@@ -185,7 +193,10 @@ async def deprioritize_memory(
 
     async with get_api_context(config) as api:
         try:
-            unit = await api.deprioritize_memory_unit(uuid_obj, reason=reason)
+            resolved_vault = await api.resolve_vault_identifier(vault)
+            unit = await api.deprioritize_memory_unit(
+                uuid_obj, reason=reason, vault_id=resolved_vault
+            )
         except Exception as e:
             handle_api_error(e)
             return
@@ -200,6 +211,14 @@ async def deprioritize_memory(
 async def restore_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
+    vault: Annotated[
+        str,
+        typer.Option(
+            '--vault',
+            '-v',
+            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+        ),
+    ],
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj
@@ -207,12 +226,73 @@ async def restore_memory(
 
     async with get_api_context(config) as api:
         try:
-            unit = await api.restore_memory_unit(uuid_obj)
+            resolved_vault = await api.resolve_vault_identifier(vault)
+            unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
         except Exception as e:
             handle_api_error(e)
             return
 
     console.print(f'[green]Memory unit {unit.id} restored.[/green]')
+
+
+@app.command('reconsolidate')
+@async_command
+async def reconsolidate_memory(
+    ctx: typer.Context,
+    entity_id: Annotated[str, typer.Argument(help='UUID of the entity to reconsolidate.')],
+    vault: Annotated[
+        str,
+        typer.Option('--vault', '-v', help='Vault UUID (required for vault-scoped resolution).'),
+    ],
+):
+    """F9: re-evaluate memories for an entity under a per-entity advisory lock.
+
+    Runs contradiction detection across all units linked to the entity, then
+    triggers reflection. LLM-intensive — use only when there is concrete
+    evidence of conflicting information.
+    """
+    config: MemexConfig = ctx.obj
+    entity_uuid = parse_uuid(entity_id, 'entity')
+    vault_uuid = parse_uuid(vault, 'vault')
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.reconsolidate_entity(entity_uuid, vault_uuid)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print_json(json.dumps(result, default=str))
+
+
+@app.command('consolidate')
+@async_command
+async def consolidate_memory(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Option('--vault', '-v', help='Vault UUID to consolidate.'),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option('--dry-run', help='Preview without making changes.'),
+    ] = False,
+):
+    """F9: vault-wide low-MW unit consolidation. Use sparingly (e.g., monthly per vault).
+
+    For per-entity hygiene, prefer `memex memory reconsolidate`.
+    """
+    config: MemexConfig = ctx.obj
+    vault_uuid = parse_uuid(vault, 'vault')
+
+    async with get_api_context(config) as api:
+        try:
+            result = await api.consolidate_vault(vault_uuid, dry_run=dry_run)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print_json(json.dumps(result, default=str))
 
 
 @app.command('delete')

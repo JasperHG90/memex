@@ -69,6 +69,7 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.lint import LintService
+from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
@@ -540,6 +541,14 @@ class MemexAPI:
             config=self.config,
         )
 
+        self._locks = LocksService(
+            metastore=self.metastore,
+            config=self.config,
+            reflection=self._reflection,
+            contradiction=self._contradiction,
+            units=self._units,
+        )
+
         from memex_core.services.session_briefing import SessionBriefingService
 
         self.session_briefing = SessionBriefingService(
@@ -605,6 +614,38 @@ class MemexAPI:
     def lint_llm(self) -> 'LintLLMService':
         """F10 surprise-gated LLM lint service."""
         return self._lint_llm
+
+    @property
+    def locks(self) -> LocksService:
+        return self._locks
+
+    async def reconsolidate_entity(
+        self,
+        entity_id: UUID,
+        vault_id: UUID,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Re-evaluate memories for an entity under a per-entity advisory lock.
+
+        Facade for `LocksService.reconsolidate_entity` (F9).
+        """
+        return await self._locks.reconsolidate_entity(
+            entity_id, vault_id, timeout_seconds=timeout_seconds
+        )
+
+    async def consolidate_vault(
+        self,
+        vault_id: UUID,
+        *,
+        dry_run: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Vault-wide low-MW unit consolidation (F9 / RFC-008).
+
+        Facade for `LocksService.consolidate_vault`.
+        """
+        return await self._locks.consolidate_vault(vault_id, dry_run=dry_run, actor=actor)
 
     @property
     def embedder(self) -> EmbeddingsModel:
@@ -1035,13 +1076,20 @@ class MemexAPI:
         unit_id: UUID,
         reason: str,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
-        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService."""
+        """Deprioritize a memory unit (non-destructive). Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
         return await self._units.set_unit_deprioritized(
             unit_id,
             reason,
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )
@@ -1050,12 +1098,19 @@ class MemexAPI:
         self,
         unit_id: UUID,
         *,
+        vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
     ) -> Any:
-        """Restore a deprioritized memory unit. Delegates to UnitsService."""
+        """Restore a deprioritized memory unit. Delegates to UnitsService.
+
+        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        When None (legacy callers / CLI), the service mutates without a vault
+        check; HTTP/MCP/Hermes routes always supply it.
+        """
         return await self._units.restore_unit(
             unit_id,
+            vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
         )

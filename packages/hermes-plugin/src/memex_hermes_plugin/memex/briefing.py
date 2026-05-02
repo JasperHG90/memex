@@ -192,7 +192,21 @@ Match the tool to the query type:
     - Background `reflect` (scheduler-driven) is the cheaper default. Reach
       for `summarize_node` only with an in-session reason.
     - Rate-limited per (entity, vault). On rejection the response includes
-      `retry_after_seconds`; do NOT retry-loop."""
+      `retry_after_seconds`; do NOT retry-loop.
+- **Reconsolidating versus consolidating** — F9 ships two related but distinct
+  curation verbs:
+    - `memex_memory_reconsolidate(entity_id, vault_id)` is **ENTITY-SCOPED**.
+      Use when you notice retrieved facts about a specific entity disagree.
+      Runs contradiction detection across that entity's linked units, then
+      reflection. Acquires a per-entity Postgres advisory lock — concurrent
+      reconsolidations on the same entity serialise.
+    - `memex_memory_consolidate(vault_id, dry_run)` is **VAULT-SCOPED**.
+      Identifies low-MW + stale units across the entire vault and
+      deprioritizes them, writing findings to the maintenance ledger. Use
+      sparingly (e.g., monthly per vault). `dry_run=true` returns the
+      candidate list as a preview without writes.
+    - Reach for `reconsolidate` on concrete contradiction signals;
+      `consolidate` is the periodic batch."""
 
 
 def format_briefing_block(

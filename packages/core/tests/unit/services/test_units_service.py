@@ -135,3 +135,128 @@ async def test_set_unit_deprioritized_raises_when_unit_missing():
             uuid4(), reason='ignored', actor='x', background_tasks=None
         )
     audit_mock.log.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_unit_deprioritized_rejects_cross_vault():
+    """HIGH-005: passing vault_id that does not match the unit's vault must
+    raise MemoryUnitNotFoundError and write NO audit row.
+
+    This is the service-layer backstop behind the route's
+    `check_vault_access` gate. A scoped key targeting an in-scope vault
+    that supplies a (unit_id, vault_id) pair where the unit actually lives
+    in a different vault must NOT mutate the row.
+    """
+    from memex_common.exceptions import MemoryUnitNotFoundError
+
+    unit_id = uuid4()
+    real_vault = uuid4()
+    other_vault = uuid4()
+    unit = MemoryUnit(
+        id=unit_id,
+        vault_id=real_vault,
+        type='fact',
+        text='example',
+        is_deprioritized=False,
+    )
+    service, metastore, audit_mock = _make_service(unit)
+
+    with pytest.raises(MemoryUnitNotFoundError):
+        await service.set_unit_deprioritized(
+            unit_id,
+            reason='cross-vault attempt',
+            vault_id=other_vault,
+            actor='attacker',
+            background_tasks=None,
+        )
+
+    # The flag MUST NOT have flipped on the in-memory unit — the service
+    # raised before the assignment.
+    assert unit.is_deprioritized is False
+    # No commit, no audit write.
+    assert metastore.commits == 0
+    audit_mock.log.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restore_unit_rejects_cross_vault():
+    """HIGH-005 (restore variant): cross-vault restore is rejected the same
+    way as deprioritize.
+    """
+    from memex_common.exceptions import MemoryUnitNotFoundError
+
+    unit_id = uuid4()
+    real_vault = uuid4()
+    other_vault = uuid4()
+    unit = MemoryUnit(
+        id=unit_id,
+        vault_id=real_vault,
+        type='fact',
+        text='example',
+        is_deprioritized=True,
+    )
+    service, metastore, audit_mock = _make_service(unit)
+
+    with pytest.raises(MemoryUnitNotFoundError):
+        await service.restore_unit(
+            unit_id,
+            vault_id=other_vault,
+            actor='attacker',
+            background_tasks=None,
+        )
+
+    assert unit.is_deprioritized is True  # unchanged
+    assert metastore.commits == 0
+    audit_mock.log.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_unit_deprioritized_allows_matching_vault():
+    """HIGH-005 happy path: matching vault_id flips the flag and writes an
+    audit row.
+    """
+    unit_id = uuid4()
+    vault_id = uuid4()
+    unit = MemoryUnit(
+        id=unit_id,
+        vault_id=vault_id,
+        type='fact',
+        text='example',
+        is_deprioritized=False,
+    )
+    service, metastore, audit_mock = _make_service(unit)
+
+    result = await service.set_unit_deprioritized(
+        unit_id,
+        reason='in-scope',
+        vault_id=vault_id,
+        actor='agent:claude',
+        background_tasks=None,
+    )
+
+    assert result.is_deprioritized is True
+    assert metastore.commits == 1
+    assert audit_mock.log.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_set_unit_deprioritized_skips_vault_check_when_none():
+    """Legacy path: when vault_id is None (in-process CLI / tests) the
+    service must not impose a vault check.
+    """
+    unit_id = uuid4()
+    unit = MemoryUnit(
+        id=unit_id,
+        vault_id=uuid4(),
+        type='fact',
+        text='example',
+        is_deprioritized=False,
+    )
+    service, metastore, audit_mock = _make_service(unit)
+
+    result = await service.set_unit_deprioritized(
+        unit_id, reason='no vault', actor='cli', background_tasks=None
+    )
+    assert result.is_deprioritized is True
+    assert metastore.commits == 1
+    assert audit_mock.log.call_count == 1

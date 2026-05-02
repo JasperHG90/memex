@@ -127,6 +127,10 @@ class MemexAPIProtocol(Protocol):
     # F8 — Lint flags (read-only agent surface)
     async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    # F9 — Per-entity advisory lock + vault-wide consolidate
+    async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
+
 
 # ---------------------------------------------------------------------------
 # Vault resolution helpers (Stream 1)
@@ -1309,6 +1313,25 @@ GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
         'required': ['vault_id'],
     },
 }
+
+
+TOOLS_MODE_SCHEMAS: list[dict[str, Any]] = [
+    # The minimal "primary" tool surface exposed when ``memory_mode='tools'``.
+    # Memory-mode 'tools' opts the agent out of briefing + prefetch context,
+    # so we hand it only the LLM-reaches-for-most-often verbs and rely on the
+    # model to compose them. Keep this list narrow; do NOT auto-grow it when
+    # new MCP verbs land — Tier-A's ALL_SCHEMAS expansion silently broke this
+    # surface once already (46 tools leaking into tools-mode). New verbs ship
+    # in 'hybrid' mode by default; promote one to TOOLS_MODE_SCHEMAS only when
+    # there is a deliberate product decision and a paired test update.
+    RECALL_SCHEMA,
+    RETRIEVE_NOTES_SCHEMA,
+    SURVEY_SCHEMA,
+    RETAIN_SCHEMA,
+    LIST_ENTITIES_SCHEMA,
+    GET_ENTITY_MENTIONS_SCHEMA,
+    GET_ENTITY_COOCCURRENCES_SCHEMA,
+]
 
 
 ALL_SCHEMAS: list[dict[str, Any]] = [
@@ -3191,6 +3214,7 @@ __all__ = [
     'RETAIN_SCHEMA',
     'RETRIEVE_NOTES_SCHEMA',
     'SURVEY_SCHEMA',
+    'TOOLS_MODE_SCHEMAS',
     'VaultResolutionError',
     'dispatch',
     # --- Read/discovery (Stream 2) ---
@@ -3274,6 +3298,9 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
         'required': ['unit_id', 'reason'],
     },
 }
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
 
 MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_restore',
@@ -3310,8 +3337,13 @@ def handle_memory_deprioritize(
         uuid_obj = UUID(str(raw_unit_id))
     except ValueError:
         return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot deprioritize.')
     try:
-        result = run_sync(api.deprioritize_memory_unit(uuid_obj, reason=reason), timeout=30.0)
+        result = run_sync(
+            api.deprioritize_memory_unit(uuid_obj, reason=reason, vault_id=vault_id),
+            timeout=30.0,
+        )
     except Exception as e:
         logger.warning('memex_memory_deprioritize failed: %s', e)
         return tool_error(f'Deprioritize failed: {e}')
@@ -3338,8 +3370,10 @@ def handle_memory_restore(
         uuid_obj = UUID(str(raw_unit_id))
     except ValueError:
         return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot restore.')
     try:
-        result = run_sync(api.restore_memory_unit(uuid_obj), timeout=30.0)
+        result = run_sync(api.restore_memory_unit(uuid_obj, vault_id=vault_id), timeout=30.0)
     except Exception as e:
         logger.warning('memex_memory_restore failed: %s', e)
         return tool_error(f'Restore failed: {e}')
@@ -3591,7 +3625,9 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
         'memex_get_lint_flags — List pending memory-hygiene findings the linter has detected.\n'
         'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
         '\n'
-        '- vault_id (optional): scope to a single vault. Omit for all-vault view.\n'
+        '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
+        'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
+        'all-vault view).\n'
         '- lint_type (optional): structural | quality | governance | schema\n'
         '- status (optional): pending | resolved | dismissed (default: pending)\n'
         '- limit (default 20)\n'
@@ -3606,7 +3642,9 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
         'properties': {
             'vault_id': {
                 'type': 'string',
-                'description': 'Vault UUID or name; omit for all-vault view.',
+                'description': (
+                    'Vault UUID or name. Omit to default to the session active write vault.'
+                ),
             },
             'lint_type': {
                 'type': 'string',
@@ -3639,7 +3677,12 @@ def handle_get_lint_flags(
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    """Sync wrapper around RemoteMemexAPI.lint_get_flags."""
+    """Sync wrapper around RemoteMemexAPI.lint_get_flags.
+
+    HIGH-006: never falls through to an all-vault view. Either the agent
+    supplies vault_id, or the Hermes session vault binding is used. If
+    neither is available, the call is rejected.
+    """
     raw_vault = args.get('vault_id')
     resolved: str | None = None
     try:
@@ -3648,6 +3691,12 @@ def handle_get_lint_flags(
             resolved = str(resolved_id) if resolved_id else None
         elif vault_id is not None:
             resolved = str(vault_id)
+        if resolved is None:
+            return tool_error(
+                'memex_get_lint_flags requires a vault_id or an active session '
+                'vault binding (Wave 0 vault-scoping invariant; refusing to '
+                'fall through to a global all-vault view).'
+            )
         result = run_sync(
             api.lint_get_flags(
                 vault_id=resolved,
@@ -3670,6 +3719,113 @@ ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
 
 
 # --- F9 ---  (filled by WS-locks)
+
+MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_reconsolidate',
+    'description': (
+        'Re-evaluate memories for a specific entity, detecting contradictions and '
+        'updating mental models. Use when retrieved facts about an entity disagree. '
+        'Runs contradiction detection across all units linked to the entity, then '
+        'triggers reflection. ENTITY-SCOPED counterpart to memex_memory_consolidate '
+        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entity_id': {
+                'type': 'string',
+                'description': 'Entity UUID to reconsolidate.',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID — required for vault-scoped unit resolution.',
+            },
+        },
+        'required': ['entity_id', 'vault_id'],
+    },
+}
+
+
+MEMORY_CONSOLIDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_memory_consolidate',
+    'description': (
+        'Vault-wide batch curation. Identifies low-MW + stale units and '
+        'deprioritizes them; writes findings to the maintenance ledger. '
+        'VAULT-SCOPED counterpart to memex_memory_reconsolidate (per-entity). '
+        'Use sparingly (e.g., monthly per vault). For per-entity hygiene, prefer '
+        'memex_memory_reconsolidate.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'vault_id': {
+                'type': 'string',
+                'description': 'Vault UUID to consolidate.',
+            },
+            'dry_run': {
+                'type': 'boolean',
+                'description': 'If true, preview without making changes.',
+            },
+        },
+        'required': ['vault_id'],
+    },
+}
+
+
+def handle_memory_reconsolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_entity = _require(args, 'entity_id')
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entity_uuid = UUID(str(raw_entity))
+    except ValueError:
+        return tool_error(f'Invalid entity UUID: {raw_entity}')
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    try:
+        result = run_sync(api.reconsolidate_entity(entity_uuid, vault_uuid), timeout=120.0)
+    except Exception as e:
+        logger.warning('memex_memory_reconsolidate failed: %s', e)
+        return tool_error(f'Reconsolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_memory_consolidate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_vault = _require(args, 'vault_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        vault_uuid = UUID(str(raw_vault))
+    except ValueError:
+        return tool_error(f'Invalid vault UUID: {raw_vault}')
+    dry_run = bool(args.get('dry_run', False))
+    try:
+        result = run_sync(api.consolidate_vault(vault_uuid, dry_run=dry_run), timeout=300.0)
+    except Exception as e:
+        logger.warning('memex_memory_consolidate failed: %s', e)
+        return tool_error(f'Consolidate failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_memory_reconsolidate'] = handle_memory_reconsolidate
+HANDLERS['memex_memory_consolidate'] = handle_memory_consolidate
+ALL_SCHEMAS.extend([MEMORY_RECONSOLIDATE_SCHEMA, MEMORY_CONSOLIDATE_SCHEMA])
+
 
 # --- F20 --- (filled by WS-revisit)
 

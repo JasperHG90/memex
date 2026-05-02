@@ -119,7 +119,7 @@ def _fake_entity(name: str = 'Rust') -> EntityDTO:
 
 
 def test_all_schemas_have_required_fields():
-    """All 43 tools (Streams 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint + F20 revisit)
+    """All 46 tools (Streams 1-5 baseline + Tier A F4/F5 + F14/F29 + F32 diagnostics + F8 lint + F20 revisit + F9 locks)
     must be registered exactly (AC-086 + AC-008 + AC-X-10)."""
     names = {s['name'] for s in ALL_SCHEMAS}
     stream_1_baseline = {
@@ -184,6 +184,10 @@ def test_all_schemas_have_required_fields():
         'memex_get_due_for_review',
         'memex_memory_review',
     }
+    tier_a_locks = {
+        'memex_memory_reconsolidate',
+        'memex_memory_consolidate',
+    }
     expected = (
         stream_1_baseline
         | stream_2_read_discovery
@@ -194,6 +198,7 @@ def test_all_schemas_have_required_fields():
         | tier_a_diagnostics
         | tier_a_linter
         | tier_a_revisit
+        | tier_a_locks
     )
     assert names == expected
     for s in ALL_SCHEMAS:
