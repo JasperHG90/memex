@@ -328,7 +328,7 @@ async def test_no_calendar_day_reset(
 
 @pytest.mark.asyncio
 async def test_maybe_run_skips_below_threshold(
-    session: AsyncSession, metastore, memex_config, filestore
+    session: AsyncSession, metastore, memex_config, filestore, monkeypatch
 ) -> None:
     """Surprise score below threshold → no LLM call, no quota increment."""
     memex_config.server.memory.lint_llm.surprise_threshold = 0.99
@@ -337,22 +337,16 @@ async def test_maybe_run_skips_below_threshold(
     unit_id = _new_unit_id()
 
     # Stub compute_unit_surprise to return a low score.
-    from memex_core.services import lint_llm as lint_llm_module
-
     async def _low_surprise(*args, **kwargs):
         return 0.1
 
-    monkeypatched = lint_llm_module.compute_unit_surprise
-    lint_llm_module.compute_unit_surprise = _low_surprise
-    try:
-        outcome = await svc.maybe_run(
-            unit_id,
-            vault_id,
-            run_llm_check=_stub_check(returns=_make_finding(unit_id)),
-            session=session,
-        )
-    finally:
-        lint_llm_module.compute_unit_surprise = monkeypatched
+    monkeypatch.setattr('memex_core.services.lint_llm.compute_unit_surprise', _low_surprise)
+    outcome = await svc.maybe_run(
+        unit_id,
+        vault_id,
+        run_llm_check=_stub_check(returns=_make_finding(unit_id)),
+        session=session,
+    )
     await session.commit()
 
     assert outcome.skipped_below_threshold is True
@@ -406,7 +400,7 @@ async def test_maybe_run_zero_cap_short_circuits(
 
 @pytest.mark.asyncio
 async def test_defers_when_cap_exceeded(
-    session: AsyncSession, metastore, memex_config, filestore
+    session: AsyncSession, metastore, memex_config, filestore, monkeypatch
 ) -> None:
     """Above-cap units are persisted as llm_deferred MaintenanceProposal rows."""
     memex_config.server.memory.lint_llm.cost_cap_per_24h = 1
@@ -419,22 +413,16 @@ async def test_defers_when_cap_exceeded(
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     await _seed_quota_bucket(session, vault_id, hour_bucket=now, count=1)
 
-    from memex_core.services import lint_llm as lint_llm_module
-
     async def _high_surprise(*args, **kwargs):
         return 0.9
 
-    monkeypatched = lint_llm_module.compute_unit_surprise
-    lint_llm_module.compute_unit_surprise = _high_surprise
-    try:
-        outcome = await svc.maybe_run(
-            unit_id,
-            vault_id,
-            run_llm_check=_stub_check(returns=_make_finding(unit_id)),
-            session=session,
-        )
-    finally:
-        lint_llm_module.compute_unit_surprise = monkeypatched
+    monkeypatch.setattr('memex_core.services.lint_llm.compute_unit_surprise', _high_surprise)
+    outcome = await svc.maybe_run(
+        unit_id,
+        vault_id,
+        run_llm_check=_stub_check(returns=_make_finding(unit_id)),
+        session=session,
+    )
     await session.commit()
 
     assert outcome.deferred is True
