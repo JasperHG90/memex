@@ -33,6 +33,12 @@ async def get_reranking_model(
             built-in ONNX model.  ``LitellmRerankerBackend`` delegates to
             the litellm-backed adapter.  ``DisabledBackend`` returns ``None``.
 
+            ``OnnxBackend.quantization='int8'`` (F42) lazily produces an int8
+            variant of the cross-encoder weights on first load (cached on
+            disk) for ~2× CPU speedup. The variant is folded into
+            ``FastReranker.model_version`` so the F41 score cache invalidates
+            cleanly when the field is flipped.
+
     Returns:
         An object satisfying the ``RerankerModel`` protocol, or ``None``
         if reranking is disabled.
@@ -54,11 +60,23 @@ async def get_reranking_model(
             downloader = ModelDownloader(repo_id=_spec.repo_id, revision=_spec.revision)
             await downloader.download_async(client=httpx.AsyncClient(), force=False)
 
+        # F42: opt-in int8 dynamic quantization. Default ``fp32`` short-circuits
+        # to the stock model.  ``int8`` lazily produces ``model.int8.onnx`` on
+        # first call (cached on disk) and threads the variant tag into
+        # ``model_version`` so the F41 cache invalidates structurally on flip.
+        variant: str = getattr(config, 'quantization', 'fp32') if config is not None else 'fp32'
+        if variant == 'int8':
+            from memex_core.memory.models.quantization import ensure_quantized_model
+
+            model_filename = ensure_quantized_model(path, 'model.onnx')
+        else:
+            model_filename = 'model.onnx'
+
         _onnx_reranker_cache = FastReranker(
             model_dir=str(path),
-            model_name='model.onnx',
+            model_name=model_filename,
             batch_size=batch_size,
-            model_version=f'onnx:{_spec.repo_id}:{_spec.revision}',
+            model_version=f'onnx:{_spec.repo_id}:{_spec.revision}:{variant}',
         )
         return _onnx_reranker_cache
 
@@ -101,6 +119,20 @@ class FastReranker(BaseOnnxModel):
     @property
     def model_version(self) -> str:
         return self._model_version
+
+    @property
+    def variant(self) -> str:
+        """F42 — quantization variant tag (``fp32`` | ``int8`` | ``unknown``).
+
+        Parsed from the ``model_version`` trailing segment to label the
+        ``RERANKER_LATENCY_SECONDS`` histogram. Falls back to ``unknown``
+        for legacy ``onnx:repo:rev`` tags (no variant suffix) or anything
+        ad-hoc.
+        """
+        parts = self._model_version.rsplit(':', 1)
+        if len(parts) == 2 and parts[1] in ('fp32', 'int8'):
+            return parts[1]
+        return 'unknown'
 
     def score(
         self,

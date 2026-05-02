@@ -287,6 +287,20 @@ class OnnxBackend(BaseModel):
     """Use the built-in fine-tuned ONNX model (default)."""
 
     type: Literal['onnx'] = 'onnx'
+    quantization: Literal['fp32', 'int8'] = Field(
+        default='fp32',
+        description=(
+            'F42: Cross-encoder weight precision. ``fp32`` (default) uses the '
+            'stock model; ``int8`` produces a dynamically-quantised variant on '
+            'first load (cached on disk) for ~2× CPU speedup with low recall '
+            'risk on the supported reranker. The variant flows into '
+            '``FastReranker.model_version`` (``onnx:repo:rev:fp32`` vs '
+            '``onnx:repo:rev:int8``), which keys the F41 score cache so a '
+            'flip naturally invalidates stale entries. Currently only the '
+            'reranker honours this field; on the embedding path it is a '
+            'no-op (logged once at load time).'
+        ),
+    )
 
 
 class LitellmEmbeddingBackend(BaseModel):

@@ -313,3 +313,21 @@ CROSS_ENCODER_CACHE_MISSES_TOTAL = Counter(
     'Cross-encoder reranker score cache misses (F41). '
     'A miss triggers a cross-encoder forward pass and a fill.',
 )
+
+# ---------------------------------------------------------------------------
+# F42 — Reranker variant (model precision) latency observability
+# ---------------------------------------------------------------------------
+# RERANKER_LATENCY_SECONDS lets us A/B compare fp32 vs int8 latency online
+# without a code path swap. Recall-impact comparison is OFFLINE — run the
+# evaluation harness with each variant; F42's online surface only proves the
+# CPU-time win. ``variant`` carries the quantization mode so the same
+# histogram serves every backend.
+RERANKER_LATENCY_SECONDS = Histogram(
+    'memex_reranker_latency_seconds',
+    'F42 — wall-clock duration of a single cross-encoder forward pass '
+    '(post-cache, post-semaphore). Compare fp32 vs int8 by selecting on '
+    'the ``variant`` label. Recall is measured offline; this only proves '
+    'the latency win.',
+    ['variant'],  # 'fp32' | 'int8' | 'unknown'
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)

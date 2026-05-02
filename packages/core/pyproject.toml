@@ -26,6 +26,11 @@ dependencies = [
     "httpx>=0.28.1,<0.29.0",
     "langchain-text-splitters>=1.1.0",
     "onnxruntime>=1.23.2",
+    # F42: onnx package supports onnxruntime.quantization.quantize_dynamic for
+    # the int8 reranker variant. Required at import time on the int8 path
+    # (only invoked when OnnxBackend.quantization='int8'); fp32 default never
+    # imports it.
+    "onnx>=1.17",
     "pgvector>=0.4.2",
     "python-dateutil>=2.9.0.post0",
     "python-frontmatter>=1.1.0",

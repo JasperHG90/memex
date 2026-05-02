@@ -58,6 +58,7 @@ from memex_core.metrics import (
     CONFIDENCE_SCORE_DISTRIBUTION,
     CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
     MW_BOOST_OBSERVED,
+    RERANKER_LATENCY_SECONDS,
 )
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
@@ -1335,15 +1336,23 @@ class RetrievalEngine:
         Shared reranker cap across both reranker sites — one model, one
         capacity budget. wait_for cancels the coroutine but the underlying
         thread keeps running.
+
+        F42 — wraps the to_thread call in a labelled latency timer so the
+        ``variant`` (``fp32`` / ``int8`` / ``unknown``) can be A/B compared
+        in Prometheus without a code path swap.
         """
         if self.reranker is None:
             raise RuntimeError('reranker required for _reranker_score_uncached')
         reranker = self.reranker
+        # F42 — read variant via getattr (out-of-tree rerankers may not expose
+        # it). Same defensive pattern as F41's model_version lookup.
+        variant = getattr(reranker, 'variant', 'unknown')
         async with get_reranker_semaphore(), _instrument('rerank'):
-            raw = await asyncio.wait_for(
-                asyncio.to_thread(reranker.score, query, texts),
-                timeout=get_reranker_call_timeout(),
-            )
+            with RERANKER_LATENCY_SECONDS.labels(variant=variant).time():
+                raw = await asyncio.wait_for(
+                    asyncio.to_thread(reranker.score, query, texts),
+                    timeout=get_reranker_call_timeout(),
+                )
         return [float(s) for s in raw]
 
     async def _reranker_score(
