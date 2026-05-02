@@ -27,6 +27,7 @@ from memex_common.schemas import (
     CreateVaultRequest,
     DeadLetterItemDTO,
     DefaultVaultsResponse,
+    DueUnitDTO,
     FindNoteResult,
     MemoryLinkDTO,
     NoteAppendRequest,
@@ -804,31 +805,18 @@ class RemoteMemexAPI:
         vault_id: UUID | str,
         *,
         limit: int = 20,
-    ) -> list[Any]:
+    ) -> list[DueUnitDTO]:
         """List memory units due for FSRS-5 revisit in a vault. See F20.
 
-        Returns a list of objects with attributes ``unit_id``, ``text_preview``,
-        ``revisit_due_at``, and ``intent_class``. Wire format is JSON dicts
-        with those keys; we wrap each in a ``SimpleNamespace`` so callers can
-        use attribute access symmetrically with the in-process ``DueUnit``.
+        Returns a list of :class:`DueUnitDTO` with attributes ``unit_id``,
+        ``text_preview``, ``revisit_due_at``, and ``intent_class``. The DTO
+        mirrors the in-process ``memex_core.services.revisitation.DueUnit``
+        so callers can use attribute access symmetrically across the
+        in-process and remote APIs.
         """
-        from datetime import datetime
-        from types import SimpleNamespace
-        from uuid import UUID as _UUID
-
         params = {'vault_id': str(vault_id), 'limit': limit}
         result = await self._get('memory/due_for_review', params=params)
-        out: list[Any] = []
-        for r in result:
-            out.append(
-                SimpleNamespace(
-                    unit_id=_UUID(r['unit_id']),
-                    text_preview=r['text_preview'],
-                    revisit_due_at=datetime.fromisoformat(r['revisit_due_at']),
-                    intent_class=r['intent_class'],
-                )
-            )
-        return out
+        return [DueUnitDTO(**r) for r in result]
 
     async def review_memory_unit(
         self,
