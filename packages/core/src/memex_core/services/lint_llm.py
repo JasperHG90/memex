@@ -261,6 +261,12 @@ class LintLLMService(BaseService):
         if cap <= 0:
             return False
 
+        # NOTE: This read-then-UPSERT pattern admits a race under concurrent
+        # ticks. It is safe ONLY under single-leader scheduling
+        # (MEMEX_LEADER_LOCK_ID advisory lock guarantees one writer).
+        # If scheduler parallelism is introduced, replace with an atomic
+        # INSERT ... ON CONFLICT DO UPDATE that computes the comparison
+        # server-side (e.g. WHERE clause on the UPDATE branch).
         used = await self.quota_used(vault_id, session=session)
         if used >= cap:
             return False
