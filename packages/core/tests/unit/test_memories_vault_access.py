@@ -339,3 +339,63 @@ class TestReconsolidateMentalModelIdTyping:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()['mental_model_id'] is None
+
+
+# ---------------------------------------------------------------------------
+# Schema drift: service-layer dict missing required keys must surface as a
+# clearly-logged 500 ("schema mismatch"), NOT be swallowed by the broad
+# service-error handler as a generic Internal Server Error. Hermes round-2 MED.
+# ---------------------------------------------------------------------------
+
+
+class TestReconsolidateResponseSchemaDrift:
+    """If ``LocksService.reconsolidate_entity``'s return shape drifts from
+    ``ReconsolidateResponse`` (e.g. a required field is removed at the
+    service layer), the resulting ``pydantic.ValidationError`` must NOT be
+    caught by the broad ``except (MemexError, ValueError, ...)`` block --
+    that would silently surface a programming error as a generic 500 with
+    no log signal indicating the real cause is response schema drift.
+
+    Contract: response construction lives outside the service-error try
+    block; a ValidationError from ``ReconsolidateResponse(**result)`` is
+    logged at CRITICAL with a "schema drift" marker and surfaced as a 500
+    with detail ``'Internal response schema mismatch'``.
+    """
+
+    def test_missing_required_key_logs_schema_drift_and_500(self, mock_api, caplog):
+        # Service returns a dict missing required ``units_examined`` and
+        # ``contradictions_run`` -- pure schema drift, not a business error.
+        mock_api.reconsolidate_entity = AsyncMock(
+            return_value={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                # 'units_examined': MISSING
+                # 'contradictions_run': MISSING
+                'mental_model_id': None,
+                'observations_added': 0,
+            }
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        with caplog.at_level('CRITICAL', logger='memex.core.server'):
+            resp = client.post(
+                '/api/v1/memory/reconsolidate',
+                json={
+                    'entity_id': str(ENTITY_ID),
+                    'vault_id': str(ALLOWED_VAULT),
+                    'timeout_seconds': 5.0,
+                },
+            )
+
+        assert resp.status_code == 500, resp.text
+        # Surfaced as a schema-mismatch 500, not the generic correlation-id envelope.
+        assert resp.json()['detail'] == 'Internal response schema mismatch'
+
+        # The "schema drift" marker MUST appear in the logs at CRITICAL --
+        # this is the on-call signal that distinguishes a code bug from a
+        # client-visible business error.
+        critical_records = [r for r in caplog.records if r.levelname == 'CRITICAL']
+        assert critical_records, 'Expected a CRITICAL log for schema drift'
+        assert any('schema drift' in r.getMessage().lower() for r in critical_records), (
+            f'Expected "schema drift" in CRITICAL logs; got: '
+            f'{[r.getMessage() for r in critical_records]}'
+        )

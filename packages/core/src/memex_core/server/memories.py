@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from memex_common.config import Permission
 from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
@@ -221,11 +221,26 @@ async def reconsolidate_entity(
             request.vault_id,
             timeout_seconds=request.timeout_seconds,
         )
-        return ReconsolidateResponse(**result)
     except EntityLockTimeoutError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reconsolidate failed')
+
+    # Response construction is a code-only operation: a ValidationError here
+    # is schema drift between LocksService.reconsolidate_entity's return shape
+    # and ReconsolidateResponse, NOT a client-visible business error. Surface
+    # it as a logged 500 ("schema mismatch") instead of letting the broad
+    # service-error handler swallow it as a generic Internal Server Error.
+    try:
+        return ReconsolidateResponse(**result)
+    except ValidationError as exc:
+        logger.critical(
+            'Reconsolidate response schema drift: service returned dict that does '
+            'not match ReconsolidateResponse: %s',
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail='Internal response schema mismatch')
 
 
 @router.post(
