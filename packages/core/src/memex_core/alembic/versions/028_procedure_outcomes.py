@@ -10,12 +10,10 @@ Revises: 027_consolidation_ticks
 Create Date: 2026-04-30
 """
 
-from typing import Sequence, Union
-
 revision: str = '028_procedure_outcomes'
-down_revision: Union[str, None] = '027_consolidation_ticks'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = '027_consolidation_ticks'
+branch_labels: str | list[str] | None = None
+depends_on: str | list[str] | None = None
 
 
 def upgrade() -> None:

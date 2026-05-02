@@ -10,12 +10,10 @@ Revises: 025_maintenance_proposals
 Create Date: 2026-04-30
 """
 
-from typing import Sequence, Union
-
 revision: str = '026_revisit_columns'
-down_revision: Union[str, None] = '025_maintenance_proposals'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = '025_maintenance_proposals'
+branch_labels: str | list[str] | None = None
+depends_on: str | list[str] | None = None
 
 
 def upgrade() -> None:

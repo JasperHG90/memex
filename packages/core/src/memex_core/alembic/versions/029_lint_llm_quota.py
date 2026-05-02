@@ -10,12 +10,10 @@ Revises: 028_procedure_outcomes
 Create Date: 2026-04-30
 """
 
-from typing import Sequence, Union
-
 revision: str = '029_lint_llm_quota'
-down_revision: Union[str, None] = '028_procedure_outcomes'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = '028_procedure_outcomes'
+branch_labels: str | list[str] | None = None
+depends_on: str | list[str] | None = None
 
 
 def upgrade() -> None:
