@@ -354,6 +354,15 @@ class LintService(BaseService):
         """
         results: list[RuleRunResult] = []
         async with self.metastore.session() as session:
+            # SAVEPOINT loop: per-rule ``begin_nested`` isolates a failing rule's
+            # rollback from previously-emitted findings. Caveat: an asyncpg
+            # *protocol* error (vs. a logical SQL error like a constraint
+            # violation) can leave the underlying connection in an unusable
+            # state — the SAVEPOINT rollback succeeds logically, but the outer
+            # ``commit()`` below may still fail and lose findings from earlier
+            # successful rules. The outer commit is therefore wrapped in a
+            # try/except that warns (with the count of successful rules) and
+            # re-raises so the caller still sees the tick failed.
             for spec in rules:
                 # Per-rule SAVEPOINT so a failing rule rolls back only its own
                 # findings — successful rules still persist on the outer commit.
@@ -383,7 +392,23 @@ class LintService(BaseService):
                         )
                     )
                     continue
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception as exc:
+                successful_rule_count = sum(
+                    1 for r in results if r.error is None and r.findings_emitted > 0
+                )
+                committed_findings = sum(r.findings_emitted for r in results if r.error is None)
+                logger.warning(
+                    'lint tick: outer commit failed after per-rule SAVEPOINTs; '
+                    'findings from successful rules may have been lost '
+                    '(successful_rules=%d, committed_findings=%d, error=%s)',
+                    successful_rule_count,
+                    committed_findings,
+                    exc,
+                    exc_info=True,
+                )
+                raise
         return LintRunSummary(vault_id=vault_id, rules=results)
 
     async def _run_one(
