@@ -280,9 +280,11 @@ class TestConsolidateLockTimeoutEnvelope:
     summarize-node 429 contract and the note-append 503 contract).
     """
 
+    _INTERNAL_LEAK_NEEDLE = 'advisory lock id=0xdeadbeef'
+
     def test_consolidate_lock_timeout_returns_503_with_retry_after(self, mock_api):
         mock_api.consolidate_vault.side_effect = EntityLockTimeoutError(
-            'could not acquire advisory lock'
+            f'could not acquire {self._INTERNAL_LEAK_NEEDLE}'
         )
         client = _make_client(mock_api, _unrestricted_writer())
         resp = client.post(
@@ -292,6 +294,66 @@ class TestConsolidateLockTimeoutEnvelope:
         assert resp.status_code == 503, resp.text
         assert resp.headers.get('retry-after') is not None
         assert int(resp.headers['retry-after']) > 0
+        # Hermes round-3 MED: internal exception text MUST NOT leak to the
+        # HTTP client. Detail is a generic, fixed string.
+        body = resp.json()
+        assert body['detail'] == 'Entity lock timeout — please retry shortly'
+        assert self._INTERNAL_LEAK_NEEDLE not in body['detail']
+
+
+class TestReconsolidateLockTimeoutEnvelope:
+    """``reconsolidate_entity`` translates ``EntityLockTimeoutError`` into a
+    503 with a ``Retry-After`` header (parity with ``consolidate_vault``).
+    Hermes round-3 MED.
+    """
+
+    _INTERNAL_LEAK_NEEDLE = 'advisory lock id=0xfeedface'
+
+    def test_reconsolidate_lock_timeout_returns_503_with_retry_after(self, mock_api):
+        mock_api.reconsolidate_entity = AsyncMock(
+            side_effect=EntityLockTimeoutError(f'could not acquire {self._INTERNAL_LEAK_NEEDLE}')
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 5.0,
+            },
+        )
+        assert resp.status_code == 503, resp.text
+        assert resp.headers.get('retry-after') == '5'
+        body = resp.json()
+        assert body['detail'] == 'Entity lock timeout — please retry shortly'
+        # Hermes round-3 MED: internal exception text MUST NOT leak to the
+        # HTTP client.
+        assert self._INTERNAL_LEAK_NEEDLE not in body['detail']
+
+    def test_reconsolidate_lock_timeout_logs_full_exception(self, mock_api, caplog):
+        """Server-side log MUST include the full exception so on-call can
+        diagnose lock contention even though the HTTP detail is generic.
+        """
+        mock_api.reconsolidate_entity = AsyncMock(
+            side_effect=EntityLockTimeoutError(f'could not acquire {self._INTERNAL_LEAK_NEEDLE}')
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        with caplog.at_level('WARNING', logger='memex.core.server'):
+            resp = client.post(
+                '/api/v1/memory/reconsolidate',
+                json={
+                    'entity_id': str(ENTITY_ID),
+                    'vault_id': str(ALLOWED_VAULT),
+                    'timeout_seconds': 5.0,
+                },
+            )
+        assert resp.status_code == 503, resp.text
+        warning_records = [r for r in caplog.records if r.levelname == 'WARNING']
+        assert warning_records, 'Expected a WARNING log for entity lock timeout'
+        assert any(self._INTERNAL_LEAK_NEEDLE in r.getMessage() for r in warning_records), (
+            f'Expected internal lock-timeout detail in WARNING logs; got: '
+            f'{[r.getMessage() for r in warning_records]}'
+        )
 
 
 class TestReconsolidateMentalModelIdTyping:

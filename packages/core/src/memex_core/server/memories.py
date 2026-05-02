@@ -196,9 +196,11 @@ class ReconsolidateResponse(BaseModel):
     response_model=ReconsolidateResponse,
     dependencies=[Depends(require_write)],
     responses={
-        409: {
+        503: {
             'description': (
-                'Concurrent reconsolidation in progress on this entity (advisory lock contention).'
+                'Concurrent reconsolidation in progress on this entity (advisory lock '
+                'contention). Includes a ``Retry-After`` header. Mirrors the '
+                '``/memory/consolidate`` lock-timeout contract.'
             )
         }
     },
@@ -213,6 +215,10 @@ async def reconsolidate_entity(
     Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
     `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
+
+    Translates ``EntityLockTimeoutError`` into a 503 with ``Retry-After: 5``
+    (parity with ``consolidate_vault``). The internal exception text is
+    logged server-side and never surfaced to the client.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
@@ -222,7 +228,18 @@ async def reconsolidate_entity(
             timeout_seconds=request.timeout_seconds,
         )
     except EntityLockTimeoutError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        logger.warning(
+            'Reconsolidate entity lock timeout (entity_id=%s vault_id=%s): %s',
+            request.entity_id,
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail='Entity lock timeout — please retry shortly',
+            headers={'Retry-After': '5'},
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Reconsolidate failed')
 
@@ -279,9 +296,15 @@ async def consolidate_vault(
     try:
         return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
     except EntityLockTimeoutError as exc:
+        logger.warning(
+            'Consolidate entity lock timeout (vault_id=%s): %s',
+            request.vault_id,
+            exc,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=503,
-            detail=f'Entity lock timeout: {exc}',
+            detail='Entity lock timeout — please retry shortly',
             headers={'Retry-After': '5'},
         )
     except RateLimitExceededError as exc:
