@@ -373,8 +373,6 @@ class ConsolidationService:
                 out.append(UUID(resource_id))
             except (ValueError, TypeError):
                 continue
-            if len(out) >= budget:
-                break
         return out
 
     async def resolve_unit_ids_to_entity_ids(
