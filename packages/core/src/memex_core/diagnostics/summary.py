@@ -86,6 +86,7 @@ async def _avg_mw_score(metastore: 'MetaStore', vault_id: UUID) -> float:
     ).where(
         MemoryUnit.vault_id == vault_id,
         MemoryUnit.status == ContentStatus.ACTIVE,
+        MemoryUnit.is_deprioritized.is_(False),
     )
     async with metastore.session() as sess:
         row = (await sess.exec(stmt)).one()
