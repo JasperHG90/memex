@@ -90,7 +90,8 @@ async def _avg_mw_score(metastore: 'MetaStore', vault_id: UUID) -> float:
     )
     async with metastore.session() as sess:
         row = (await sess.exec(stmt)).one()
-    val = row[0] if not isinstance(row, tuple) else row[0]
+    # .one() always returns a Row tuple; row[0] is the avg() scalar (None for empty).
+    val = row[0]
     return float(val) if val is not None else 0.5
 
 
