@@ -25,6 +25,14 @@ class RerankerModel(Protocol):
 
     ``score()`` accepts a query and a list of document texts
     and returns a 1-D array-like of float scores in input order.
+
+    ``model_version`` is a stable string identifier (provider:model:revision
+    style) that distinguishes one cross-encoder weight set from another.
+    The retrieval-side score cache (F41) keys on this so a model upgrade
+    invalidates entries structurally rather than waiting for the TTL.
     """
+
+    @property
+    def model_version(self) -> str: ...
 
     def score(self, query: str, texts: list[str]) -> Any: ...

@@ -753,6 +753,24 @@ class RetrievalConfig(BaseModel):
         description='Max documents per ONNX reranker inference call. '
         '0 = all at once (no batching). Lower values reduce peak GPU memory.',
     )
+    cross_encoder_cache_enabled: bool = Field(
+        default=True,
+        description='Enable in-process TTL cache for cross-encoder reranker scores (F41). '
+        'Repeat queries (e.g. recurring briefings) get free reranking. Set False to bypass.',
+    )
+    cross_encoder_cache_size: int = Field(
+        default=10000,
+        ge=0,
+        description='Maximum number of (model_version, query_hash, unit_id) entries in the '
+        'cross-encoder score cache. Lock pool uses the same cap.',
+    )
+    cross_encoder_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=0,
+        description='TTL for cross-encoder score cache entries in seconds. Default 24h. '
+        'Backstops other invalidation paths; model upgrades are invalidated structurally '
+        'via the model_version key component.',
+    )
     causal_weight_threshold: float = Field(
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',

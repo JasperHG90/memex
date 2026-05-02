@@ -237,3 +237,18 @@ CONSOLIDATE_TOTAL = Counter(
     # No dry_run label — dry_run runs increment as success but the candidate
     # count is in the response body (no separate metric).
 )
+
+# ---------------------------------------------------------------------------
+# F41 — Cross-encoder score cache
+# ---------------------------------------------------------------------------
+
+CROSS_ENCODER_CACHE_HITS_TOTAL = Counter(
+    'memex_cross_encoder_cache_hits_total',
+    'Cross-encoder reranker score cache hits (F41). Hit rate = hits / (hits + misses).',
+)
+
+CROSS_ENCODER_CACHE_MISSES_TOTAL = Counter(
+    'memex_cross_encoder_cache_misses_total',
+    'Cross-encoder reranker score cache misses (F41). '
+    'A miss triggers a cross-encoder forward pass and a fill.',
+)

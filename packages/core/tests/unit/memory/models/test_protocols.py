@@ -37,7 +37,8 @@ class TestProtocolConformance:
         assert isinstance(mock, EmbeddingsModel)
 
     def test_mock_reranker_satisfies_protocol(self) -> None:
-        """MagicMock with score method satisfies RerankerModel."""
+        """MagicMock with score method and model_version satisfies RerankerModel."""
         mock = MagicMock()
         mock.score = MagicMock(return_value=np.zeros(1))
+        mock.model_version = 'mock:test:v0'
         assert isinstance(mock, RerankerModel)

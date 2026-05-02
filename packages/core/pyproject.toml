@@ -66,6 +66,7 @@ dependencies = [
     # changes are validated; py-fsrs 6.x switches to FSRS-6 (deliberate algo
     # upgrade — that's a future ticket, not a drop-in).
     "fsrs>=4.0.0,<5.0.0",
+    "xxhash>=3.0",
 ]
 
 [project.optional-dependencies]
