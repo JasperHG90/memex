@@ -3522,3 +3522,70 @@ def test_append_note_api_failure_returns_error(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data or 'isError' in data, out
+
+
+# ---------------------------------------------------------------------------
+# handle_memory_summarize_node — vault resolution error paths (Hermes round-2)
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_node_value_error_on_vault_returns_not_found(config, vault_id):
+    """ValueError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=ValueError('bad input'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_key_error_on_vault_returns_not_found(config, vault_id):
+    """KeyError from resolve_vault_identifier surfaces as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=KeyError('missing'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'unknown-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Vault not found' in data['error']
+    api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_unexpected_exception_returns_generic_resolution_error(config, vault_id):
+    """Unexpected exceptions (e.g. infrastructure failures) surface a distinct
+    generic message — they must NOT masquerade as 'Vault not found'."""
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(side_effect=RuntimeError('connection refused'))
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Failed to resolve vault identifier' in data['error']
+    assert 'Vault not found' not in data['error']
+    api.summarize_node.assert_not_called()

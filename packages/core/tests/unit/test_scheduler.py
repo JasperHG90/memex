@@ -235,3 +235,153 @@ async def test_vault_summary_task_no_summary_falls_through_to_is_stale(mock_bg_s
 
     api.vault_summary.update_summary.assert_awaited_once_with('vault-1')
     api.vault_summary.regenerate_summary.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# periodic_diagnostics_refresh_task — error-handling branches (Hermes round-2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_diagnostics_refresh_continues_after_per_vault_unexpected_exception(
+    mock_bg_session,
+):
+    """Per-vault inner loop must continue when one vault raises an unexpected
+    programming error (AttributeError / NameError) so other vaults still
+    refresh this tick."""
+    from memex_core.scheduler import periodic_diagnostics_refresh_task
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    vault_a = MagicMock()
+    vault_a.id = 'vault-a'
+    vault_a.name = 'alpha'
+    vault_b = MagicMock()
+    vault_b.id = 'vault-b'
+    vault_b.name = 'beta'
+    vault_c = MagicMock()
+    vault_c.id = 'vault-c'
+    vault_c.name = 'gamma'
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[vault_a, vault_b, vault_c])
+
+    visited: list[str] = []
+
+    async def _compute(vault_id, *, force_refresh=False):
+        visited.append(vault_id)
+        if vault_id == 'vault-b':
+            raise AttributeError("'NoneType' has no attribute 'foo'")
+        return ('computing', {'task_id': 't'})
+
+    api.diagnostics = MagicMock()
+    api.diagnostics.get_or_compute_manifold = AsyncMock(side_effect=_compute)
+
+    await periodic_diagnostics_refresh_task(api)
+
+    assert visited == ['vault-a', 'vault-b', 'vault-c'], (
+        'inner loop must continue after AttributeError on vault-b'
+    )
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_diagnostics_refresh_continues_after_per_vault_name_error(mock_bg_session):
+    """NameError in one vault must not stop the loop."""
+    from memex_core.scheduler import periodic_diagnostics_refresh_task
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    vault_a = MagicMock(id='vault-a', name='alpha')
+    vault_b = MagicMock(id='vault-b', name='beta')
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[vault_a, vault_b])
+
+    visited: list[str] = []
+
+    async def _compute(vault_id, *, force_refresh=False):
+        visited.append(vault_id)
+        if vault_id == 'vault-a':
+            raise NameError('undefined_symbol')
+        return ('computing', {'task_id': 't'})
+
+    api.diagnostics = MagicMock()
+    api.diagnostics.get_or_compute_manifold = AsyncMock(side_effect=_compute)
+
+    await periodic_diagnostics_refresh_task(api)
+
+    assert visited == ['vault-a', 'vault-b']
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_diagnostics_refresh_outer_unexpected_exception_reraises(mock_bg_session):
+    """Outer-level unexpected exception (e.g. ``api.list_vaults`` raising an
+    AttributeError) must re-raise so the AioClock supervisor surfaces it,
+    rather than being silently swallowed."""
+    from memex_core.scheduler import periodic_diagnostics_refresh_task
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(side_effect=AttributeError('api missing attribute'))
+
+    with pytest.raises(AttributeError, match='api missing attribute'):
+        await periodic_diagnostics_refresh_task(api)
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_diagnostics_refresh_outer_known_exception_does_not_reraise(
+    mock_bg_session,
+):
+    """Outer-level *known* infrastructure exceptions (OSError/RuntimeError/
+    ValueError) are logged but NOT re-raised — they're treated as transient."""
+    from memex_core.scheduler import periodic_diagnostics_refresh_task
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(side_effect=OSError('postgres unreachable'))
+
+    # Should NOT raise.
+    await periodic_diagnostics_refresh_task(api)
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_diagnostics_refresh_per_vault_known_exception_continues(
+    mock_bg_session,
+):
+    """Per-vault OSError/RuntimeError/ValueError logs a warning but continues."""
+    from memex_core.scheduler import periodic_diagnostics_refresh_task
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    vault_a = MagicMock(id='vault-a', name='alpha')
+    vault_b = MagicMock(id='vault-b', name='beta')
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[vault_a, vault_b])
+
+    visited: list[str] = []
+
+    async def _compute(vault_id, *, force_refresh=False):
+        visited.append(vault_id)
+        if vault_id == 'vault-a':
+            raise OSError('disk full')
+        return ('computing', {'task_id': 't'})
+
+    api.diagnostics = MagicMock()
+    api.diagnostics.get_or_compute_manifold = AsyncMock(side_effect=_compute)
+
+    await periodic_diagnostics_refresh_task(api)
+
+    assert visited == ['vault-a', 'vault-b']

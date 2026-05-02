@@ -3457,11 +3457,15 @@ def handle_memory_summarize_node(
             )
             return tool_error('Vault not found or invalid identifier')
         except Exception:
+            # Catch-all for infrastructure failures (HTTP errors, network
+            # timeouts, backend exceptions). Surface a distinct message so
+            # genuine connectivity issues don't masquerade as missing-vault
+            # errors.
             logger.exception(
                 'memex_memory_summarize_node: vault resolution failed for identifier %r',
                 raw_vault,
             )
-            return tool_error('Vault not found or invalid identifier')
+            return tool_error('Failed to resolve vault identifier')
 
     try:
         result = run_sync(
