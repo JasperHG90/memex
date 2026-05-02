@@ -204,7 +204,7 @@ _COLD_LOW_MW_UNIT_SQL = f"""
       AND (mu.success_co_count + mu.failure_co_count) >= 5
       AND {_MW_SCORE_EXPR} < 0.3
       AND mu.updated_at < (now() - interval '30 days')
-"""
+"""  # noqa: S608
 
 
 _SENSITIVE_UNREVIEWED_UNIT_SQL = """
@@ -505,7 +505,7 @@ class LintService(BaseService):
         async with self.metastore.session() as session:
             result = await session.execute(
                 text(
-                    'UPDATE maintenance_proposals '
+                    'UPDATE maintenance_proposals '  # noqa: S608
                     'SET status = :new, resolved_at = now(), resolved_by = :actor '
                     f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
@@ -573,7 +573,7 @@ class LintService(BaseService):
 
         where_sql = ' AND '.join(clauses)
         stmt = text(
-            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '
+            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '  # noqa: S608
             f'evidence, suggested_action, status, source, created_at, resolved_at, '
             f'resolved_by '
             f'FROM maintenance_proposals WHERE {where_sql} '
