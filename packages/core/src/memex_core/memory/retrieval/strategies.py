@@ -646,9 +646,10 @@ class MentalModelStrategy:
         intent_class = kwargs.get('intent_class')
         risk_class = kwargs.get('risk_class')
         if intent_class is not None or risk_class is not None:
-            logger.debug(
-                'Intent/risk filters silently skipped for mental_model strategy '
-                '(intent_class=%s, risk_class=%s) — out-of-scope per issue #92',
+            logger.warning(
+                'Mental-model strategy ignores intent/risk filters (intent_class=%s, risk_class=%s); '
+                'results will mix unfiltered mental-model units with filtered units from other strategies. '
+                'Out-of-scope per issue #92 — see strategies.py for rationale.',
                 intent_class,
                 risk_class,
             )
