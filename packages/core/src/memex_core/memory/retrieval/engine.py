@@ -167,6 +167,23 @@ class RetrievalEngine:
         )
         self._session_factory = session_factory
 
+        # Anisotropy corrector — shared across retrieval / contradiction /
+        # extraction-dedup since they observe the same embedding manifold.
+        # Disabled mode keeps a private instance so the singleton stays
+        # untainted for other callers.
+        from memex_core.memory.models.anisotropy import (
+            AnisotropyCorrector,
+            get_shared_corrector,
+        )
+
+        if self.retrieval_config.anisotropy_window_size == 0:
+            self._anisotropy = AnisotropyCorrector(window_size=0)
+        else:
+            self._anisotropy = get_shared_corrector(
+                window_size=self.retrieval_config.anisotropy_window_size,
+                min_samples=self.retrieval_config.anisotropy_min_samples,
+            )
+
         # Source RRF constants from config
         self.k_rrf = self.retrieval_config.rrf_k
         self.candidate_pool_size = self.retrieval_config.candidate_pool_size
@@ -264,6 +281,8 @@ class RetrievalEngine:
         token_budget = request.token_budget
         if token_budget is None and self.retrieval_config:
             token_budget = self.retrieval_config.token_budget
+        if token_budget is not None and token_budget <= 0:
+            token_budget = None
 
         effective_limit = request.limit
         if token_budget is not None and effective_limit < 50:
@@ -326,6 +345,9 @@ class RetrievalEngine:
 
         # Explicitly pass include_stale flag to strategies
         filters['include_stale'] = request.include_stale
+
+        # Pass include_deprioritized flag to strategies (default: exclude)
+        filters['include_deprioritized'] = request.include_deprioritized
 
         # Thread source_context filter for context-scoped retrieval
         if request.source_context:
@@ -451,6 +473,10 @@ class RetrievalEngine:
             threshold = self.retrieval_config.superseded_threshold
             final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
 
+        # Snapshot AFTER superseded filter so exploration injection cannot
+        # surface superseded-but-ACTIVE units (PR #91 cycle3 MED-1).
+        hydrated_candidates = list(final_results)
+
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
@@ -502,6 +528,19 @@ class RetrievalEngine:
                 insert_at = min(orig_pos, len(final_results))
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
+
+        # 9b. Exploration floor: ε-greedy injection of low-MW units (F33)
+        if final_results and self.retrieval_config.exploration_epsilon > 0:
+            from memex_core.memory.retrieval.exploration import inject_exploration_units
+
+            if hydrated_candidates:
+                final_results = inject_exploration_units(
+                    final_results,
+                    hydrated_candidates,
+                    epsilon=self.retrieval_config.exploration_epsilon,
+                    max_injections=self.retrieval_config.exploration_max_injections,
+                    low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
+                )
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
@@ -565,6 +604,7 @@ class RetrievalEngine:
 
         if token_budget is not None:
             return (final_results, resonance_context)
+
         return (final_results[: request.limit], resonance_context)
 
     def _fuse_multi_query_results(
@@ -1084,8 +1124,11 @@ class RetrievalEngine:
         * **temporal proximity boost** -- scaled by
           ``RetrievalConfig.reranking_temporal_alpha`` (uses ``unit.temporal_proximity``
           when available)
+        * **Memory Worth boost** -- scaled by
+          ``RetrievalConfig.reranking_mw_alpha`` (Beta-Bernoulli posterior mean;
+          cold-start mw_boost = 1.0, neutral)
 
-        Set both alphas to 0 to disable boosts (backward compatible).
+        Set any alpha to 0 to disable that boost (backward compatible).
         """
         if not self.reranker or not results:
             return results
@@ -1115,10 +1158,14 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency and temporal proximity boosts
+            # Apply multiplicative recency, temporal proximity, and MW boosts
+            from memex_core.metrics import MW_BOOST_OBSERVED
+            from memex_core.services.outcomes import compute_mw_boost
+
             now = datetime.now(timezone.utc)
             recency_alpha = self.retrieval_config.reranking_recency_alpha
             temporal_alpha = self.retrieval_config.reranking_temporal_alpha
+            mw_alpha = self.retrieval_config.reranking_mw_alpha
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1137,7 +1184,15 @@ class RetrievalEngine:
                     temporal = 0.5  # neutral
                 temporal_boost = 1.0 + temporal_alpha * (temporal - 0.5)
 
-                boosted_scores.append(ce_score * recency_boost * temporal_boost)
+                # Memory Worth boost (additive-marginal composition)
+                mw_boost = compute_mw_boost(
+                    success_co_count=unit.success_co_count,
+                    failure_co_count=unit.failure_co_count,
+                    mw_alpha=mw_alpha,
+                )
+                MW_BOOST_OBSERVED.observe(mw_boost)
+
+                boosted_scores.append(ce_score * recency_boost * temporal_boost * mw_boost)
 
             scored_results = []
             for unit, boosted, raw_score in zip(results, boosted_scores, scores):
@@ -1154,11 +1209,14 @@ class RetrievalEngine:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
             return results
 
-    @staticmethod
     async def _compute_pairwise_cosine(
-        session: AsyncSession, unit_ids: list[UUID]
+        self, session: AsyncSession, unit_ids: list[UUID]
     ) -> dict[tuple[UUID, UUID], float]:
-        """Compute pairwise cosine similarity for a set of memory units via SQL."""
+        """Compute pairwise cosine similarity for a set of memory units via SQL.
+
+        Raw cosine similarities are normalized through the anisotropy corrector
+        (Z-score → sigmoid) to counteract embedding anisotropy.
+        """
         from sqlalchemy import text
 
         if len(unit_ids) < 2:
@@ -1181,9 +1239,11 @@ class RetrievalEngine:
         result = await conn.execute(stmt, {'unit_ids': [str(uid) for uid in unit_ids]})
         matrix: dict[tuple[UUID, UUID], float] = {}
         for row in result:
+            raw_sim = float(row.similarity)
+            corrected = self._anisotropy.normalize(raw_sim)
             key = (row.id_a, row.id_b)
-            matrix[key] = float(row.similarity)
-            matrix[(row.id_b, row.id_a)] = float(row.similarity)
+            matrix[key] = corrected
+            matrix[(row.id_b, row.id_a)] = corrected
         return matrix
 
     @staticmethod

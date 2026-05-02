@@ -85,20 +85,31 @@ async def _get_semantic_candidates(
     vault_id: UUID,
     threshold: float,
 ) -> list[MemoryUnit]:
-    """Find semantically similar units via pgvector cosine distance."""
+    """Find semantically similar units via pgvector cosine distance.
+
+    Raw pgvector similarities are routed through the shared anisotropy
+    corrector (F2) before the threshold is applied, so contradiction
+    candidate selection works on a discriminative scale rather than the
+    compressed [0.7, 0.95] band typical of high-dimensional embeddings.
+    """
     if unit.embedding is None or len(unit.embedding) == 0:
         return []
 
-    max_distance = 1.0 - threshold
+    from memex_core.memory.models.anisotropy import get_shared_corrector
+
+    # Loosen the SQL pre-filter so the corrector has room to discriminate.
+    # The pgvector index still bounds cost via ORDER BY + LIMIT.
+    coarse_max_distance = max(0.05, 1.0 - threshold + 0.2)
 
     stmt = text("""
-        SELECT id FROM memory_units
+        SELECT id, 1 - (embedding <=> :embedding) AS sim
+        FROM memory_units
         WHERE vault_id = :vault_id
           AND id != :unit_id
           AND status = 'active'
           AND (embedding <=> :embedding) < :max_distance
         ORDER BY (embedding <=> :embedding)
-        LIMIT 30
+        LIMIT 60
     """)
 
     result = await session.execute(
@@ -107,10 +118,17 @@ async def _get_semantic_candidates(
             'vault_id': str(vault_id),
             'unit_id': str(unit.id),
             'embedding': '[' + ','.join(str(float(x)) for x in unit.embedding) + ']',
-            'max_distance': max_distance,
+            'max_distance': coarse_max_distance,
         },
     )
-    candidate_ids = [row[0] for row in result]
+
+    corrector = get_shared_corrector()
+    candidate_ids: list[UUID] = []
+    for row in result:
+        if corrector.normalize(float(row.sim)) >= threshold:
+            candidate_ids.append(row.id)
+            if len(candidate_ids) >= 30:
+                break
 
     if not candidate_ids:
         return []

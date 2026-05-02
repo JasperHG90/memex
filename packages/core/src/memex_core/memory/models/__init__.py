@@ -19,6 +19,10 @@ from memex_core.memory.models.reranking import (
     get_reranking_model,
 )
 from memex_core.memory.models.ner import get_ner_model, FastNERModel
+from memex_core.memory.models.anisotropy import (
+    AnisotropyCorrector,
+    AnisotropyCorrectorGroup,
+)
 
 __all__ = [
     'BaseOnnxModel',
@@ -35,4 +39,6 @@ __all__ = [
     'get_reranking_model',
     'FastNERModel',
     'get_ner_model',
+    'AnisotropyCorrector',
+    'AnisotropyCorrectorGroup',
 ]

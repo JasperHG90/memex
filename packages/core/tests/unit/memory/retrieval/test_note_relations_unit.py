@@ -368,6 +368,8 @@ def test_build_memory_unit_model_extracts_contradiction_links_only():
     mock_unit.occurred_start = None
     mock_unit.occurred_end = None
     mock_unit.mentioned_at = None
+    mock_unit.intent_class = 'durable'
+    mock_unit.risk_class = 'none'
 
     result = _build_memory_unit_model(mock_unit)
 
@@ -392,6 +394,8 @@ def test_build_memory_unit_model_no_links():
     mock_unit.status = 'active'
     mock_unit.metadata = {'tags': []}
     mock_unit.superseded_by = []
+    mock_unit.intent_class = 'durable'
+    mock_unit.risk_class = 'none'
 
     result = _build_memory_unit_model(mock_unit)
     assert result.links == []

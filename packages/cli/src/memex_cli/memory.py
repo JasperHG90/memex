@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import pathlib as plb
+import sys
 from typing import Annotated
 from uuid import UUID
 import itertools
@@ -137,6 +138,17 @@ async def view_memory(
         console.print(f'[bold cyan]Memory Unit[/bold cyan] [dim]{unit.id}[/dim]')
         console.print(f'[dim]Type:[/dim] {unit.fact_type}')
         console.print(f'[dim]Status:[/dim] {unit.status}')
+        intent = getattr(unit, 'intent_class', None)
+        risk = getattr(unit, 'risk_class', None)
+        if intent or risk:
+            parts = []
+            if intent:
+                parts.append(f'intent={intent}')
+            if risk and risk != 'none':
+                parts.append(f'[yellow]risk={risk}[/yellow]')
+            elif risk:
+                parts.append(f'risk={risk}')
+            console.print(f'[dim]Classifier:[/dim] {" · ".join(parts)}')
         if unit.note_id:
             console.print(f'[dim]Note ID:[/dim] {unit.note_id}')
         if unit.mentioned_at:
@@ -438,6 +450,20 @@ async def search_memory(
         ),
     ] = None,
     expand: Annotated[bool, typer.Option('--expand', help='Enable query expansion.')] = False,
+    intent: Annotated[
+        str | None,
+        typer.Option(
+            '--intent',
+            help='Filter by intent class (permanent | durable | ephemeral).',
+        ),
+    ] = None,
+    risk: Annotated[
+        str | None,
+        typer.Option(
+            '--risk',
+            help='Filter by risk class (none | sensitive | private | safety).',
+        ),
+    ] = None,
 ):
     """
     Search for memories.
@@ -487,8 +513,42 @@ async def search_memory(
         except Exception as e:
             handle_api_error(e)
 
+        unfiltered_count = len(results)
+        filter_active = bool(intent or risk)
+
+        if intent:
+            allowed_intents = {'permanent', 'durable', 'ephemeral'}
+            wanted = intent.lower()
+            if wanted not in allowed_intents:
+                console.print(
+                    f'[red]Invalid --intent {intent!r}. Allowed: {sorted(allowed_intents)}[/red]'
+                )
+                return
+            results = [u for u in results if getattr(u, 'intent_class', 'durable') == wanted]
+
+        if risk:
+            allowed_risks = {'none', 'sensitive', 'private', 'safety'}
+            wanted_risk = risk.lower()
+            if wanted_risk not in allowed_risks:
+                console.print(
+                    f'[red]Invalid --risk {risk!r}. Allowed: {sorted(allowed_risks)}[/red]'
+                )
+                return
+            results = [u for u in results if getattr(u, 'risk_class', 'none') == wanted_risk]
+
         if not results:
-            console.print('[yellow]No results found.[/yellow]')
+            if filter_active and unfiltered_count == limit:
+                # Client-side filter may have eliminated everything from a
+                # truncated page. Warn so the user can widen the search.
+                # Server-side filter is tracked as a follow-up (PR #91 cycle3 MED-2).
+                print(
+                    f'No results matched filter, but {unfiltered_count} unfiltered hits '
+                    'returned (filter applied client-side, results may be truncated; '
+                    'consider --limit to expand search)',
+                    file=sys.stderr,
+                )
+            else:
+                console.print('[yellow]No results found.[/yellow]')
             return
 
         if minimal:

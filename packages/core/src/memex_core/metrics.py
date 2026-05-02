@@ -112,3 +112,54 @@ NOTE_ADD_OVERLAPS_EXISTING_TOTAL = Counter(
     # documented future surfaces (no code currently emits them).
     ['surface'],
 )
+
+# ---------------------------------------------------------------------------
+# Memory Worth (MW) outcome metrics (F1a)
+# ---------------------------------------------------------------------------
+
+OUTCOME_RECORDED_TOTAL = Counter(
+    'memex_outcome_recorded_total',
+    'Total outcome recordings by vault and outcome type.',
+    ['vault_id', 'outcome'],
+)
+
+MW_SCORE_DISTRIBUTION = Histogram(
+    'memex_mw_score',
+    'Distribution of MW scores observed during outcome recording.',
+    ['vault_id'],
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+MW_BOOST_OBSERVED = Histogram(
+    'memex_mw_boost',
+    'MW boost factors applied during reranking. Neutral is 1.0 (cold-start).',
+    buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
+)
+
+# ---------------------------------------------------------------------------
+# Write-time classifier metrics (F25)
+# ---------------------------------------------------------------------------
+
+CLASSIFIER_CALLS_TOTAL = Counter(
+    'memex_classifier_calls_total',
+    'Write-time classifier calls by status (success | error | fallback).',
+    ['status'],
+)
+
+CLASSIFIER_INTENT_DISTRIBUTION = Counter(
+    'memex_classifier_intent_total',
+    'Distribution of intent classifications produced by the write-time classifier.',
+    ['intent_class'],
+)
+
+CLASSIFIER_RISK_DISTRIBUTION = Counter(
+    'memex_classifier_risk_total',
+    'Distribution of risk classifications produced by the write-time classifier.',
+    ['risk_class'],
+)
+
+CLASSIFIER_BLOCKED_TOTAL = Counter(
+    'memex_classifier_blocked_total',
+    'Facts refused at ingestion because the classifier flagged risk_class=safety.',
+    ['vault_id'],
+)

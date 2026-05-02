@@ -147,6 +147,7 @@ async def test_filters_propagation(mock_embedder, mock_session):
 
         expected_filters: dict[str, Any] = filters.copy()
         expected_filters['include_stale'] = False
+        expected_filters['include_deprioritized'] = False
         assert passed_filters == expected_filters
 
 

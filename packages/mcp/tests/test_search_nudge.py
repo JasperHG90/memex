@@ -133,6 +133,8 @@ async def test_memory_search_nonempty_no_hint():
     mock_result.occurred_start = None
     mock_result.occurred_end = None
     mock_result.event_date = None
+    mock_result.intent_class = 'durable'
+    mock_result.risk_class = 'none'
 
     mock_api = AsyncMock()
     mock_api.search = AsyncMock(return_value=[mock_result])

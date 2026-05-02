@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 from uuid import UUID
+from datetime import datetime
 import mimetypes
 
 import aiofiles
@@ -141,6 +142,31 @@ def _coerce_int(v: Any) -> Any:
         except ValueError:
             pass
     return v
+
+
+def _coerce_float(v: Any) -> Any:
+    """Coerce a stringified float back to a float."""
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return v
+
+
+def _to_utc_datetime(dt: datetime | None) -> datetime | None:
+    """Convert a parsed datetime to UTC.
+
+    Naive datetimes get UTC assigned. Aware datetimes are converted to UTC.
+    Avoids ``.replace(tzinfo=)`` which silently overwrites existing timezones.
+    """
+    from datetime import timezone as _tz2
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_tz2.utc)
+    return dt.astimezone(_tz2.utc)
 
 
 def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
@@ -1036,6 +1062,29 @@ async def memex_add_note(
             description='Template slug used to create this note (e.g. "general_note").',
         ),
     ] = None,
+    intent_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional intent override applied to all extracted facts: '
+                '"permanent" (enduring user preferences/conventions), "durable" '
+                '(default), or "ephemeral" (transient context — drains MW faster). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
+    risk_class: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Optional risk override: "none" (default), "private" (PII/secrets), '
+                '"sensitive" (restricted topic), "safety" (refuse persistence). '
+                'Omit to let the write-time classifier decide.'
+            ),
+        ),
+    ] = None,
 ) -> McpAddNoteResult:
     try:
         if len(description.split(' ')) > 250:
@@ -1082,6 +1131,27 @@ async def memex_add_note(
 
         effective_note_key = note_key if note_key else f'mcp:add_note:{title}'
 
+        from memex_common.schemas import IntentClass as _IntentClass, RiskClass as _RiskClass
+
+        parsed_intent: _IntentClass | None = None
+        if intent_class:
+            try:
+                parsed_intent = _IntentClass(intent_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid intent_class={intent_class!r}. '
+                    f'Allowed: {[c.value for c in _IntentClass]}'
+                )
+
+        parsed_risk: _RiskClass | None = None
+        if risk_class:
+            try:
+                parsed_risk = _RiskClass(risk_class.lower())
+            except ValueError:
+                raise ToolError(
+                    f'Invalid risk_class={risk_class!r}. Allowed: {[c.value for c in _RiskClass]}'
+                )
+
         note = NoteCreateDTO(
             name=title,
             description=description,
@@ -1093,6 +1163,8 @@ async def memex_add_note(
             user_notes=user_notes,
             author=author,
             template=template,
+            intent_class=parsed_intent,
+            risk_class=parsed_risk,
         )
 
         result = await api.ingest(note, background=background)
@@ -1313,8 +1385,7 @@ def compute_staleness(
         return Staleness.STALE
 
     if event_date is not None and isinstance(event_date, _dt):
-        if event_date.tzinfo is None:
-            event_date = event_date.replace(tzinfo=_tz.utc)
+        event_date = _to_utc_datetime(event_date)
         age_days = (now - event_date).days
 
         if age_days > 30:
@@ -1394,6 +1465,12 @@ def _build_memory_unit_model(
         'virtual': is_virtual,
         'mental_model_id': mental_model_id_uuid,
         'evidence_ids': evidence_ids,
+        'success_co_count': getattr(res, 'success_co_count', 0),
+        'failure_co_count': getattr(res, 'failure_co_count', 0),
+        'is_deprioritized': getattr(res, 'is_deprioritized', False),
+        'intent_class': getattr(res, 'intent_class', 'durable'),
+        'risk_class': getattr(res, 'risk_class', 'none'),
+        'exploration': bool(unit_metadata.get('exploration', False)),
     }
 
     links_raw = unit_metadata.get('links', [])
@@ -1492,6 +1569,18 @@ async def memex_memory_search(
         BeforeValidator(_coerce_bool),
         Field(default=False, description='Include superseded (low-confidence) memory units.'),
     ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            default=False,
+            description=(
+                'Include deprioritized memories in results. '
+                'Default (false) returns only active, non-deprioritized memories. '
+                'Set to true for "remember when..." queries or explicit recall of past discussions.'
+            ),
+        ),
+    ] = False,
     after: Annotated[
         str | None,
         Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
@@ -1556,13 +1645,11 @@ async def memex_memory_search(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
-        )
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         results = await api.search(
             query=query,
@@ -1571,6 +1658,7 @@ async def memex_memory_search(
             token_budget=token_budget,
             strategies=strategies,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             after=after_dt,
             before=before_dt,
             tags=tags,
@@ -1763,13 +1851,11 @@ async def memex_note_search(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
-        after_dt = _dt.fromisoformat(after).replace(tzinfo=_tz.utc) if after else None
-        before_dt = _dt.fromisoformat(before).replace(tzinfo=_tz.utc) if before else None
-        ref_dt = (
-            _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
-        )
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
         search_limit = limit * 3 if has_assets else limit
         results = await api.search_notes(
@@ -3237,6 +3323,26 @@ async def memex_survey(
         BeforeValidator(_coerce_int),
         Field(description='Max token budget for all results. Truncates when exceeded.'),
     ] = None,
+    after: Annotated[
+        str | None,
+        Field(default=None, description='Only results after this ISO 8601 date (e.g. 2025-01-01).'),
+    ] = None,
+    before: Annotated[
+        str | None,
+        Field(
+            default=None, description='Only results before this ISO 8601 date (e.g. 2025-12-31).'
+        ),
+    ] = None,
+    reference_date: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'ISO-8601 timestamp. Relative dates in the query (e.g. "last week") '
+                'resolve against this instead of now(). Use for historical queries.'
+            ),
+        ),
+    ] = None,
 ) -> McpSurveyResult:
     """Survey a broad topic — decompose, parallel search, grouped results."""
     try:
@@ -3245,11 +3351,20 @@ async def memex_survey(
         _validate_vault_ids(vault_ids)
         resolved_vids = await _resolve_vault_ids(api, vault_ids)
 
+        from datetime import datetime as _dt
+
+        after_dt = _to_utc_datetime(_dt.fromisoformat(after)) if after else None
+        before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
+        ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
+
         result = await api.survey(
             query=query,
             vault_ids=resolved_vids,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after_dt,
+            before=before_dt,
+            reference_date=ref_dt,
         )
 
         topics = [
@@ -3328,6 +3443,79 @@ async def memex_get_vault_summary(
     except Exception as e:
         logger.error(f'Get vault summary failed: {e}', exc_info=True)
         raise ToolError(f'Get vault summary failed: {e}')
+
+
+@mcp.tool(
+    name='memex_record_outcome',
+    description=(
+        'Record whether previously retrieved memory units contributed '
+        'to a successful outcome. Call this after you have actually used retrieved memories '
+        'to perform a task or answer a question.\n\n'
+        'Call generously. Silence provides no learning signal.'
+    ),
+    tags={'write'},
+    annotations={'readOnlyHint': False},
+)
+async def memex_record_outcome(
+    ctx: Context,
+    unit_ids: Annotated[
+        list[str],
+        BeforeValidator(_coerce_list),
+        Field(
+            description=(
+                'UUIDs of memory units you actually used — not all retrieved units, '
+                'only the ones that were load-bearing in your reasoning.'
+            ),
+        ),
+    ],
+    success: Annotated[
+        bool,
+        BeforeValidator(_coerce_bool),
+        Field(
+            description='True if the task succeeded using these memories, false if they were misleading.'
+        ),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(description='Vault UUID or name. Omit to use config defaults.'),
+    ] = None,
+    outcome_confidence: Annotated[
+        float,
+        BeforeValidator(_coerce_float),
+        Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description='Weight for this outcome signal (0.0-1.0). Default 1.0.',
+        ),
+    ] = 1.0,
+    reason: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description='Optional free-text reason for the outcome (logged, not stored on units).',
+        ),
+    ] = None,
+) -> dict:
+    """Record an outcome for memory units to train Memory Worth scoring."""
+    try:
+        api = get_api(ctx)
+        vault_id = vault_id or _default_write_vault(ctx)
+        resolved_vid = await _resolve_vault_id(api, vault_id)
+
+        return await api.record_outcome(
+            unit_ids=unit_ids,
+            success=success,
+            vault_id=str(resolved_vid),
+            outcome_confidence=outcome_confidence,
+            reason=reason,
+        )
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Record outcome failed: {e}', exc_info=True)
+        raise ToolError(f'Record outcome failed: {e}')
 
 
 def entrypoint():

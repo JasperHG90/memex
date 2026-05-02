@@ -52,6 +52,34 @@ class EntityType(str, Enum):
     MISC = 'Misc'
 
 
+class IntentClass(str, Enum):
+    """Lifecycle class for a memory unit, set at write time (F25).
+
+    permanent — identity / preferences / facts that should never decay.
+    durable   — project decisions, multi-week relevance (default).
+    ephemeral — task context, days-to-weeks relevance only.
+    """
+
+    PERMANENT = 'permanent'
+    DURABLE = 'durable'
+    EPHEMERAL = 'ephemeral'
+
+
+class RiskClass(str, Enum):
+    """Content sensitivity, set at write time (F25 — subsumes F26).
+
+    none      — public-safe content (default).
+    sensitive — flagged for linter review; still retrievable in default scope.
+    private   — excluded from default retrieval; surfaced only on explicit query.
+    safety    — refused at ingestion (Memex will not persist).
+    """
+
+    NONE = 'none'
+    SENSITIVE = 'sensitive'
+    PRIVATE = 'private'
+    SAFETY = 'safety'
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 
@@ -249,6 +277,10 @@ class RetrievalRequest(BaseModel):
         default=False,
         description='Whether to include superseded (low-confidence) memory units in results.',
     )
+    include_deprioritized: bool = Field(
+        default=False,
+        description='Whether to include deprioritized memory units in results.',
+    )
     debug: bool = Field(
         default=False,
         description=(
@@ -331,6 +363,15 @@ class MemoryUnitBase(VaultMixin):
         examples=['active', 'stale'],
     )
 
+    intent_class: IntentClass = Field(
+        default=IntentClass.DURABLE,
+        description='Lifecycle class set at write time (permanent | durable | ephemeral).',
+    )
+    risk_class: RiskClass = Field(
+        default=RiskClass.NONE,
+        description='Content sensitivity set at write time (none | sensitive | private | safety).',
+    )
+
     mentioned_at: dt.datetime | None = Field(
         default=None, description='The datetime when the memory unit was mentioned.'
     )
@@ -408,6 +449,21 @@ class MemoryUnitDTO(MemoryUnitBase):
     superseded_by: list[SupersessionInfo] | None = Field(
         default=None,
         description='Units that supersede this one.',
+    )
+
+    success_co_count: int = Field(
+        default=0,
+        description='MW success co-occurrence counter.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        description='MW failure co-occurrence counter.',
+    )
+
+    is_deprioritized: bool = Field(
+        default=False,
+        description='Whether this unit has been deprioritized (non-destructive retrieval downweight).',
     )
 
     @property
@@ -599,6 +655,23 @@ class NoteCreateDTO(BaseModel):
         'When present and the extension is not .md, the server converts '
         'the content to Markdown before ingestion using FileContentProcessor.',
         examples=['report.pdf', 'slides.pptx', 'meeting-notes.md'],
+    )
+    intent_class: IntentClass | None = Field(
+        default=None,
+        description=(
+            'Optional intent override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier when set. Use "ephemeral" for transient '
+            'context, "durable" for default-lived facts, "permanent" for enduring '
+            'preferences/conventions.'
+        ),
+    )
+    risk_class: RiskClass | None = Field(
+        default=None,
+        description=(
+            'Optional risk override applied to all facts extracted from the note. '
+            'Bypasses the write-time classifier. Set "safety" to refuse persistence; '
+            '"sensitive"/"private" for restricted handling; "none" for default.'
+        ),
     )
 
     @property

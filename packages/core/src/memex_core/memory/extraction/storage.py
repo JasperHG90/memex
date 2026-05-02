@@ -70,12 +70,13 @@ async def insert_facts_batch(
             'mentioned_at': fact.mentioned_at,
             'context': fact.context,
             'fact_type': fact.fact_type,
-            'access_count': 0,
             'unit_metadata': metadata_merged,
             'note_id': UUID(effective_doc_id) if effective_doc_id else None,
             'chunk_id': UUID(fact.chunk_id) if fact.chunk_id else None,
             'vault_id': fact.vault_id if fact.vault_id else GLOBAL_VAULT_ID,
             'status': ContentStatus.ACTIVE,
+            'intent_class': fact.intent_class,
+            'risk_class': fact.risk_class,
         }
         if fact.chunk_id:
             logger.debug(f'Linking fact to chunk_id: {fact.chunk_id}')
@@ -265,6 +266,19 @@ async def store_chunks_batch(
     return {row[1]: str(row[0]) for row in results.all()}
 
 
+# Default widening factor for the candidate pool fed into the Python-side
+# anisotropy filter. Pulling N×limit rows gives the normalized filter room to
+# discard rows that fall below ``threshold`` after correction.
+_DEFAULT_POOL_MULTIPLIER = 4
+
+# Hard cap on the pool size so the multiplier cannot trigger unbounded scans on
+# very large memory_units tables. Even with a permissive raw_floor and a high
+# limit, we never request more than this many rows from pgvector. Tuned to be
+# generous (well above realistic ``limit`` values) while preventing pathological
+# scans flagged by Hermes review on PR #91 (MED-3).
+_MAX_POOL_SIZE = 1000
+
+
 async def find_similar_facts(
     session: AsyncSession,
     embedding: list[float],
@@ -273,36 +287,59 @@ async def find_similar_facts(
     exclude_ids: list[UUID] | None = None,
     fact_type: str | None = None,
     vault_ids: list[UUID] | None = None,
+    pool_multiplier: int = _DEFAULT_POOL_MULTIPLIER,
+    max_pool_size: int = _MAX_POOL_SIZE,
 ) -> list[tuple[UUID, float]]:
     """
     Find semantically similar facts using vector cosine distance.
+
+    Similarity scores are routed through the shared anisotropy corrector
+    (F2) so the threshold filters on a discriminative, normalized scale
+    rather than raw cosine values that cluster in [0.7, 0.95].
 
     Args:
         session: Active database session.
         embedding: Query embedding vector.
         limit: Max number of results.
-        threshold: Minimum similarity score (0 to 1).
+        threshold: Minimum similarity score (0 to 1) — compared against the
+            anisotropy-corrected score, not the raw pgvector value.
         exclude_ids: List of UUIDs to exclude from results.
         fact_type: Optional filter for fact type.
         vault_ids: Optional list of Vault IDs to scope search. If None/Empty, search all.
+        pool_multiplier: Widening factor applied to ``limit`` when sizing the
+            candidate pool that feeds the Python-side normalized filter. Defaults
+            to ``_DEFAULT_POOL_MULTIPLIER``.
+        max_pool_size: Hard cap on the candidate-pool LIMIT clause sent to
+            pgvector. Prevents runaway scans when ``limit`` and
+            ``pool_multiplier`` combine to produce an unreasonably large pool.
 
     Returns:
-        List of (unit_id, similarity_score) tuples.
+        List of ``(unit_id, similarity_score)`` tuples sorted by descending
+        normalized similarity.
     """
     if exclude_ids is None:
         exclude_ids = []
 
     from typing import Any, cast
 
+    from memex_core.memory.models.anisotropy import get_shared_corrector
+
     # 1 - cosine_distance = cosine_similarity
     similarity = 1 - cast(Any, col(MemoryUnit.embedding)).cosine_distance(embedding)
 
+    # Pull a wider candidate pool than `limit` so the Python-side normalized
+    # filter has room to work. The anisotropy corrector compresses scores
+    # toward (0, 1); a raw cutoff of 0.5 is a generous coarse pre-filter.
+    # The pool size is hard-capped via ``max_pool_size`` so that very large
+    # ``limit`` values cannot trigger pathological scans (PR #91 MED-3).
+    raw_floor = min(threshold, 0.5)
+    pool_size = min(limit * pool_multiplier, max_pool_size)
     statement = (
         select(MemoryUnit.id, similarity)
-        .where(similarity >= threshold)
+        .where(similarity >= raw_floor)
         .where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
         .order_by(similarity.desc())
-        .limit(limit)
+        .limit(pool_size)
     )
 
     if fact_type:
@@ -316,7 +353,14 @@ async def find_similar_facts(
         statement = statement.where(col(MemoryUnit.vault_id).in_(vault_ids))
 
     results = await session.exec(statement)
-    return [(row[0], float(row[1])) for row in results.all()]
+    corrector = get_shared_corrector()
+    scored: list[tuple[UUID, float]] = []
+    for row in results.all():
+        normalized = corrector.normalize(float(row[1]))
+        if normalized >= threshold:
+            scored.append((row[0], normalized))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:limit]
 
 
 async def check_duplicates_in_window(
@@ -392,24 +436,30 @@ async def check_duplicates_in_window(
     if indices_to_check_semantic:
         from typing import Any, cast
 
-        distance_threshold = 1.0 - similarity_threshold
+        from memex_core.memory.models.anisotropy import get_shared_corrector
+
+        # Loosened raw pre-filter so anisotropy normalization (F2) has room
+        # to discriminate. We still pass the threshold semantic to callers,
+        # but the comparison is now against the normalized score.
+        coarse_distance_floor = max(0.0, 1.0 - similarity_threshold + 0.2)
+        corrector = get_shared_corrector()
 
         for idx in indices_to_check_semantic:
             emb = embeddings[idx]
-            similarity_expr = (
-                cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb) < distance_threshold
-            )
+            similarity_expr_value = 1 - cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb)
+            distance_expr = cast(Any, col(MemoryUnit.embedding)).cosine_distance(emb)
 
             statement = (
-                select(1)
+                select(MemoryUnit.id, similarity_expr_value)
                 .where(
                     and_(
                         col(MemoryUnit.event_date) >= start_date,
                         col(MemoryUnit.event_date) <= end_date,
                     )
                 )
-                .where(similarity_expr)
-                .limit(1)
+                .where(distance_expr < coarse_distance_floor)
+                .order_by(distance_expr)
+                .limit(5)
             )
 
             # Vault Scoping
@@ -417,8 +467,10 @@ async def check_duplicates_in_window(
                 statement = statement.where(col(MemoryUnit.vault_id).in_(vault_ids))
 
             result = await session.exec(statement)
-            if result.first() is not None:
-                is_duplicate[idx] = True
+            for row in result.all():
+                if corrector.normalize(float(row[1])) >= similarity_threshold:
+                    is_duplicate[idx] = True
+                    break
 
     return is_duplicate
 

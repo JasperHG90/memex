@@ -16,12 +16,14 @@ from memex_common.exceptions import (
     VaultNotFoundError,
 )
 from memex_common.schemas import (
+    IntentClass,
     LineageResponse,
     LineageDirection,
     MemoryLinkDTO,
     NoteSearchResult,
     NodeDTO,
     RelatedNoteDTO,
+    RiskClass,
     SurveyResponse,
 )
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
@@ -62,6 +64,7 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.notes import NoteService
+from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
@@ -470,6 +473,7 @@ class MemexAPI:
             doc_search=self._doc_search,
             vaults=self._vaults,
         )
+        self._outcomes = OutcomeService()
         self.vault_summary = VaultSummaryService(
             metastore=self.metastore,
             lm=self.lm,
@@ -685,9 +689,40 @@ class MemexAPI:
         note: NoteInput,
         vault_id: UUID | str | None = None,
         event_date: datetime | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
     ) -> dict[str, Any]:
-        """Ingest a note. Delegates to IngestionService."""
-        return await self._ingestion.ingest(note, vault_id=vault_id, event_date=event_date)
+        """Ingest a note. Delegates to IngestionService.
+
+        ``intent_override`` and ``risk_override`` accept the string values of the
+        ``IntentClass`` / ``RiskClass`` enums and are validated here so callers
+        bypassing the HTTP / MCP layers (which already validate via Pydantic and
+        explicit enum parsing respectively) cannot smuggle arbitrary strings into
+        the extraction pipeline.
+        """
+        if intent_override is not None:
+            try:
+                IntentClass(intent_override)
+            except ValueError as exc:
+                allowed = [c.value for c in IntentClass]
+                raise ValueError(
+                    f'intent_override must be one of {allowed}, got {intent_override!r}'
+                ) from exc
+        if risk_override is not None:
+            try:
+                RiskClass(risk_override)
+            except ValueError as exc:
+                allowed = [c.value for c in RiskClass]
+                raise ValueError(
+                    f'risk_override must be one of {allowed}, got {risk_override!r}'
+                ) from exc
+        return await self._ingestion.ingest(
+            note,
+            vault_id=vault_id,
+            event_date=event_date,
+            intent_override=intent_override,
+            risk_override=risk_override,
+        )
 
     async def ingest_batch_internal(
         self,
@@ -943,6 +978,7 @@ class MemexAPI:
         strategies: list[str] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
+        include_deprioritized: bool = False,
         debug: bool = False,
         after: datetime | None = None,
         before: datetime | None = None,
@@ -960,6 +996,7 @@ class MemexAPI:
             strategies=strategies,
             include_stale=include_stale,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             debug=debug,
             after=after,
             before=before,
@@ -1018,6 +1055,9 @@ class MemexAPI:
         vault_ids: list[UUID | str] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        reference_date: datetime | None = None,
     ) -> SurveyResponse:
         """Broad topic survey. Delegates to SearchService."""
         # Resolve vault identifiers to UUIDs
@@ -1038,6 +1078,9 @@ class MemexAPI:
             vault_ids=resolved,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after,
+            before=before,
+            reference_date=reference_date,
         )
 
     async def background_reflect(self, request: ReflectionRequest) -> None:
@@ -1055,6 +1098,25 @@ class MemexAPI:
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
         """Reflect on multiple entities. Delegates to ReflectionService."""
         return await self._reflection.reflect_batch(requests)
+
+    async def record_outcome(
+        self,
+        unit_ids: list[str],
+        success: bool,
+        vault_id: str,
+        outcome_confidence: float = 1.0,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an outcome for memory units. Delegates to OutcomeService."""
+        async with self.metastore.session() as session:
+            return await self._outcomes.record_outcome(
+                session=session,
+                unit_ids=unit_ids,
+                success=success,
+                vault_id=vault_id,
+                outcome_confidence=outcome_confidence,
+                reason=reason,
+            )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""

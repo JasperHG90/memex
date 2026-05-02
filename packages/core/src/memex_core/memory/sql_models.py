@@ -145,6 +145,18 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         description='Semantic embedding of the mental model (centroid of observation embeddings).',
     )
 
+    success_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, server_default='0'),
+        description='MW success co-occurrence counter (vault-scoped).',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, server_default='0'),
+        description='MW failure co-occurrence counter (vault-scoped).',
+    )
+
     __table_args__ = (
         # Enforce uniqueness for Entity + Vault (Global or Specific)
         Index(
@@ -551,10 +563,34 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='The date when the memory unit was created or is relevant.',
     )
 
-    access_count: int = Field(
+    success_co_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
-        description='Number of times the memory unit has been accessed.',
+        description='Number of successful outcome co-occurrences for Memory Worth scoring.',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, server_default='0'),
+        description='Number of failure outcome co-occurrences for Memory Worth scoring.',
+    )
+
+    is_deprioritized: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default='false'),
+        description='Whether this unit has been deprioritized (non-destructive retrieval downweight).',
+    )
+
+    intent_class: str = Field(
+        default='durable',
+        sa_column=Column(Text, nullable=False, server_default='durable'),
+        description='Lifecycle class set at write time: permanent | durable | ephemeral.',
+    )
+
+    risk_class: str = Field(
+        default='none',
+        sa_column=Column(Text, nullable=False, server_default='none'),
+        description='Content sensitivity set at write time: none | sensitive | private | safety.',
     )
 
     confidence: float = Field(
@@ -623,6 +659,14 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         CheckConstraint("fact_type IN ('world', 'event', 'observation')"),
         CheckConstraint("status IN ('active', 'stale')", name='memory_units_status_check'),
         CheckConstraint(
+            "intent_class IN ('permanent', 'durable', 'ephemeral')",
+            name='ck_memory_units_intent_class',
+        ),
+        CheckConstraint(
+            "risk_class IN ('none', 'sensitive', 'private', 'safety')",
+            name='ck_memory_units_risk_class',
+        ),
+        CheckConstraint(
             'confidence >= 0.0 AND confidence <= 1.0',
             name='memory_units_confidence_check',
         ),
@@ -631,7 +675,9 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         Index('idx_memory_units_status', 'status'),
         Index('idx_memory_units_event_date', 'event_date', postgresql_ops={'event_date': 'DESC'}),
         Index(
-            'idx_memory_units_access_count', 'access_count', postgresql_ops={'access_count': 'DESC'}
+            'idx_memory_units_is_deprioritized',
+            'is_deprioritized',
+            postgresql_where=sql_text('is_deprioritized = true'),
         ),
         Index('idx_memory_units_fact_type', 'fact_type'),
         Index('idx_memory_units_confidence', 'confidence'),
@@ -851,6 +897,18 @@ class UnitEntity(SQLModel, table=True):  # type: ignore
     )
 
     vault_id: UUID = vault_id_field()
+
+    success_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, server_default='0'),
+        description='MW success co-occurrence counter (vault-scoped).',
+    )
+
+    failure_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, server_default='0'),
+        description='MW failure co-occurrence counter (vault-scoped).',
+    )
 
     # Relationships
 

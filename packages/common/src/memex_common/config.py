@@ -584,6 +584,15 @@ class ExtractionConfig(BaseModel):
         'least one in-flight gauge is > 0. None (default) disables it.',
     )
 
+    intent_risk_classifier_enabled: bool = Field(
+        default=True,
+        description='F25: enable write-time intent + risk classifier. When True, every '
+        'extracted fact is classified by an LLM call before persistence (intent ∈ '
+        '{permanent, durable, ephemeral}; risk ∈ {none, sensitive, private, safety}; '
+        'safety-class facts are dropped at write time). Set False to disable the LLM '
+        'call entirely (all facts default to durable/none).',
+    )
+
     @property
     def active_strategy(self) -> ExtractionStrategy:
         """Return the active extraction strategy name."""
@@ -697,6 +706,11 @@ class RetrievalConfig(BaseModel):
         description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
         '0 = no boost (backward compatible).',
     )
+    reranking_mw_alpha: float = Field(
+        default=0.3,
+        description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
+        '0 = no MW influence. Default 0.3 matches recency/temporal magnitude.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',
@@ -710,6 +724,16 @@ class RetrievalConfig(BaseModel):
         default=0.3,
         description='Minimum link weight for causal graph expansion in memory_links.',
     )
+    anisotropy_window_size: int = Field(
+        default=1024,
+        description='Sliding window size for Z-score anisotropy correction. '
+        '1024 matches D-MEM §4.1. Set to 0 to disable.',
+    )
+    anisotropy_min_samples: int = Field(
+        default=32,
+        description='Minimum observations before anisotropy correction activates. '
+        'Below this threshold, raw similarity scores pass through unchanged.',
+    )
     graph_semantic_seeding: bool = Field(
         default=True,
         description='Enable semantic seeding for graph retrieval strategies.',
@@ -721,6 +745,21 @@ class RetrievalConfig(BaseModel):
     graph_semantic_seed_weight: float = Field(
         default=0.7,
         description='Weight for semantic seed entities (lower than NER weight of 1.0).',
+    )
+    exploration_epsilon: float = Field(
+        default=0.05,
+        description='Probability of injecting exploration units (low-MW memories) into '
+        'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
+        'Prevents rich-get-richer dynamics per Memory Worth §5.3.',
+    )
+    exploration_max_injections: int = Field(
+        default=2,
+        description='Maximum number of exploration units to inject per retrieval call.',
+    )
+    exploration_low_mw_threshold: int = Field(
+        default=5,
+        description='Units with (success_co_count + failure_co_count) below this '
+        'threshold are eligible for exploration injection.',
     )
     link_expansion_causal_threshold: float = Field(
         default=0.3,

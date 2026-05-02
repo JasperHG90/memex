@@ -89,6 +89,11 @@ def apply_generic_filters(statement: Select, **kwargs: Any) -> Select:
     if not include_stale:
         statement = statement.where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
 
+    # Filter out deprioritized units by default; include them when explicitly requested.
+    include_deprioritized = kwargs.get('include_deprioritized', False)
+    if not include_deprioritized:
+        statement = statement.where(col(MemoryUnit.is_deprioritized) == False)  # noqa: E712
+
     return statement
 
 
