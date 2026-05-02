@@ -109,10 +109,12 @@ class MemexAPIProtocol(Protocol):
     async def get_entity_cooccurrences(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_entity_mentions(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_memory_units_by_chunks(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_memory_links(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_lineage(self, *args: Any, **kwargs: Any) -> Any: ...
     async def deprioritize_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def restore_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def get_unit_history(self, *args: Any, **kwargs: Any) -> Any: ...
     async def get_due_for_review(self, *args: Any, **kwargs: Any) -> Any: ...
     async def review_memory_unit(self, *args: Any, **kwargs: Any) -> Any: ...
     async def summarize_node(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -859,8 +861,10 @@ GET_ENTITIES_SCHEMA: dict[str, Any] = {
 GET_MEMORY_UNITS_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_memory_units',
     'description': (
-        'Batch lookup of memory units (facts, events, observations) by ID. '
-        'Includes status and supersession info.'
+        'Batch lookup of memory units (facts, events, observations). Provide '
+        'exactly one of `unit_ids` (direct ID lookup) or `chunk_ids` (returns '
+        'all units extracted from the named chunks, vault-scoped). Includes '
+        'status and supersession info.'
     ),
     'parameters': {
         'type': 'object',
@@ -870,8 +874,23 @@ GET_MEMORY_UNITS_SCHEMA: dict[str, Any] = {
                 'items': {'type': 'string'},
                 'description': 'List of memory unit UUIDs to fetch.',
             },
+            'chunk_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': (
+                    'List of chunk UUIDs. Returns all memory units extracted '
+                    'from these chunks, scoped to `vault_id`. Mutually '
+                    'exclusive with `unit_ids`.'
+                ),
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name. Required when `chunk_ids` is set; '
+                    'ignored for the `unit_ids` path.'
+                ),
+            },
         },
-        'required': ['unit_ids'],
     },
 }
 
@@ -2464,33 +2483,91 @@ def _serialize_full_entity(ent: Any) -> dict[str, Any]:
 def handle_get_memory_units(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    """Fetch memory units by ID.
+    """Fetch memory units by ID or by chunk_id (F46).
 
-    Issues one ``api.get_memory_unit`` call per ID — ``RemoteMemexAPI`` does
-    not currently expose a batch ``get_memory_units`` endpoint. If one is
-    added later, adopt the try-batch-then-fallback pattern used by
-    ``handle_get_entities`` (batch call wrapped in try/except, falling back
-    to the per-ID loop on failure).
+    Provide exactly one of ``unit_ids`` or ``chunk_ids``. The chunk-traversal
+    path is vault-scoped; an unknown chunk simply contributes nothing to the
+    result set.
     """
-    raw_ids = args.get('unit_ids') or []
-    uuids: list[UUID] = []
-    for uid_str in raw_ids:
+    raw_unit_ids = args.get('unit_ids')
+    raw_chunk_ids = args.get('chunk_ids')
+
+    has_unit_ids = raw_unit_ids is not None
+    has_chunk_ids = raw_chunk_ids is not None
+
+    if has_unit_ids == has_chunk_ids:
+        return json.dumps(
+            {
+                'error': (
+                    'Provide exactly one of `unit_ids` or `chunk_ids` (not both, not neither).'
+                ),
+                'results': [],
+            }
+        )
+
+    items: list[dict[str, Any]] = []
+
+    if has_unit_ids:
+        uuids: list[UUID] = []
+        for uid_str in raw_unit_ids or []:
+            try:
+                uuids.append(UUID(str(uid_str)))
+            except (ValueError, TypeError):
+                continue
+
+        for uid in uuids:
+            try:
+                unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
+            except Exception as e:
+                logger.warning('get_memory_unit(%s) failed: %s', uid, e)
+                continue
+            if unit is None:
+                continue
+            items.append(_serialize_memory_unit_full(unit))
+
+        return json.dumps({'results': items})
+
+    chunk_uuids: list[UUID] = []
+    for cid_str in raw_chunk_ids or []:
         try:
-            uuids.append(UUID(str(uid_str)))
+            chunk_uuids.append(UUID(str(cid_str)))
         except (ValueError, TypeError):
             continue
 
-    items: list[dict[str, Any]] = []
-    # Singular per-ID loop — no batch API available; see docstring for the
-    # pattern to adopt if RemoteMemexAPI grows a batch variant.
-    for uid in uuids:
+    if not chunk_uuids:
+        return json.dumps({'results': []})
+
+    arg_vault = args.get('vault_id')
+    target_vault: UUID | None = None
+    if arg_vault:
+        # When the caller explicitly passes vault_id, an unparseable value
+        # MUST fail fast — silently falling back to the session-bound vault
+        # could return data from a different vault than the one the agent
+        # asked for (Wave 0 vault-scoping invariant).
         try:
-            unit = run_sync(api.get_memory_unit(uid), timeout=30.0)
-        except Exception as e:
-            logger.warning('get_memory_unit(%s) failed: %s', uid, e)
-            continue
-        if unit is None:
-            continue
+            target_vault = UUID(str(arg_vault))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid vault UUID: {arg_vault}')
+    else:
+        target_vault = vault_id
+    if target_vault is None:
+        return json.dumps(
+            {
+                'error': 'vault_id is required when chunk_ids is provided.',
+                'results': [],
+            }
+        )
+
+    try:
+        units = run_sync(
+            api.get_memory_units_by_chunks(chunk_uuids, target_vault),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('get_memory_units_by_chunks failed: %s', e)
+        return json.dumps({'results': []})
+
+    for unit in units or []:
         items.append(_serialize_memory_unit_full(unit))
 
     return json.dumps({'results': items})
@@ -3323,6 +3400,8 @@ __all__ = [
     'MEMORY_RESTORE_SCHEMA',
     # --- F14 / F29 record_outcome (WS-quick-wins) ---
     'RECORD_OUTCOME_SCHEMA',
+    # --- F49 contradiction-graph timeline ---
+    'GET_UNIT_HISTORY_SCHEMA',
 ]
 
 
@@ -4153,3 +4232,83 @@ def handle_get_diagnostics_summary(
 
 
 HANDLERS['memex_get_diagnostics_summary'] = handle_get_diagnostics_summary
+
+
+# --- F49 contradiction-graph timeline ---
+
+GET_UNIT_HISTORY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_get_unit_history',
+    'description': (
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'unit_id': {
+                'type': 'string',
+                'description': 'Memory unit UUID to start the walk from (root, depth=0).',
+            },
+            'max_depth': {
+                'type': 'integer',
+                'description': (
+                    'Maximum recursion depth (default: 10). Nodes reached at '
+                    'the cap are returned with truncated=True.'
+                ),
+            },
+        },
+        'required': ['unit_id'],
+    },
+}
+# Note: vault_id is sourced from the Hermes session binding (handler injects
+# it from the `vault_id` arg); not exposed in the schema since the agent never
+# names a vault directly.
+
+
+def handle_get_unit_history(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_unit_id = _require(args, 'unit_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        uuid_obj = UUID(str(raw_unit_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid memory unit UUID: {raw_unit_id}')
+    if vault_id is None:
+        return tool_error('No vault is bound to this Hermes session; cannot walk history.')
+
+    raw_depth = args.get('max_depth')
+    try:
+        max_depth = int(raw_depth) if raw_depth is not None else 10
+    except (TypeError, ValueError):
+        return tool_error(f'Invalid max_depth: {raw_depth!r}')
+    if max_depth < 0:
+        return tool_error('max_depth must be >= 0.')
+
+    try:
+        result = run_sync(
+            api.get_unit_history(uuid_obj, vault_id=vault_id, max_depth=max_depth),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_get_unit_history failed: %s', e)
+        return tool_error(f'Get unit history failed: {e}')
+
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    return json.dumps(result)
+
+
+HANDLERS['memex_get_unit_history'] = handle_get_unit_history
+ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)

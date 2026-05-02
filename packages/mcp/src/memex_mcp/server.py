@@ -2994,7 +2994,12 @@ async def memex_get_lineage(
 
 @mcp.tool(
     name='memex_get_memory_units',
-    description='Batch lookup of memory units by ID. Includes contradiction links and supersession info.',
+    description=(
+        'Batch lookup of memory units. Provide exactly one of '
+        '`unit_ids` (direct ID lookup) or `chunk_ids` (returns all units '
+        'extracted from the named chunks, vault-scoped). Includes '
+        'contradiction links and supersession info.'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -3002,31 +3007,84 @@ async def memex_get_lineage(
 async def memex_get_memory_units(
     ctx: Context,
     unit_ids: Annotated[
-        list[str], BeforeValidator(_coerce_list), Field(description='List of memory unit UUIDs.')
-    ],
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(default=None, description='List of memory unit UUIDs.'),
+    ] = None,
+    chunk_ids: Annotated[
+        list[str] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'List of chunk UUIDs. Returns all memory units extracted from '
+                'these chunks, scoped to `vault_id`. Mutually exclusive with `unit_ids`.'
+            ),
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                'Vault UUID or name. Required when `chunk_ids` is set; ignored '
+                'for the `unit_ids` path. Defaults to the active read vault.'
+            ),
+        ),
+    ] = None,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Retrieve multiple memory units with their contradiction context."""
+    if (unit_ids is None) == (chunk_ids is None):
+        raise ToolError('Provide exactly one of `unit_ids` or `chunk_ids` (not both, not neither).')
+
     try:
         api = get_api(ctx)
         output: list[McpFact | McpEvent | McpObservation] = []
-        for uid_str in unit_ids:
+
+        if unit_ids is not None:
+            for uid_str in unit_ids:
+                try:
+                    uuid_obj = UUID(uid_str)
+                except ValueError:
+                    continue
+
+                try:
+                    unit = await api.get_memory_unit(uuid_obj)
+                except Exception:
+                    continue
+
+                if unit is None:
+                    continue
+
+                output.append(_build_memory_unit_model(unit))
+
+            return output
+
+        chunk_uuids: list[UUID] = []
+        for cid_str in chunk_ids or []:
             try:
-                uuid_obj = UUID(uid_str)
+                chunk_uuids.append(UUID(cid_str))
             except ValueError:
                 continue
 
-            try:
-                unit = await api.get_memory_unit(uuid_obj)
-            except Exception:
-                continue
+        if not chunk_uuids:
+            return []
 
-            if unit is None:
-                continue
+        # Chunk traversal is a read operation — default to the active read
+        # vault (matches the convention used by other MCP read tools, e.g.
+        # memex_list_notes). Use the first read vault when multiple are
+        # configured; the agent can pass `vault_id` explicitly to override.
+        vault_str = vault_id or _default_read_vaults(ctx)[0]
+        resolved_vault = await _resolve_vault_id(api, vault_str)
 
+        units = await api.get_memory_units_by_chunks(chunk_uuids, resolved_vault)
+        for unit in units:
             output.append(_build_memory_unit_model(unit))
 
         return output
 
+    except ToolError:
+        raise
     except Exception as e:
         logger.error(f'Get memory units failed: {e}', exc_info=True)
         raise ToolError(f'Get memory units failed: {e}')
@@ -3102,6 +3160,88 @@ async def memex_get_memory_links(
     except Exception as e:
         logger.error(f'Get memory links failed: {e}', exc_info=True)
         raise ToolError(f'Get memory links failed: {e}')
+
+
+@mcp.tool(
+    name='memex_get_unit_history',
+    description=(
+        'Walk the contradiction graph backward (newer -> older) from a memory '
+        'unit, returning its supersession history as a tree. Use for '
+        '"how has my view on X evolved" / audit / lineage queries. v1 '
+        'returns supersession history (negative-evidence path: contradicts / '
+        'weakens links), NOT full confidence evolution. A future forward=True '
+        'extension can walk reinforces separately. No reranker, no boosts, '
+        'no quality filtering — graph walk is for completeness, not relevance.'
+    ),
+    tags={'storage'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_get_unit_history(
+    ctx: Context,
+    unit_id: Annotated[
+        str,
+        Field(description='Memory unit UUID to start the walk from (root, depth=0).'),
+    ],
+    vault_id: Annotated[
+        str,
+        Field(
+            description=(
+                'Vault UUID or name the unit belongs to. REQUIRED for per-vault '
+                'auth scoping (Wave 0 multi-tenant invariant). Cross-vault '
+                'links are filtered out.'
+            ),
+        ),
+    ],
+    max_depth: Annotated[
+        int,
+        BeforeValidator(_coerce_int),
+        Field(
+            description=(
+                'Maximum recursion depth for the contradiction walk. Nodes '
+                'reached at the cap are returned with truncated=True.'
+            ),
+        ),
+    ] = 10,
+) -> dict[str, Any]:
+    """Walk the contradiction graph backward from ``unit_id`` (newer -> older).
+
+    v1 returns supersession history (negative-evidence path:
+    contradicts/weakens links), NOT full confidence evolution. A future
+    ``forward=True`` extension can walk ``reinforces`` separately.
+
+    Returns a JSON-serialised ``UnitHistoryNodeDTO`` tree rooted at
+    ``unit_id`` (depth=0). Predecessors are nested under each node and
+    sorted oldest-first by ``event_date``. ``link_type`` on each
+    non-root node names the supersession edge from that node to its
+    parent (the newer authoritative unit).
+    """
+    try:
+        api = get_api(ctx)
+
+        try:
+            unit_uuid = UUID(unit_id)
+        except (ValueError, TypeError):
+            raise ToolError(f'Invalid unit_id: {unit_id!r}')
+
+        resolved_vault = await _resolve_vault_id(api, vault_id)
+
+        if max_depth < 0:
+            raise ToolError('max_depth must be >= 0.')
+
+        history = await api.get_unit_history(
+            unit_uuid,
+            max_depth=max_depth,
+            vault_id=resolved_vault,
+        )
+
+        return cast(dict[str, Any], history.model_dump(mode='json'))
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Get unit history failed: {e}', exc_info=True)
+        raise ToolError(f'Get unit history failed: {e}')
 
 
 @mcp.tool(

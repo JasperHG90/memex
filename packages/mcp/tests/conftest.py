@@ -37,6 +37,7 @@ def mock_api():
     mock.get_entity_cooccurrences = AsyncMock()
     mock.get_entities = AsyncMock()
     mock.get_memory_unit = AsyncMock()
+    mock.get_memory_units_by_chunks = AsyncMock(return_value=[])
     mock.get_nodes = AsyncMock()
     mock.get_note_metadata = AsyncMock()
     mock.get_notes_metadata = AsyncMock()

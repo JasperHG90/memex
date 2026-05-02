@@ -1035,6 +1035,59 @@ class RelatedNoteDTO(BaseModel):
     strength: float = 0.0
 
 
+class UnitHistoryNodeDTO(BaseModel):
+    """A node in a memory unit's contradiction-graph timeline (F49).
+
+    The tree is rooted at the queried unit (depth=0); each predecessor
+    represents an older unit that the current node supersedes via a
+    ``contradicts`` or ``weakens`` link. Walked backward in time.
+    """
+
+    unit_id: UUID = Field(description='Memory unit at this depth.')
+    text: str = Field(description='Memory unit text content.')
+    note_id: UUID | None = Field(
+        default=None,
+        description='Source note ID (null when the unit has no source note).',
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description='Current confidence on the unit (0.0-1.0).',
+    )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description='When the unit was originally observed (event_date / mentioned_at fallback).',
+    )
+    link_type: str | None = Field(
+        default=None,
+        description=(
+            'Type of supersession edge from this node to its parent (the newer '
+            "unit that supersedes it): 'contradicts' or 'weakens'. None for the "
+            'starting unit (root).'
+        ),
+    )
+    link_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Metadata on the link (e.g., reasoning, temporal_basis).',
+    )
+    depth: int = Field(
+        description='0 for the starting unit, 1 for direct predecessors, etc.',
+    )
+    predecessors: list['UnitHistoryNodeDTO'] = Field(
+        default_factory=list,
+        description='Older units this one supersedes (branching for multi-predecessor cases).',
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            'True when further predecessors exist but were not expanded — '
+            'either because ``max_depth`` was reached or the node was already '
+            'visited via another path.'
+        ),
+    )
+
+
 class NoteSearchResult(BaseModel):
     """Result of a note search."""
 

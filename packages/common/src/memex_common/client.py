@@ -58,6 +58,7 @@ from memex_common.schemas import (
     SummaryRequest,
     SummaryResponse,
     SurveyRequest,
+    UnitHistoryNodeDTO,
     SurveyResponse,
 )
 
@@ -794,6 +795,26 @@ class RemoteMemexAPI:
         result = await self._get(f'memories/{unit_id}')
         return MemoryUnitDTO(**result)
 
+    async def get_memory_units_by_chunks(
+        self,
+        chunk_ids: list[UUID | str],
+        vault_id: UUID | str,
+    ) -> list[MemoryUnitDTO]:
+        """F46: fetch memory units belonging to the named chunks (vault-scoped).
+
+        Mirrors the service-layer short-circuit (see
+        ``memex_core.services.stats.StatsService.get_memory_units_by_chunks``)
+        so an empty input list never costs a network round-trip.
+        """
+        if not chunk_ids:
+            return []
+        body = {
+            'chunk_ids': [str(c) for c in chunk_ids],
+            'vault_id': str(vault_id),
+        }
+        result = await self._post('memories/by-chunks', body)
+        return [MemoryUnitDTO(**r) for r in result]
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data."""
         try:
@@ -936,6 +957,24 @@ class RemoteMemexAPI:
             params['link_type'] = link_type
         result = await self._get(f'memories/{unit_id}/links', params=params)
         return [MemoryLinkDTO(**lnk) for lnk in result]
+
+    async def get_unit_history(
+        self,
+        unit_id: UUID,
+        *,
+        vault_id: UUID,
+        max_depth: int = 10,
+    ) -> UnitHistoryNodeDTO:
+        """F49: walk the contradiction graph backward from ``unit_id``.
+
+        Returns a ``UnitHistoryNodeDTO`` tree (root + nested predecessors).
+        """
+        params: dict[str, Any] = {
+            'vault_id': str(vault_id),
+            'max_depth': max_depth,
+        }
+        result = await self._get(f'memories/{unit_id}/history', params=params)
+        return UnitHistoryNodeDTO(**result)
 
     async def get_note_links(
         self,

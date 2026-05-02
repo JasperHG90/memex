@@ -18,7 +18,7 @@ from memex_core.server.auth import (
     require_read,
     require_write,
 )
-from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO
+from memex_common.schemas import MemoryLinkDTO, MemoryUnitDTO, UnitHistoryNodeDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -32,6 +32,43 @@ from memex_core.services.rate_limit import RateLimitExceededError
 logger = logging.getLogger('memex.core.server')
 
 router = APIRouter(prefix='/api/v1')
+
+
+class MemoryUnitsByChunksRequest(BaseModel):
+    """F46: batch lookup of memory units by chunk_id."""
+
+    chunk_ids: list[UUID] = Field(..., description='Chunk UUIDs to expand into memory units.')
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID to scope the lookup. REQUIRED — chunk-traversal must not '
+            'leak units from sibling vaults.'
+        ),
+    )
+
+
+@router.post(
+    '/memories/by-chunks',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_memory_units_by_chunks(
+    request: Annotated[MemoryUnitsByChunksRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """F46: get all memory units belonging to the named chunks (vault-scoped)."""
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
+        return [build_memory_unit_dto(u) for u in units]
+    except (MemexError, ValueError) as e:
+        # Hermes round-1 MED: narrowed from (KeyError, RuntimeError, OSError)
+        # which can mask genuine bugs (bad DTO dict access, filesystem errors)
+        # rather than client-visible errors. Service-layer raises MemexError
+        # subclasses for known failure modes; ValueError covers UUID/typing
+        # validation. Anything else propagates as a 500 with a logged stack.
+        raise _handle_error(e, 'Failed to get memory units by chunks')
 
 
 @router.get('/memories/{id}', response_model=MemoryUnitDTO, dependencies=[Depends(require_read)])
@@ -366,3 +403,46 @@ async def get_memory_links(
         return links[:limit]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get links for memory unit {memory_id}')
+
+
+@router.get(
+    '/memories/{memory_id}/history',
+    response_model=UnitHistoryNodeDTO,
+    dependencies=[Depends(require_read)],
+)
+async def get_unit_history(
+    memory_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: UUID = Query(
+        ...,
+        description=(
+            'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
+            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+        ),
+    ),
+    max_depth: int = Query(
+        10,
+        ge=0,
+        le=50,
+        description='Maximum recursion depth for the contradiction-graph walk.',
+    ),
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> UnitHistoryNodeDTO:
+    """F49: walk the contradiction graph backward from ``memory_id``.
+
+    Returns the supersession history (negative-evidence path: contradicts /
+    weakens links) as an ordered tree rooted at the queried unit (depth=0).
+    ``reinforces`` is excluded — it points forward in time. v1 returns
+    supersession history, NOT full confidence evolution.
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        return await api.get_unit_history(
+            memory_id,
+            max_depth=max_depth,
+            vault_id=vault_id,
+        )
+    except MemoryUnitNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to get history for memory unit {memory_id}')
