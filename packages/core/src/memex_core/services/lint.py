@@ -395,16 +395,21 @@ class LintService(BaseService):
             try:
                 await session.commit()
             except Exception as exc:
-                successful_rule_count = sum(
-                    1 for r in results if r.error is None and r.findings_emitted > 0
-                )
-                committed_findings = sum(r.findings_emitted for r in results if r.error is None)
+                # The outer commit failed — findings from successful rules
+                # were NOT persisted. Name the variables accordingly:
+                # ``findings_at_risk`` is the count of findings that were
+                # emitted by successful rules but lost when the commit
+                # failed. ``successful_rule_count`` counts every rule that
+                # completed without raising, including those that emitted
+                # zero findings (still a meaningful "ran cleanly" signal).
+                findings_at_risk = sum(r.findings_emitted for r in results if r.error is None)
+                successful_rule_count = sum(1 for r in results if r.error is None)
                 logger.warning(
                     'lint tick: outer commit failed after per-rule SAVEPOINTs; '
                     'findings from successful rules may have been lost '
-                    '(successful_rules=%d, committed_findings=%d, error=%s)',
+                    '(findings_at_risk=%d, successful_rules=%d, error=%s)',
+                    findings_at_risk,
                     successful_rule_count,
-                    committed_findings,
                     exc,
                     exc_info=True,
                 )
@@ -572,7 +577,7 @@ class LintService(BaseService):
             # reports `lint.py:531:21` and `--^` underlines through L533.
             result = await session.execute(
                 text(
-                    'UPDATE maintenance_proposals '  # noqa: S608 — see invariant above (anchor verified at this line)
+                    'UPDATE maintenance_proposals '  # noqa: S608
                     'SET status = :new, resolved_at = now(), resolved_by = :actor '
                     f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
@@ -654,7 +659,7 @@ class LintService(BaseService):
         # through the closing string.
         where_sql = ' AND '.join(clauses)
         stmt = text(
-            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '  # noqa: S608 — see invariant above (anchor verified at this line)
+            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '  # noqa: S608
             f'evidence, suggested_action, status, source, created_at, resolved_at, '
             f'resolved_by '
             f'FROM maintenance_proposals WHERE {where_sql} '
