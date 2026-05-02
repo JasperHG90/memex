@@ -842,10 +842,12 @@ class ConsolidationConfig(BaseModel):
     )
     cadence_seconds: int = Field(
         default=86400,
+        ge=60,
         description='Wall-clock interval between consolidation ticks (default: 24h).',
     )
     units_per_tick: int = Field(
         default=500,
+        ge=1,
         description='Per-tick budget (oldest-first). Saturation signalled by units_processed=cap.',
     )
 
