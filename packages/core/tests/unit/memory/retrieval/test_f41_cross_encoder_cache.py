@@ -196,6 +196,65 @@ class TestCacheUnit:
         assert second == [2.0]
 
     @pytest.mark.asyncio
+    async def test_overlapping_keys_in_different_orders_do_not_deadlock(self) -> None:
+        """Hermes round-1 CRITICAL — without globally-consistent lock ordering,
+        two callers acquiring the same per-key locks in different orders would
+        deadlock. Both calls must finish under timeout."""
+        cache = CrossEncoderScoreCache(max_size=10, ttl_seconds=60)
+        u1, u2 = uuid4(), uuid4()
+        key_a = ('m', 'q', u1)
+        key_b = ('m', 'q', u2)
+
+        gate = asyncio.Event()
+        compute_started = asyncio.Event()
+        active = 0
+
+        async def compute(missing: Sequence[int]) -> Sequence[float]:
+            nonlocal active
+            active += 1
+            compute_started.set()
+            # Hold both compute calls inside the locked region simultaneously
+            # so a deadlock (if it existed) would be observable.
+            await gate.wait()
+            return [1.0 for _ in missing]
+
+        async def call(keys: list[tuple[str, str, UUID]]) -> list[float]:
+            return await cache.get_or_compute_batch(keys, compute)
+
+        # Coro 1 will queue locks in [key_a, key_b] order (without sorting).
+        # Coro 2 will queue them in [key_b, key_a] order — the classic AB/BA
+        # deadlock pattern.
+        task = asyncio.gather(
+            call([key_a, key_b]),
+            call([key_b, key_a]),
+        )
+        # Drive scheduler so both coroutines have a chance to interleave on
+        # the lock acquisitions before we release the gate.
+        await asyncio.sleep(0.05)
+        gate.set()
+        results = await asyncio.wait_for(task, timeout=2.0)
+
+        assert results[0] == [1.0, 1.0]
+        assert results[1] == [1.0, 1.0]
+
+    @pytest.mark.asyncio
+    async def test_repeated_key_in_single_call_does_not_self_deadlock(self) -> None:
+        """A query may legitimately reference the same unit twice (RRF dedupe
+        runs *after* this layer). Acquiring the same lock twice in one
+        coroutine would deadlock — the dedupe must collapse it."""
+        cache = CrossEncoderScoreCache(max_size=10, ttl_seconds=60)
+        u1 = uuid4()
+        key = ('m', 'q', u1)
+
+        async def compute(missing: Sequence[int]) -> Sequence[float]:
+            return [7.0 for _ in missing]
+
+        out = await asyncio.wait_for(
+            cache.get_or_compute_batch([key, key, key], compute), timeout=2.0
+        )
+        assert out == [7.0, 7.0, 7.0]
+
+    @pytest.mark.asyncio
     async def test_lru_lock_pool_evicts_at_cap(self) -> None:
         cache = CrossEncoderScoreCache(max_size=2, ttl_seconds=60)
 

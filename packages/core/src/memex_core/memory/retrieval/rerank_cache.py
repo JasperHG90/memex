@@ -115,7 +115,13 @@ class CrossEncoderScoreCache:
         if not miss_indices:
             return [s for s in scores if s is not None]  # type: ignore[misc]
 
-        locks = [await self._get_lock(keys[i]) for i in miss_indices]
+        # Acquire per-key locks in a globally-consistent order to avoid
+        # deadlock when two concurrent calls request the same keys in
+        # different orders. Dedupe first — a single key may appear at
+        # multiple miss_indices (same unit referenced twice in a query)
+        # and re-acquiring its lock would deadlock the same coroutine.
+        unique_miss_keys = sorted({keys[i] for i in miss_indices})
+        locks = [await self._get_lock(k) for k in unique_miss_keys]
         for lock in locks:
             await lock.acquire()
         try:
