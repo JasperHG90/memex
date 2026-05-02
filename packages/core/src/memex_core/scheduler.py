@@ -99,12 +99,26 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
             for vault in vaults:
                 try:
                     await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)
-                except Exception as e:
+                except (OSError, RuntimeError, ValueError) as e:
                     logger.warning(
                         f'Scheduler: Manifold compute failed for vault {vault.name}: {e}'
                     )
-        except Exception as e:
+                except Exception:
+                    # Programming errors (AttributeError/TypeError/NameError) must not
+                    # silently poison the per-vault loop — log with full traceback and
+                    # continue so other vaults still get refreshed this tick.
+                    logger.exception(
+                        'Scheduler: Unexpected error refreshing manifold for vault %s',
+                        vault.name,
+                    )
+        except (OSError, RuntimeError, ValueError) as e:
             logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
+        except Exception:
+            # Programming errors at the outer level (e.g. attribute missing on api)
+            # are real bugs — log the full traceback then re-raise so AioClock's
+            # supervisor surfaces the failure rather than silently swallowing it.
+            logger.exception('Scheduler: Unexpected fatal error in diagnostics refresh task')
+            raise
 
 
 async def periodic_lint_task(api: 'MemexAPI'):

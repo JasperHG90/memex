@@ -3449,8 +3449,19 @@ def handle_memory_summarize_node(
     else:
         try:
             target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
-        except (ValueError, KeyError) as e:
-            return tool_error(f'Invalid vault: {e}')
+        except (ValueError, KeyError):
+            logger.warning(
+                'memex_memory_summarize_node: vault not found for identifier %r',
+                raw_vault,
+                exc_info=True,
+            )
+            return tool_error('Vault not found or invalid identifier')
+        except Exception:
+            logger.exception(
+                'memex_memory_summarize_node: vault resolution failed for identifier %r',
+                raw_vault,
+            )
+            return tool_error('Vault not found or invalid identifier')
 
     try:
         result = run_sync(
