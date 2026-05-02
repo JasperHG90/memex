@@ -2,7 +2,7 @@ import pytest
 from memex_core.memory.sql_models import Note, MemoryUnit, FactTypes
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.models import RetrievalRequest
-from memex_common.config import GLOBAL_VAULT_ID
+from memex_common.config import GLOBAL_VAULT_ID, RetrievalConfig
 from datetime import datetime, timezone
 from uuid import uuid4
 from sqlalchemy import event
@@ -42,7 +42,15 @@ async def test_retrieval_nplus1(session, metastore):
 
     mock_embedder.encode.return_value = [np.array([0.1] * 384)]
 
-    engine = RetrievalEngine(embedder=mock_embedder, reranker=None)
+    # exploration_epsilon=0 keeps the query count deterministic — the F44
+    # bypass hydration query (added in wave 9) only fires when ε-greedy
+    # rolls succeed, which would otherwise flake this test ~5% of the time
+    # at the default ε=0.05.
+    engine = RetrievalEngine(
+        embedder=mock_embedder,
+        reranker=None,
+        retrieval_config=RetrievalConfig(exploration_epsilon=0.0),
+    )
 
     # 3. Capture Query Count
     query_count = 0

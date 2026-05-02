@@ -74,6 +74,7 @@ class SearchService:
         expand_query: bool = False,
         intent_class: str | None = None,
         risk_class: str | None = None,
+        apply_pre_filter: bool = True,
     ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
@@ -103,6 +104,7 @@ class SearchService:
             include_stale=include_stale,
             include_superseded=include_superseded,
             include_deprioritized=include_deprioritized,
+            apply_pre_filter=apply_pre_filter,
             debug=debug,
             after=after,
             before=before,

@@ -147,6 +147,67 @@ MW_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# F40 / F44 / F45 — pre-reranker filter observability
+# ---------------------------------------------------------------------------
+# CROSS_ENCODER_INPUT_COUNT_HISTOGRAM and F33_EXPLORATION_INJECTED_TOTAL emit
+# on every retrieval call (regardless of apply_pre_filter) so observability
+# comparisons (with/without filter) are always possible.
+# HYDRATION_QUERY_DURATION_SECONDS and PRE_FILTER_CANDIDATES_PRUNED skip
+# empty-input retrievals (model-only results) — the hydration query itself is
+# skipped in that case, so neither histogram observes a value.
+
+HYDRATION_QUERY_DURATION_SECONDS = Histogram(
+    'memex_hydration_query_duration_seconds',
+    'Duration of the main hydration query (with the F40 pre-filter when active). '
+    'p95 is the re-evaluation gate from §3.4.1 — > 5 ms suggests precomputed '
+    'columns become justified.',
+    buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+PRE_FILTER_CANDIDATES_PRUNED = Histogram(
+    'memex_pre_filter_candidates_pruned',
+    'F40 — count of RRF candidates that the pre-reranker filter dropped per query. '
+    'Validates the ~30% reclaim assumption empirically. Always emits 0 when '
+    'apply_pre_filter is False or when nothing was pruned.',
+    buckets=(0, 1, 2, 5, 10, 20, 30, 40, 50, 75, 100),
+)
+
+CROSS_ENCODER_INPUT_COUNT_HISTOGRAM = Histogram(
+    'memex_cross_encoder_input_count',
+    'F45 — number of candidates the cross-encoder reranker actually scored, '
+    'post pre-filter. Should drop from ~70 (cap) to ~50 in the typical case '
+    'when the F40 pre-filter is active.',
+    buckets=(0, 5, 10, 20, 30, 40, 50, 60, 70, 75),
+)
+
+F33_EXPLORATION_INJECTED_TOTAL = Counter(
+    'memex_f33_exploration_injected_total',
+    'F44 — count of low-MW candidates that the separate F33 hydration query '
+    'surfaced for exploration injection (i.e., units the F40 pre-filter would '
+    'have removed but the F33 path bypasses). Validates that the F33 bypass '
+    'actually fires.',
+)
+
+# ---------------------------------------------------------------------------
+# F47: Contradiction-derived confidence reranker composition metrics
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_SCORE_DISTRIBUTION = Histogram(
+    'memex_confidence_score',
+    'Distribution of MemoryUnit.confidence values observed at retrieval hydration. '
+    'Independent of confidence_alpha — accumulates calibration data even when the '
+    'F47 boost is off (default).',
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+CONFIDENCE_BOOST_OBSERVED = Histogram(
+    'memex_confidence_boost',
+    'F47 confidence boost factors applied during reranking. Neutral is 1.0 '
+    '(cold-start unit OR confidence_alpha=0).',
+    buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
+)
+
+# ---------------------------------------------------------------------------
 # Write-time classifier metrics (F25)
 # ---------------------------------------------------------------------------
 
