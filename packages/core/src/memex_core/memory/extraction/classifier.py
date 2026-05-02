@@ -28,10 +28,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
 
 import dspy
 
+from memex_common.schemas import (
+    IntentClass,
+    IntentLiteral,
+    RiskClass,
+    RiskLiteral,
+)
 from memex_core.llm import run_dspy_operation
 from memex_core.memory.extraction.models import ProcessedFact
 from memex_core.metrics import (
@@ -42,14 +47,16 @@ from memex_core.metrics import (
 
 logger = logging.getLogger('memex.core.memory.extraction.classifier')
 
-INTENT_VALUES = ('permanent', 'durable', 'ephemeral')
-RISK_VALUES = ('none', 'sensitive', 'private', 'safety')
+# Derived from the canonical IntentClass / RiskClass enums in
+# memex_common.schemas — adding/renaming an enum value updates these tuples
+# automatically. The DEFAULT_* constants are intentionally explicit (rather
+# than positional indices) so a future enum reordering cannot silently flip
+# the default behavior.
+INTENT_VALUES: tuple[str, ...] = tuple(c.value for c in IntentClass)
+RISK_VALUES: tuple[str, ...] = tuple(c.value for c in RiskClass)
 
-DEFAULT_INTENT = 'durable'
-DEFAULT_RISK = 'none'
-
-IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
-RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
+DEFAULT_INTENT = IntentClass.DURABLE.value
+DEFAULT_RISK = RiskClass.NONE.value
 
 
 class ClassifyMemoryUnit(dspy.Signature):

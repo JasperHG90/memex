@@ -55,6 +55,12 @@ async def search_memories(
             source_context=request.source_context,
             reference_date=request.reference_date,
             expand_query=request.expand_query,
+            # Use ``is not None`` rather than truthiness — IntentClass /
+            # RiskClass subclass ``str``, so an enum member with value ``''``
+            # would be falsy and silently coerce to None. No such member
+            # exists today, but the explicit check is the safe idiom.
+            intent_class=request.intent_class.value if request.intent_class is not None else None,
+            risk_class=request.risk_class.value if request.risk_class is not None else None,
         )
         t_search = time.monotonic() - t0
 
