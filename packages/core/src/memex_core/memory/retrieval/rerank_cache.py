@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
-from typing import Awaitable, Callable, Sequence
+from typing import Awaitable, Callable, Sequence, cast
 from uuid import UUID
 
 import xxhash
@@ -128,7 +128,11 @@ class CrossEncoderScoreCache:
                 miss_indices.append(i)
 
         if not miss_indices:
-            return [s for s in scores if s is not None]  # type: ignore[misc]
+            # All keys hit — every entry of *scores* is a float, never None.
+            # ``cast`` is preferable to a list comprehension + ``type: ignore``
+            # here because it expresses the intent (refine the type, do not
+            # filter values) without an O(n) re-pass.
+            return cast(list[float], scores)
 
         # Acquire per-key locks in a globally-consistent order to avoid
         # deadlock when two concurrent calls request the same keys in

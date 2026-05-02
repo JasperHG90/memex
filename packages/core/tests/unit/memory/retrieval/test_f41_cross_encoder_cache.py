@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from memex_common.config import RetrievalConfig
+from memex_common.types import FactTypes
 from memex_core.memory.retrieval.engine import RetrievalEngine
 from memex_core.memory.retrieval.rerank_cache import (
     CrossEncoderScoreCache,
@@ -28,7 +29,7 @@ def _make_unit(unit_id: UUID | None = None, text: str = 'fact') -> MemoryUnit:
     return MemoryUnit(
         id=unit_id or uuid4(),
         text=text,
-        fact_type='fact',
+        fact_type=FactTypes.WORLD,
         event_date=datetime.now(timezone.utc),
         vault_id=uuid4(),
         note_id=uuid4(),
