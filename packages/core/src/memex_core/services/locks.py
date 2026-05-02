@@ -92,6 +92,28 @@ def split_for_pg_locks(lock_id: int) -> LockIdSplit:
 
 _RETRY_INTERVAL_SECONDS: Final[float] = 0.1
 
+# CRIT-1 mitigation: bound concurrent asyncpg connections opened by
+# acquire_entity_lock so a burst of reconsolidate/consolidate calls cannot
+# exhaust Postgres ``max_connections``. Sized to match the SQLAlchemy pool
+# default (``pool_size=5`` in metastore.py). Module-level so it covers both
+# the LocksService and ConsolidationService callers. The full fix (a shared
+# asyncpg pool reused across acquisitions) is tracked as a follow-up.
+_MAX_CONCURRENT_LOCK_CONNECTIONS: Final[int] = 5
+_lock_connection_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_lock_connection_semaphore() -> asyncio.Semaphore:
+    """Lazily create the connection semaphore on first use.
+
+    Created lazily so the running event loop is the one that owns the
+    semaphore; constructing it at module import would bind to whatever
+    loop happens to be active (or none) at import time.
+    """
+    global _lock_connection_semaphore
+    if _lock_connection_semaphore is None:
+        _lock_connection_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOCK_CONNECTIONS)
+    return _lock_connection_semaphore
+
 
 @asynccontextmanager
 async def acquire_entity_lock(
@@ -109,6 +131,9 @@ async def acquire_entity_lock(
     bounded wait — blocking `pg_advisory_lock` would hang an MCP request
     indefinitely if the lock is contended.
 
+    Connection acquisition is gated by a process-level semaphore so a burst
+    of concurrent callers cannot exhaust Postgres ``max_connections``.
+
     Raises EntityLockTimeoutError when timeout_seconds elapses without
     acquiring. On context exit (success OR exception), the lock is released
     and the connection closed; if the process crashes before exit, Postgres
@@ -117,35 +142,37 @@ async def acquire_entity_lock(
     from memex_core.metrics import ENTITY_LOCK_ACQUIRES_TOTAL
 
     lock_id = entity_lock_id(entity_id)
-    conn = await asyncpg.connect(dsn)
-    acquired = False
-    try:
-        deadline = monotonic() + timeout_seconds
-        while True:
-            got = await conn.fetchval('SELECT pg_try_advisory_lock($1)', lock_id)
-            if got:
-                acquired = True
-                ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='acquired').inc()
-                break
-            if monotonic() >= deadline:
-                ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='timeout').inc()
-                raise EntityLockTimeoutError(
-                    f'could not acquire advisory lock for entity {entity_id} '
-                    f'within {timeout_seconds}s (lock_id={lock_id})'
-                )
-            await asyncio.sleep(_RETRY_INTERVAL_SECONDS)
-        yield
-    finally:
-        if acquired:
-            try:
-                await conn.execute('SELECT pg_advisory_unlock($1)', lock_id)
-            except Exception:
-                logger.exception(
-                    'pg_advisory_unlock failed for entity %s; relying on '
-                    'connection close to release',
-                    entity_id,
-                )
-        await conn.close()
+    semaphore = _get_lock_connection_semaphore()
+    async with semaphore:
+        conn = await asyncpg.connect(dsn)
+        acquired = False
+        try:
+            deadline = monotonic() + timeout_seconds
+            while True:
+                got = await conn.fetchval('SELECT pg_try_advisory_lock($1)', lock_id)
+                if got:
+                    acquired = True
+                    ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='acquired').inc()
+                    break
+                if monotonic() >= deadline:
+                    ENTITY_LOCK_ACQUIRES_TOTAL.labels(outcome='timeout').inc()
+                    raise EntityLockTimeoutError(
+                        f'could not acquire advisory lock for entity {entity_id} '
+                        f'within {timeout_seconds}s (lock_id={lock_id})'
+                    )
+                await asyncio.sleep(_RETRY_INTERVAL_SECONDS)
+            yield
+        finally:
+            if acquired:
+                try:
+                    await conn.execute('SELECT pg_advisory_unlock($1)', lock_id)
+                except Exception:
+                    logger.exception(
+                        'pg_advisory_unlock failed for entity %s; relying on '
+                        'connection close to release',
+                        entity_id,
+                    )
+            await conn.close()
 
 
 _DEFAULT_RECONSOLIDATE_TIMEOUT_S: Final[float] = 30.0
