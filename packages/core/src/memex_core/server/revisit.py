@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator, Field
 
 from memex_common.exceptions import MemexError
+from memex_common.revisit import reject_bool_quality
 from memex_core.api import MemexAPI
 from memex_core.server.auth import require_read, require_write
 from memex_core.server.common import _handle_error, get_api
@@ -33,24 +34,11 @@ logger = logging.getLogger('memex.core.server.revisit')
 router = APIRouter(prefix='/api/v1/memory')
 
 
-def _reject_bool_quality(v: Any) -> Any:
-    """Pydantic BeforeValidator that blocks ``bool`` from being coerced into
-    ``int`` for the F20 ``quality`` field. Mirrors the same guard at the MCP
-    boundary; without this, ``True`` would silently route to ``Quality.AGAIN``
-    because ``bool ⊂ int`` in Python.
-    """
-    if isinstance(v, bool):
-        raise ValueError(
-            f"bool is not a valid quality (got {v!r}); use 1/2/3/4 or 'again'/'hard'/'good'/'easy'."
-        )
-    return v
-
-
 class ReviewMemoryRequest(BaseModel):
     unit_id: str = Field(..., description='Memory unit UUID being reviewed.')
     quality: Annotated[
         int | str,
-        BeforeValidator(_reject_bool_quality),
+        BeforeValidator(reject_bool_quality),
         Field(
             description=(
                 'Review rating. Accepts the FSRS-5 IntEnum value (1=again, '
