@@ -83,6 +83,19 @@ class FastReranker(BaseOnnxModel):
     ) -> None:
         super().__init__(model_dir=model_dir, model_name=model_name)
         self.batch_size = batch_size
+        if model_version == 'onnx:unknown':
+            # Hermes round-1 LOW — the default sentinel disables F41
+            # structural cache invalidation on model upgrades. Production
+            # callers go through ``get_reranking_model`` which always
+            # supplies a versioned identifier; the fallback is a footgun
+            # for ad-hoc instantiation in tests/benchmarks.
+            logger.warning(
+                'FastReranker constructed with default model_version=%r — '
+                'F41 cache will not invalidate on model upgrade until TTL '
+                'expires. Pass an explicit model_version (e.g. '
+                '"onnx:repo_id:revision") if you intend to swap models.',
+                model_version,
+            )
         self._model_version = model_version
 
     @property

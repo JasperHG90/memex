@@ -21,14 +21,7 @@ from memex_core.metrics import (
     CROSS_ENCODER_CACHE_HITS_TOTAL,
     CROSS_ENCODER_CACHE_MISSES_TOTAL,
 )
-
-
-def _read_metric(metric: object) -> float:
-    samples = list(metric.collect()[0].samples)  # type: ignore[attr-defined]
-    for s in samples:
-        if s.name.endswith('_total'):
-            return float(s.value)
-    return 0.0
+from _metric_helpers import read_counter_total as _read_metric
 
 
 def _make_unit(unit_id: UUID | None = None, text: str = 'fact') -> MemoryUnit:
@@ -255,16 +248,26 @@ class TestCacheUnit:
         assert out == [7.0, 7.0, 7.0]
 
     @pytest.mark.asyncio
-    async def test_lru_lock_pool_evicts_at_cap(self) -> None:
-        cache = CrossEncoderScoreCache(max_size=2, ttl_seconds=60)
+    async def test_weak_lock_pool_drops_unheld_entries(self) -> None:
+        """Hermes round-1 MED — lock pool is a WeakValueDictionary. After a
+        compute completes and no caller holds the lock, the entry must be
+        collectable. We assert the pool does not grow without bound across
+        many distinct keys."""
+        import gc
+
+        cache = CrossEncoderScoreCache(max_size=10, ttl_seconds=60)
 
         async def compute(missing: Sequence[int]) -> Sequence[float]:
             return [0.0 for _ in missing]
 
-        for _ in range(5):
+        for _ in range(50):
             await cache.get_or_compute_batch([('m', 'q', uuid4())], compute)
 
-        assert cache.lock_pool_size <= 2
+        gc.collect()
+        # Each call's locks are released and the local `locks` list goes
+        # out of scope; weak entries should be reclaimable. We allow a
+        # small slack for any in-flight collection cycles.
+        assert cache.lock_pool_size < 50
 
     @pytest.mark.asyncio
     async def test_compute_fn_size_mismatch_raises(self) -> None:

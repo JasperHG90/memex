@@ -19,19 +19,24 @@ the same query+unit pair MUST NOT both invoke the cross-encoder.  Per-key
 3. Run a single batched ``compute_fn`` on the still-uncached subset, fill the
    cache, release every lock.
 
-The lock pool is a bounded ``LRUCache`` so it cannot grow without bound when
-the working set churns.  Evicting a lock that nobody holds is safe — a fresh
-lock for the same key on the next miss is functionally equivalent.
+The lock pool is a ``WeakValueDictionary`` so it does not pin locks beyond
+the lifetime of the coroutines that hold them.  Concurrent callers each
+keep a strong reference for the duration of the locked region; once they
+all release, the entry is collected.  A bounded LRU lock pool is unsafe
+here — evicting a still-held lock would hand a fresh lock to a second
+caller and break stampede protection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Hashable, Sequence
+import weakref
+from typing import Awaitable, Callable, Sequence
+from uuid import UUID
 
 import xxhash
-from cachetools import LRUCache, TTLCache
+from cachetools import TTLCache
 
 from memex_core.metrics import (
     CROSS_ENCODER_CACHE_HITS_TOTAL,
@@ -52,7 +57,7 @@ def hash_query(query: str) -> str:
     return xxhash.xxh64(query.encode('utf-8')).hexdigest()
 
 
-CacheKey = tuple[str, str, Hashable]
+CacheKey = tuple[str, str, UUID]
 BatchComputeFn = Callable[[Sequence[int]], Awaitable[Sequence[float]]]
 
 
@@ -61,7 +66,17 @@ class CrossEncoderScoreCache:
 
     def __init__(self, max_size: int = 10000, ttl_seconds: int = 86400) -> None:
         self._values: TTLCache[CacheKey, float] = TTLCache(maxsize=max_size, ttl=ttl_seconds)
-        self._locks: LRUCache[CacheKey, asyncio.Lock] = LRUCache(maxsize=max_size)
+        # Hermes round-1 MED — lock pool uses ``WeakValueDictionary`` so a
+        # lock entry is only collected once nothing else holds it. An
+        # LRUCache here could evict a lock while a coroutine still owned
+        # it, breaking stampede protection (a fresh lock for the same key
+        # would let a second coroutine bypass the barrier and duplicate
+        # work). Callers MUST keep a strong reference for the duration of
+        # the locked region — ``get_or_compute_batch`` does this by
+        # accumulating locks into a local list before acquiring.
+        self._locks: weakref.WeakValueDictionary[CacheKey, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._pool_lock = asyncio.Lock()
 
     async def _get_lock(self, key: CacheKey) -> asyncio.Lock:

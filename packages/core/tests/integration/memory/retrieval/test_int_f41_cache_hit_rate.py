@@ -26,12 +26,7 @@ from memex_core.metrics import (
 )
 
 
-def _read_metric(metric: object) -> float:
-    samples = list(metric.collect()[0].samples)  # type: ignore[attr-defined]
-    for s in samples:
-        if s.name.endswith('_total'):
-            return float(s.value)
-    return 0.0
+from _metric_helpers import read_counter_total as _read_metric  # noqa: E402
 
 
 @pytest.mark.integration
