@@ -340,7 +340,18 @@ class LintService(BaseService):
         results: list[RuleRunResult] = []
         async with self.metastore.session() as session:
             for spec in rules:
-                results.append(await self._run_one(session, spec, vault_id))
+                # Per-rule SAVEPOINT so a failing rule rolls back only its own
+                # findings — successful rules still persist on the outer commit.
+                try:
+                    async with session.begin_nested():
+                        results.append(await self._run_one(session, spec, vault_id))
+                except Exception:
+                    logger.exception(
+                        'Lint rule %s failed for vault %s; continuing with remaining rules',
+                        spec.name,
+                        vault_id,
+                    )
+                    continue
             await session.commit()
         return LintRunSummary(vault_id=vault_id, rules=results)
 
