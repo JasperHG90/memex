@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -50,6 +51,7 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.formatting import format_for_reranking
+from memex_core.metrics import CROSS_ENCODER_INPUT_COUNT_HISTOGRAM
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
@@ -616,12 +618,10 @@ class RetrievalEngine:
         # budget over its threshold for the ~95% of calls (with default
         # ε=0.05) that don't end up injecting.
         if final_results and self.retrieval_config.exploration_epsilon > 0:
-            import random as _random
-
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import F33_EXPLORATION_INJECTED_TOTAL
 
-            should_inject = _random.random() <= self.retrieval_config.exploration_epsilon
+            should_inject = random.random() <= self.retrieval_config.exploration_epsilon
 
             if should_inject:
                 exploration_pool = hydrated_candidates
@@ -1142,12 +1142,13 @@ class RetrievalEngine:
         candidates before they reach the cross-encoder.
 
         F45 — emits ``HYDRATION_QUERY_DURATION_SECONDS`` and
-        ``PRE_FILTER_CANDIDATES_PRUNED_TOTAL`` on every call so
-        observability comparisons (with/without filter) are possible.
+        ``PRE_FILTER_CANDIDATES_PRUNED``. Metrics emit when ``unit_ids`` is
+        non-empty. Empty-input retrievals (model-only results) skip the
+        hydration query entirely and so don't emit pre-filter metrics.
         """
         from memex_core.metrics import (
             HYDRATION_QUERY_DURATION_SECONDS,
-            PRE_FILTER_CANDIDATES_PRUNED_TOTAL,
+            PRE_FILTER_CANDIDATES_PRUNED,
         )
 
         unit_ids = [row.id for row in ranked_items if row.type == 'unit']
@@ -1187,7 +1188,7 @@ class RetrievalEngine:
             # F45 — pruned-candidates histogram (always emits, even when
             # the predicate is inactive — value is 0 in that case).
             pruned = max(0, len(unit_ids) - len(fetched_units))
-            PRE_FILTER_CANDIDATES_PRUNED_TOTAL.observe(pruned)
+            PRE_FILTER_CANDIDATES_PRUNED.observe(pruned)
 
         if model_ids:
             models = (
@@ -1285,8 +1286,6 @@ class RetrievalEngine:
             # F45 — emit zero-input observation so the histogram is always
             # populated for the no-rerank case (observability comparisons
             # need the denominator).
-            from memex_core.metrics import CROSS_ENCODER_INPUT_COUNT_HISTOGRAM
-
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 
@@ -1305,8 +1304,6 @@ class RetrievalEngine:
 
             # F45 — cross-encoder input count post-filter. Validates that
             # the pre-filter shrinks the reranker working set.
-            from memex_core.metrics import CROSS_ENCODER_INPUT_COUNT_HISTOGRAM
-
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(len(formatted_texts))
 
             # Shared reranker cap across both reranker sites — one model,

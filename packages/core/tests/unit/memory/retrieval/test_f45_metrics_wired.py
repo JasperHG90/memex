@@ -22,7 +22,7 @@ def test_f45_histograms_importable() -> None:
     from memex_core import metrics
 
     assert hasattr(metrics, 'HYDRATION_QUERY_DURATION_SECONDS')
-    assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED_TOTAL')
+    assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED')
     assert hasattr(metrics, 'CROSS_ENCODER_INPUT_COUNT_HISTOGRAM')
     assert hasattr(metrics, 'F33_EXPLORATION_INJECTED_TOTAL')
 

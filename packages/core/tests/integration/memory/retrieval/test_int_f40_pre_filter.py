@@ -697,7 +697,7 @@ class TestF45Observability:
     ):
         """Even when apply_pre_filter=False (no pruning) the histogram MUST
         emit a value (0) so observability comparisons are possible."""
-        from memex_core.metrics import PRE_FILTER_CANDIDATES_PRUNED_TOTAL
+        from memex_core.metrics import PRE_FILTER_CANDIDATES_PRUNED
 
         engine = RetrievalEngine(
             embedder=embedder,
@@ -729,16 +729,16 @@ class TestF45Observability:
         session.add(UnitEntity(unit_id=uid, entity_id=entity.id, vault_id=GLOBAL_VAULT_ID))
         await session.commit()
 
-        before = PRE_FILTER_CANDIDATES_PRUNED_TOTAL._sum.get()
+        before = PRE_FILTER_CANDIDATES_PRUNED._sum.get()
         await engine.retrieve(
             session,
             RetrievalRequest(
                 query=topic, limit=5, vault_ids=[GLOBAL_VAULT_ID], apply_pre_filter=False
             ),
         )
-        after = PRE_FILTER_CANDIDATES_PRUNED_TOTAL._sum.get()
+        after = PRE_FILTER_CANDIDATES_PRUNED._sum.get()
         assert after >= before, (
-            'PRE_FILTER_CANDIDATES_PRUNED_TOTAL must observe even when the '
+            'PRE_FILTER_CANDIDATES_PRUNED must observe even when the '
             'pre-filter is disabled (value=0) so observability comparisons '
             'with/without the filter are possible.'
         )
@@ -749,7 +749,7 @@ class TestF45Observability:
         from memex_core import metrics
 
         assert hasattr(metrics, 'HYDRATION_QUERY_DURATION_SECONDS')
-        assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED_TOTAL')
+        assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED')
         assert hasattr(metrics, 'CROSS_ENCODER_INPUT_COUNT_HISTOGRAM')
         assert hasattr(metrics, 'F33_EXPLORATION_INJECTED_TOTAL')
 

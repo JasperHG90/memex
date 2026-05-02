@@ -160,7 +160,7 @@ HYDRATION_QUERY_DURATION_SECONDS = Histogram(
     buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
 )
 
-PRE_FILTER_CANDIDATES_PRUNED_TOTAL = Histogram(
+PRE_FILTER_CANDIDATES_PRUNED = Histogram(
     'memex_pre_filter_candidates_pruned',
     'F40 — count of RRF candidates that the pre-reranker filter dropped per query. '
     'Validates the ~30% reclaim assumption empirically. Always emits 0 when '
