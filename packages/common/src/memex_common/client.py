@@ -322,10 +322,16 @@ class RemoteMemexAPI:
         source_context: str | None = None,
         reference_date: dt.datetime | None = None,
         expand_query: bool = False,
-        intent_class: IntentClass | str | None = None,
-        risk_class: RiskClass | str | None = None,
+        intent_class: IntentClass | None = None,
+        risk_class: RiskClass | None = None,
     ) -> list[MemoryUnitDTO]:
-        """Search for memories."""
+        """Search for memories.
+
+        ``intent_class`` and ``risk_class`` are typed as the canonical enums
+        (``IntentClass`` / ``RiskClass``). Callers holding a validated string
+        (e.g. CLI / MCP / Hermes after their own pre-flight check) should
+        construct the enum at the boundary: ``IntentClass(value)``.
+        """
         request = RetrievalRequest(
             query=query,
             limit=limit,

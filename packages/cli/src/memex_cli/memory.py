@@ -628,25 +628,34 @@ async def search_memory(
     # Validate intent / risk against allowed values BEFORE the API call so
     # users see a clean error instead of a server 422. Allowed sets are
     # canonical in memex_common.schemas (derived from IntentClass / RiskClass).
-    from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+    # We coerce to the enum after validation to match the typed
+    # RemoteMemexAPI.search signature (IntentClass | None / RiskClass | None).
+    from memex_common.schemas import (
+        IntentClass,
+        RiskClass,
+        VALID_INTENT_CLASSES,
+        VALID_RISK_CLASSES,
+    )
 
-    intent_value: str | None = None
+    intent_value: IntentClass | None = None
     if intent:
-        intent_value = intent.lower()
-        if intent_value not in VALID_INTENT_CLASSES:
+        intent_str = intent.lower()
+        if intent_str not in VALID_INTENT_CLASSES:
             console.print(
                 f'[red]Invalid --intent {intent!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}[/red]'
             )
             return
+        intent_value = IntentClass(intent_str)
 
-    risk_value: str | None = None
+    risk_value: RiskClass | None = None
     if risk:
-        risk_value = risk.lower()
-        if risk_value not in VALID_RISK_CLASSES:
+        risk_str = risk.lower()
+        if risk_str not in VALID_RISK_CLASSES:
             console.print(
                 f'[red]Invalid --risk {risk!r}. Allowed: {sorted(VALID_RISK_CLASSES)}[/red]'
             )
             return
+        risk_value = RiskClass(risk_str)
 
     async with get_api_context(config) as api:
         try:

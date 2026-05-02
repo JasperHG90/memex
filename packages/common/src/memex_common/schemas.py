@@ -198,6 +198,31 @@ class RetainContent(VaultMixin):
 class RetrievalRequest(BaseModel):
     """
     Unified request object for memory retrieval.
+
+    NOTE — dual-model architecture (intentional):
+    There are TWO ``RetrievalRequest`` classes in the codebase:
+
+    1. ``memex_common.schemas.RetrievalRequest`` (this class) — the
+       **wire / protocol** model. It is the public Pydantic schema used by
+       the FastAPI server (request body), the ``RemoteMemexAPI`` HTTP client,
+       and the OpenAPI spec. Enum-typed fields (``intent_class: IntentClass``,
+       ``risk_class: RiskClass``) act as a self-documenting contract for
+       external callers.
+    2. ``memex_core.memory.retrieval.models.RetrievalRequest`` — the
+       **internal / storage** model (SQLModel). It is built inside the
+       ``SearchService`` from already-validated primitives, so it carries
+       ``intent_class: str | None`` / ``risk_class: str | None`` and
+       enforces the same value set via a ``model_validator`` against the
+       canonical ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` frozensets.
+
+    The boundary conversion happens in
+    ``memex_core/server/retrieval.py::search_memories`` which unpacks the
+    enum via ``request.intent_class.value if request.intent_class else None``
+    before calling ``MemexAPI.search``.
+
+    If you need to add or rename a class value, update ``IntentClass`` /
+    ``RiskClass`` in this module — both ``VALID_INTENT_CLASSES`` (here) and
+    the model_validator in the core model derive from those enums.
     """
 
     query: str = Field(..., description='The search query or context string.')

@@ -194,6 +194,8 @@ def test_memory_view_multi_partial_error(runner, mock_api, mock_config, monkeypa
 
 def test_memory_search_intent_forwarded_to_api(runner, mock_api, mock_config, monkeypatch):
     """`--intent ephemeral` must be forwarded to api.search; no client-side filtering."""
+    from memex_common.schemas import IntentClass
+
     uid = uuid4()
     mock_api.search.return_value = [
         MemoryUnitDTO(id=uid, text='hit', fact_type='world', intent_class='ephemeral'),
@@ -204,12 +206,16 @@ def test_memory_search_intent_forwarded_to_api(runner, mock_api, mock_config, mo
     assert result.exit_code == 0
     mock_api.search.assert_called_once()
     kwargs = mock_api.search.call_args.kwargs
-    assert kwargs.get('intent_class') == 'ephemeral'
+    # CLI coerces validated string to the typed enum at the boundary so the
+    # RemoteMemexAPI.search signature (IntentClass | None) is satisfied.
+    assert kwargs.get('intent_class') == IntentClass.EPHEMERAL
     assert kwargs.get('risk_class') is None
 
 
 def test_memory_search_risk_forwarded_to_api(runner, mock_api, mock_config, monkeypatch):
     """`--risk sensitive` must be forwarded to api.search; no client-side filtering."""
+    from memex_common.schemas import RiskClass
+
     uid = uuid4()
     mock_api.search.return_value = [
         MemoryUnitDTO(id=uid, text='hit', fact_type='world', risk_class='sensitive'),
@@ -220,7 +226,9 @@ def test_memory_search_risk_forwarded_to_api(runner, mock_api, mock_config, monk
     assert result.exit_code == 0
     mock_api.search.assert_called_once()
     kwargs = mock_api.search.call_args.kwargs
-    assert kwargs.get('risk_class') == 'sensitive'
+    # CLI coerces validated string to the typed enum at the boundary so the
+    # RemoteMemexAPI.search signature (RiskClass | None) is satisfied.
+    assert kwargs.get('risk_class') == RiskClass.SENSITIVE
     assert kwargs.get('intent_class') is None
 
 

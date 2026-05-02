@@ -1671,6 +1671,20 @@ async def memex_memory_search(
         before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
         ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
+        # Validate intent_class / risk_class locally so MCP callers see a
+        # clean ToolError instead of a server 422. Mirrors the CLI and
+        # Hermes-plugin pattern; canonical sets live in memex_common.schemas.
+        from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+
+        if intent_class is not None and intent_class not in VALID_INTENT_CLASSES:
+            raise ToolError(
+                f'Invalid intent_class={intent_class!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}'
+            )
+        if risk_class is not None and risk_class not in VALID_RISK_CLASSES:
+            raise ToolError(
+                f'Invalid risk_class={risk_class!r}. Allowed: {sorted(VALID_RISK_CLASSES)}'
+            )
+
         results = await api.search(
             query=query,
             limit=limit,

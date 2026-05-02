@@ -19,6 +19,21 @@ VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'menta
 class RetrievalRequest(SQLModel):
     """
     Unified request object for memory retrieval.
+
+    NOTE — dual-model architecture (intentional):
+    This is the **internal / storage** ``RetrievalRequest`` (SQLModel),
+    distinct from the wire/protocol model in
+    ``memex_common.schemas.RetrievalRequest``. The wire model is enum-typed
+    (``IntentClass`` / ``RiskClass``) for the public API; this model carries
+    ``intent_class: str | None`` / ``risk_class: str | None`` because it is
+    constructed inside ``SearchService`` from already-validated primitives
+    (the FastAPI route in ``memex_core/server/retrieval.py`` unpacks the
+    wire-model enums via ``.value`` at the boundary).
+
+    Value parity is enforced by the ``model_validator`` below against the
+    canonical ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` frozensets,
+    which are derived from the same ``IntentClass`` / ``RiskClass`` enums in
+    ``memex_common.schemas``. Add new class values there, not here.
     """
 
     query: str = Field(..., description='The search query or context string.')
