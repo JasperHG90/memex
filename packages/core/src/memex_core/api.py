@@ -1,4 +1,7 @@
-from typing import cast, Self, Any, AsyncGenerator
+from typing import cast, Self, Any, AsyncGenerator, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memex_core.services.lint_llm import LintLLMService
 import asyncio
 import hashlib
 import pathlib as plb
@@ -599,7 +602,7 @@ class MemexAPI:
         return self._revisit
 
     @property
-    def lint_llm(self):
+    def lint_llm(self) -> 'LintLLMService':
         """F10 surprise-gated LLM lint service."""
         return self._lint_llm
 
