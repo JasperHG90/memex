@@ -34,6 +34,38 @@ logger = logging.getLogger('memex.core.server')
 router = APIRouter(prefix='/api/v1')
 
 
+class MemoryUnitsByChunksRequest(BaseModel):
+    """F46: batch lookup of memory units by chunk_id."""
+
+    chunk_ids: list[UUID] = Field(..., description='Chunk UUIDs to expand into memory units.')
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID to scope the lookup. REQUIRED — chunk-traversal must not '
+            'leak units from sibling vaults.'
+        ),
+    )
+
+
+@router.post(
+    '/memories/by-chunks',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_memory_units_by_chunks(
+    request: Annotated[MemoryUnitsByChunksRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """F46: get all memory units belonging to the named chunks (vault-scoped)."""
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
+        return [build_memory_unit_dto(u) for u in units]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to get memory units by chunks')
+
+
 @router.get('/memories/{id}', response_model=MemoryUnitDTO, dependencies=[Depends(require_read)])
 async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Get memory unit details."""
