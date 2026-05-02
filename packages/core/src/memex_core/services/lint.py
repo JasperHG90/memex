@@ -309,6 +309,7 @@ class RuleRunResult:
     lint_type: LintType
     findings_emitted: int
     duration_seconds: float
+    error: str | None = None
 
 
 @dataclass
@@ -342,14 +343,28 @@ class LintService(BaseService):
             for spec in rules:
                 # Per-rule SAVEPOINT so a failing rule rolls back only its own
                 # findings — successful rules still persist on the outer commit.
+                start = time.perf_counter()
                 try:
                     async with session.begin_nested():
                         results.append(await self._run_one(session, spec, vault_id))
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         'Lint rule %s failed for vault %s; continuing with remaining rules',
                         spec.name,
                         vault_id,
+                    )
+                    # Record the failure in the summary so callers can
+                    # distinguish "rule ran with no findings" from "rule did
+                    # not complete". The SAVEPOINT has already rolled back
+                    # any partial inserts for this rule.
+                    results.append(
+                        RuleRunResult(
+                            rule_name=spec.name,
+                            lint_type=spec.lint_type,
+                            findings_emitted=0,
+                            duration_seconds=time.perf_counter() - start,
+                            error=str(exc),
+                        )
                     )
                     continue
             await session.commit()

@@ -19,6 +19,7 @@ Three cases:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -322,3 +323,54 @@ async def test_count_pending_global_excludes_vault_scoped_rows(session: AsyncSes
     # Vault count should be exactly 4 (the seeded rules; the global row excluded).
     vault_count = await api.lint.count_pending(vault_id)
     assert vault_count == 4
+
+
+@pytest.mark.asyncio
+async def test_run_rules_records_failed_rule_in_summary(session: AsyncSession, api) -> None:
+    """A rule whose execution raises must appear in the summary with ``error``
+    set, so callers can distinguish "rule ran, no findings" from "rule did
+    not run". Surviving rules still emit their findings normally.
+    """
+    vault_id, _ = await _seed_all_rules_fire(session)
+
+    real_run_one = api.lint._run_one
+    target_rule = 'cold_low_mw_unit'
+
+    async def _flaky_run_one(session, spec, v):
+        if spec.name == target_rule:
+            raise RuntimeError('synthetic rule failure')
+        return await real_run_one(session, spec, v)
+
+    with patch.object(api.lint, '_run_one', side_effect=_flaky_run_one):
+        summary = await api.lint.run_rules(vault_id)
+
+    by_rule = {r.rule_name: r for r in summary.rules}
+    assert target_rule in by_rule, 'failed rule must still appear in summary.rules'
+    failed = by_rule[target_rule]
+    assert failed.error is not None
+    assert 'synthetic rule failure' in failed.error
+    assert failed.findings_emitted == 0
+
+    # Surviving rules still recorded normally, with no error.
+    for name in (
+        'orphan_mental_model',
+        'sensitive_unreviewed_unit',
+        'dangling_entity_ref_in_unit',
+    ):
+        assert name in by_rule, f'rule {name} should still have run'
+        assert by_rule[name].error is None
+        assert by_rule[name].findings_emitted == 1
+
+    # Failed rule's SAVEPOINT rolled back: no ledger row for cold_low_mw_unit.
+    rows = (
+        (
+            await session.execute(
+                text('SELECT rule_name FROM maintenance_proposals WHERE vault_id = :v'),
+                {'v': str(vault_id)},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    rule_names = {row['rule_name'] for row in rows}
+    assert target_rule not in rule_names
