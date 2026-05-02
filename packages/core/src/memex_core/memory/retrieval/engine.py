@@ -148,7 +148,7 @@ def _build_pre_filter_clause(
     # NULL by schema, so SQL three-valued logic does not arise. The
     # contradiction engine's α-stepping is itself the evidence-accumulation
     # threshold — adding a separate count gate would double-count.
-    branches.append('memory_units.confidence < 0.2')
+    branches.append('(memory_units.confidence < 0.2)')
 
     if not branches:
         return None

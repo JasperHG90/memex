@@ -49,7 +49,7 @@ class TestF48ConfidenceBranch:
         )
         assert clause is not None
         sql = str(clause)
-        assert 'memory_units.confidence < 0.2' in sql, (
+        assert '(memory_units.confidence < 0.2)' in sql, (
             f'F48 regression: confidence branch missing from rendered SQL when '
             f'apply_pre_filter=True. Got: {sql!r}'
         )
@@ -62,7 +62,7 @@ class TestF48ConfidenceBranch:
         )
         assert clause is not None
         sql = str(clause)
-        assert 'memory_units.confidence < 0.2' in sql
+        assert '(memory_units.confidence < 0.2)' in sql
         assert 'importance' in sql
         assert 'stability' in sql
 
@@ -88,7 +88,7 @@ class TestF48ConfidenceBranch:
         )
         assert clause is not None
         sql = str(clause)
-        assert ' OR memory_units.confidence < 0.2' in sql, (
+        assert ' OR (memory_units.confidence < 0.2)' in sql, (
             f'F48 branch must be OR-joined to the predicate; got {sql!r}'
         )
 
