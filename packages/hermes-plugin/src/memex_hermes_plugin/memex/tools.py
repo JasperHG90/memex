@@ -45,13 +45,6 @@ from memex_common.asset_cache import (
 from memex_common.asset_resize import validate_and_resize
 from memex_common.revisit import reject_bool_quality
 from memex_common.schemas import IntentClass, NoteAppendRequest, RiskClass
-
-
-# Canonical-source-derived JSON Schema enum lists. Sourced from the
-# ``IntentClass`` / ``RiskClass`` enums in ``memex_common.schemas`` so adding
-# or renaming a class value does not silently desync the Hermes tool surface.
-_INTENT_ENUM_VALUES: list[str] = [c.value for c in IntentClass]
-_RISK_ENUM_VALUES: list[str] = [c.value for c in RiskClass]
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -59,6 +52,13 @@ from .config import HermesMemexConfig
 from .templates import HERMES_USER_NOTE_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+
+# Canonical-source-derived JSON Schema enum lists. Sourced from the
+# ``IntentClass`` / ``RiskClass`` enums in ``memex_common.schemas`` so adding
+# or renaming a class value does not silently desync the Hermes tool surface.
+_INTENT_ENUM_VALUES: list[str] = [c.value for c in IntentClass]
+_RISK_ENUM_VALUES: list[str] = [c.value for c in RiskClass]
 
 
 # ---------------------------------------------------------------------------
@@ -1582,20 +1582,24 @@ def handle_memory_search(
     # signature without relying on implicit Pydantic coercion downstream.
     from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
 
-    raw_intent = args.get('intent_class') or None
+    # Use ``is not None`` rather than truthiness — IntentClass / RiskClass
+    # subclass ``str``, so a hypothetical enum member with value ``''`` would
+    # be falsy and silently coerce to None. Matches the convention in
+    # ``memex_core.server.retrieval``.
+    raw_intent = args.get('intent_class')
     if raw_intent is not None and raw_intent not in VALID_INTENT_CLASSES:
         return tool_error(
             f'Invalid intent_class: {raw_intent!r}. '
             f'Valid values: {" | ".join(sorted(VALID_INTENT_CLASSES))}'
         )
-    raw_risk = args.get('risk_class') or None
+    raw_risk = args.get('risk_class')
     if raw_risk is not None and raw_risk not in VALID_RISK_CLASSES:
         return tool_error(
             f'Invalid risk_class: {raw_risk!r}. '
             f'Valid values: {" | ".join(sorted(VALID_RISK_CLASSES))}'
         )
-    intent_class = IntentClass(raw_intent) if raw_intent else None
-    risk_class = RiskClass(raw_risk) if raw_risk else None
+    intent_class = IntentClass(raw_intent) if raw_intent is not None else None
+    risk_class = RiskClass(raw_risk) if raw_risk is not None else None
 
     try:
         results = run_sync(
