@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -1639,7 +1639,7 @@ async def memex_memory_search(
         ),
     ] = False,
     intent_class: Annotated[
-        str | None,
+        Literal['permanent', 'durable', 'ephemeral'] | None,
         Field(
             default=None,
             description=(
@@ -1648,7 +1648,7 @@ async def memex_memory_search(
         ),
     ] = None,
     risk_class: Annotated[
-        str | None,
+        Literal['none', 'sensitive', 'private', 'safety'] | None,
         Field(
             default=None,
             description=(

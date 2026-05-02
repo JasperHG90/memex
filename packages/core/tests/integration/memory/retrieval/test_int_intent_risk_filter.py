@@ -10,6 +10,7 @@ import pytest_asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import GLOBAL_VAULT_ID
@@ -42,6 +43,7 @@ class TestIntentRiskFilter:
         ephemeral_id = uuid4()
         sensitive_id = uuid4()
         private_id = uuid4()
+        safety_id = uuid4()
 
         note = Note(id=note_id, original_text='intent risk filter test note', vault_id=vault_id)
         emb = [0.1] * 384
@@ -103,24 +105,66 @@ class TestIntentRiskFilter:
                 intent_class='durable',
                 risk_class='private',
             ),
+            MemoryUnit(
+                id=safety_id,
+                note_id=note_id,
+                text='Safety fact about classification',
+                fact_type=FactTypes.WORLD,
+                embedding=emb,
+                vault_id=vault_id,
+                event_date=now,
+                intent_class='durable',
+                risk_class='safety',
+            ),
         ]
         entity = Entity(id=entity_id, canonical_name='Classification')
+
+        unit_ids = (
+            permanent_id,
+            durable_id,
+            ephemeral_id,
+            sensitive_id,
+            private_id,
+            safety_id,
+        )
 
         session.add(note)
         for unit in units:
             session.add(unit)
         session.add(entity)
-        for uid in (permanent_id, durable_id, ephemeral_id, sensitive_id, private_id):
+        for uid in unit_ids:
             session.add(UnitEntity(unit_id=uid, entity_id=entity_id, vault_id=vault_id))
         await session.commit()
 
-        return {
-            'permanent_id': permanent_id,
-            'durable_id': durable_id,
-            'ephemeral_id': ephemeral_id,
-            'sensitive_id': sensitive_id,
-            'private_id': private_id,
-        }
+        try:
+            yield {
+                'permanent_id': permanent_id,
+                'durable_id': durable_id,
+                'ephemeral_id': ephemeral_id,
+                'sensitive_id': sensitive_id,
+                'private_id': private_id,
+                'safety_id': safety_id,
+            }
+        finally:
+            # Explicit teardown — defends against state leak across tests
+            # even if the autouse `clean_tables` fixture is ever bypassed.
+            await session.execute(
+                text('DELETE FROM unit_entities WHERE unit_id = ANY(CAST(:ids AS uuid[]))'),
+                {'ids': [str(u) for u in unit_ids]},
+            )
+            await session.execute(
+                text('DELETE FROM memory_units WHERE id = ANY(CAST(:ids AS uuid[]))'),
+                {'ids': [str(u) for u in unit_ids]},
+            )
+            await session.execute(
+                text('DELETE FROM entities WHERE id = CAST(:id AS uuid)'),
+                {'id': str(entity_id)},
+            )
+            await session.execute(
+                text('DELETE FROM notes WHERE id = CAST(:id AS uuid)'),
+                {'id': str(note_id)},
+            )
+            await session.commit()
 
     async def test_intent_filter_permanent(
         self, session: AsyncSession, engine_instance, seeded_units
@@ -135,8 +179,8 @@ class TestIntentRiskFilter:
 
         result_ids = {r.id for r in results}
         assert seeded_units['permanent_id'] in result_ids
-        # Only permanent should pass — durable/ephemeral/sensitive/private all excluded
-        for key in ('durable_id', 'ephemeral_id', 'sensitive_id', 'private_id'):
+        # Only permanent should pass — every other intent class is excluded
+        for key in ('durable_id', 'ephemeral_id', 'sensitive_id', 'private_id', 'safety_id'):
             assert seeded_units[key] not in result_ids
 
     async def test_intent_filter_ephemeral(
@@ -152,7 +196,7 @@ class TestIntentRiskFilter:
 
         result_ids = {r.id for r in results}
         assert seeded_units['ephemeral_id'] in result_ids
-        for key in ('permanent_id', 'durable_id', 'sensitive_id', 'private_id'):
+        for key in ('permanent_id', 'durable_id', 'sensitive_id', 'private_id', 'safety_id'):
             assert seeded_units[key] not in result_ids
 
     async def test_risk_filter_sensitive(
@@ -168,7 +212,7 @@ class TestIntentRiskFilter:
 
         result_ids = {r.id for r in results}
         assert seeded_units['sensitive_id'] in result_ids
-        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'private_id'):
+        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'private_id', 'safety_id'):
             assert seeded_units[key] not in result_ids
 
     async def test_risk_filter_private(self, session: AsyncSession, engine_instance, seeded_units):
@@ -182,7 +226,22 @@ class TestIntentRiskFilter:
 
         result_ids = {r.id for r in results}
         assert seeded_units['private_id'] in result_ids
-        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'sensitive_id'):
+        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'sensitive_id', 'safety_id'):
+            assert seeded_units[key] not in result_ids
+
+    async def test_risk_filter_safety(self, session: AsyncSession, engine_instance, seeded_units):
+        """Risk class 'safety' is the most security-critical — verify isolation explicitly."""
+        request = RetrievalRequest(
+            query='classification',
+            limit=10,
+            vault_ids=[GLOBAL_VAULT_ID],
+            risk_class='safety',
+        )
+        results, _ = await engine_instance.retrieve(session, request)
+
+        result_ids = {r.id for r in results}
+        assert seeded_units['safety_id'] in result_ids
+        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'sensitive_id', 'private_id'):
             assert seeded_units[key] not in result_ids
 
     async def test_combined_intent_and_risk_filter(
@@ -200,7 +259,7 @@ class TestIntentRiskFilter:
         result_ids = {r.id for r in results}
         # Only the durable+sensitive unit should remain
         assert seeded_units['sensitive_id'] in result_ids
-        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'private_id'):
+        for key in ('permanent_id', 'durable_id', 'ephemeral_id', 'private_id', 'safety_id'):
             assert seeded_units[key] not in result_ids
 
     async def test_no_filter_returns_all_intents(
@@ -214,13 +273,14 @@ class TestIntentRiskFilter:
         results, _ = await engine_instance.retrieve(session, request)
 
         result_ids = {r.id for r in results}
-        # All five units should be returned (no filter applied)
+        # All six units should be returned (no filter applied)
         for key in (
             'permanent_id',
             'durable_id',
             'ephemeral_id',
             'sensitive_id',
             'private_id',
+            'safety_id',
         ):
             assert seeded_units[key] in result_ids
 
