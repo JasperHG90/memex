@@ -188,6 +188,20 @@ _ORPHAN_MENTAL_MODEL_SQL = """
 """
 
 
+# Safety invariant for S608: the only interpolations in this f-string are
+# ``_MW_SCORE_EXPR`` (a module-private literal at line 166 — a fixed
+# arithmetic expression with no user input). ``vault_id`` is bound via the
+# :name placeholder and never interpolated. No user-controlled value is ever
+# spliced into the SQL text.
+#
+# noqa placement: ruff 0.14.x anchors S608 on the FIRST physical line of a
+# multi-line concatenated string, but for triple-quoted strings the
+# diagnostic span covers BOTH the opening and closing ``"""`` lines, and an
+# inline comment on the opening line would become part of the string body.
+# The noqa therefore sits on the closing ``"""`` line — verified empirically
+# by stripping the marker (ruff reports the diagnostic anchored at the
+# opening line and underlines through the closing line, and the
+# closing-line noqa successfully suppresses).
 _COLD_LOW_MW_UNIT_SQL = f"""
     SELECT
         mu.id::text AS target_id,
@@ -204,7 +218,7 @@ _COLD_LOW_MW_UNIT_SQL = f"""
       AND (mu.success_co_count + mu.failure_co_count) >= 5
       AND {_MW_SCORE_EXPR} < 0.3
       AND mu.updated_at < (now() - interval '30 days')
-"""
+"""  # noqa: S608 — see invariant above (anchor verified at this line)
 
 
 _SENSITIVE_UNREVIEWED_UNIT_SQL = """
@@ -309,6 +323,7 @@ class RuleRunResult:
     lint_type: LintType
     findings_emitted: int
     duration_seconds: float
+    error: str | None = None
 
 
 @dataclass
@@ -339,9 +354,66 @@ class LintService(BaseService):
         """
         results: list[RuleRunResult] = []
         async with self.metastore.session() as session:
+            # SAVEPOINT loop: per-rule ``begin_nested`` isolates a failing rule's
+            # rollback from previously-emitted findings. Caveat: an asyncpg
+            # *protocol* error (vs. a logical SQL error like a constraint
+            # violation) can leave the underlying connection in an unusable
+            # state — the SAVEPOINT rollback succeeds logically, but the outer
+            # ``commit()`` below may still fail and lose findings from earlier
+            # successful rules. The outer commit is therefore wrapped in a
+            # try/except that warns (with the count of successful rules) and
+            # re-raises so the caller still sees the tick failed.
             for spec in rules:
-                results.append(await self._run_one(session, spec, vault_id))
-            await session.commit()
+                # Per-rule SAVEPOINT so a failing rule rolls back only its own
+                # findings — successful rules still persist on the outer commit.
+                # Fallback timer for the error path; happy-path uses the
+                # ``duration_seconds`` value computed inside ``_run_one``.
+                start = time.perf_counter()
+                try:
+                    async with session.begin_nested():
+                        results.append(await self._run_one(session, spec, vault_id))
+                except Exception as exc:
+                    logger.exception(
+                        'Lint rule %s failed for vault %s; continuing with remaining rules',
+                        spec.name,
+                        vault_id,
+                    )
+                    # Record the failure in the summary so callers can
+                    # distinguish "rule ran with no findings" from "rule did
+                    # not complete". The SAVEPOINT has already rolled back
+                    # any partial inserts for this rule.
+                    results.append(
+                        RuleRunResult(
+                            rule_name=spec.name,
+                            lint_type=spec.lint_type,
+                            findings_emitted=0,
+                            duration_seconds=time.perf_counter() - start,
+                            error=str(exc),
+                        )
+                    )
+                    continue
+            try:
+                await session.commit()
+            except Exception as exc:
+                # The outer commit failed — findings from successful rules
+                # were NOT persisted. Name the variables accordingly:
+                # ``findings_at_risk`` is the count of findings that were
+                # emitted by successful rules but lost when the commit
+                # failed. ``successful_rule_count`` counts every rule that
+                # completed without raising, including those that emitted
+                # zero findings (still a meaningful "ran cleanly" signal).
+                findings_at_risk = sum(r.findings_emitted for r in results if r.error is None)
+                successful_rule_count = sum(1 for r in results if r.error is None)
+                logger.warning(
+                    'lint tick: outer commit failed after per-rule SAVEPOINTs; '
+                    'findings from successful rules may have been lost '
+                    '(findings_at_risk=%d, successful_rules=%d, error=%s)',
+                    findings_at_risk,
+                    successful_rule_count,
+                    exc,
+                    exc_info=True,
+                )
+                raise
         return LintRunSummary(vault_id=vault_id, rules=results)
 
     async def _run_one(
@@ -492,9 +564,20 @@ class LintService(BaseService):
             params['vault_id'] = str(vault_id)
 
         async with self.metastore.session() as session:
+            # Safety invariant for S608: ``where_extra`` is either '' or the
+            # literal string ' AND vault_id = :vault_id' (set on lines 517-520).
+            # No user-controlled value is ever interpolated into the SQL
+            # string — ``vault_id``, ``new_status``, ``finding_id``, and
+            # ``actor`` all flow through the bound ``params`` dict via :name
+            # placeholders. ``new_status`` is allowlist-validated on L509.
+            #
+            # noqa placement: ruff anchors S608 on the FIRST physical line of
+            # the multi-line concatenated string (line 531), so the noqa below
+            # is on the correct line. Verified by stripping the marker — ruff
+            # reports `lint.py:531:21` and `--^` underlines through L533.
             result = await session.execute(
                 text(
-                    'UPDATE maintenance_proposals '
+                    'UPDATE maintenance_proposals '  # noqa: S608
                     'SET status = :new, resolved_at = now(), resolved_by = :actor '
                     f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
@@ -560,9 +643,23 @@ class LintService(BaseService):
             params['cursor_ts'] = cursor_ts
             params['cursor_id'] = str(cursor_id)
 
+        # Safety invariant for S608: every entry appended to ``clauses`` (lines
+        # 575-589) is a hard-coded literal SQL fragment — no f-string contains
+        # a value derived from ``status``, ``vault_id``, ``lint_type``,
+        # ``target_type``, or ``cursor``. All user-controlled values flow
+        # exclusively through the ``params`` dict via :name bind parameters.
+        # ``status`` is allowlist-validated on L557 and ``limit`` is bounded on
+        # L559-561, so ``where_sql`` is provably constructed from a closed set
+        # of literal strings.
+        #
+        # noqa placement: ruff anchors S608 on the FIRST physical line of the
+        # multi-line concatenated string (the line below), so the noqa is on
+        # the correct line. Verified by stripping the marker — ruff reports
+        # `lint.py:611:13` (the `f'SELECT ...'` line) and `--^` underlines
+        # through the closing string.
         where_sql = ' AND '.join(clauses)
         stmt = text(
-            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '
+            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '  # noqa: S608
             f'evidence, suggested_action, status, source, created_at, resolved_at, '
             f'resolved_by '
             f'FROM maintenance_proposals WHERE {where_sql} '

@@ -19,6 +19,7 @@ Three cases:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -155,19 +156,41 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
     )
     session.add(ue)
     await session.commit()
+    # Commit the DROP CONSTRAINT in its own transaction so a later rollback on
+    # the DELETE path cannot undo it. If the DROP and DELETE shared a
+    # transaction, ``session.rollback()`` in the except branch would also
+    # discard the DROP, leaving the FK in place — and the finally's ADD
+    # CONSTRAINT would then raise (duplicate constraint), masking the
+    # original DELETE failure. The intermediate "FK temporarily missing"
+    # state between commits is acceptable for a test fixture; the finally
+    # always restores it.
     await session.execute(
         text('ALTER TABLE unit_entities DROP CONSTRAINT unit_entities_entity_id_fkey')
     )
-    await session.execute(text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)})
     await session.commit()
-    await session.execute(
-        text(
-            'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
-            'FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE '
-            'NOT VALID'
+    try:
+        await session.execute(
+            text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)}
         )
-    )
-    await session.commit()
+        await session.commit()
+    except Exception:
+        # SQLAlchemy puts the session in a "needs rollback" state when the
+        # DELETE/commit fails; clear it so the finally's ALTER can run.
+        await session.rollback()
+        raise
+    finally:
+        # Always restore the FK so a mid-fixture failure can't leave the
+        # schema with a dropped constraint that bleeds into other tests.
+        # NOT VALID is required because the dangling row deliberately
+        # remains for the lint rule to detect.
+        await session.execute(
+            text(
+                'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
+                'FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE '
+                'NOT VALID'
+            )
+        )
+        await session.commit()
 
     targets = {
         'orphan_mental_model': str(orphan_mm.id),
@@ -314,3 +337,54 @@ async def test_count_pending_global_excludes_vault_scoped_rows(session: AsyncSes
     # Vault count should be exactly 4 (the seeded rules; the global row excluded).
     vault_count = await api.lint.count_pending(vault_id)
     assert vault_count == 4
+
+
+@pytest.mark.asyncio
+async def test_run_rules_records_failed_rule_in_summary(session: AsyncSession, api) -> None:
+    """A rule whose execution raises must appear in the summary with ``error``
+    set, so callers can distinguish "rule ran, no findings" from "rule did
+    not run". Surviving rules still emit their findings normally.
+    """
+    vault_id, _ = await _seed_all_rules_fire(session)
+
+    real_run_one = api.lint._run_one
+    target_rule = 'cold_low_mw_unit'
+
+    async def _flaky_run_one(session, spec, v):
+        if spec.name == target_rule:
+            raise RuntimeError('synthetic rule failure')
+        return await real_run_one(session, spec, v)
+
+    with patch.object(api.lint, '_run_one', side_effect=_flaky_run_one):
+        summary = await api.lint.run_rules(vault_id)
+
+    by_rule = {r.rule_name: r for r in summary.rules}
+    assert target_rule in by_rule, 'failed rule must still appear in summary.rules'
+    failed = by_rule[target_rule]
+    assert failed.error is not None
+    assert 'synthetic rule failure' in failed.error
+    assert failed.findings_emitted == 0
+
+    # Surviving rules still recorded normally, with no error.
+    for name in (
+        'orphan_mental_model',
+        'sensitive_unreviewed_unit',
+        'dangling_entity_ref_in_unit',
+    ):
+        assert name in by_rule, f'rule {name} should still have run'
+        assert by_rule[name].error is None
+        assert by_rule[name].findings_emitted == 1
+
+    # Failed rule's SAVEPOINT rolled back: no ledger row for cold_low_mw_unit.
+    rows = (
+        (
+            await session.execute(
+                text('SELECT rule_name FROM maintenance_proposals WHERE vault_id = :v'),
+                {'v': str(vault_id)},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    rule_names = {row['rule_name'] for row in rows}
+    assert target_rule not in rule_names
