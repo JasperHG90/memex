@@ -158,16 +158,24 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
     await session.execute(
         text('ALTER TABLE unit_entities DROP CONSTRAINT unit_entities_entity_id_fkey')
     )
-    await session.execute(text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)})
-    await session.commit()
-    await session.execute(
-        text(
-            'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
-            'FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE '
-            'NOT VALID'
+    try:
+        await session.execute(
+            text('DELETE FROM entities WHERE id = :id'), {'id': str(dangling_ent.id)}
         )
-    )
-    await session.commit()
+        await session.commit()
+    finally:
+        # Always restore the FK so a mid-fixture failure can't leave the
+        # schema with a dropped constraint that bleeds into other tests.
+        # NOT VALID is required because the dangling row deliberately
+        # remains for the lint rule to detect.
+        await session.execute(
+            text(
+                'ALTER TABLE unit_entities ADD CONSTRAINT unit_entities_entity_id_fkey '
+                'FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE '
+                'NOT VALID'
+            )
+        )
+        await session.commit()
 
     targets = {
         'orphan_mental_model': str(orphan_mm.id),
