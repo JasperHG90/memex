@@ -3448,9 +3448,9 @@ def handle_memory_summarize_node(
         target_vault = vault_id
     else:
         try:
-            target_vault = UUID(str(raw_vault))
-        except ValueError:
-            return tool_error(f'Invalid vault UUID: {raw_vault}')
+            target_vault = run_sync(api.resolve_vault_identifier(str(raw_vault)), timeout=10.0)
+        except (ValueError, KeyError) as e:
+            return tool_error(f'Invalid vault: {e}')
 
     try:
         result = run_sync(
