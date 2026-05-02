@@ -3617,3 +3617,32 @@ def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, v
     assert 'Vault not found' not in data['error']
     assert 'Failed to resolve vault identifier' not in data['error']
     api.summarize_node.assert_not_called()
+
+
+def test_summarize_node_none_target_vault_returns_internal_error(config, vault_id):
+    """Round-9 regression: when ``resolve_vault_identifier`` returns ``None``
+    (the protocol stub permits ``UUID | None``), the handler MUST surface a
+    clean ``tool_error`` rather than letting ``None`` flow into
+    ``api.summarize_node`` and produce a confusing call-site ``AttributeError``.
+    The single ``not isinstance(target_vault, UUID)`` guard catches this because
+    ``isinstance(None, UUID)`` is ``False`` and ``type(None).__name__`` is
+    ``'NoneType'``.
+    """
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=None)
+    api.summarize_node = AsyncMock()
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': 'some-vault'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'Internal error' in data['error']
+    assert 'NoneType' in data['error']
+    assert 'expected UUID' in data['error']
+    api.summarize_node.assert_not_called()

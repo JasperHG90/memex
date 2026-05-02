@@ -3479,14 +3479,18 @@ def handle_memory_summarize_node(
             )
             return tool_error('Failed to resolve vault identifier')
 
-    # Narrow ``target_vault`` to ``UUID | None``. ``api.resolve_vault_identifier``
-    # is contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
-    # but the protocol stub used here (line 110) types it as ``Any``. Returning
-    # ``tool_error`` matches every other error path in this handler and keeps the
-    # diagnostic intact instead of relying on the invocation framework to surface
-    # a bare ``raise``. A regular ``if``/``return`` (not ``assert``) ensures the
-    # check survives ``python -O``.
-    if target_vault is not None and not isinstance(target_vault, UUID):
+    # Narrow ``target_vault`` to ``UUID``. ``api.resolve_vault_identifier`` is
+    # contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
+    # but the protocol stub used here (line 110) types it as ``Any`` and the
+    # protocol-level return is ``UUID | None``. ``None`` is not a valid downstream
+    # value for this handler, and ``isinstance(None, UUID)`` is ``False`` — so a
+    # single ``not isinstance`` check catches both ``None`` and any other unexpected
+    # type and yields a clear ``'NoneType'`` diagnostic. Returning ``tool_error``
+    # matches every other error path in this handler and keeps the diagnostic
+    # intact instead of letting ``None`` flow into a downstream ``AttributeError``.
+    # A regular ``if``/``return`` (not ``assert``) ensures the check survives
+    # ``python -O``.
+    if not isinstance(target_vault, UUID):
         return tool_error(
             f'Internal error: vault resolution returned unexpected type '
             f'{type(target_vault).__name__} (expected UUID)'
