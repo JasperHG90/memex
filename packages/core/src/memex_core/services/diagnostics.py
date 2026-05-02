@@ -89,6 +89,10 @@ class DiagnosticsService(BaseService):
             task = asyncio.create_task(self._compute_and_cache(vault_id))
             self._pending[key] = task
 
+            # Default-argument capture is intentional: binds _service and _key at
+            # definition time (early binding). A bare closure would late-bind, which
+            # is fragile if a future refactor mutates self/key between callback
+            # creation and firing. See round-7/round-12 review notes.
             def _on_done(
                 t: asyncio.Task[dict[str, Any]],
                 _service: 'DiagnosticsService' = self,
@@ -131,14 +135,8 @@ class DiagnosticsService(BaseService):
         return await compute_manifold(self.metastore, self.filestore, vault_id)
 
     def _clear_registry(self, key: str) -> None:
-        # Plain ``def`` — intentionally NOT ``async``. Called from
-        # ``_handle_diagnostics_task_completion`` which is wired as an
-        # asyncio.Task done-callback (sync context). An ``async def`` here
-        # would silently return an unawaited coroutine. ``dict.pop`` is atomic
-        # in CPython's GIL-enabled build (default through 3.13); the registry
-        # needs no async coordination for this single-statement mutation.
-        # If/when the project adopts Python 3.13t (free-threaded, no GIL),
-        # revisit: registry mutation may need explicit locking.
+        # Sync ``def`` (called from a done-callback). ``dict.pop`` is atomic
+        # under the GIL; revisit if/when 3.13t (free-threaded) is adopted.
         self._pending.pop(key, None)
 
     async def shutdown(self) -> None:

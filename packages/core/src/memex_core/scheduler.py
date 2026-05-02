@@ -117,7 +117,7 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
                         vault.name,
                     )
         except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: Diagnostics refresh failed: {e}', exc_info=True)
+            logger.error('Scheduler: Diagnostics refresh failed: %s', e, exc_info=True)
         except Exception:
             # Programming errors at the outer level (e.g. attribute missing on api)
             # are real bugs — log the full traceback then re-raise so AioClock's
