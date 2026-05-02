@@ -44,7 +44,14 @@ from memex_common.asset_cache import (
 )
 from memex_common.asset_resize import validate_and_resize
 from memex_common.revisit import reject_bool_quality
-from memex_common.schemas import NoteAppendRequest
+from memex_common.schemas import IntentClass, NoteAppendRequest, RiskClass
+
+
+# Canonical-source-derived JSON Schema enum lists. Sourced from the
+# ``IntentClass`` / ``RiskClass`` enums in ``memex_common.schemas`` so adding
+# or renaming a class value does not silently desync the Hermes tool surface.
+_INTENT_ENUM_VALUES: list[str] = [c.value for c in IntentClass]
+_RISK_ENUM_VALUES: list[str] = [c.value for c in RiskClass]
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -266,12 +273,12 @@ RECALL_SCHEMA: dict[str, Any] = {
             },
             'intent_class': {
                 'type': 'string',
-                'enum': ['permanent', 'durable', 'ephemeral'],
+                'enum': _INTENT_ENUM_VALUES,
                 'description': ('Filter by intent class. Omit to return all classes.'),
             },
             'risk_class': {
                 'type': 'string',
-                'enum': ['none', 'sensitive', 'private', 'safety'],
+                'enum': _RISK_ENUM_VALUES,
                 'description': ('Filter by risk class. Omit to return all classes.'),
             },
         },
@@ -403,7 +410,7 @@ RETAIN_SCHEMA: dict[str, Any] = {
             },
             'intent_class': {
                 'type': 'string',
-                'enum': ['permanent', 'durable', 'ephemeral'],
+                'enum': _INTENT_ENUM_VALUES,
                 'description': (
                     'Intent override for all extracted facts. "permanent" = enduring '
                     'preferences/conventions (kept indefinitely); "durable" (default) '
@@ -413,7 +420,7 @@ RETAIN_SCHEMA: dict[str, Any] = {
             },
             'risk_class': {
                 'type': 'string',
-                'enum': ['none', 'private', 'sensitive', 'safety'],
+                'enum': _RISK_ENUM_VALUES,
                 'description': (
                     'Risk override for all extracted facts. "none" (default); '
                     '"private" = PII/secrets; "sensitive" = restricted topic; '

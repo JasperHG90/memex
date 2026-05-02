@@ -158,7 +158,13 @@ class RetrievalRequest(SQLModel):
     )
 
     @model_validator(mode='after')
-    def validate_strategies(self) -> Self:
+    def validate_request_fields(self) -> Self:
+        """Cross-field validator: strategies, intent_class, risk_class.
+
+        Originally named ``validate_strategies`` when only ``strategies`` was
+        validated; renamed in round-5 review to reflect that it now also
+        validates intent/risk class membership against the canonical enum sets.
+        """
         if self.strategies is not None:
             if len(self.strategies) == 0:
                 raise ValueError('strategies list must not be empty')

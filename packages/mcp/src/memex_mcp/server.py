@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -66,12 +66,14 @@ from memex_mcp.models import (
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
     BatchJobStatus,
+    IntentLiteral,
     LineageDirection,
     LineageResponse,
     NoteAppendRequest,
     NoteCreateDTO,
     PageIndexDTO,
     PageMetadataDTO,
+    RiskLiteral,
     TOCNodeDTO,
     filter_toc,
 )
@@ -1639,7 +1641,7 @@ async def memex_memory_search(
         ),
     ] = False,
     intent_class: Annotated[
-        Literal['permanent', 'durable', 'ephemeral'] | None,
+        IntentLiteral | None,
         Field(
             default=None,
             description=(
@@ -1648,7 +1650,7 @@ async def memex_memory_search(
         ),
     ] = None,
     risk_class: Annotated[
-        Literal['none', 'sensitive', 'private', 'safety'] | None,
+        RiskLiteral | None,
         Field(
             default=None,
             description=(
@@ -1671,9 +1673,14 @@ async def memex_memory_search(
         before_dt = _to_utc_datetime(_dt.fromisoformat(before)) if before else None
         ref_dt = _to_utc_datetime(_dt.fromisoformat(reference_date)) if reference_date else None
 
-        # Validate intent_class / risk_class locally so MCP callers see a
-        # clean ToolError instead of a server 422. Mirrors the CLI and
-        # Hermes-plugin pattern; canonical sets live in memex_common.schemas.
+        # Defense-in-depth: FastMCP+Pydantic rejects invalid Literal values
+        # upstream (the IntentLiteral / RiskLiteral annotations on the
+        # parameters above), so this check is unreachable for real MCP
+        # callers. We keep it as a safety net for direct-call paths that
+        # bypass schema validation — tests that pass raw strings, internal
+        # Python callers invoking the underlying ``.fn``, etc. — and to
+        # surface a clean ToolError (not a 422) at the boundary. Mirrors
+        # the CLI/Hermes-plugin pattern; canonical sets in memex_common.schemas.
         from memex_common.schemas import (
             VALID_INTENT_CLASSES,
             VALID_RISK_CLASSES,

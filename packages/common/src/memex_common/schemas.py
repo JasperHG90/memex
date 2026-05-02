@@ -3,7 +3,7 @@
 import datetime as dt
 import re
 from enum import Enum
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 from uuid import UUID
 from pydantic import (
     BaseModel,
@@ -82,6 +82,22 @@ class RiskClass(str, Enum):
 
 VALID_INTENT_CLASSES: frozenset[str] = frozenset(c.value for c in IntentClass)
 VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
+
+
+# Canonical ``Literal`` aliases for use as type annotations across packages
+# (MCP tool params, DSPy classifier signatures, etc.). mypy requires
+# ``Literal[...]`` arguments to be compile-time string literals — we cannot
+# unpack a runtime expression like ``Literal[*tuple(c.value for c in IntentClass)]``
+# without losing static-type narrowing — so the values are still hand-listed here.
+# However, divergence between these aliases and the ``IntentClass`` /
+# ``RiskClass`` enums is caught at test time (see
+# ``packages/common/tests/test_enum_literal_parity.py``) which asserts
+# ``typing.get_args(IntentLiteral) == tuple(c.value for c in IntentClass)``.
+# This collapses three+ duplicate definitions (MCP server, DSPy classifier,
+# Hermes JSON schema) into ONE canonical definition; downstream importers
+# reference these names instead of re-typing the value tuple.
+IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
+RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
 
 
 class LineageDirection(str, Enum):
