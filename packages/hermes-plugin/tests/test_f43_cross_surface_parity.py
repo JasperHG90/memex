@@ -21,8 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from memex_hermes_plugin.memex.briefing import _RESOLUTION_FLOW_PRIMER
-from memex_mcp._f43_descriptions import (
+pytest.importorskip('memex_mcp')
+
+from memex_hermes_plugin.memex.briefing import _RESOLUTION_FLOW_PRIMER  # noqa: E402
+from memex_mcp._f43_descriptions import (  # noqa: E402
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
