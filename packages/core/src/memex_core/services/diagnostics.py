@@ -91,6 +91,12 @@ class DiagnosticsService(BaseService):
 
             def _on_done(_t: asyncio.Task[dict[str, Any]], k: str = key) -> None:
                 self._clear_registry(k)
+                if not _t.cancelled():
+                    exc = _t.exception()
+                    if exc is not None:
+                        logger.exception(
+                            'Diagnostics manifold compute failed for key %s', k, exc_info=exc
+                        )
 
             task.add_done_callback(_on_done)
             return 'computing', {'task_id': _task_id_for(task)}
