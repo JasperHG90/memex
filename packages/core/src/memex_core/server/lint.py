@@ -32,13 +32,13 @@ router = APIRouter(prefix='/api/v1/lint')
 async def lint_status(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    scope: str = Query('vault', pattern='^(vault|global|all)$'),
+    scope: str = Query('all', pattern='^(vault|global|all)$'),
 ) -> dict[str, Any]:
     """Pending finding counts.
 
-    - ``scope=vault`` (default): count for ``vault_id`` (or active vault).
+    - ``scope=all`` (default): total across every vault and global.
+    - ``scope=vault``: count for ``vault_id``; required when scope=vault.
     - ``scope=global``: count for findings with vault_id NULL.
-    - ``scope=all``: total across every vault and global.
     """
     try:
         if scope == 'global':
@@ -74,6 +74,10 @@ async def lint_findings(
 ) -> dict[str, Any]:
     """List maintenance findings with optional filters."""
     try:
+        # `clauses` only contains hard-coded predicate fragments (no user input);
+        # the column/operator strings are trusted constants and all values are
+        # bound via :named parameters. SQLAlchemy Core constructs would be more
+        # idiomatic but offer no additional safety here.
         clauses = ['status = :status']
         params: dict[str, Any] = {'status': status}
         if vault_id is not None:
@@ -93,7 +97,7 @@ async def lint_findings(
                     'SELECT id::text, vault_id::text, lint_type, target_type, target_id, '
                     'rule_name, evidence, suggested_action, status, source, '
                     'created_at, resolved_at '
-                    f'FROM maintenance_proposals WHERE {where} '
+                    f'FROM maintenance_proposals WHERE {where} '  # noqa: S608
                     'ORDER BY created_at DESC '
                     'LIMIT :limit OFFSET :offset'
                 ),
