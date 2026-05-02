@@ -2523,11 +2523,15 @@ def handle_get_memory_units(
     arg_vault = args.get('vault_id')
     target_vault: UUID | None = None
     if arg_vault:
+        # When the caller explicitly passes vault_id, an unparseable value
+        # MUST fail fast — silently falling back to the session-bound vault
+        # could return data from a different vault than the one the agent
+        # asked for (Wave 0 vault-scoping invariant).
         try:
             target_vault = UUID(str(arg_vault))
         except (ValueError, TypeError):
-            target_vault = None
-    if target_vault is None:
+            return tool_error(f'Invalid vault UUID: {arg_vault}')
+    else:
         target_vault = vault_id
     if target_vault is None:
         return json.dumps(
