@@ -111,7 +111,7 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~4-6w for Tier-A 
   - **What is *not* a gap** (resisted scope creep — keep out of F43, codify in agent guidance as "do NOT add"): combined `memex_resolve(unit_ids, reason)` endpoint; `resolved_at` timestamp column; `resolution_type` enum on deprioritize; `bulk-by-source` parameter on deprioritize; note-level deprioritize. The free-text `reason` field carries all needed information.
   - **Out of scope (separate adjacent work, not memory-core)**: Telegram cron-response handler — translates user chat replies into the right MCP calls. Lives in Hermes/Telegram integration code per §7.5. Not a memory-core ticket; called out here so it isn't silently expected of F43.
   - **Test plan (per `feedback_llm_output_validation.md`)**: drive a real-LLM agent turn ("Telegram notifications are now resolved") against each of the three surfaces (MCP direct, Hermes briefing, Claude Code session) and assert: (a) agent disambiguates first when scope is ambiguous; (b) calls `find_note` (or `note_search` only if title unknown) BEFORE any write; (c) for cross-note scope, calls one of Options A/B/C with `top_k>=30` if Option B; (d) issues paired writes (`record_outcome=false` AND `memory_deprioritize`) only against the LLM-judged-relevant subset, not every candidate. Use `pytest -m llm` markers; reuse golden-response patterns from existing real-LLM tests.
-  - **Depends on**: F1a (`record_outcome`) + F4 (`memory_deprioritize`) — both shipped via memory_augmentation. No new code in core; pure agent-facing prompt work + tests.
+  - **Depends on**: F1a (`record_outcome`) + F4 (`memory_deprioritize`) + F46 (Option C path) + F40 (`apply_pre_filter` parameter) + F44 (F33 exploration bypass safety net) — F1a/F4 shipped via memory_augmentation; F46/F40/F44 sequence ahead of F43. No new code in core; pure agent-facing prompt work + tests.
   - **Acceptance**: real-LLM golden test passes on all three surfaces; single PR touching MCP + Hermes + Claude Code + CLAUDE.md (parity rule — partial PR is non-mergeable).
 
 ### Reranker composition extensions (~1-2w, added 2026-05-02 from architectural-asymmetry investigation)
@@ -128,7 +128,8 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~4-6w for Tier-A 
   - **Single weakening** (`confidence = 0.9`): boost ≈ 1.0 (near-neutral).
   - **Single contradiction** (`confidence = 0.8`): boost < 1.0 (mild penalty).
   - **Repeatedly contradicted** (`confidence → 0.0`): boost → `1.0 − 0.5 × confidence_alpha` (substantial penalty).
-  - `confidence_alpha` config field on `RetrievalConfig` (analogous to `reranking_mw_alpha`); tune empirically — start at 0.3 for parity with MW, validate via before/after benchmark.
+  - `confidence_alpha` config field on `RetrievalConfig` (analogous to `reranking_mw_alpha`); tune empirically — once calibration data is available, target ~0.3 for parity with MW and validate via before/after benchmark.
+  - **Default `confidence_alpha=0.0` (off) at ship time** — flip to a non-zero value only after calibration data accumulates (parallels F1c's `mw_alpha` start-after-counters-populate convention). Reason: with `confidence=1.0` as the schema default, any non-zero α at ship time gives every never-contradicted unit a multiplicative lift (e.g., α=0.3 → +15%) — most units get the boost, distorting the score distribution before the calibration that would justify it.
   - Add `CONFIDENCE_BOOST_OBSERVED` Prometheus histogram analogous to `MW_BOOST_OBSERVED` (engine.py:1162).
   - **Reranker stays content-only**: do NOT add `[CONTRADICTED]` text labels to `format_for_reranking` (the cross-encoder wasn't trained on Memex's marker; it would be hallucinating a meaning). All behavioral/structural signals compose at the same site.
   - **Tradeoffs to document and validate**:
@@ -136,8 +137,9 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~4-6w for Tier-A 
     - Behavioral change: existing retrieval results will shift (some currently-surfaced contradicted units drop). Run before/after on a representative workload before flipping the default-on.
     - Double-counting check: confirm `confidence` isn't already used to FILTER candidates upstream (e.g., at hydration). Currently engine.py:1052 only loads supersession metadata for `confidence < 1.0` — that's a display path, not a filter, so no double-count. Verify no other site silently filters on confidence before promoting F47 to default-on.
     - Per the Memory Worth paper precedent (2604.12007v1 Theorem 4.1 caveat in §2.1): do NOT claim convergence guarantees for `confidence_boost` either — it's a useful Bayesian-flavored ranking signal in practice, not provably-convergent under non-stationary multi-tenant ingestion.
+  - **Composition variance bounds**: post-F47 the reranker composition becomes `final = ce_score × recency_boost × temporal_boost × mw_boost × confidence_boost` — four multiplicative boost factors on top of `ce_score`. With α=0.3 each, the boost-only dynamic range is roughly `0.85⁴ ≈ 0.52` → `1.15⁴ ≈ 1.75`, a ~3.4× compounded range. Once F11's `importance_decay_boost` joins the chain (same composition site), this becomes five factors and the range widens further. Practical implication: MMR diversity λ may need re-tuning as additional boost factors land — call this out as an F11/F47 follow-up checkpoint to verify the diversity penalty still gates appropriately against the widened score distribution. **No spec-level clamp is added now (YAGNI)** — the boosts are intentionally additive-marginal and α-tunable, so observed behavior on a representative workload is the right gate. If before/after benchmarks show score-distribution compression (top-K candidates pile near the same final score so MMR can't differentiate), a `max_boost_compound` clamp on the product of boost factors can be added in a follow-up ticket.
   - **Depends on**: nothing new — `unit.confidence` is already being adjusted by the contradiction engine; the column already exists; the composition site is the same one F1c uses.
-  - **Acceptance**: before/after benchmark shows quality lift on contradicted-unit queries; observability metric (`CONFIDENCE_BOOST_OBSERVED` histogram) shows boost distribution matches expectations from the contradiction-frequency in the test vault; all existing tests still pass with `confidence_alpha=0.3` default.
+  - **Acceptance**: before/after benchmark shows quality lift on contradicted-unit queries when `confidence_alpha` is dialled up off the `0.0` default; observability metric (`CONFIDENCE_BOOST_OBSERVED` histogram) shows boost distribution matches expectations from the contradiction-frequency in the test vault; all existing tests still pass with the shipping default `confidence_alpha=0.0` (composition is a no-op).
 
 - [ ] **F48** — Confidence pre-reranker filter (third OR'd branch in F40's predicate) (~3-5d) — see report §3.4.2 ("Pre-reranker confidence filter: parallel to F40's MW filter"). **Pattern**: same architecture as F40 (MW pre-filter) and F47 (confidence post-reranker boost) — strongly-contradicted units that get heavily multiplied down by F47's boost are paying full reranker cost only to be downweighted past usefulness. Filter them before the cross-encoder.
   - **SQL extension to F40's predicate** (third OR'd clause):
@@ -150,7 +152,7 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~4-6w for Tier-A 
         (importance × exp(-elapsed/stability) < 0.10)
         OR
         -- Confidence branch (F48 — strongly-contradicted units)
-        (confidence < 0.2 AND <evidence_threshold>)
+        (confidence < 0.2)
     )
     ```
   - **Cold-start protection**: a never-contradicted unit has `confidence = 1.0` (the schema default) — never excluded by this branch. Only units with multiple repeated contradictions (each `-2α = -0.2`) drop below the threshold. The evidence-threshold sub-condition needs design — options:
@@ -274,10 +276,11 @@ Six follow-ups surfaced during Phase 3 adversarial review and close-out. All Tie
 | 5 — Procedural observations | ~1w | F14 |
 | 6 — Active learning | 3-4w | F20 |
 | 7 — Diagnostics | 3-4w | F32, F9 |
-| 8 — Agent-surface codification | 1-2w | F43 (depends on F1a + F4 + F46 — F46 unblocks Option C path; F1a/F4 already shipped) |
-| 9 — Latency optimization | 4-6w | F40, F44, F45 bundled (F40 + F44 must ship together or behind feature flag; F45 lands with them). F41 + F42 sequence after. F11 (Tier B) needed only for the FSFM clause inside F40 to activate. |
-| 10 — Tooling gap (PageIndex traversal) | 3-5d | F46 (independent, can ship anytime; unblocks F43's Option C guidance) |
+| 8 — Tooling gap (PageIndex traversal) | 3-5d | F46 (independent unblocker; ships first because F43's Option C guidance depends on it being callable end-to-end) |
+| 9 — Latency optimization bundle | 4-6w | F40, F44, F45 bundled (F40 + F44 must ship together or behind feature flag; F45 lands with them). F40 introduces the `apply_pre_filter` parameter that F43 (Wave 10) routes against. F11 (Tier B) needed only for the FSFM clause inside F40 to activate. |
+| 10 — Agent-surface codification | 2-3w | F43 (depends on Wave 8 + Wave 9 — needs F46 for Option C path, F40 for the `apply_pre_filter` parameter, F44 for the F33 exploration safety net; F1a/F4 already shipped) |
 | 11 — Reranker composition extensions | 2-3w | F47 (post-reranker confidence boost) → F48 (pre-reranker confidence filter, riding F40's `apply_pre_filter` flag) → F49 (graph-walk timeline). Sequence F47 first to validate the signal direction, then F48 once observability confirms low false-prune rate, then F49 (independent). All three feed into F43's historical-routing-rule extension. |
+| 12 — Latency follow-on | 2-4w | F41 (cross-encoder score cache), F42 (model-size / quantization tuning). Sequence after F40+F41 since F42 is the only lever with quality-regression risk; both compose with Wave 9. |
 
 **Tight MVP:** F1a + F2 + F4 (~5-7 weeks) — F1a delivers the deprioritization column + outcome write API; F2 ships independently; F4 stacks on F1a. Adds the curation verb on top of MW data + the anisotropy fix without requiring F1b/F1c to be in production.
 

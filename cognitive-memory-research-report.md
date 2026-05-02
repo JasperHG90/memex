@@ -454,9 +454,13 @@ final = ce_score × recency_boost × temporal_boost × mw_boost × confidence_bo
 | 0.2 | 0.91 | substantial penalty |
 | 0.0 | 0.85 | floor penalty |
 
-`confidence_alpha` is a config field on `RetrievalConfig`, analogous to `reranking_mw_alpha`. Suggested default 0.3 for parity with MW; tune empirically on a benchmark query set, mirroring F1c's calibration approach.
+`confidence_alpha` is a config field on `RetrievalConfig`, analogous to `reranking_mw_alpha`. **Ship default: `confidence_alpha = 0.0` (off)** — flip to a non-zero value (target ~0.3 for parity with MW) only after calibration data accumulates, mirroring F1c's `mw_alpha` start-after-counters-populate convention. Reason: with `confidence = 1.0` as the schema default, any non-zero α at ship time gives every never-contradicted unit a multiplicative lift (the table above shows +15% at α=0.3) — most units get the boost, distorting the score distribution before the calibration that would justify it. The illustrative table is kept at α=0.3 because it reads cleanest at that value; treat it as the post-calibration target, not the shipping default.
 
 Observability: `CONFIDENCE_BOOST_OBSERVED` Prometheus histogram analogous to `MW_BOOST_OBSERVED` (engine.py:1162). Per-unit logged contributions stay readable: `ce=0.84 × recency=1.05 × temporal=1.00 × mw=1.08 × confidence=0.91 → final=0.86`.
+
+**Composition variance bounds.**
+
+Post-F47 the reranker composition becomes `final = ce_score × recency_boost × temporal_boost × mw_boost × confidence_boost` — four multiplicative boost factors on top of `ce_score`. With α=0.3 on each, the boost-only dynamic range is roughly `0.85⁴ ≈ 0.52` → `1.15⁴ ≈ 1.75`, a ~3.4× compounded range. Once F11's `importance_decay_boost` joins the chain (same composition site), this becomes five factors and the range widens further. Practical implication: MMR diversity λ may need re-tuning as additional boost factors land — flag this as an F11/F47 follow-up checkpoint to verify the diversity penalty still gates appropriately against the widened score distribution. No spec-level clamp is added now (YAGNI) — the boosts are intentionally additive-marginal and α-tunable, so observed behavior on a representative workload is the right gate. If before/after benchmarks show score-distribution compression (top-K candidates piling near the same final score so MMR can't differentiate), a `max_boost_compound` clamp on the product of boost factors can be added in a follow-up ticket.
 
 **The fix: pre-reranker confidence filter (F48).**
 
