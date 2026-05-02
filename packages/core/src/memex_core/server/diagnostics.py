@@ -81,7 +81,11 @@ async def get_manifold_status(
         return JSONResponse(content=payload, status_code=202)
     if status == 'unavailable':
         raise HTTPException(status_code=501, detail=_UMAP_MISSING_DETAIL)
-    raise HTTPException(status_code=404, detail='No manifold task or cache for this vault/task_id.')
+    if status == 'absent':
+        raise HTTPException(
+            status_code=404, detail='No manifold task or cache for this vault/task_id.'
+        )
+    raise HTTPException(status_code=500, detail=f'Unexpected manifold status: {status}')
 
 
 @router.get('/retrieval/{vault_id}')

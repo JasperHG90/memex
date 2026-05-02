@@ -54,11 +54,19 @@ class DiagnosticsService(BaseService):
         *,
         force_refresh: bool = False,
     ) -> tuple[str, dict[str, Any] | None]:
-        """Returns (status, payload). status ∈ {'ready', 'computing', 'unavailable'}.
+        """Returns (status, payload). status ∈ {'ready', 'computing', 'unavailable', 'absent'}.
 
         - 'ready' → payload is the cached manifold dict (200 OK).
         - 'computing' → payload includes task_id (202 Accepted).
         - 'unavailable' → umap-learn not installed (501 Not Implemented).
+        - 'absent' → no in-flight task and no cached manifold (404 Not Found);
+          only emitted by :meth:`get_manifold_status`, never by this method.
+
+        Note: ``force_refresh=True`` skips the warm-cache check but does NOT
+        cancel an in-flight compute. If a task is already running for this
+        vault, the existing task's id is returned. Cancellation is avoided
+        because the in-flight task may have side effects (cache writes,
+        metrics, traces) that should complete.
         """
         if not force_refresh:
             cached = await warm_cache_hit(self.filestore, self.metastore, vault_id)
