@@ -219,7 +219,7 @@ class KVService(BaseService):
                     )
                     stmt = stmt.on_conflict_do_nothing(constraint='uq_kv_key')
                     stmt = stmt.returning(KVEntry.__table__)
-                    insert_result = await session.exec(stmt)  # type: ignore[arg-type]
+                    insert_result = await session.execute(stmt)
                     row = insert_result.first()
                     await session.commit()
                     if row is not None:

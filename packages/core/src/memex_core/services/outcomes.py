@@ -19,6 +19,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -305,22 +306,13 @@ class OutcomeService:
 
         from sqlalchemy import text as sql_text
 
-        # Pre-check that the referenced kv_key exists. Without this, the
-        # downstream INSERT into ``procedure_outcomes`` (which has a FK to
-        # ``kv_entries.key``) would raise a raw asyncpg
-        # ``ForeignKeyViolationError`` — surface a clean ``ValueError``
-        # instead so callers can distinguish bad input from infra errors.
-        existence_check = await session.execute(
-            sql_text('SELECT 1 FROM kv_entries WHERE key = :k'),
-            {'k': kv_key},
-        )
-        if existence_check.scalar_one_or_none() is None:
-            raise ValueError(f'Cannot record outcome for unknown kv_key: {kv_key!r}')
-
         success_inc = 1 if success else 0
         failure_inc = 0 if success else 1
         # Upsert: INSERT ... ON CONFLICT (vault_id, kv_key) DO UPDATE.
         # Atomic at the row level — no read-modify-write window.
+        # Rely on the FK constraint to ``kv_entries.key`` to validate that
+        # the referenced procedure exists; catching the raw IntegrityError
+        # here avoids the TOCTOU race a SELECT 1 pre-check would introduce.
         upsert = sql_text(
             'INSERT INTO procedure_outcomes '
             '(vault_id, kv_key, success_co_count, failure_co_count, last_outcome_at) '
@@ -332,17 +324,24 @@ class OutcomeService:
             '  updated_at = now() '
             'RETURNING success_co_count, failure_co_count, last_outcome_at'
         )
-        result = await session.execute(
-            upsert,
-            {
-                'vid': vault_uuid,
-                'k': kv_key,
-                'sinc': success_inc,
-                'finc': failure_inc,
-            },
-        )
-        row = result.first()
-        await session.commit()
+        try:
+            result = await session.execute(
+                upsert,
+                {
+                    'vid': vault_uuid,
+                    'k': kv_key,
+                    'sinc': success_inc,
+                    'finc': failure_inc,
+                },
+            )
+            row = result.first()
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            err_text = str(exc).lower()
+            if 'foreign key' in err_text or 'fk_' in err_text:
+                raise ValueError(f'Cannot record outcome for unknown kv_key: {kv_key!r}') from exc
+            raise
 
         OUTCOME_RECORDED_TOTAL.labels(
             vault_id=str(vault_id), outcome='success' if success else 'failure'
