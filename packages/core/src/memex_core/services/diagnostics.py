@@ -161,7 +161,14 @@ def _handle_diagnostics_task_completion(
     ``key`` are passed explicitly; ``task`` is the completed task supplied
     by the asyncio scheduler.
     """
-    service._clear_registry(key)
+    # Always run the registry clear, but never let a failure here bypass the
+    # cancelled / InvalidStateError / failure-logging branches below. A raise
+    # from ``_clear_registry`` would otherwise silently swallow the task's
+    # exception and leave both error branches unexecuted.
+    try:
+        service._clear_registry(key)
+    except Exception:
+        logger.exception('Failed to clear diagnostics registry for key=%s', key)
     if task.cancelled():
         return
     try:

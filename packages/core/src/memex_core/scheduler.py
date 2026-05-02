@@ -101,7 +101,9 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
                     await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)
                 except (OSError, RuntimeError, ValueError) as e:
                     logger.warning(
-                        f'Scheduler: Manifold compute failed for vault {vault.name}: {e}'
+                        'Scheduler: Manifold compute failed for vault %s: %s',
+                        vault.name,
+                        e,
                     )
                 except Exception:
                     # Programming errors (AttributeError/TypeError/NameError) must not

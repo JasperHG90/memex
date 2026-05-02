@@ -3481,13 +3481,15 @@ def handle_memory_summarize_node(
 
     # Narrow ``target_vault`` to ``UUID | None``. ``api.resolve_vault_identifier``
     # is contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
-    # but the protocol stub used here (line 110) types it as ``Any``. The assert
-    # documents the contract for mypy and surfaces a loud failure at the boundary
-    # if the contract is ever broken — instead of a confusing AttributeError
-    # deeper in ``api.summarize_node``.
-    assert target_vault is None or isinstance(target_vault, UUID), (
-        f'resolve_vault_identifier returned non-UUID: {type(target_vault).__name__}'
-    )
+    # but the protocol stub used here (line 110) types it as ``Any``. The explicit
+    # ``raise TypeError`` documents the contract for mypy and surfaces a loud
+    # failure at the boundary if the contract is ever broken — instead of a
+    # confusing AttributeError deeper in ``api.summarize_node``. Using a real
+    # ``raise`` (not ``assert``) ensures the check survives ``python -O``.
+    if target_vault is not None and not isinstance(target_vault, UUID):
+        raise TypeError(
+            f'resolve_vault_identifier returned non-UUID: {type(target_vault).__name__}'
+        )
 
     try:
         result = run_sync(
