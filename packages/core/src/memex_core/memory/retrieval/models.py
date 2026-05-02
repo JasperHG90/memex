@@ -4,9 +4,16 @@ from typing import Any, Self
 from pydantic import Field, model_validator
 from sqlmodel import SQLModel
 
+from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+
+__all__ = [
+    'RetrievalRequest',
+    'VALID_STRATEGIES',
+    'VALID_INTENT_CLASSES',
+    'VALID_RISK_CLASSES',
+]
+
 VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'mental_model'})
-VALID_INTENT_CLASSES = frozenset({'permanent', 'durable', 'ephemeral'})
-VALID_RISK_CLASSES = frozenset({'none', 'sensitive', 'private', 'safety'})
 
 
 class RetrievalRequest(SQLModel):

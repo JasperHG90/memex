@@ -1566,15 +1566,22 @@ def handle_memory_search(
     tags = args.get('tags') or None
     vault_ids = _resolve_vault_ids(api, args, vault_id)
 
+    # Allowed sets are canonical in memex_common.schemas (derived from the
+    # IntentClass / RiskClass enums). Imported lazily to keep the module
+    # import surface lean for handler discovery.
+    from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+
     intent_class = args.get('intent_class') or None
-    if intent_class is not None and intent_class not in {'permanent', 'durable', 'ephemeral'}:
+    if intent_class is not None and intent_class not in VALID_INTENT_CLASSES:
         return tool_error(
-            f'Invalid intent_class: {intent_class!r}. Valid values: permanent | durable | ephemeral'
+            f'Invalid intent_class: {intent_class!r}. '
+            f'Valid values: {" | ".join(sorted(VALID_INTENT_CLASSES))}'
         )
     risk_class = args.get('risk_class') or None
-    if risk_class is not None and risk_class not in {'none', 'sensitive', 'private', 'safety'}:
+    if risk_class is not None and risk_class not in VALID_RISK_CLASSES:
         return tool_error(
-            f'Invalid risk_class: {risk_class!r}. Valid values: none | sensitive | private | safety'
+            f'Invalid risk_class: {risk_class!r}. '
+            f'Valid values: {" | ".join(sorted(VALID_RISK_CLASSES))}'
         )
 
     try:

@@ -626,23 +626,26 @@ async def search_memory(
     ref_dt = _dt.fromisoformat(reference_date).replace(tzinfo=_tz.utc) if reference_date else None
 
     # Validate intent / risk against allowed values BEFORE the API call so
-    # users see a clean error instead of a server 422.
+    # users see a clean error instead of a server 422. Allowed sets are
+    # canonical in memex_common.schemas (derived from IntentClass / RiskClass).
+    from memex_common.schemas import VALID_INTENT_CLASSES, VALID_RISK_CLASSES
+
     intent_value: str | None = None
     if intent:
-        allowed_intents = {'permanent', 'durable', 'ephemeral'}
         intent_value = intent.lower()
-        if intent_value not in allowed_intents:
+        if intent_value not in VALID_INTENT_CLASSES:
             console.print(
-                f'[red]Invalid --intent {intent!r}. Allowed: {sorted(allowed_intents)}[/red]'
+                f'[red]Invalid --intent {intent!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}[/red]'
             )
             return
 
     risk_value: str | None = None
     if risk:
-        allowed_risks = {'none', 'sensitive', 'private', 'safety'}
         risk_value = risk.lower()
-        if risk_value not in allowed_risks:
-            console.print(f'[red]Invalid --risk {risk!r}. Allowed: {sorted(allowed_risks)}[/red]')
+        if risk_value not in VALID_RISK_CLASSES:
+            console.print(
+                f'[red]Invalid --risk {risk!r}. Allowed: {sorted(VALID_RISK_CLASSES)}[/red]'
+            )
             return
 
     async with get_api_context(config) as api:

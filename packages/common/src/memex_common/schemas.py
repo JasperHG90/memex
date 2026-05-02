@@ -80,6 +80,10 @@ class RiskClass(str, Enum):
     SAFETY = 'safety'
 
 
+VALID_INTENT_CLASSES: frozenset[str] = frozenset(c.value for c in IntentClass)
+VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 

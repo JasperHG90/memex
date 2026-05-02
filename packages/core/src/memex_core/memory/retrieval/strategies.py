@@ -621,6 +621,14 @@ class MentalModelStrategy:
         # Generic filters generally don't apply to MentalModels in the same way (no fact_type),
         # so we skip apply_generic_filters here or check column existence.
         # MentalModels don't have 'fact_type', so we skip it.
+        #
+        # NOTE: apply_context_filter / apply_intent_risk_filter are intentionally
+        # NOT applied here. ``context``, ``intent_class`` and ``risk_class`` are
+        # MemoryUnit columns (set at write time per F25); MentalModel rows are
+        # synthesised by reflection across many memory units and don't carry
+        # those facets. If a write-time risk/intent filter must constrain
+        # mental-model retrieval in the future, the join would need to fan out
+        # through the contributing MemoryUnits — out of scope for issue #92.
 
         if query_embedding is None:
             # Fallback to name match if no embedding
