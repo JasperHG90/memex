@@ -34,25 +34,28 @@ app = typer.Typer(
 )
 
 
-def _resolve_vault_arg(
+def _resolve_scope(
     vault: str | None,
     is_global: bool,
     is_all: bool,
-) -> tuple[str, str | None]:
-    """Reduce the three flag-shaped vault scoping args to (scope, vault_id)."""
+) -> str:
+    """Reduce the three flag-shaped vault scoping args to a scope string.
+
+    Vault identifier resolution happens in the command body via
+    ``api.resolve_vault_identifier`` (parity with ``memex consolidate``)
+    so vault names — not just UUIDs — are accepted.
+    """
     chosen = sum(1 for x in (vault, is_global, is_all) if x)
     if chosen > 1:
         console.print('[red]Pass at most one of --vault / --global / --all.[/red]')
         raise typer.Exit(2)
     if is_all:
-        return 'all', None
+        return 'all'
     if is_global:
-        return 'global', None
+        return 'global'
     if vault is not None:
-        # Validate UUID format eagerly for fast feedback.
-        parse_uuid(vault, 'vault')
-        return 'vault', vault
-    return 'all', None  # Default — show every pending finding.
+        return 'vault'
+    return 'all'  # Default — show every pending finding.
 
 
 @app.command('status')
@@ -73,11 +76,16 @@ async def lint_status(
     ] = False,
 ):
     """Pending finding counts. Default behaviour is ``--all``."""
-    scope, vault_id = _resolve_vault_arg(vault, is_global, is_all)
+    scope = _resolve_scope(vault, is_global, is_all)
 
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
+            vault_id = (
+                str(await api.resolve_vault_identifier(vault))
+                if scope == 'vault' and vault is not None
+                else None
+            )
             payload = await api.lint_status(scope=scope, vault_id=vault_id)
         except Exception as e:
             handle_api_error(e)
@@ -117,8 +125,6 @@ async def lint_findings(
     limit: Annotated[int, typer.Option('--limit', min=1, max=500)] = 50,
 ):
     """List maintenance findings."""
-    if vault is not None:
-        parse_uuid(vault, 'vault')
     if lint_type is not None and lint_type not in {'structural', 'quality', 'governance', 'schema'}:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)
@@ -126,8 +132,9 @@ async def lint_findings(
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
+            vault_id = str(await api.resolve_vault_identifier(vault)) if vault is not None else None
             payload = await api.lint_findings(
-                vault_id=vault,
+                vault_id=vault_id,
                 lint_type=lint_type,
                 status=status,
                 limit=limit,
