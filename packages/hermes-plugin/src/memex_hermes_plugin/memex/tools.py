@@ -3479,6 +3479,16 @@ def handle_memory_summarize_node(
             )
             return tool_error('Failed to resolve vault identifier')
 
+    # Narrow ``target_vault`` to ``UUID | None``. ``api.resolve_vault_identifier``
+    # is contractually typed ``-> UUID`` (see memex_core.api / memex_common.client),
+    # but the protocol stub used here (line 110) types it as ``Any``. The assert
+    # documents the contract for mypy and surfaces a loud failure at the boundary
+    # if the contract is ever broken — instead of a confusing AttributeError
+    # deeper in ``api.summarize_node``.
+    assert target_vault is None or isinstance(target_vault, UUID), (
+        f'resolve_vault_identifier returned non-UUID: {type(target_vault).__name__}'
+    )
+
     try:
         result = run_sync(
             api.summarize_node(entity_uuid, scope=scope, vault_id=target_vault),

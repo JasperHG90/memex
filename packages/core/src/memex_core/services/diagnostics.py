@@ -89,20 +89,12 @@ class DiagnosticsService(BaseService):
             task = asyncio.create_task(self._compute_and_cache(vault_id))
             self._pending[key] = task
 
-            def _on_done(_t: asyncio.Task[dict[str, Any]], k: str = key) -> None:
-                self._clear_registry(k)
-                if _t.cancelled():
-                    return
-                try:
-                    exc = _t.exception()
-                except asyncio.InvalidStateError:
-                    return
-                if exc is not None:
-                    logger.exception(
-                        'Diagnostics manifold compute failed for key %s',
-                        k,
-                        exc_info=(type(exc), exc, exc.__traceback__),
-                    )
+            def _on_done(
+                t: asyncio.Task[dict[str, Any]],
+                _service: 'DiagnosticsService' = self,
+                _key: str = key,
+            ) -> None:
+                _handle_diagnostics_task_completion(_service, _key, t)
 
             task.add_done_callback(_on_done)
             return 'computing', {'task_id': _task_id_for(task)}
@@ -154,3 +146,34 @@ class DiagnosticsService(BaseService):
 
 def _task_id_for(task: asyncio.Task[Any]) -> str:
     return f'{id(task):x}'
+
+
+def _handle_diagnostics_task_completion(
+    service: DiagnosticsService,
+    key: str,
+    task: asyncio.Task[dict[str, Any]],
+) -> None:
+    """Done-callback body for diagnostics UMAP compute tasks.
+
+    Extracted to module scope so unit tests can drive it directly without
+    monkey-patching ``Task.add_done_callback`` on a real asyncio.Task — the
+    closure-capture form is fragile under PyPy/uvloop. ``service`` and
+    ``key`` are passed explicitly; ``task`` is the completed task supplied
+    by the asyncio scheduler.
+    """
+    service._clear_registry(key)
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except asyncio.InvalidStateError:
+        return
+    if exc is not None:
+        # Use ``logger.error`` (not ``logger.exception``) because we are not
+        # inside an ``except`` block — the explicit exc_info tuple from the
+        # task's stored exception is what carries the traceback.
+        logger.error(
+            'Diagnostics manifold compute failed for key %s',
+            key,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
