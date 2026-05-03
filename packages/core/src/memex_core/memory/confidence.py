@@ -40,6 +40,8 @@ from __future__ import annotations
 import math
 from typing import Protocol, runtime_checkable
 
+import structlog
+
 # Variance of Uniform(0, 1) = Beta(1, 1) — the cold-start ceiling.
 # Pinned in tests so a future prior change is a deliberate edit.
 # Triplicated constant (Hermes round-25 MED): also defined in
@@ -49,6 +51,8 @@ from typing import Protocol, runtime_checkable
 # pins equivalence across all three sites. Any edit here MUST be
 # mirrored in both common locations.
 MAX_VARIANCE: float = 1.0 / 12.0
+
+_logger = structlog.get_logger('memex.core.memory.confidence')
 
 
 @runtime_checkable
@@ -141,8 +145,14 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
     # objects. ``NaN`` falls back to ``1.0`` for parity with the
     # missing-attribute branch above.
     if not math.isfinite(confidence):
+        _logger.debug(
+            'extract_confidence_and_count: non-finite confidence clamped', raw=raw_confidence
+        )
         confidence = 1.0
-    confidence = max(0.0, min(1.0, confidence))
+    clamped_confidence = max(0.0, min(1.0, confidence))
+    if clamped_confidence != confidence:
+        _logger.debug('extract_confidence_and_count: confidence clamped to [0,1]', raw=confidence)
+    confidence = clamped_confidence
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
     if raw_count is None:
         evidence_count = 0
@@ -156,16 +166,12 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
         # caller passing ``True`` would otherwise short-circuit to 1.
         evidence_count = raw_count
     elif isinstance(raw_count, float) and not math.isfinite(raw_count):
-        # NaN / inf guard (Hermes round-24 HIGH): ``float('nan')`` and
-        # ``float('inf')`` would survive the half-up round below
-        # (``math.floor(NaN + 0.5)`` is ``NaN``, then ``int(NaN)``
-        # raises ``ValueError``). Fall back to 0 so the rerank path
-        # cannot 500 on a stale in-memory unit.
+        _logger.debug(
+            'extract_confidence_and_count: non-finite evidence_count clamped', raw=raw_count
+        )
         evidence_count = 0
     else:
-        # Half-up rounding (Hermes round-21 MED): ``math.floor(x + 0.5)``
-        # gives ``2.5 → 3`` and ``2.9 → 3`` consistently, unlike the
-        # builtin ``round()`` which uses banker's rounding.
+        _logger.debug('extract_confidence_and_count: non-int evidence_count rounded', raw=raw_count)
         evidence_count = int(math.floor(float(raw_count) + 0.5))
     evidence_count = max(0, evidence_count)
     return confidence, evidence_count

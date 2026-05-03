@@ -277,6 +277,11 @@ class ContradictionEngine:
         # one per ``weaken`` (delta = -alpha) and one per ``contradict``
         # (delta = -2*alpha) targeting ``u``. Reinforces are intentionally
         # excluded from the count (F22 v1 backfill/forward symmetry —
+        # see migration 033 backfill SQL which also filters
+        # ``link_type IN ('contradicts', 'weakens')``). Both paths
+        # count links, not events — a batch with 2 weakens on the same
+        # target produces 2 links (deduped by from/to/link_type at
+        # line 115–117) and evidence_bumps[u]=2.
         # see BACKLOG "Future symmetric extension" bullet). So a unit
         # receiving N weakens + M contradicts in one batch lands with
         # ``bump = N + M`` and ``delta = -(N + 2M) * alpha`` — these

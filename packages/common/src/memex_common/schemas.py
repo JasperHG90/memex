@@ -39,7 +39,9 @@ from memex_common.mixins import VaultMixin
 # Triplicated constant (Hermes round-25 MED): also defined in
 # ``memex_core.memory.confidence.MAX_VARIANCE`` and
 # ``memex_common.config._MAX_VARIANCE``. Any edit here MUST be mirrored
-# in both of those locations.
+# in both of those locations. Future: a ``memex_common.constants``
+# module would reduce duplication from 3 to 2 (core can't import
+# common for the reverse direction), halving the drift surface.
 _MAX_VARIANCE: float = 1.0 / 12.0
 
 

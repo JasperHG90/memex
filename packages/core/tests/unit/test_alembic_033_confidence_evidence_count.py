@@ -85,14 +85,14 @@ class TestChunkedBackfillTermination:
 
     def _run_upgrade_with_mocked_execute(self, rowcounts: list[int]) -> int:
         m = _load_migration_033()
-        # Each backfill batch result returns a list whose length the
-        # production code reads via ``len(result.all())`` — driver-independent
-        # rowcount (Hermes round-18 MED). One trailing result is the
+        # Each backfill batch result is iterable (``sum(1 for _ in result)``)
+        # and closeable — driver-independent rowcount (Hermes round-18 MED,
+        # refined round-26 MED). One trailing result is the
         # mismatch-verification SELECT (``.scalar() -> 0`` = no mismatches).
         backfill_results: list[MagicMock] = []
         for rc in rowcounts:
             r = MagicMock()
-            r.all.return_value = [object()] * rc
+            r.__iter__ = MagicMock(return_value=iter([object()] * rc))
             backfill_results.append(r)
 
         verification_result = MagicMock()
@@ -149,7 +149,7 @@ class TestBackfillVerificationLogging:
         # immediately so the verification step is the only further DB
         # interaction.
         backfill_result = MagicMock()
-        backfill_result.all.return_value = []
+        backfill_result.__iter__ = MagicMock(return_value=iter([]))
 
         verification_result = MagicMock()
         verification_result.scalar.return_value = mismatch_count

@@ -193,7 +193,9 @@ def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.
     """Derive note-level status from unit confidences."""
     if not units:
         return 'active'
-    low_confidence = sum(1 for u in units if getattr(u, 'confidence', 1.0) < superseded_threshold)
+    low_confidence = sum(
+        1 for u in units if extract_confidence_and_count(u)[0] < superseded_threshold
+    )
     ratio = low_confidence / len(units)
     if ratio > 0.5:
         return 'superseded'
@@ -631,7 +633,9 @@ class RetrievalEngine:
         # 6b. Filter superseded units
         if not request.include_superseded:
             threshold = self.retrieval_config.superseded_threshold
-            final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
+            final_results = [
+                u for u in final_results if extract_confidence_and_count(u)[0] >= threshold
+            ]
 
         # Snapshot AFTER superseded filter so exploration injection cannot
         # surface superseded-but-ACTIVE units (PR #91 cycle3 MED-1).
@@ -1300,7 +1304,9 @@ class RetrievalEngine:
             fetched_models = {m.id: m for m in models}
 
         # Load supersession context for low-confidence units
-        low_conf_ids = [u.id for u in fetched_units.values() if getattr(u, 'confidence', 1.0) < 1.0]
+        low_conf_ids = [
+            u.id for u in fetched_units.values() if extract_confidence_and_count(u)[0] < 1.0
+        ]
         if low_conf_ids:
             from memex_core.memory.sql_models import MemoryLink
 

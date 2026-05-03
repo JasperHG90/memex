@@ -64,6 +64,7 @@ Create Date: 2026-05-03
 """
 
 import logging
+import os
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -240,6 +241,7 @@ def upgrade() -> None:
         # report as ``-1``). ``sum`` counts without materialising rows
         # into a list, unlike the prior ``len(result.all())``.
         batch_rowcount = sum(1 for _ in result)
+        result.close()
         if not batch_rowcount:
             logger.info(
                 'F22 backfill complete: %d batches, %d units backfilled total.',
@@ -310,7 +312,13 @@ def upgrade() -> None:
         WHERE mu.confidence_evidence_count <> a.cnt
     """)
     mismatch_count = conn.execute(mismatch_check_sql).scalar() or 0
+    mismatch_count = int(mismatch_count)
     if mismatch_count > 0:
+        fail_on_mismatch = os.environ.get('MEMEX_MIGRATION_FAIL_ON_MISMATCH', '').lower() in (
+            '1',
+            'true',
+            'yes',
+        )
         logger.error(
             'F22 backfill verification: %d units have '
             'confidence_evidence_count mismatched against actual link counts. '
@@ -322,9 +330,16 @@ def upgrade() -> None:
             'post-deploy ``UPDATE memory_units mu SET '
             'confidence_evidence_count = sub.cnt FROM (...) sub WHERE '
             'mu.id = sub.unit_id AND mu.confidence_evidence_count <> sub.cnt`` '
-            'with the contradiction engine paused.',
+            'with the contradiction engine paused.%s',
             mismatch_count,
+            ' FAILING migration (MEMEX_MIGRATION_FAIL_ON_MISMATCH=1).' if fail_on_mismatch else '',
         )
+        if fail_on_mismatch:
+            raise RuntimeError(
+                f'F22 backfill verification: {mismatch_count} units have '
+                f'confidence_evidence_count mismatches. '
+                f'Set MEMEX_MIGRATION_FAIL_ON_MISMATCH=0 to log-only.'
+            )
 
 
 def downgrade() -> None:
