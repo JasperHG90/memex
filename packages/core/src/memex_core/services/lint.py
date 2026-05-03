@@ -545,7 +545,15 @@ class LintService(BaseService):
             # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
             confidence_map: dict[str, tuple[float, int]] = {}
             if gate_active and rows:
-                target_ids = [row['target_id'] for row in rows]
+                # Hermes round-9 HIGH: cast through ``str()`` even though
+                # every rule SQL uses ``id::text AS target_id`` — asyncpg
+                # may surface ``uuid.UUID`` objects under some text() row
+                # adapters, and ``UUID(...) not in {str: ...}`` returns
+                # False, silently disabling the gate. The cast is a
+                # one-line guard against that drift class. Bulk-load keys
+                # are ``id::text`` (always str), so consumer-side normalise
+                # to str at the boundary.
+                target_ids = [str(row['target_id']) for row in rows]
                 confidence_map = await _bulk_load_confidence_map(session, target_ids)
                 # Hermes round-6 MED: format-mismatch defence. The bulk map
                 # keys are `id::text` from PostgreSQL (canonical lowercase,
@@ -570,7 +578,7 @@ class LintService(BaseService):
             for row in rows:
                 if gate_active and _confidence_map_blocks(
                     confidence_map,
-                    row['target_id'],
+                    str(row['target_id']),
                     gate.confidence_min,
                     gate.variance_max,
                 ):
