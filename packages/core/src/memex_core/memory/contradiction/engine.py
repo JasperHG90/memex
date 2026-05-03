@@ -158,8 +158,15 @@ class ContradictionEngine:
                 }
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
-                    values['confidence_evidence_count'] = (
-                        MemoryUnit.confidence_evidence_count + bump
+                    # GREATEST(0, ...) belt-and-suspenders parallels the
+                    # confidence column's clamp (Hermes round-9 LOW).
+                    # Bumps are always +1 today, so the GREATEST is a no-op
+                    # — but a future code change that produces negative
+                    # deltas would clamp gracefully here instead of
+                    # tripping the DB CHECK constraint.
+                    values['confidence_evidence_count'] = sa_func.greatest(
+                        0,
+                        MemoryUnit.confidence_evidence_count + bump,
                     )
                 stmt = update(MemoryUnit).where(MemoryUnit.id == unit_id).values(**values)
                 await session.execute(stmt)
