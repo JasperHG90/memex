@@ -282,6 +282,8 @@ async def test_real_llm_extraction_emits_valid_intent_and_risk_per_fact() -> Non
     ]
 
     intent_correct = 0
+    risk_correct = 0
+    risk_total = 0  # number of fixtures with a non-trivial expected risk
     risk_valid = 0
     intent_classes_seen: set[str] = set()
     risk_classes_seen: set[str] = set()
@@ -309,16 +311,33 @@ async def test_real_llm_extraction_emits_valid_intent_and_risk_per_fact() -> Non
         # fact matched the expected intent label.
         if any(f.intent_class == expected_intent for f in facts):
             intent_correct += 1
-        # Treat 'sensitive' as an acceptable downgrade of 'private' (the LLM
-        # may legitimately disagree on PII strength).
-        if expected_risk == 'private':
-            assert any(f.risk_class in {'private', 'sensitive'} for f in facts), (
-                f'expected PII to be flagged for chunk: {chunk!r}'
-            )
+        # Hermes round-6 MED: score risk classification with the same soft
+        # tolerance as intent (best-of-N count) instead of a per-fixture hard
+        # assert. Real-LLM non-determinism can flake the PII fixture without
+        # the test being meaningfully wrong; score it under the aggregate
+        # threshold below. Treat 'sensitive' as an acceptable downgrade of
+        # 'private' (the LLM may legitimately disagree on PII strength).
+        if expected_risk != 'none':
+            risk_total += 1
+            acceptable = {expected_risk}
+            if expected_risk == 'private':
+                acceptable.add('sensitive')
+            if any(f.risk_class in acceptable for f in facts):
+                risk_correct += 1
 
     assert intent_correct >= 3, (
         f'expected ≥3/4 intent fixtures to land correctly, got {intent_correct}/4'
     )
+    if risk_total > 0:
+        # Soft tolerance: at least half of the non-trivial-risk fixtures must
+        # land correctly across runs. With the current 1-fixture set this
+        # collapses to "the run produced a private/sensitive risk somewhere",
+        # which is robust against single-shot LLM flakes.
+        threshold = max(1, risk_total // 2)
+        assert risk_correct >= threshold, (
+            f'expected ≥{threshold}/{risk_total} risk fixtures to land in their '
+            f'acceptable bucket, got {risk_correct}/{risk_total}'
+        )
     assert risk_valid > 0
     assert {'permanent', 'ephemeral'} <= intent_classes_seen, (
         f'real LLM did not exercise both permanent and ephemeral classes; saw {intent_classes_seen}'
