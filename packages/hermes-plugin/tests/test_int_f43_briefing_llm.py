@@ -46,7 +46,18 @@ def _hermes_tools_with_routing() -> list[dict[str, Any]]:
     shorter than MCP's because the briefing teaches routing.
     """
 
-    def _tool(name: str, description: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _tool(
+        name: str,
+        description: str,
+        params: dict[str, Any],
+        required: list[str] | None = None,
+    ) -> dict[str, Any]:
+        # The default `list(params.keys())[:1]` only marks the first parameter
+        # required, which is wrong for tools whose required set is multi-arg.
+        # Tools sourced from real schemas (RECORD_OUTCOME_SCHEMA etc.) use
+        # `parameters` directly and bypass this helper. For tools defined here,
+        # pass `required=` explicitly when the canonical required list is known
+        # (mirrors the MCP-side pattern in test_int_f43_resolution_flow_llm.py).
         return {
             'type': 'function',
             'function': {
@@ -55,7 +66,7 @@ def _hermes_tools_with_routing() -> list[dict[str, Any]]:
                 'parameters': {
                     'type': 'object',
                     'properties': params,
-                    'required': list(params.keys())[:1],
+                    'required': required if required is not None else list(params.keys())[:1],
                 },
             },
         }
