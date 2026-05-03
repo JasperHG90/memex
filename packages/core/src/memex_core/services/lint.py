@@ -437,9 +437,7 @@ class LintService(BaseService):
 
         emitted = 0
         gate = self.config.server.memory.lint.confidence_gate
-        gate_active = spec.target_type == 'memory_unit' and (
-            gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
-        )
+        gate_active = spec.target_type == 'memory_unit' and gate.is_active()
         ctx = (
             _tracer.start_as_current_span('memex.lint.run_rule', attributes=attrs)
             if _tracer

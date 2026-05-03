@@ -602,7 +602,7 @@ class LintLLMService(BaseService):
             return outcome
 
         gate = settings.confidence_gate
-        gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
+        gate_active = gate.is_active()
         if gate_active:
             if confidence_map is not None:
                 from memex_core.services.lint_confidence import confidence_map_blocks
@@ -817,7 +817,7 @@ class LintLLMService(BaseService):
         # (the ship default), so the extra query is paid only when the
         # operator opts into the gate.
         gate = self._settings.confidence_gate
-        gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
+        gate_active = gate.is_active()
         confidence_map: dict[str, tuple[float, int]] | None = None
         if gate_active and candidates:
             from memex_core.services.lint_confidence import bulk_load_confidence_map

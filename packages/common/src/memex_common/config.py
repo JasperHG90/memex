@@ -1280,6 +1280,17 @@ class LintConfidenceGate(BaseModel):
         'suppresses findings on under-evidenced units.',
     )
 
+    def is_active(self) -> bool:
+        """Return True iff this gate would suppress at least one shape of finding.
+
+        Hermes round-14 LOW: collapses the duplicated
+        ``confidence_min > 0.0 or variance_max < (1/12)`` predicate
+        previously inlined in both ``lint.py`` and ``lint_llm.py`` to a
+        single source of truth so a future tweak to gate-active semantics
+        cannot drift across the two services.
+        """
+        return self.confidence_min > 0.0 or self.variance_max < (1.0 / 12.0)
+
 
 class LintConfig(BaseModel):
     """Configuration for the F6 maintenance ledger / rule-based linter."""
