@@ -604,6 +604,28 @@ class ExtractedFact(BaseFact):
         '(none | sensitive | private | safety). Coerced to default on invalid input.',
     )
 
+    # Hermes round-2 MED: ExtractedFact previously had no validators on
+    # intent_class / risk_class even though ProcessedFact.from_extracted_fact
+    # eagerly calls IntentClass(...) / RiskClass(...) on them. The "extraction
+    # must never be blocked by a classification mishap" invariant relied on
+    # every construction site coming from a validated RawFact. Mirror RawFact's
+    # default-on-fail behavior so a future direct ``ExtractedFact(...)`` with
+    # an invalid string degrades gracefully instead of raising ValueError.
+
+    @field_validator('intent_class', mode='before')
+    @classmethod
+    def _coerce_intent_class(cls, v: object) -> str:
+        if isinstance(v, str) and v in {c.value for c in IntentClass}:
+            return v
+        return IntentClass.DURABLE.value
+
+    @field_validator('risk_class', mode='before')
+    @classmethod
+    def _coerce_risk_class(cls, v: object) -> str:
+        if isinstance(v, str) and v in {c.value for c in RiskClass}:
+            return v
+        return RiskClass.NONE.value
+
 
 class ProcessedFact(SQLModel):
     """A fact that has been processed and is ready for storage."""
