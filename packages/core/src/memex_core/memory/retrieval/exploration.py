@@ -244,6 +244,18 @@ def inject_edge_exploration(
     ``edge_exploration=True`` in their ``unit_metadata`` so the caller can
     distinguish them from F33 injections.
 
+    Wiring status (Hermes round-14 LOW): this function ships INERTLY in the
+    F22 PR — defined and tested but NOT yet called from
+    :mod:`memex_core.memory.retrieval.engine`. F22's ship-time guard
+    ``RetrievalConfig.certainty_modulation_enabled = False`` keeps the
+    feature column-only; wiring the edge-exploration injector requires a
+    paired ``edge_exploration_*`` config flag (mirroring F33's
+    ``exploration_epsilon`` / ``exploration_max_injections``) which lands
+    in the activation PR after operators observe the
+    ``CONFIDENCE_VARIANCE_OBSERVED`` distribution post-backfill. The
+    function is exposed publicly so the activation PR is a pure call-site
+    + config addition with no signature churn here.
+
     Mutation contract (Hermes round-1 MED)
     --------------------------------------
     Each injected ``MemoryUnit`` has its ``unit_metadata`` REPLACED with a
