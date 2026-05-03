@@ -614,7 +614,15 @@ class MemoryUnitDTO(MemoryUnitBase):
         """
         # Clamp at the top — defends against upstream input bugs without
         # surprising the caller with a hard failure for benign drift.
+        # Hermes round-15 MED: also write the clamped value back to
+        # ``self.confidence`` so the DTO's ``confidence`` and
+        # ``confidence_variance`` fields are mutually consistent for any
+        # downstream consumer that reads both. Without this, a caller
+        # could see ``confidence=1.0001`` paired with a variance computed
+        # from ``confidence=1.0`` — a silent inconsistency.
         confidence_clamped = max(0.0, min(1.0, self.confidence))
+        if confidence_clamped != self.confidence:
+            object.__setattr__(self, 'confidence', confidence_clamped)
         alpha = 1.0 + confidence_clamped * self.confidence_evidence_count
         beta = 1.0 + (1.0 - confidence_clamped) * self.confidence_evidence_count
         n = alpha + beta
