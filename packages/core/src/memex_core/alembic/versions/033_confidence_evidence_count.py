@@ -55,6 +55,13 @@ depends_on: str | Sequence[str] | None = None
 
 _CHECK_CONSTRAINT_NAME = 'memory_units_confidence_evidence_count_check'
 
+# Hermes round-10 LOW: chunk the backfill so a vault with millions of
+# memory_units doesn't hold a long-running row-level lock on the entire
+# table during the single-shot ``UPDATE … FROM (subquery)``. 5000 strikes
+# the standard balance between per-statement overhead and lock duration —
+# matches typical pgvector / memex backfill batch sizes.
+_BACKFILL_BATCH_SIZE = 5000
+
 
 def _column_exists(conn, table: str, column: str) -> bool:
     result = conn.execute(
@@ -98,20 +105,34 @@ def upgrade() -> None:
             ),
         )
 
-    op.execute(
-        sa.text(
-            'UPDATE memory_units mu '
-            'SET confidence_evidence_count = sub.cnt '
-            'FROM ( '
-            '    SELECT to_unit_id AS unit_id, COUNT(*) AS cnt '
-            '    FROM memory_links '
-            "    WHERE link_type IN ('contradicts', 'weakens') "
-            '    GROUP BY to_unit_id '
-            ') sub '
-            'WHERE mu.id = sub.unit_id '
-            '  AND mu.confidence_evidence_count = 0'
-        )
+    # Chunked backfill (Hermes round-10 LOW). Each batch runs in its own
+    # transaction via ``autocommit_block`` so the lock window per batch is
+    # bounded by ``_BACKFILL_BATCH_SIZE`` rows — not by the total count of
+    # backfill candidates in the vault. The inner SELECT picks the next
+    # ``_BACKFILL_BATCH_SIZE`` actual candidates (units that both have
+    # incoming contradicts/weakens links AND still carry the default 0),
+    # so the outer UPDATE always touches exactly the rows we just chose.
+    # The loop terminates when a batch updates 0 rows.
+    backfill_sql = sa.text(
+        'UPDATE memory_units mu '
+        'SET confidence_evidence_count = sub.cnt '
+        'FROM ( '
+        '    SELECT ml.to_unit_id AS unit_id, COUNT(*) AS cnt '
+        '    FROM memory_links ml '
+        '    JOIN memory_units mu_inner ON mu_inner.id = ml.to_unit_id '
+        "    WHERE ml.link_type IN ('contradicts', 'weakens') "
+        '      AND mu_inner.confidence_evidence_count = 0 '
+        '    GROUP BY ml.to_unit_id '
+        '    LIMIT :batch_size '
+        ') sub '
+        'WHERE mu.id = sub.unit_id '
+        '  AND mu.confidence_evidence_count = 0'
     )
+    while True:
+        with op.get_context().autocommit_block():
+            result = op.get_bind().execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
+        if not result.rowcount:
+            break
 
     # Hermes round-6 MED: production runs migrations only (not
     # ``Base.metadata.create_all``), so the SQLModel-level
