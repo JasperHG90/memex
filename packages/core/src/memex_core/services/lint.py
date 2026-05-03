@@ -545,9 +545,28 @@ class LintService(BaseService):
             # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
             confidence_map: dict[str, tuple[float, int]] = {}
             if gate_active and rows:
-                confidence_map = await _bulk_load_confidence_map(
-                    session, [row['target_id'] for row in rows]
-                )
+                target_ids = [row['target_id'] for row in rows]
+                confidence_map = await _bulk_load_confidence_map(session, target_ids)
+                # Hermes round-6 MED: format-mismatch defence. The bulk map
+                # keys are `id::text` from PostgreSQL (canonical lowercase,
+                # hyphenated UUID). If any rule's `select_sql` somewhere
+                # ever returned a different string form, the per-id lookup
+                # in ``_confidence_map_blocks`` would silently miss and the
+                # unit would surface (the documented "missing row → do not
+                # block" fallback). Surface the mismatch loudly so it
+                # doesn't manifest as a phantom finding.
+                missing = [tid for tid in target_ids if tid not in confidence_map]
+                if missing:
+                    logger.warning(
+                        'lint rule %s: confidence-gate bulk map missed %d/%d '
+                        'target_ids — these will fall through the gate '
+                        '(possibly stale or rule SQL emitting a non-canonical '
+                        'UUID string). Sample: %s',
+                        spec.name,
+                        len(missing),
+                        len(target_ids),
+                        missing[:5],
+                    )
             for row in rows:
                 if gate_active and _confidence_map_blocks(
                     confidence_map,
