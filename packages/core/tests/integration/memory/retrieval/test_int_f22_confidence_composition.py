@@ -133,7 +133,10 @@ async def test_backfill_counts_contradicts_and_weakens_only(session: AsyncSessio
 
     rows = (
         await session.execute(
-            text('SELECT id, confidence_evidence_count FROM memory_units WHERE id = ANY(:ids)'),
+            text(
+                'SELECT id, confidence_evidence_count FROM memory_units '
+                'WHERE id = ANY(CAST(:ids AS uuid[]))'
+            ),
             {'ids': [str(target_a_id), str(target_b_id), str(target_c_id)]},
         )
     ).all()
