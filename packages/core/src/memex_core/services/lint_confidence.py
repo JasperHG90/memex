@@ -14,10 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory.confidence import mean_and_variance
 
+# Hermes round-14 MED: explicit CAST to ``uuid`` so a non-UUID string
+# parameter raises a clear, predictable Postgres ``invalid input syntax``
+# error rather than a partial implicit-cast failure deep in asyncpg's
+# prepared-statement machinery. The column is UUID-typed; matching the
+# parameter type at the SQL boundary keeps the call site self-documenting.
 _LOAD_UNIT_CONFIDENCE_SQL = text("""
     SELECT confidence, confidence_evidence_count
     FROM memory_units
-    WHERE id = :unit_id
+    WHERE id = CAST(:unit_id AS uuid)
 """)
 
 
