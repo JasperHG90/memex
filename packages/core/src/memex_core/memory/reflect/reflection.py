@@ -51,6 +51,19 @@ from memex_core.memory.confidence import extract_confidence_and_count, mean_and_
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
+
+def _variance_key(unit: MemoryUnit) -> float:
+    """F22 reflection prioritisation key: closed-form Beta(1, 1) variance.
+
+    Hoisted to module scope (Hermes round-17 LOW) so the closure isn't
+    re-defined on every call to ``_batch_fetch_recent_memories``. Pure
+    function — no captured state.
+    """
+    confidence, count = extract_confidence_and_count(unit)
+    _, variance = mean_and_variance(confidence, count)
+    return variance
+
+
 # F5: hard ceiling on per-entity recent-memory fetch when ReflectionRequest
 # carries limit_recent_memories=None (scope='full'). Caps per-call LLM cost
 # so a busy entity with thousands of units cannot saturate the prompt budget
@@ -590,12 +603,6 @@ class ReflectionEngine:
         # ``RetrievalConfig.certainty_modulation_enabled`` for the F47
         # boost gating.
         if self.config.server.memory.reflection.variance_prioritisation_enabled:
-
-            def _variance_key(unit: MemoryUnit) -> float:
-                confidence, count = extract_confidence_and_count(unit)
-                _, variance = mean_and_variance(confidence, count)
-                return variance
-
             for eid, units in memories_map.items():
                 units.sort(key=_variance_key, reverse=True)
 
