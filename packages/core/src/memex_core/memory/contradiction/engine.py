@@ -87,21 +87,47 @@ class ContradictionEngine:
             )
 
             all_links: list[MemoryLink] = []
-            confidence_updates: dict[UUID, float] = {}
+            # Hermes round-4 HIGH: accumulate signed alpha-step deltas per
+            # target instead of overwriting with absolute new-confidence
+            # values. ``evidence_bumps`` was already summed; mirroring the
+            # accumulation here keeps ``confidence`` and
+            # ``confidence_evidence_count`` consistent when the same target
+            # is touched by multiple flagged units in one batch.
+            confidence_deltas: dict[UUID, float] = {}
             evidence_bumps: dict[UUID, int] = {}
+            # Snapshot pre-batch confidence per affected unit so we can
+            # apply ``unit.confidence + sum(deltas)`` deterministically
+            # without re-reading the row mid-loop.
+            pre_batch_confidence: dict[UUID, float] = {}
+            for u in flagged_units:
+                pre_batch_confidence[u.id] = float(u.confidence)
 
             tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
+            # Capture pre-batch confidence for any candidate units surfaced
+            # by classification (these are loaded inside _process_flagged_unit
+            # via get_candidates). We extract them from the link rows.
             for result in results:
                 if isinstance(result, BaseException):
                     logger.error('Error processing flagged unit: %s', result)
                     continue
-                links, updates, bumps = result
+                links, deltas, bumps = result
                 all_links.extend(links)
-                confidence_updates.update(updates)
+                for unit_id, delta in deltas.items():
+                    confidence_deltas[unit_id] = confidence_deltas.get(unit_id, 0.0) + delta
                 for unit_id, bump in bumps.items():
                     evidence_bumps[unit_id] = evidence_bumps.get(unit_id, 0) + bump
+
+            # Resolve pre-batch confidence for any units not in flagged_units
+            # (i.e., existing candidate units that received deltas). Load
+            # them once in a single SELECT to keep this a constant-cost step.
+            unknown_ids = [uid for uid in confidence_deltas if uid not in pre_batch_confidence]
+            if unknown_ids:
+                stmt_load = select(MemoryUnit).where(col(MemoryUnit.id).in_(unknown_ids))
+                result_load = await session.exec(stmt_load)
+                for u in result_load.all():
+                    pre_batch_confidence[u.id] = float(u.confidence)
 
             if all_links:
                 deduped: dict[tuple[UUID, UUID, str], MemoryLink] = {}
@@ -130,7 +156,19 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            for unit_id, new_confidence in confidence_updates.items():
+            for unit_id, delta in confidence_deltas.items():
+                base = pre_batch_confidence.get(unit_id)
+                if base is None:
+                    # Defensive: if the unit was deleted between
+                    # _process_flagged_unit's read and now, skip rather
+                    # than silently writing a corrupted confidence.
+                    logger.warning(
+                        'Skipping confidence update for unit %s: pre-batch '
+                        'confidence unavailable (unit may have been removed).',
+                        unit_id,
+                    )
+                    continue
+                new_confidence = max(0.0, min(1.0, base + delta))
                 values: dict[str, Any] = {'confidence': new_confidence}
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
@@ -144,7 +182,7 @@ class ContradictionEngine:
                 'Contradiction detection: created %d links, updated %d confidences '
                 '(evidence bumps: %d)',
                 len(all_links),
-                len(confidence_updates),
+                len(confidence_deltas),
                 sum(evidence_bumps.values()),
             )
 
@@ -178,9 +216,21 @@ class ContradictionEngine:
     ) -> tuple[list[MemoryLink], dict[UUID, float], dict[UUID, int]]:
         """Process a single flagged unit: get candidates, classify, adjust.
 
-        Returns ``(links, confidence_updates, evidence_bumps)`` — F22 adds the
-        third element to track per-unit ``confidence_evidence_count`` bumps so
-        the caller can update both fields in the same atomic statement.
+        Returns ``(links, confidence_deltas, evidence_bumps)``:
+
+          - ``links``: link rows to upsert (deduped by the caller).
+          - ``confidence_deltas``: signed alpha-step deltas keyed by unit_id.
+            ``+alpha`` for reinforce, ``-alpha`` for weaken, ``-2*alpha`` for
+            contradict. The caller sums deltas per-unit (Hermes round-4 HIGH:
+            previously this dict was ``confidence_updates`` carrying the
+            absolute new value, so concurrent batches that touched the same
+            target would overwrite each other and drift the confidence column
+            out of sync with ``confidence_evidence_count``).
+          - ``evidence_bumps``: per-unit increments for
+            ``confidence_evidence_count`` — summed by the caller.
+
+        Both delta maps stay symmetric in the caller's accumulation step so
+        ``confidence`` and ``confidence_evidence_count`` advance in lockstep.
         """
         candidates = await get_candidates(
             session,
@@ -201,7 +251,7 @@ class ContradictionEngine:
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
-        confidence_updates: dict[UUID, float] = {}
+        confidence_deltas: dict[UUID, float] = {}
         evidence_bumps: dict[UUID, int] = {}
 
         for rel in relationships:
@@ -220,18 +270,22 @@ class ContradictionEngine:
             note_title = await self._get_note_title(session, authoritative.note_id)
 
             if relation == 'reinforce':
+                # Symmetric reinforce: both endpoints gain +alpha. Reinforce
+                # does NOT bump evidence_count (F22 v1 design — see BACKLOG
+                # known-v1-limitation: forward/backfill symmetry).
                 for u in [unit, existing_unit]:
-                    new_conf = min(u.confidence + self.config.alpha, 1.0)
-                    confidence_updates[u.id] = new_conf
+                    confidence_deltas[u.id] = confidence_deltas.get(u.id, 0.0) + self.config.alpha
                 link_type = 'reinforces'
             elif relation == 'weaken':
-                new_conf = max(superseded.confidence - self.config.alpha, 0.0)
-                confidence_updates[superseded.id] = new_conf
+                confidence_deltas[superseded.id] = (
+                    confidence_deltas.get(superseded.id, 0.0) - self.config.alpha
+                )
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'weakens'
             elif relation == 'contradict':
-                new_conf = max(superseded.confidence - 2 * self.config.alpha, 0.0)
-                confidence_updates[superseded.id] = new_conf
+                confidence_deltas[superseded.id] = (
+                    confidence_deltas.get(superseded.id, 0.0) - 2 * self.config.alpha
+                )
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'contradicts'
             else:
@@ -257,7 +311,7 @@ class ContradictionEngine:
             )
             links.append(link)
 
-        return links, confidence_updates, evidence_bumps
+        return links, confidence_deltas, evidence_bumps
 
     async def _classify(
         self, unit: MemoryUnit, candidates: list[MemoryUnit]
