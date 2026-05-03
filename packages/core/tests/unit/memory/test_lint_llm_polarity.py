@@ -132,3 +132,30 @@ class TestPolarityClassifier:
             neutral_prob=0.2,
         )
         assert result.label == PolarityLabel.CONTRADICTION
+
+    def test_polarity_result_probabilities_sum_within_tolerance(self):
+        result = PolarityResult(
+            label=PolarityLabel.NEUTRAL,
+            contradiction_prob=0.333,
+            entailment_prob=0.333,
+            neutral_prob=0.334,
+        )
+        assert result.label is PolarityLabel.NEUTRAL
+
+    def test_polarity_result_rejects_probabilities_summing_below_tolerance(self):
+        with pytest.raises(ValueError, match='must sum to ~1.0'):
+            PolarityResult(
+                label=PolarityLabel.NEUTRAL,
+                contradiction_prob=0.1,
+                entailment_prob=0.1,
+                neutral_prob=0.1,
+            )
+
+    def test_polarity_result_rejects_probabilities_summing_above_tolerance(self):
+        with pytest.raises(ValueError, match='must sum to ~1.0'):
+            PolarityResult(
+                label=PolarityLabel.CONTRADICTION,
+                contradiction_prob=0.6,
+                entailment_prob=0.6,
+                neutral_prob=0.6,
+            )

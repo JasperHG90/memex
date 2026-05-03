@@ -23,12 +23,14 @@ References: RFC-006 §"Cost-cap implementation", §"Trigger surface".
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -289,6 +291,36 @@ def _truncate_to_hour(dt: datetime) -> datetime:
     return dt.replace(minute=0, second=0, microsecond=0)
 
 
+_CONTEXT_AWARE_CHECK_CACHE: 'WeakKeyDictionary[Any, bool]' = WeakKeyDictionary()
+
+
+def _check_accepts_context(run_llm_check: RunLLMCheck) -> bool:
+    """Return True iff ``run_llm_check`` accepts a ``context`` kwarg.
+
+    Result is cached per-callable (weakly) so signature introspection only
+    runs once per check. Falls back to ``True`` when the signature cannot be
+    introspected (e.g. C-implemented callables): the caller-side ``run_llm_check``
+    is expected to accept ``context`` whenever it cannot be inspected.
+    """
+    cached = _CONTEXT_AWARE_CHECK_CACHE.get(run_llm_check)
+    if cached is not None:
+        return cached
+    try:
+        sig = inspect.signature(run_llm_check)
+    except (TypeError, ValueError):
+        accepts = True
+    else:
+        params = sig.parameters
+        accepts = 'context' in params or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+    try:
+        _CONTEXT_AWARE_CHECK_CACHE[run_llm_check] = accepts
+    except TypeError:
+        pass
+    return accepts
+
+
 async def _invoke_check(
     run_llm_check: RunLLMCheck,
     unit_id: UUID,
@@ -303,11 +335,14 @@ async def _invoke_check(
     the precomputed :class:`PolarityResult` through to the DSPy signature
     without re-invoking the NLI model. Existing 3-arg checks (and existing
     tests that mock 3-arg lambdas) continue to work unchanged.
+
+    Dispatch is decided up front by ``inspect.signature`` (cached per-callable)
+    rather than by catching ``TypeError`` from the call site, so genuine
+    ``TypeError``s raised inside the check body are not silently swallowed.
     """
-    try:
+    if _check_accepts_context(run_llm_check):
         return await run_llm_check(unit_id, vault_id, session, context=context)
-    except TypeError:
-        return await run_llm_check(unit_id, vault_id, session)
+    return await run_llm_check(unit_id, vault_id, session)
 
 
 class LintLLMService(BaseService):

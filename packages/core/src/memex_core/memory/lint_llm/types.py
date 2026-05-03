@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from memex_core.memory.sql_models import LintType
 
@@ -30,8 +30,9 @@ class PolarityResult(BaseModel):
 
     Probabilities are stored verbatim (no rounding) so the gate can apply its
     threshold to the contradiction-probability without re-deriving it. The
-    ``model_validator`` enforces the three-key shape and that probabilities sum
-    to within tolerance of 1.0.
+    ``model_validator`` enforces that the per-class probabilities sum to within
+    tolerance of 1.0 (a softmax post-condition); per-field validators handle
+    the [0, 1] bound and label coercion.
     """
 
     label: PolarityLabel = Field(description='Argmax of the three-class probabilities.')
@@ -47,6 +48,18 @@ class PolarityResult(BaseModel):
         if isinstance(v, str):
             return PolarityLabel(v.lower())
         return v
+
+    @model_validator(mode='after')
+    def _check_probabilities_sum_to_one(self) -> 'PolarityResult':
+        total = self.contradiction_prob + self.entailment_prob + self.neutral_prob
+        if not 0.99 <= total <= 1.01:
+            raise ValueError(
+                'PolarityResult probabilities must sum to ~1.0 '
+                f'(contradiction={self.contradiction_prob}, '
+                f'entailment={self.entailment_prob}, '
+                f'neutral={self.neutral_prob}, sum={total:.4f}).'
+            )
+        return self
 
 
 @dataclass
