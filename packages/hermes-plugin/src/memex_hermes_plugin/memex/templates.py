@@ -82,7 +82,7 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
 
 
 # --- F3 --- (4-layer memory-routing primer — single source of truth lives in
-# `memex_mcp._f3_descriptions.LAYER_ROUTING_PRIMER_FRAGMENT`. Re-exported here
+# `memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`. Re-exported here
 # under the `_PROMPT_FRAGMENT` suffix to match the templates.py naming
 # convention for prompt fragments. The briefing.py `_LAYER_ROUTING_PRIMER`
 # (table form) is sourced from the same module.)

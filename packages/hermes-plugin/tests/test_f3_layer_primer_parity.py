@@ -12,7 +12,10 @@ in ALL FOUR agent surfaces:
      (``memex_hermes_plugin.memex.templates.LAYER_ROUTING_PROMPT_FRAGMENT``)
   4. Claude Code plugin rule
      (``packages/claude-code-plugin/rules/memory-layers.md``)
-  5. Root ``CLAUDE.md`` "Memory layers and tool routing" section
+  5. Root ``AGENTS.md`` "Memory layers and tool routing" section
+     (``CLAUDE.md`` is a symlink to ``AGENTS.md`` — same file on disk; we
+     read ``AGENTS.md`` directly so a static review of this test sees the
+     surface that actually carries the table)
 
 Per CLAUDE.md rule 24 (agent-surface parity): the layer-routing guidance must
 not drift between surfaces. A failing assertion here indicates a real surface
@@ -30,19 +33,23 @@ import pytest
 
 pytest.importorskip('memex_mcp')
 
+from memex_common.agent_surface import (  # noqa: E402
+    LAYER_ROUTING_PRIMER_FRAGMENT,
+    LAYER_ROUTING_PRIMER_PROSE,
+    LAYER_ROUTING_PRIMER_TABLE,
+)
 from memex_hermes_plugin.memex.briefing import _LAYER_ROUTING_PRIMER  # noqa: E402
 from memex_hermes_plugin.memex.templates import (  # noqa: E402
     LAYER_ROUTING_PROMPT_FRAGMENT,
-)
-from memex_mcp._f3_descriptions import (  # noqa: E402
-    LAYER_ROUTING_PRIMER_PROSE,
-    LAYER_ROUTING_PRIMER_TABLE,
 )
 from memex_mcp.server import mcp  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CC_RULE_PATH = Path(__file__).parents[2] / 'claude-code-plugin' / 'rules' / 'memory-layers.md'
-_CLAUDE_MD_PATH = _REPO_ROOT / 'CLAUDE.md'
+# CLAUDE.md is a symlink to AGENTS.md (same file on disk); reading AGENTS.md
+# directly avoids any ambiguity around symlink resolution and makes a static
+# diff-review see the surface that actually carries the table.
+_AGENTS_MD_PATH = _REPO_ROOT / 'AGENTS.md'
 
 _F3_TOOLS = (
     'memex_memory_search',
@@ -85,7 +92,7 @@ def surfaces() -> dict[str, str]:
         'hermes_briefing': _LAYER_ROUTING_PRIMER,
         'hermes_template': LAYER_ROUTING_PROMPT_FRAGMENT,
         'claude_code_rule': _CC_RULE_PATH.read_text(),
-        'claude_md_root': _CLAUDE_MD_PATH.read_text(),
+        'agents_md_root': _AGENTS_MD_PATH.read_text(),
     }
 
 
@@ -140,7 +147,7 @@ def test_mcp_search_tools_carry_prose_primer() -> None:
     assert not missing, (
         'F3 MCP tool description drift — these tools do not carry the '
         f'canonical prose primer verbatim: {missing!r}. The canonical text '
-        'lives in `memex_mcp._f3_descriptions.LAYER_ROUTING_PRIMER_PROSE`.'
+        'lives in `memex_common.agent_surface.LAYER_ROUTING_PRIMER_PROSE`.'
     )
 
 
@@ -153,7 +160,7 @@ _CANONICAL_TABLE_ROWS = (
 
 
 def test_table_surfaces_carry_full_canonical_rows() -> None:
-    """Hermes briefing, Claude Code rule, and CLAUDE.md must all carry every
+    """Hermes briefing, Claude Code rule, and AGENTS.md must all carry every
     canonical markdown row from `LAYER_ROUTING_PRIMER_TABLE` verbatim.
 
     Row matching is full-row (layer name + What it stores + Retrieve with +
@@ -171,7 +178,7 @@ def test_table_surfaces_carry_full_canonical_rows() -> None:
     surfaces_to_check = {
         'hermes_briefing': _LAYER_ROUTING_PRIMER,
         'claude_code_rule': _CC_RULE_PATH.read_text(),
-        'claude_md_root': _CLAUDE_MD_PATH.read_text(),
+        'agents_md_root': _AGENTS_MD_PATH.read_text(),
     }
 
     failures: list[str] = []
@@ -185,33 +192,48 @@ def test_table_surfaces_carry_full_canonical_rows() -> None:
 
 
 def test_table_primer_single_source_of_truth() -> None:
-    """`_LAYER_ROUTING_PRIMER` (briefing.py) MUST be the same string object as
-    `LAYER_ROUTING_PRIMER_TABLE` (`_f3_descriptions.py`).
+    """`_LAYER_ROUTING_PRIMER` (briefing.py) MUST be the same string as the
+    canonical `memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE`.
 
     Pins the import-from-source-of-truth structure introduced in
     Hermes round-1: drift can no longer happen because there is only one
     string. If a future change splits them apart, this test fails before any
     column-level drift can sneak in.
+
+    Both ``is`` (object identity — Python's import cache means re-importing
+    the same name from the same module returns the same object) and ``==``
+    (content equality — survives any future test setup that legitimately
+    forces a module reload) are asserted. The ``==`` fallback gives the test
+    a graceful degradation path while the ``is`` check stays primary.
     """
+    assert _LAYER_ROUTING_PRIMER == LAYER_ROUTING_PRIMER_TABLE, (
+        '`_LAYER_ROUTING_PRIMER` content drifted from canonical '
+        '`memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE`.'
+    )
     assert _LAYER_ROUTING_PRIMER is LAYER_ROUTING_PRIMER_TABLE, (
         '`_LAYER_ROUTING_PRIMER` must be imported from '
-        '`memex_mcp._f3_descriptions.LAYER_ROUTING_PRIMER_TABLE` so the table '
-        'has a single source of truth.'
+        '`memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE` so the table '
+        'has a single source of truth (object identity, not just equality).'
     )
 
 
 def test_prompt_fragment_single_source_of_truth() -> None:
-    """`templates.LAYER_ROUTING_PROMPT_FRAGMENT` MUST be the same string
-    object as `_f3_descriptions.LAYER_ROUTING_PRIMER_FRAGMENT`.
+    """`templates.LAYER_ROUTING_PROMPT_FRAGMENT` MUST be the same string as
+    the canonical `memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`.
 
     Pins the import-from-source-of-truth structure for the prompt fragment.
-    The PRIMER_FRAGMENT (canonical name in `_f3_descriptions`) and the
+    The PRIMER_FRAGMENT (canonical name in `agent_surface`) and the
     PROMPT_FRAGMENT (templates.py-side alias) must point at the same string.
+    Asserts both ``==`` (content equality) and ``is`` (object identity) —
+    see ``test_table_primer_single_source_of_truth`` for the rationale.
     """
-    from memex_mcp._f3_descriptions import LAYER_ROUTING_PRIMER_FRAGMENT
-
+    assert LAYER_ROUTING_PROMPT_FRAGMENT == LAYER_ROUTING_PRIMER_FRAGMENT, (
+        '`templates.LAYER_ROUTING_PROMPT_FRAGMENT` content drifted from '
+        'canonical `memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`.'
+    )
     assert LAYER_ROUTING_PROMPT_FRAGMENT is LAYER_ROUTING_PRIMER_FRAGMENT, (
         '`templates.LAYER_ROUTING_PROMPT_FRAGMENT` must be imported from '
-        '`memex_mcp._f3_descriptions.LAYER_ROUTING_PRIMER_FRAGMENT` so the '
-        'fragment has a single source of truth.'
+        '`memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT` so the '
+        'fragment has a single source of truth (object identity, not just '
+        'equality).'
     )
