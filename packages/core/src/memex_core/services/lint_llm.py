@@ -572,6 +572,7 @@ class LintLLMService(BaseService):
         run_llm_check: RunLLMCheck,
         session: AsyncSession,
         polarity_classifier: PolarityClassifier | None = None,
+        confidence_map: dict[str, tuple[float, int]] | None = None,
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
@@ -585,6 +586,13 @@ class LintLLMService(BaseService):
         ``polarity_classifier.polarity_threshold`` the OR'd gate clears and
         the LLM check fires. The NLI invocation is skipped when cosine
         surprise is already at/above the threshold (cheap pre-filter).
+
+        ``confidence_map`` (Hermes round-5 MED): when supplied, the F22
+        confidence/variance gate runs against this prefetched
+        ``{unit_id_str: (confidence, evidence_count)}`` map instead of
+        firing one SELECT per unit. ``tick()`` builds the map once for all
+        candidates so the gate scales O(1) extra queries instead of O(N).
+        ``None`` falls back to the per-row SELECT for one-off callers.
         """
         outcome = MaybeRunOutcome()
         settings = self._settings
@@ -596,13 +604,22 @@ class LintLLMService(BaseService):
         gate = settings.confidence_gate
         gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
         if gate_active:
-            from memex_core.services.lint import _gate_blocks_finding
+            if confidence_map is not None:
+                from memex_core.services.lint import _confidence_map_blocks
 
-            if await _gate_blocks_finding(
-                session, str(unit_id), gate.confidence_min, gate.variance_max
-            ):
-                outcome.skipped_confidence_gate = True
-                return outcome
+                if _confidence_map_blocks(
+                    confidence_map, str(unit_id), gate.confidence_min, gate.variance_max
+                ):
+                    outcome.skipped_confidence_gate = True
+                    return outcome
+            else:
+                from memex_core.services.lint import _gate_blocks_finding
+
+                if await _gate_blocks_finding(
+                    session, str(unit_id), gate.confidence_min, gate.variance_max
+                ):
+                    outcome.skipped_confidence_gate = True
+                    return outcome
 
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
@@ -793,6 +810,23 @@ class LintLLMService(BaseService):
                 vault_id, limit=settings.units_per_tick, session=session
             )
 
+        # F22 confidence-gate bulk pre-fetch (Hermes round-5 MED): when the
+        # gate is active, hydrate ``(confidence, confidence_evidence_count)``
+        # for every candidate up front so per-unit ``maybe_run`` does NOT
+        # fire one SELECT per unit. Skipped entirely when the gate is off
+        # (the ship default), so the extra query is paid only when the
+        # operator opts into the gate.
+        gate = self._settings.confidence_gate
+        gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
+        confidence_map: dict[str, tuple[float, int]] | None = None
+        if gate_active and candidates:
+            from memex_core.services.lint import _bulk_load_confidence_map
+
+            async with self.metastore.session() as session:
+                confidence_map = await _bulk_load_confidence_map(
+                    session, [str(uid) for uid in candidates]
+                )
+
         for unit_id in candidates:
             async with self.metastore.session() as session:
                 try:
@@ -802,6 +836,7 @@ class LintLLMService(BaseService):
                         run_llm_check=run_llm_check,
                         session=session,
                         polarity_classifier=polarity_classifier,
+                        confidence_map=confidence_map,
                     )
                     await session.commit()
                 except Exception:
