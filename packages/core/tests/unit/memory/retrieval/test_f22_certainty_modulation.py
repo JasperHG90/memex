@@ -132,14 +132,20 @@ class TestVarianceMetricEmits:
         assert math.isclose(sum_after - sum_before, 105.0 / 11132.0, rel_tol=1e-6)
 
     @pytest.mark.asyncio
-    async def test_variance_metric_silent_when_flag_off(self) -> None:
+    async def test_variance_metric_emits_even_when_flag_off(self) -> None:
+        """Hermes round-8 MED: the histogram MUST fire even with the flag
+        off so operators have calibration data BEFORE flipping it. The
+        prior gating-on-flag behaviour left them blind to the variance
+        distribution they were about to enable scoring against.
+        """
         unit = _make_unit(confidence=0.3, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=False)
         sum_before = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
         await engine._rerank_results('q', [unit])
-        # No emission when flag is False — F22 metric only fires inside the
-        # certainty branch so the histogram is calibration-on-demand.
-        assert CONFIDENCE_VARIANCE_OBSERVED._sum.get() == sum_before
+        sum_after = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
+        # variance for (0.3, 20) ≈ 0.00943 — same emission path as the
+        # flag-on case, just without the certainty multiplier on the boost.
+        assert math.isclose(sum_after - sum_before, 105.0 / 11132.0, rel_tol=1e-6)
 
 
 class TestModulatedBoostShape:

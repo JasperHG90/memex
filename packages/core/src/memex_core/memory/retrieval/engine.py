@@ -1516,15 +1516,22 @@ class RetrievalEngine:
                 # certainty = 0 → boost collapses to neutral (preserves F47 cold-start
                 # safety even with the multiplier active).
                 confidence = _get_confidence(unit)
+                evidence_count = _get_evidence_count(unit)
+                # Hermes round-8 MED: emit the calibration histogram on
+                # every rerank pass — including when ``certainty_modulation``
+                # is OFF (the ship default). Operators need the variance
+                # distribution BEFORE flipping the flag to make an informed
+                # decision; gating the metric on the flag would leave them
+                # blind. The single mean_and_variance call serves both the
+                # metric and the (conditional) certainty multiplier.
+                _, variance = mean_and_variance(confidence, evidence_count)
+                CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
                 if self.retrieval_config.certainty_modulation_enabled:
-                    evidence_count = _get_evidence_count(unit)
-                    # Single source of truth — both the variance metric and
-                    # the certainty multiplier come from the closed-form
-                    # helpers in ``memex_core.memory.confidence`` (Hermes
-                    # round-4 MED: removes the prior inline duplication of
+                    # Single source of truth — the certainty multiplier
+                    # comes from the closed-form helper in
+                    # ``memex_core.memory.confidence`` (Hermes round-4 MED:
+                    # removes the prior inline duplication of
                     # ``1.0 - variance / MAX_VARIANCE``).
-                    _, variance = mean_and_variance(confidence, evidence_count)
-                    CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
                     certainty_factor = certainty(confidence, evidence_count)
                     confidence_boost = max(
                         1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
