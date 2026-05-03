@@ -238,7 +238,17 @@ async def lint_review_cmd(
     ] = False,
     limit: Annotated[
         int,
-        typer.Option('--limit', min=1, max=500, help='Max findings to review this session.'),
+        typer.Option(
+            '--limit',
+            min=1,
+            max=500,
+            help=(
+                'Max findings to fetch from the server. With ``--global``, the '
+                'global filter is applied client-side AFTER this cap, so a '
+                'global session may surface fewer than --limit findings if '
+                'vault-scoped findings dominate; raise --limit to compensate.'
+            ),
+        ),
     ] = 50,
 ):
     """Walk pending findings interactively (analogous to ``git add -p``).
@@ -247,6 +257,10 @@ async def lint_review_cmd(
     written. Pass ``--apply`` to flip accepted findings to ``resolved`` and
     dismissed findings to ``dismissed`` via the same service paths used by
     ``memex lint resolve`` / ``memex lint dismiss``.
+
+    Note: ``--global`` filters client-side after the server-side ``--limit``
+    cap (mirrors ``memex lint findings``). A server-side ``vault_id IS NULL``
+    filter is tracked as a follow-up; bump ``--limit`` if needed.
     """
     scope = _resolve_scope(vault, is_global, is_all)
     if lint_type is not None and lint_type not in {
