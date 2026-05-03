@@ -144,6 +144,17 @@ class ContradictionEngine:
             # (Hermes round-5 HIGH). ``LEAST/GREATEST`` clamp matches the
             # prior application-level ``max(0.0, min(1.0, ...))``.
             #
+            # Round-4 HIGH semantic note (Hermes round-11): the deltas-and-
+            # clamp form trades per-step clamping (old: confidence=0.15
+            # weakened twice → 0.05, 0.0 with two zero-pinned steps) for
+            # accumulated-then-clamped (new: total delta -0.2 → 0.15-0.2
+            # clamped to 0.0 once). The endpoint value is identical for
+            # any monotonic-decreasing sequence on a unit; only the
+            # *number* of intermediate clamps changes — which is unobserved
+            # because nothing reads the mid-batch state. The accumulation
+            # is what makes round-4's concurrency fix correct: per-step
+            # absolute writes raced; per-step deltas don't.
+            #
             # TODO(perf, post-v1): one UPDATE per distinct unit_id is fine
             # for typical contradiction-batch sizes (≤ a few units), but a
             # single bulk ``UPDATE … FROM (VALUES …)`` or ``executemany``
