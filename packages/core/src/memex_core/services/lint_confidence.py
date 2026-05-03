@@ -122,11 +122,22 @@ async def bulk_load_confidence_map(
     # error deep in asyncpg. The type annotation already says
     # ``list[str]``; assert at runtime so a caller violating the contract
     # gets a clear ``TypeError`` instead of a confusing DB error.
+    # Hermes round-22 MED: also reject non-(list/tuple/set) iterables
+    # (e.g. generators) — SQLAlchemy's ``expanding=True`` consumes the
+    # iterable lazily and a single-shot generator would silently expand
+    # to an empty tuple after the first internal iteration.
     if isinstance(unit_ids, str):
         raise TypeError(
             f'unit_ids must be a list/sequence of UUID strings; got a single str. '
             f'Wrap it in a list before calling: bulk_load_confidence_map(session, [unit_id]). '
             f'Received: {unit_ids!r}'
+        )
+    if not isinstance(unit_ids, (list, tuple, set, frozenset)):
+        raise TypeError(
+            f'unit_ids must be a list/tuple/set of UUID strings; got '
+            f'{type(unit_ids).__name__}. Generators are NOT accepted '
+            f'because SQLAlchemy ``expanding=True`` may consume them '
+            f'lazily and silently expand to empty.'
         )
     result = await session.execute(_BULK_LOAD_UNIT_CONFIDENCE_SQL, {'unit_ids': unit_ids})
     out: dict[str, tuple[float, int]] = {}

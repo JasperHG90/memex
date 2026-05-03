@@ -189,6 +189,49 @@ class TestBulkConfidenceLoad:
         cmap = {'u1': (1.0, 20)}
         assert confidence_map_blocks(cmap, 'u1', confidence_min=0.5, variance_max=0.005) is False
 
+    @pytest.mark.asyncio
+    async def test_bulk_load_rejects_single_str(self) -> None:
+        """A single str must raise TypeError, not silently expand char-by-char."""
+        from memex_core.services.lint_confidence import bulk_load_confidence_map
+
+        session = MagicMock()
+        session.execute = AsyncMock()
+
+        with pytest.raises(TypeError, match='single str'):
+            await bulk_load_confidence_map(session, 'single-uuid-string')  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_bulk_load_rejects_generator(self) -> None:
+        """Hermes round-22 MED: a generator must raise TypeError, not
+        silently expand to empty after lazy consumption.
+        """
+        from memex_core.services.lint_confidence import bulk_load_confidence_map
+
+        session = MagicMock()
+        session.execute = AsyncMock()
+
+        def _gen():
+            yield 'a'
+            yield 'b'
+
+        with pytest.raises(TypeError, match='Generators are NOT accepted'):
+            await bulk_load_confidence_map(session, _gen())  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_bulk_load_accepts_tuple_and_set(self) -> None:
+        """Tuple and set inputs are valid (non-list iterables that are
+        materialised, not lazy)."""
+        from memex_core.services.lint_confidence import bulk_load_confidence_map
+
+        session = MagicMock()
+        result = MagicMock()
+        result.mappings.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=result)
+
+        await bulk_load_confidence_map(session, ('a', 'b'))
+        await bulk_load_confidence_map(session, {'a', 'b'})
+        assert session.execute.call_count == 2
+
 
 class TestMaybeRunConfidenceMapFastPath:
     """F22 — ``maybe_run`` short-circuits via the prefetched ``confidence_map``.
