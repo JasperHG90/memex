@@ -32,9 +32,14 @@ async def test_get_unit_history_tool_registered():
     """F49 must be on the base branch — graph-walk timeline tool registered."""
     from memex_mcp.server import mcp
 
-    tools = await mcp._list_tools()
-    tool_names = [t.name for t in tools]
-    assert 'memex_get_unit_history' in tool_names, (
+    # Use the public ``get_tool`` API rather than ``list_tools``: the latter is
+    # filtered by the DiscoveryMode transform under progressive disclosure
+    # (auto-applied in this package's conftest), so it would only show the
+    # discovery surface (memex_tags / memex_search / memex_get_schema).
+    # ``get_tool`` returns the registered Tool object regardless of transforms,
+    # which is the right semantics for "is this tool registered?".
+    tool = await mcp.get_tool('memex_get_unit_history')
+    assert tool is not None and tool.name == 'memex_get_unit_history', (
         'F49 (memex_get_unit_history MCP tool) is not registered on the base branch. '
-        f'F43 sequencing-gate failed: ship F49 first. Registered tools: {sorted(tool_names)[:10]}...'
+        'F43 sequencing-gate failed: ship F49 first.'
     )
