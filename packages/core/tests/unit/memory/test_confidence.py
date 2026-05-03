@@ -15,7 +15,6 @@ from memex_core.memory.confidence import (
     certainty,
     extract_confidence_and_count,
     mean_and_variance,
-    sample_concentration,
 )
 
 
@@ -139,14 +138,6 @@ class TestWellEvidencedClean:
         # Full F47 boost at certainty=1.0 would be 1.15; at c≈0.977 we get ≈1.146
         assert math.isclose(boost, 1.0 + 0.3 * 0.5 * c, rel_tol=REL_TOL)
         assert 1.14 < boost < 1.15
-
-
-class TestSampleConcentration:
-    def test_known_pair(self) -> None:
-        assert sample_concentration(7.0, 15.0) == 22.0
-
-    def test_zero_pair(self) -> None:
-        assert sample_concentration(0.0, 0.0) == 0.0
 
 
 class TestMeanIsInputConfidence:

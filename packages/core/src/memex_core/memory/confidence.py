@@ -160,12 +160,3 @@ def certainty(confidence: float, evidence_count: int) -> float:
     """
     _, variance = mean_and_variance(confidence, evidence_count)
     return certainty_from_variance(variance)
-
-
-def sample_concentration(alpha: float, beta: float) -> float:
-    """Concentration parameter ``α + β`` of a Beta posterior.
-
-    Used by reflection-cron prioritisation: low concentration → wide posterior
-    → high information yield from re-evaluation.
-    """
-    return alpha + beta
