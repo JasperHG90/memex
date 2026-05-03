@@ -20,6 +20,17 @@ You have been invoked via the `/recall` slash command.
    c. If still no results, call `memex_list_entities` to browse the knowledge graph.
    d. If nothing is found after all three strategies, say so — do not guess.
 
+   **Memory layers (§2.3 / F3)** — route by query type using the four-layer
+   primer in `.claude/rules/memory-layers.md`: Episodic (`memex_note_search`
+   / `memex_recent_notes` / `memex_find_note`) for "what happened, when";
+   Semantic (`memex_memory_search` / `memex_get_memory_units` /
+   `memex_get_entity_mentions`) for decontextualised facts; Conceptual
+   (`memex_survey` / `memex_get_entities` with `mental_models=True`) for
+   synthesised mental models; Procedural-observations
+   (`memex_kv_search` / `memex_kv_get` with `prefix='procedure:'`) for
+   "how do I adapt my skill to this context". The agent owns the verb;
+   Memex owns the adverb.
+
    **Historical / audit-query routing rule (§3.4.2)** — when the user asks
    HOW THINGS CHANGED rather than "what is true *now*", route differently.
    Triggers: "evolved", "used to", "history of", "what changed", "what did I

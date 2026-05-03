@@ -77,6 +77,26 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
 )
 
 
+# --- F3 --- (4-layer memory-routing primer — see briefing.py `_LAYER_ROUTING_PRIMER`
+# for the canonical text rendered in the system prompt; this fragment is the
+# same primer rendered as a tool-call planning template.)
+LAYER_ROUTING_PROMPT_FRAGMENT = (
+    'Memex memory layers (route by query type):\n'
+    '\n'
+    '  - Episodic ("what happened, when") → memex_note_search /\n'
+    '    memex_recent_notes / memex_find_note. Source: timestamped Notes.\n'
+    '  - Semantic ("decontextualised facts") → memex_memory_search /\n'
+    '    memex_get_memory_units / memex_get_entity_mentions. Source: MemoryUnits.\n'
+    '  - Conceptual ("synthesised mental models") → memex_survey /\n'
+    '    memex_get_entities(mental_models=True). Source: MentalModels.\n'
+    '  - Procedural-observations ("adaptations to context") → memex_kv_search /\n'
+    "    memex_kv_get(prefix='procedure:'). Source: KV `procedure:<verb>:<tag>`.\n"
+    '\n'
+    'Default: memex_memory_search for content-shaped questions; memex_note_search\n'
+    'for source-shaped questions. The agent owns the verb; Memex owns the adverb.'
+)
+
+
 # --- F43 --- (historical / audit-query routing rule)
 HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
     'When the user asks HOW THINGS CHANGED (not "what is true now"), do NOT\n'
@@ -96,5 +116,6 @@ HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
 
 __all__ += [
     'HISTORICAL_ROUTING_PROMPT_FRAGMENT',
+    'LAYER_ROUTING_PROMPT_FRAGMENT',
     'RESOLUTION_FLOW_PROMPT_FRAGMENT',
 ]

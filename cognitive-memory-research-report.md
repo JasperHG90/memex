@@ -1014,6 +1014,14 @@ record success=false. This is how Memex avoids rich-get-richer dynamics.
 
 #### F3. Layer formalization in agent-facing tool documentation (docs only)
 
+> **Status:** Implemented (2026-05-03, branch `wave-14/F3-layer-formalization`).
+> Canonical primer constants live in
+> `packages/mcp/src/memex_mcp/_f3_descriptions.py`
+> (`LAYER_ROUTING_PRIMER_PROSE` / `LAYER_ROUTING_PRIMER_TABLE` /
+> `LAYER_ROUTING_PRIMER_FRAGMENT`); the 4 agent surfaces (MCP server, Hermes
+> briefing + templates, Claude Code rule, root `CLAUDE.md`) are pinned by
+> `packages/hermes-plugin/tests/test_f3_layer_primer_parity.py`.
+
 **1. Source citation:**
 - Issue #64 Comment 2 (JasperHG90, 2026-04-28): *"Hierarchical Memory Layers... is implicitly exists in the current schema (Episodic: `Note`, Semantic: `MemoryUnit`, Conceptual: `MentalModel`). No major DB refactor needed. Instead, formalize these layers in the MCP tool documentation to help the LLM route its queries (e.g., 'Use VaultSummary for conceptual context; use NoteSearch for episodic evidence')."*
 - Cross-referenced in §2.3 *Memory types and how Memex covers them* (this report) and §2.4 (`Note` = episodic, `MemoryUnit` = semantic, `MentalModel` = conceptual mapping). KinthAI's pragmatic 3-way split (#64 comment): *"Do something → procedural; Know something → semantic; Need context → episodic."*
