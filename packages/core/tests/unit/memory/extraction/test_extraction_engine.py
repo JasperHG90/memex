@@ -306,3 +306,310 @@ class TestMakeLmPropagatesTimeout:
         assert kwargs.get('num_retries') == 7, (
             f'num_retries not propagated from ModelConfig; got kwargs={kwargs!r}'
         )
+
+
+class TestClassifyAndFilterMetricsGating:
+    """F25b — distribution metrics must NOT fire when the kill-switch is engaged.
+
+    When ``intent_risk_classifier_enabled=False`` every fact is force-rewritten
+    to durable / none. Emitting the distribution counters in that state would
+    paint a misleading 100% durable / none picture on dashboards. The Hermes
+    round-1 review flagged the unconditional emission as a metrics-correctness
+    bug; this test pins the gating behavior.
+    """
+
+    @staticmethod
+    def _processed(intent: str = 'durable', risk: str = 'none') -> ProcessedFact:
+        from memex_common.schemas import IntentClass, RiskClass
+
+        pf = ProcessedFact(
+            fact_text=f'fact-{uuid4()}',
+            fact_type='world',
+            embedding=[0.0] * 384,
+            mentioned_at=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+        )
+        pf.intent_class = IntentClass(intent)
+        pf.risk_class = RiskClass(risk)
+        return pf
+
+    def test_metrics_skipped_when_classifier_disabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        # Snapshot all currently-tracked label values so we can assert no
+        # post-call deltas — child counters created lazily on first .labels()
+        # call.
+        def _snap_total(metric):  # noqa: ANN001
+            total = 0.0
+            for child in metric._metrics.values():
+                total += child._value.get()
+            return total
+
+        before_intent = _snap_total(CLASSIFIER_INTENT_DISTRIBUTION)
+        before_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
+
+        facts = [self._processed('ephemeral', 'none'), self._processed('permanent', 'none')]
+        out = engine._classify_and_filter(facts)
+
+        after_intent = _snap_total(CLASSIFIER_INTENT_DISTRIBUTION)
+        after_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
+
+        from memex_common.schemas import IntentClass, RiskClass
+
+        assert len(out) == 2
+        # Force-rewrite to defaults still happens.
+        assert all(f.intent_class == IntentClass.DURABLE for f in out)
+        assert all(f.risk_class == RiskClass.NONE for f in out)
+        # Distribution metrics: no delta when kill-switch is engaged.
+        assert after_intent == before_intent, (
+            'CLASSIFIER_INTENT_DISTRIBUTION must not increment when '
+            'intent_risk_classifier_enabled=False'
+        )
+        assert after_risk == before_risk, (
+            'CLASSIFIER_RISK_DISTRIBUTION must not increment when '
+            'intent_risk_classifier_enabled=False'
+        )
+
+    def test_metrics_emit_when_classifier_enabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()  # default: enabled
+        assert cfg.intent_risk_classifier_enabled is True
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        before_intent = CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class='ephemeral')._value.get()
+        before_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()
+
+        facts = [self._processed('ephemeral', 'none')]
+        out = engine._classify_and_filter(facts)
+
+        after_intent = CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class='ephemeral')._value.get()
+        after_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()
+
+        assert len(out) == 1
+        assert after_intent - before_intent == 1
+        assert after_risk - before_risk == 1
+
+    def test_safety_class_facts_do_not_inflate_distribution(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-4 MED: ``CLASSIFIER_RISK_DISTRIBUTION`` must increment
+        only for facts that survive ``filter_safety_blocked``. Otherwise a
+        ``risk='safety'`` fact gets counted both as a ``safety`` distribution
+        tick *and* as a ``CLASSIFIER_BLOCKED_TOTAL`` tick — double-counting.
+        """
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        before_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        before_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
+            intent_class='durable'
+        )._value.get()
+
+        facts = [
+            self._processed('durable', 'safety'),  # gets dropped
+            self._processed('durable', 'none'),  # gets persisted
+        ]
+        out = engine._classify_and_filter(facts)
+
+        after_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        after_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
+            intent_class='durable'
+        )._value.get()
+
+        assert len(out) == 1
+        # Safety-class fact does NOT show up on the distribution.
+        assert after_safety == before_safety, (
+            'CLASSIFIER_RISK_DISTRIBUTION must not increment for facts dropped '
+            'by filter_safety_blocked — they are tracked separately by '
+            'CLASSIFIER_BLOCKED_TOTAL.'
+        )
+        # The kept (non-safety) fact's intent does land on the distribution.
+        assert after_intent_durable - before_intent_durable == 1
+
+
+class TestPartialOverrideSemantics:
+    """F25b — per-dimension overrides preserve the LLM's classification on
+    the non-overridden dimension.
+
+    Hermes round-3 HIGH flagged this as a contract change vs. F25 v1, where
+    setting *either* override skipped the entire classifier and the
+    non-overridden dimension fell back to schema defaults. After the fold
+    there is no separate classifier to skip — intent + risk arrive together
+    with extraction — so per-dimension overrides are the only coherent
+    semantics. These tests pin the new contract so a future refactor cannot
+    silently revert it.
+    """
+
+    @staticmethod
+    def _processed(intent: str, risk: str) -> ProcessedFact:
+        from memex_common.schemas import IntentClass, RiskClass
+
+        pf = ProcessedFact(
+            fact_text=f'fact-{uuid4()}',
+            fact_type='world',
+            embedding=[0.0] * 384,
+            mentioned_at=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+        )
+        pf.intent_class = IntentClass(intent)
+        pf.risk_class = RiskClass(risk)
+        return pf
+
+    def test_intent_override_only_keeps_llm_risk(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """``intent_override='ephemeral'`` alone → intent overwritten, risk
+        kept from the LLM (here: ``private``).
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(facts, intent_override='ephemeral', risk_override=None)
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.EPHEMERAL
+        assert out[0].risk_class == RiskClass.PRIVATE  # NOT default ``none``
+
+    def test_risk_override_only_keeps_llm_intent(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """``risk_override='sensitive'`` alone → risk overwritten, intent
+        kept from the LLM.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('ephemeral', 'none')]
+        out = engine._classify_and_filter(facts, intent_override=None, risk_override='sensitive')
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.EPHEMERAL  # NOT default ``durable``
+        assert out[0].risk_class == RiskClass.SENSITIVE
+
+    def test_both_overrides_overwrite_both_dimensions(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Setting both overrides recovers the F25 v1 'override everything'
+        behavior — the previous coarser semantic is opt-in via this call shape.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(facts, intent_override='durable', risk_override='none')
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE
+
+    def test_kill_switch_takes_precedence_over_overrides(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """The kill-switch is "ignore intent/risk entirely" — overrides do
+        not bypass it.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(
+            facts, intent_override='ephemeral', risk_override='sensitive'
+        )
+
+        assert len(out) == 1
+        # Force-defaults win over the overrides.
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE
+
+    def test_invalid_intent_override_raises_when_classifier_enabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-7 LOW: pin the normal-path contract — invalid
+        overrides DO raise ``ValueError`` when the classifier is enabled.
+        Pairs with ``test_kill_switch_does_not_validate_ignored_overrides``
+        which covers the kill-switch fast-path.
+        """
+        cfg = ExtractionConfig()  # default: enabled
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+        facts = [self._processed('durable', 'none')]
+
+        with pytest.raises(ValueError, match='intent_override must be one of'):
+            engine._classify_and_filter(facts, intent_override='nonsense')
+
+        with pytest.raises(ValueError, match='risk_override must be one of'):
+            engine._classify_and_filter(facts, risk_override='also-nonsense')
+
+    def test_kill_switch_does_not_validate_ignored_overrides(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-5 LOW: when the kill-switch is engaged we discard
+        overrides anyway, so validating them and raising ValueError on a bad
+        value is a confusing user-experience for the caller (especially if
+        the kill-switch is set at the config level by another call site).
+        Validate-after-kill-switch ordering means a stale-or-bad override
+        passes silently in this configuration.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        # Garbage overrides — should NOT raise because the kill-switch
+        # short-circuits before validation.
+        out = engine._classify_and_filter(
+            facts, intent_override='nonsense', risk_override='also-nonsense'
+        )
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE

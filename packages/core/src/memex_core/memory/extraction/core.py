@@ -60,6 +60,32 @@ class ExtractSemanticFacts(dspy.Signature):
     Extract semantic facts from text chunks.
     LANGUAGE RULE: Output extracted facts in ENGLISH. Translate if necessary.
     TEMPORAL HANDLING: Use 'event_date_ref' as the anchor for relative dates.
+
+    PER-FACT CLASSIFICATION (F25b — folded into the same call as extraction):
+
+    Each extracted fact MUST carry an ``intent_class`` and a ``risk_class``.
+
+    Intent describes how durable the fact is, NOT how important it feels:
+      - permanent: identity, preferences, key facts that should never decay
+        (e.g. "user has a peanut allergy", "user prefers ruff over black").
+      - durable: project decisions, relationship state, multi-week relevance.
+        DEFAULT for unclear cases.
+      - ephemeral: task context, session details, days-to-weeks relevance only
+        (e.g. "tomorrow's standup is at 10am", "Bob is on vacation this week").
+
+    Set intent based on the content's actual durability, not perceived importance.
+    A specific date for next week is "ephemeral" even if the event is important.
+    The user's home address is "permanent" even though it's not exciting.
+
+    Risk classifies sensitivity:
+      - none: default, public-safe content.
+      - sensitive: flagged for linter review; still retrievable in default scope.
+      - private: excluded from default retrieval; surfaced only on explicit query
+        (passwords, financial details, medical specifics).
+      - safety: blocked entirely (Memex refuses to ingest). Use ONLY for content
+        that would cause real-world harm if surfaced (e.g. self-harm planning,
+        instructions for violence). Be conservative — when in doubt, prefer
+        'sensitive' or 'private' over 'safety'.
     """
 
     chunk_text: str = dspy.InputField(
@@ -88,6 +114,27 @@ class ExtractFrontmatterMetadata(dspy.Signature):
     3. Any other structured metadata as factual statements
 
     LANGUAGE RULE: Output extracted facts in ENGLISH.
+
+    PER-FACT CLASSIFICATION (F25b — folded into the same call as extraction):
+
+    Each extracted fact MUST carry an ``intent_class`` and a ``risk_class``.
+
+    Intent describes how durable the fact is, NOT how important it feels:
+      - permanent: identity, preferences, key facts that should never decay.
+      - durable: project decisions, relationship state, multi-week relevance.
+        DEFAULT for unclear cases.
+      - ephemeral: task context, session details, days-to-weeks relevance only.
+
+    Frontmatter often carries durable document metadata (author, publish_date,
+    title); prefer ``durable`` unless the content suggests otherwise.
+
+    Risk classifies sensitivity:
+      - none: default, public-safe content.
+      - sensitive: flagged for linter review; still retrievable in default scope.
+      - private: excluded from default retrieval (passwords, financial details,
+        medical specifics).
+      - safety: blocked entirely (Memex refuses to ingest). Use ONLY for content
+        that would cause real-world harm. Be conservative.
     """
 
     frontmatter_text: str = dspy.InputField(

@@ -1,34 +1,34 @@
-"""Unit tests for F25 write-time classifier.
+"""Unit tests for the F25 / F25b write-time classifier surface.
 
-Tests cover:
-- _coerce_intent / _coerce_risk default-on-fail behavior
-- classify_facts mutates fact attributes from canned predictor output
-- filter_safety_blocked drops safety-class facts
-- classifier failure path keeps schema defaults (extraction never blocks)
+After F25b the standalone classifier predictor is gone — intent + risk arrive
+on each fact directly from the extraction LLM. What remains is:
 
-Real LLM is not used here — a stub predictor returns canned `dspy.Prediction`
-objects so we can assert the mutation logic without network calls.
+- ``filter_safety_blocked`` — drops ``risk_class='safety'`` facts before
+  persistence.
+- The per-fact pydantic validators on ``RawFact`` that enforce default-on-fail
+  coercion at parse time. (The module-level ``_coerce_intent`` / ``_coerce_risk``
+  helpers were retired in the F25b follow-up — they had become dead production
+  code duplicating the validators. Default-on-fail behavior is now exercised
+  through ``RawFact`` directly in ``TestRawFactValidators``.)
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
 from uuid import uuid4
 
-import dspy
 import pytest
 
-from memex_core.memory.extraction.classifier import (
-    DEFAULT_INTENT,
-    DEFAULT_RISK,
-    INTENT_VALUES,
-    RISK_VALUES,
-    classify_facts,
-    filter_safety_blocked,
-    _coerce_intent,
-    _coerce_risk,
-)
-from memex_core.memory.extraction.models import ProcessedFact
+from memex_common.schemas import IntentClass, RiskClass
+from memex_core.memory.extraction.classifier import filter_safety_blocked
+from memex_core.memory.extraction.models import ProcessedFact, RawFact
+
+# Single source of truth: derive valid values + defaults directly from the
+# canonical enums (was previously re-exported from classifier.py until
+# Hermes round-5 retired the orphaned constants).
+INTENT_VALUES: tuple[str, ...] = tuple(c.value for c in IntentClass)
+RISK_VALUES: tuple[str, ...] = tuple(c.value for c in RiskClass)
+DEFAULT_INTENT = IntentClass.DURABLE.value
+DEFAULT_RISK = RiskClass.NONE.value
 
 
 def _make_fact(text: str = 'a fact', context: str = '') -> ProcessedFact:
@@ -42,95 +42,54 @@ def _make_fact(text: str = 'a fact', context: str = '') -> ProcessedFact:
     )
 
 
-class TestCoerce:
-    @pytest.mark.parametrize('value', INTENT_VALUES)
-    def test_intent_passthrough_for_valid_values(self, value: str) -> None:
-        assert _coerce_intent(value) == value
+class TestRawFactValidators:
+    """The extraction LLM produces intent_class / risk_class on RawFact.
+    Pydantic validators enforce default-on-fail so a malformed LLM output
+    cannot crash the extraction pipeline.
+    """
 
-    @pytest.mark.parametrize('value', RISK_VALUES)
-    def test_risk_passthrough_for_valid_values(self, value: str) -> None:
-        assert _coerce_risk(value) == value
+    @pytest.mark.parametrize('intent', list(INTENT_VALUES))
+    def test_valid_intent_passes_through(self, intent: str) -> None:
+        rf = RawFact(what='x', fact_type='world', intent_class=intent, risk_class='none')
+        assert rf.intent_class == intent
+
+    @pytest.mark.parametrize('risk', list(RISK_VALUES))
+    def test_valid_risk_passes_through(self, risk: str) -> None:
+        rf = RawFact(what='x', fact_type='world', intent_class='durable', risk_class=risk)
+        assert rf.risk_class == risk
+
+    def test_invalid_intent_falls_back_to_default(self) -> None:
+        rf = RawFact(what='x', fact_type='world', intent_class='forever', risk_class='none')  # type: ignore[arg-type]
+        assert rf.intent_class == DEFAULT_INTENT
+
+    def test_invalid_risk_falls_back_to_default(self) -> None:
+        rf = RawFact(
+            what='x',
+            fact_type='world',
+            intent_class='durable',
+            risk_class='very-bad',  # type: ignore[arg-type]
+        )
+        assert rf.risk_class == DEFAULT_RISK
+
+    def test_omitted_classification_takes_field_defaults(self) -> None:
+        rf = RawFact(what='x', fact_type='world')
+        assert rf.intent_class == DEFAULT_INTENT
+        assert rf.risk_class == DEFAULT_RISK
 
     @pytest.mark.parametrize(
         'garbage', ['', 'unknown', None, 42, ['durable'], {'intent': 'durable'}]
     )
-    def test_intent_defaults_on_garbage(self, garbage: object) -> None:
-        assert _coerce_intent(garbage) == DEFAULT_INTENT
+    def test_intent_non_string_garbage_falls_back_to_default(self, garbage: object) -> None:
+        # Coverage previously held by ``TestCoerce`` against ``_coerce_intent``;
+        # after the helper was retired, RawFact's validator must absorb the
+        # same non-string garbage shapes (None, int, list, dict).
+        rf = RawFact(what='x', fact_type='world', intent_class=garbage, risk_class='none')  # type: ignore[arg-type]
+        assert rf.intent_class == DEFAULT_INTENT
 
     @pytest.mark.parametrize('garbage', ['', 'unknown', None, 42, ['none']])
-    def test_risk_defaults_on_garbage(self, garbage: object) -> None:
-        assert _coerce_risk(garbage) == DEFAULT_RISK
-
-
-class TestClassifyFacts:
-    @pytest.mark.asyncio
-    async def test_empty_list_returns_empty(self) -> None:
-        result = await classify_facts([], lm=object(), predictor=object())  # type: ignore[arg-type]
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_mutates_facts_with_predictor_output(self) -> None:
-        fact = _make_fact()
-        canned = dspy.Prediction(intent_class='ephemeral', risk_class='sensitive')
-
-        async def fake_run_dspy(*_args: object, **_kwargs: object) -> dspy.Prediction:
-            return canned
-
-        with patch('memex_core.memory.extraction.classifier.run_dspy_operation', fake_run_dspy):
-            await classify_facts([fact], lm=object(), predictor=object())  # type: ignore[arg-type]
-
-        assert fact.intent_class == 'ephemeral'
-        assert fact.risk_class == 'sensitive'
-
-    @pytest.mark.asyncio
-    async def test_keeps_defaults_when_predictor_raises(self) -> None:
-        fact = _make_fact()
-        original_intent = fact.intent_class
-        original_risk = fact.risk_class
-
-        async def boom(*_args: object, **_kwargs: object) -> dspy.Prediction:
-            raise RuntimeError('LLM provider unreachable')
-
-        with patch('memex_core.memory.extraction.classifier.run_dspy_operation', boom):
-            await classify_facts([fact], lm=object(), predictor=object())  # type: ignore[arg-type]
-
-        assert fact.intent_class == original_intent == DEFAULT_INTENT
-        assert fact.risk_class == original_risk == DEFAULT_RISK
-
-    @pytest.mark.asyncio
-    async def test_invalid_predictor_output_falls_back_to_defaults(self) -> None:
-        fact = _make_fact()
-        bogus = dspy.Prediction(intent_class='unknown', risk_class='nope')
-
-        async def fake_run_dspy(*_args: object, **_kwargs: object) -> dspy.Prediction:
-            return bogus
-
-        with patch('memex_core.memory.extraction.classifier.run_dspy_operation', fake_run_dspy):
-            await classify_facts([fact], lm=object(), predictor=object())  # type: ignore[arg-type]
-
-        assert fact.intent_class == DEFAULT_INTENT
-        assert fact.risk_class == DEFAULT_RISK
-
-    @pytest.mark.asyncio
-    async def test_classifies_each_fact_independently(self) -> None:
-        facts = [_make_fact(text=f'fact {i}') for i in range(3)]
-        outputs = [
-            dspy.Prediction(intent_class='permanent', risk_class='none'),
-            dspy.Prediction(intent_class='durable', risk_class='sensitive'),
-            dspy.Prediction(intent_class='ephemeral', risk_class='private'),
-        ]
-        call_idx = {'i': 0}
-
-        async def fake_run_dspy(*_args: object, **_kwargs: object) -> dspy.Prediction:
-            out = outputs[call_idx['i']]
-            call_idx['i'] += 1
-            return out
-
-        with patch('memex_core.memory.extraction.classifier.run_dspy_operation', fake_run_dspy):
-            await classify_facts(facts, lm=object(), predictor=object())  # type: ignore[arg-type]
-
-        assert [f.intent_class for f in facts] == ['permanent', 'durable', 'ephemeral']
-        assert [f.risk_class for f in facts] == ['none', 'sensitive', 'private']
+    def test_risk_non_string_garbage_falls_back_to_default(self, garbage: object) -> None:
+        rf = RawFact(what='x', fact_type='world', intent_class='durable', risk_class=garbage)  # type: ignore[arg-type]
+        assert rf.risk_class == DEFAULT_RISK
 
 
 class TestFilterSafetyBlocked:

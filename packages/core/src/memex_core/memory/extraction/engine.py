@@ -59,14 +59,15 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     add_temporal_offsets,
     process_embeddings,
 )
-from memex_core.memory.extraction.classifier import (
-    ClassifyMemoryUnit,
-    classify_facts,
-    filter_safety_blocked,
-)
+from memex_core.memory.extraction.classifier import filter_safety_blocked
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
+from memex_core.metrics import (
+    CLASSIFIER_INTENT_DISTRIBUTION,
+    CLASSIFIER_RISK_DISTRIBUTION,
+)
 from memex_core.processing.titles import resolve_title_from_page_index
+from memex_common.schemas import IntentClass, RiskClass
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
 
@@ -217,27 +218,65 @@ class ExtractionEngine:
         )
         self.semaphore = asyncio.Semaphore(config.max_concurrency)
         self.page_index_lm = page_index_lm
-        self._classifier_predictor: dspy.Module | None = (
-            dspy.Predict(ClassifyMemoryUnit) if config.intent_risk_classifier_enabled else None
-        )
 
-    async def _classify_and_filter(
+    def _classify_and_filter(
         self,
         processed_facts: list[ProcessedFact],
         intent_override: str | None = None,
         risk_override: str | None = None,
     ) -> list[ProcessedFact]:
-        """F25 — classify intent + risk, then drop facts marked safety.
+        """F25b — apply overrides, emit distribution metrics, drop safety facts.
 
-        If overrides are supplied the explicit values win and the classifier
-        is bypassed for those dimensions. When both overrides are set the
-        classifier is skipped entirely. The safety filter still runs so an
-        override of ``risk_class='safety'`` is honored.
+        Intent + risk are produced by the extraction LLM (folded into
+        ``ExtractSemanticFacts``) and arrive on each fact already. This method
+        handles the post-extraction concerns:
+
+        * **Per-dimension overrides.** ``intent_override`` and ``risk_override``
+          are applied independently. A caller passing only ``intent_override``
+          replaces the intent on every fact while leaving the LLM-produced
+          ``risk_class`` intact, and vice versa. This is a deliberate post-fold
+          contract change from the F25 v1 behavior, where setting *either*
+          override skipped the entire (separate) classifier call and the
+          non-overridden dimension fell back to schema defaults. After the
+          fold there is no separate classifier to skip — intent + risk arrive
+          together with extraction — so per-dimension overrides are the only
+          coherent semantics. See cognitive-memory-research-report.md §F25b
+          (Surface impact) for the full rationale.
+        * Facts with ``risk_class='safety'`` are dropped before persistence
+          via :func:`filter_safety_blocked`. This honors both LLM-classified
+          safety and a deliberate ``risk_override='safety'`` from the caller.
+        * Distribution metrics are incremented for the *final* intent / risk
+          values (post-override, **post-safety-filter**), so dashboards
+          reflect what was actually persisted. Safety-class drops are
+          counted separately by ``CLASSIFIER_BLOCKED_TOTAL`` on the
+          safety-filter side — counting them on the distribution as well
+          would double-count them.
+
+        When ``config.intent_risk_classifier_enabled`` is False, every fact is
+        forced to the schema defaults (durable / none) regardless of LLM
+        output — this is the kill-switch for intent/risk handling. Overrides
+        are *not* honored when the kill-switch is engaged, since the explicit
+        intent of disabling the classifier is "ignore intent/risk entirely".
         """
         if not processed_facts:
             return processed_facts
 
-        from memex_common.schemas import IntentClass, RiskClass
+        # Kill-switch first: when intent/risk handling is disabled the
+        # explicit intent is "ignore intent/risk entirely" — we shouldn't
+        # validate (let alone honor) overrides the caller supplies because
+        # we'd just discard them. This avoids surprising a caller who sets
+        # the kill-switch at the config level and then passes a stale
+        # override from a call site that shouldn't matter.
+        if not self.config.intent_risk_classifier_enabled:
+            for f in processed_facts:
+                f.intent_class = IntentClass.DURABLE
+                f.risk_class = RiskClass.NONE
+            # No fact can carry ``risk='safety'`` after this loop, so
+            # ``filter_safety_blocked`` would be a no-op — skip it for
+            # clarity (and a trivial perf win). Distribution metrics are
+            # also skipped: emitting them would paint a misleading 100%
+            # durable / none picture on dashboards.
+            return processed_facts
 
         if intent_override is not None and intent_override not in {c.value for c in IntentClass}:
             allowed = [c.value for c in IntentClass]
@@ -246,31 +285,30 @@ class ExtractionEngine:
             allowed = [c.value for c in RiskClass]
             raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
 
-        skip_classifier = bool(intent_override or risk_override)
-        if not skip_classifier and self._classifier_predictor is not None:
-            await classify_facts(
-                processed_facts,
-                lm=self.lm,
-                semaphore=self.semaphore,
-                predictor=self._classifier_predictor,
-            )
-
         if intent_override:
-            intent_value = (
-                IntentClass(intent_override)
-                if isinstance(intent_override, str)
-                else intent_override
-            )
+            intent_value = IntentClass(intent_override)
             for f in processed_facts:
                 f.intent_class = intent_value
         if risk_override:
-            risk_value = (
-                RiskClass(risk_override) if isinstance(risk_override, str) else risk_override
-            )
+            risk_value = RiskClass(risk_override)
             for f in processed_facts:
                 f.risk_class = risk_value
 
-        return filter_safety_blocked(processed_facts)
+        # Drop safety-class facts FIRST, then emit distribution metrics on
+        # what survived. The docstring promises dashboards reflect what was
+        # *actually persisted*, so counting safety facts here would
+        # double-count them (they're already covered by the dedicated
+        # ``CLASSIFIER_BLOCKED_TOTAL`` counter on the safety-filter side).
+        # ``ProcessedFact.intent_class`` / ``risk_class`` are typed as
+        # ``IntentClass`` / ``RiskClass`` enums and every construction path
+        # assigns the enum value (kill-switch, override, and
+        # ``from_extracted_fact``); ``.value`` is therefore always defined.
+        kept = filter_safety_blocked(processed_facts)
+        for f in kept:
+            CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=f.intent_class.value).inc()
+            CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=f.risk_class.value).inc()
+
+        return kept
 
     async def extract_and_persist(
         self,
@@ -422,7 +460,7 @@ class ExtractionEngine:
                     if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                         pf.chunk_id = chunk_map[ef.chunk_index]
 
-            processed_facts = await self._classify_and_filter(
+            processed_facts = self._classify_and_filter(
                 processed_facts, intent_override=intent_override, risk_override=risk_override
             )
             if not processed_facts:
@@ -562,6 +600,8 @@ class ExtractionEngine:
                         who=raw_fact.who,
                         where=raw_fact.where,
                         vault_id=vault_id,
+                        intent_class=raw_fact.intent_class,
+                        risk_class=raw_fact.risk_class,
                     )
                     all_extracted_facts.append(ef)
 
@@ -597,6 +637,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         all_extracted_facts.append(ef)
                 if user_notes_text:
@@ -631,6 +673,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         all_extracted_facts.append(ef)
 
@@ -676,7 +720,7 @@ class ExtractionEngine:
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
 
-                    final_processed = await self._classify_and_filter(
+                    final_processed = self._classify_and_filter(
                         final_processed,
                         intent_override=intent_override,
                         risk_override=risk_override,
@@ -958,6 +1002,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         extracted_facts.append(ef)
                         global_fact_idx += 1
@@ -989,7 +1035,7 @@ class ExtractionEngine:
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-                        final_processed = await self._classify_and_filter(
+                        final_processed = self._classify_and_filter(
                             final_processed,
                             intent_override=intent_override,
                             risk_override=risk_override,
@@ -1197,6 +1243,8 @@ class ExtractionEngine:
                     who=f.who,
                     where=f.where,
                     vault_id=vault_id,
+                    intent_class=f.intent_class,
+                    risk_class=f.risk_class,
                 )
                 extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1232,6 +1280,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1265,6 +1315,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1292,7 +1344,7 @@ class ExtractionEngine:
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-        final_processed = await self._classify_and_filter(
+        final_processed = self._classify_and_filter(
             final_processed, intent_override=intent_override, risk_override=risk_override
         )
         if not final_processed:
@@ -1489,6 +1541,8 @@ class ExtractionEngine:
                         payload=content.payload or {},  # Ensure payload is dict
                         where=f.where,
                         vault_id=content.vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1527,6 +1581,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
             if user_notes_text:
@@ -1559,6 +1615,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1719,6 +1777,8 @@ class ExtractionEngine:
                 who=f.who,
                 where=f.where,
                 vault_id=vault_id,
+                intent_class=f.intent_class,
+                risk_class=f.risk_class,
             )
             for f in un_facts
         ]
@@ -1760,7 +1820,7 @@ class ExtractionEngine:
         for pf in final_processed:
             pf.note_id = note_id
 
-        final_processed = await self._classify_and_filter(
+        final_processed = self._classify_and_filter(
             final_processed, intent_override=intent_override, risk_override=risk_override
         )
         if not final_processed:

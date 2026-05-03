@@ -95,7 +95,9 @@ def _require_prerequisites() -> None:
 _RUN_DSPY_IMPORT_SITES: tuple[str, ...] = (
     'memex_core.llm.run_dspy_operation',
     'memex_core.memory.extraction.core.run_dspy_operation',
-    'memex_core.memory.extraction.classifier.run_dspy_operation',
+    # Note: as of F25b the classifier no longer issues its own LLM call —
+    # intent_class / risk_class are emitted directly by the extraction
+    # signature, so ``classifier.run_dspy_operation`` no longer exists.
     'memex_core.memory.reflect.reflection.run_dspy_operation',
     'memex_core.memory.retrieval.expansion.run_dspy_operation',
     'memex_core.memory.retrieval.temporal_concretizer.run_dspy_operation',

@@ -100,6 +100,30 @@ IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
 RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
 
 
+# F25b — shared default-on-fail coercion. Both ``RawFact`` (LLM output) and
+# ``ExtractedFact`` (downstream pipeline) absorb LLM-produced strings that
+# may be malformed (omitted fields, unknown values, non-string garbage like
+# None / int / list / dict). The "extraction must never be blocked by a
+# classification mishap" invariant means we always coerce to the schema
+# default rather than raise. Hermes round-6 MED: keep the coercion logic in
+# one place so a future addition to ``IntentClass`` / ``RiskClass`` cannot
+# silently desync the two pydantic ``@field_validator``s on the fact models.
+
+
+def coerce_intent_class(v: object) -> str:
+    """Coerce ``v`` to a valid ``IntentLiteral`` string, defaulting to ``durable``."""
+    if isinstance(v, str) and v in {c.value for c in IntentClass}:
+        return v
+    return IntentClass.DURABLE.value
+
+
+def coerce_risk_class(v: object) -> str:
+    """Coerce ``v`` to a valid ``RiskLiteral`` string, defaulting to ``none``."""
+    if isinstance(v, str) and v in {c.value for c in RiskClass}:
+        return v
+    return RiskClass.NONE.value
+
+
 class LineageDirection(str, Enum):
     """Direction of lineage traversal."""
 
