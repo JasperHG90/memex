@@ -560,7 +560,11 @@ class MemoryUnitDTO(MemoryUnitBase):
         description='F22: closed-form Beta(1, 1) posterior variance derived at '
         'hydration from (confidence, confidence_evidence_count). Range [0, 1/12]. '
         'Cold-start (count=0) lands at 1/12 (max); shrinks toward 0 as evidence '
-        'accumulates. Lower variance = more supporting evidence = more trustworthy.',
+        'accumulates. Lower variance = more supporting evidence = more trustworthy. '
+        'COMPUTED-ONLY: any value passed via constructor kwarg is replaced by the '
+        '``_compute_confidence_variance`` model validator (Hermes round-14 LOW). '
+        'Do not pass ``confidence_variance=...`` expecting it to be respected — '
+        'set ``confidence`` and ``confidence_evidence_count`` instead.',
     )
 
     superseded_by: list[SupersessionInfo] | None = Field(
