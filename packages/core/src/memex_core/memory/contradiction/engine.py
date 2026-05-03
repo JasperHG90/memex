@@ -269,6 +269,18 @@ class ContradictionEngine:
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
+        # Per-target confidence deltas (signed alpha steps) and evidence
+        # bumps (always +1).
+        #
+        # F22 invariant (Hermes round-17 MED — flagged for clarity):
+        # ``evidence_bumps[u]`` counts negative-evidence events only —
+        # one per ``weaken`` (delta = -alpha) and one per ``contradict``
+        # (delta = -2*alpha) targeting ``u``. Reinforces are intentionally
+        # excluded from the count (F22 v1 backfill/forward symmetry —
+        # see BACKLOG "Future symmetric extension" bullet). So a unit
+        # receiving N weakens + M contradicts in one batch lands with
+        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha`` — these
+        # magnitudes are deliberately decoupled.
         confidence_deltas: dict[UUID, float] = {}
         evidence_bumps: dict[UUID, int] = {}
 
