@@ -14,6 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory.confidence import mean_and_variance
 
+
+def _clamp_confidence_pair(confidence: float, evidence_count: int) -> tuple[float, int]:
+    """Clamp a (confidence, evidence_count) pair to the F22 valid ranges.
+
+    Hermes round-16 MED: the three lint paths (``gate_blocks_finding``,
+    ``bulk_load_confidence_map``, ``confidence_map_blocks``) all need
+    the same ``confidence ∈ [0, 1]`` + ``evidence_count >= 0``
+    belt-and-suspenders clamp before calling ``mean_and_variance``
+    (which raises ``ValueError`` on out-of-range input). Centralise
+    the formula here so a future tweak — e.g., logging a warning when
+    the clamp engages, or delegating fully to
+    ``extract_confidence_and_count`` — lands once instead of three
+    times.
+    """
+    return max(0.0, min(1.0, confidence)), max(0, evidence_count)
+
+
 # Hermes round-14 MED: explicit CAST to ``uuid`` so a non-UUID string
 # parameter raises a clear, predictable Postgres ``invalid input syntax``
 # error rather than a partial implicit-cast failure deep in asyncpg's
@@ -62,7 +79,7 @@ async def gate_blocks_finding(
     # (Hermes round-11 MED): the DB CHECK guards production writes, but a
     # stale/in-memory caller mustn't crash ``mean_and_variance`` on an
     # out-of-range confidence — defence-in-depth across both paths.
-    confidence = max(0.0, min(1.0, confidence))
+    confidence, evidence_count = _clamp_confidence_pair(confidence, evidence_count)
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max
 
@@ -97,9 +114,7 @@ async def bulk_load_confidence_map(
         # already done in ``gate_blocks_finding`` and
         # ``confidence_map_blocks`` — the map's contract is "values are
         # safe to feed into the variance formula", not "raw DB values".
-        confidence = max(0.0, min(1.0, confidence))
-        evidence_count = max(0, evidence_count)
-        out[row['unit_id']] = (confidence, evidence_count)
+        out[row['unit_id']] = _clamp_confidence_pair(confidence, evidence_count)
     return out
 
 
@@ -119,6 +134,6 @@ def confidence_map_blocks(
         return False
     confidence, evidence_count = entry
     # See ``gate_blocks_finding`` for the clamp rationale (Hermes round-11 MED).
-    confidence = max(0.0, min(1.0, confidence))
+    confidence, evidence_count = _clamp_confidence_pair(confidence, evidence_count)
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max
