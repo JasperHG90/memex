@@ -158,10 +158,12 @@ _DO_NOT_ADD = (
 # `_f1a_descriptions` (single source of truth) so MW counter discoverability
 # stays in sync between the standalone tool description and the F43-augmented
 # composite. F1a's verbatim test pins the constant against the spec; F43
-# appends the §3.5 flow + axes table below it.
+# appends the §3.5 flow + axes table below it. The `\n\n` after the preamble
+# yields a blank line before the F43 section header — visually matches the
+# deprioritize sibling description (see `_DEPRIORITIZE_PREAMBLE` below).
 MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     _RECORD_OUTCOME_PREAMBLE
-    + '\n'
+    + '\n\n'
     + '## When the user reports an issue resolved (§3.5 5-step flow)\n'
     + '\n'
     + _FLOW_HEADER
