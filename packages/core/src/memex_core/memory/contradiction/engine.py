@@ -155,6 +155,20 @@ class ContradictionEngine:
             # is what makes round-4's concurrency fix correct: per-step
             # absolute writes raced; per-step deltas don't.
             #
+            # Reinforce semantic-change note (Hermes round-14 MED): for
+            # the *reinforce* (monotonic-increasing) path the endpoint
+            # value is NOT identical to pre-fix behaviour. The old
+            # ``confidence_updates`` dict's last-writer-wins absolute
+            # write silently dropped duplicate same-target reinforces in
+            # one batch, so two reinforces on unit ``A`` landed at
+            # ``confidence + alpha`` (one event surviving). The new
+            # accumulation correctly sums them to ``confidence + 2*alpha``.
+            # This is intentional — the prior behaviour was an event-
+            # loss bug — but it is a behavioural change and reinforce-
+            # heavy batches will now move ``confidence`` strictly higher
+            # than they did before. Paired with the LEAST(1.0, ...) clamp
+            # so the column still cannot exceed 1.0.
+            #
             # TODO(perf, post-v1): one UPDATE per distinct unit_id is fine
             # for typical contradiction-batch sizes (≤ a few units), but a
             # single bulk ``UPDATE … FROM (VALUES …)`` or ``executemany``
