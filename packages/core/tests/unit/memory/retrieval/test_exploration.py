@@ -4,6 +4,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from memex_core.memory.confidence import MAX_VARIANCE
+from memex_core.memory.confidence import mean_and_variance as _real_mean_and_variance
 from memex_core.memory.retrieval.exploration import (
     DEFAULT_HIGH_VARIANCE_FRACTION,
     inject_edge_exploration,
@@ -306,9 +307,7 @@ class TestSelectEdgeExplorationCandidates:
         contradicted = _make_unit(confidence=0.0, confidence_evidence_count=5)
         with patch(
             'memex_core.memory.retrieval.exploration.mean_and_variance',
-            wraps=__import__(
-                'memex_core.memory.confidence', fromlist=['mean_and_variance']
-            ).mean_and_variance,
+            wraps=_real_mean_and_variance,
         ) as spy:
             _unit_variance(contradicted)
         # The helper MUST forward confidence=0.0 verbatim — never 1.0.
