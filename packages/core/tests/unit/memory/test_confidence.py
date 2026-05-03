@@ -12,6 +12,7 @@ import pytest
 
 from memex_core.memory.confidence import (
     MAX_VARIANCE,
+    HasConfidence,
     certainty,
     extract_confidence_and_count,
     mean_and_variance,
@@ -377,6 +378,60 @@ class TestExtractConfidenceAndCount:
         assert m == 0.5
         # Cold-start variance because count was floored to 0.
         assert math.isclose(v, MAX_VARIANCE, rel_tol=REL_TOL)
+
+    def test_int_evidence_count_uses_fast_path_no_float_cast(self):
+        """Hermes round-23 MED: when ``raw_count`` is already ``int``,
+        the helper short-circuits past ``int(math.floor(float(x) + 0.5))``
+        to avoid float precision loss at very large integers.
+
+        Pinning the production fast path: an integer count survives
+        verbatim (and stays an int), even at values where the float
+        round-trip would lose precision.
+        """
+
+        class _U:
+            confidence = 0.5
+            # Above the float53 boundary — the float-cast path would
+            # silently shift the low bits.
+            confidence_evidence_count = (1 << 53) + 1
+
+        _, n = extract_confidence_and_count(_U())
+        assert isinstance(n, int)
+        assert n == (1 << 53) + 1
+
+    def test_bool_evidence_count_does_not_short_circuit_to_int(self):
+        """``isinstance(True, int)`` is True in Python — but a caller
+        passing ``True`` MUST NOT silently short-circuit to ``1`` via
+        the int fast path. ``True`` is converted via the float-round
+        path (yielding 1, but explicitly via the rounding branch)."""
+
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = True  # type: ignore[assignment]
+
+        _, n = extract_confidence_and_count(_U())
+        # The end value is 1 either way; the test pins that ``bool``
+        # is NOT typed as ``int`` for fast-path purposes.
+        assert n == 1
+        # And ``False`` floors at 0 via the rounding path.
+        _U.confidence_evidence_count = False  # type: ignore[assignment]
+        _, n = extract_confidence_and_count(_U())
+        assert n == 0
+
+
+class TestHasConfidenceProtocolRuntime:
+    """Hermes round-23 LOW: ``HasConfidence`` is ``@runtime_checkable``
+    deliberately. This test pins one ``isinstance`` check so a future
+    edit dropping the decorator would have to revisit the Protocol's
+    documented contract.
+    """
+
+    def test_protocol_is_runtime_checkable(self):
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = 3
+
+        assert isinstance(_U(), HasConfidence)
 
 
 class TestMeanAndVarianceInputValidation:

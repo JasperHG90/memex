@@ -130,6 +130,15 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
     if raw_count is None:
         evidence_count = 0
+    elif isinstance(raw_count, int) and not isinstance(raw_count, bool):
+        # Production fast path (Hermes round-23 MED): the DB column is
+        # ``INTEGER NOT NULL`` so ``raw_count`` is an ``int`` for every
+        # production row. Skip the float-round path entirely to avoid
+        # the ``2**53 + 1`` precision loss in ``float()`` and the
+        # ``math`` import overhead. ``bool`` is excluded because
+        # ``isinstance(True, int)`` is True in Python — a confused
+        # caller passing ``True`` would otherwise short-circuit to 1.
+        evidence_count = raw_count
     else:
         # Half-up rounding (Hermes round-21 MED): ``math.floor(x + 0.5)``
         # gives ``2.5 → 3`` and ``2.9 → 3`` consistently, unlike the
