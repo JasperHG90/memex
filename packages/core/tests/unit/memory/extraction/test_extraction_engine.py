@@ -306,3 +306,106 @@ class TestMakeLmPropagatesTimeout:
         assert kwargs.get('num_retries') == 7, (
             f'num_retries not propagated from ModelConfig; got kwargs={kwargs!r}'
         )
+
+
+class TestClassifyAndFilterMetricsGating:
+    """F25b — distribution metrics must NOT fire when the kill-switch is engaged.
+
+    When ``intent_risk_classifier_enabled=False`` every fact is force-rewritten
+    to durable / none. Emitting the distribution counters in that state would
+    paint a misleading 100% durable / none picture on dashboards. The Hermes
+    round-1 review flagged the unconditional emission as a metrics-correctness
+    bug; this test pins the gating behavior.
+    """
+
+    @staticmethod
+    def _processed(intent: str = 'durable', risk: str = 'none') -> ProcessedFact:
+        from memex_common.schemas import IntentClass, RiskClass
+
+        pf = ProcessedFact(
+            fact_text=f'fact-{uuid4()}',
+            fact_type='world',
+            embedding=[0.0] * 384,
+            mentioned_at=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+        )
+        pf.intent_class = IntentClass(intent)
+        pf.risk_class = RiskClass(risk)
+        return pf
+
+    @pytest.mark.asyncio
+    async def test_metrics_skipped_when_classifier_disabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        # Snapshot all currently-tracked label values so we can assert no
+        # post-call deltas — child counters created lazily on first .labels()
+        # call.
+        def _snap_total(metric):  # noqa: ANN001
+            total = 0.0
+            for child in metric._metrics.values():
+                total += child._value.get()
+            return total
+
+        before_intent = _snap_total(CLASSIFIER_INTENT_DISTRIBUTION)
+        before_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
+
+        facts = [self._processed('ephemeral', 'none'), self._processed('permanent', 'none')]
+        out = await engine._classify_and_filter(facts)
+
+        after_intent = _snap_total(CLASSIFIER_INTENT_DISTRIBUTION)
+        after_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
+
+        from memex_common.schemas import IntentClass, RiskClass
+
+        assert len(out) == 2
+        # Force-rewrite to defaults still happens.
+        assert all(f.intent_class == IntentClass.DURABLE for f in out)
+        assert all(f.risk_class == RiskClass.NONE for f in out)
+        # Distribution metrics: no delta when kill-switch is engaged.
+        assert after_intent == before_intent, (
+            'CLASSIFIER_INTENT_DISTRIBUTION must not increment when '
+            'intent_risk_classifier_enabled=False'
+        )
+        assert after_risk == before_risk, (
+            'CLASSIFIER_RISK_DISTRIBUTION must not increment when '
+            'intent_risk_classifier_enabled=False'
+        )
+
+    @pytest.mark.asyncio
+    async def test_metrics_emit_when_classifier_enabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()  # default: enabled
+        assert cfg.intent_risk_classifier_enabled is True
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        before_intent = CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class='ephemeral')._value.get()
+        before_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()
+
+        facts = [self._processed('ephemeral', 'none')]
+        out = await engine._classify_and_filter(facts)
+
+        after_intent = CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class='ephemeral')._value.get()
+        after_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()
+
+        assert len(out) == 1
+        assert after_intent - before_intent == 1
+        assert after_risk - before_risk == 1

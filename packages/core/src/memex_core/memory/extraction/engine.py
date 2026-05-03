@@ -258,6 +258,12 @@ class ExtractionEngine:
             for f in processed_facts:
                 f.intent_class = IntentClass.DURABLE
                 f.risk_class = RiskClass.NONE
+            # Skip distribution metrics when the kill-switch is engaged: every
+            # fact is force-overwritten to durable/none, so emitting the
+            # distribution would paint a misleading 100% durable/none picture
+            # on dashboards. ``filter_safety_blocked`` is still safe to run —
+            # it's a no-op once everything is risk=none.
+            return filter_safety_blocked(processed_facts)
 
         if intent_override:
             intent_value = IntentClass(intent_override)
