@@ -12,6 +12,7 @@ Defaults to dry-run preview. ``--apply`` is required to write.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -133,7 +134,7 @@ async def run_review_loop(
 
     for idx, finding in enumerate(findings, start=1):
         _render_finding(console, idx, total, finding)
-        verdict = _prompt_verdict(console)
+        verdict = await asyncio.to_thread(_prompt_verdict, console)
         finding_id = finding.get('id', '')
 
         if verdict == 'q':
