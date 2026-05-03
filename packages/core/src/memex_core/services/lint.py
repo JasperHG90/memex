@@ -31,7 +31,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -325,11 +325,18 @@ _LOAD_UNIT_CONFIDENCE_SQL = text("""
 """)
 
 
+# Hermes round-5 MED: prior form used ``CAST(:unit_ids AS uuid[]) + ANY``
+# which relies on asyncpg-specific type adaptation of a Python ``list[str]``
+# inside a ``text()`` clause. SQLAlchemy's ``expanding=True`` bindparam is
+# the portable analogue — it expands ``:unit_ids`` into ``(:p1, :p2, ...)``
+# at compile time, with the driver adapting each individual UUID-string
+# parameter through its standard pipeline. asyncpg infers the column type
+# from the LHS of IN so an explicit per-parameter cast is unnecessary.
 _BULK_LOAD_UNIT_CONFIDENCE_SQL = text("""
     SELECT id::text AS unit_id, confidence, confidence_evidence_count
     FROM memory_units
-    WHERE id = ANY(CAST(:unit_ids AS uuid[]))
-""")
+    WHERE id IN :unit_ids
+""").bindparams(bindparam('unit_ids', expanding=True))
 
 
 async def _gate_blocks_finding(
