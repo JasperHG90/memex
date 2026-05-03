@@ -17,8 +17,6 @@ When the spec changes, edit the strings here and the parity test
 until every surface is updated.
 """
 
-from __future__ import annotations
-
 LAYER_ROUTING_PRIMER_PROSE = (
     'Memex stores four memory layers. Pick the right tool for the layer you need:\n'
     '\n'

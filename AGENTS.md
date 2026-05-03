@@ -191,9 +191,11 @@ Async mode: `asyncio_mode = "auto"` — all async tests run automatically.
 ## Memory layers and tool routing
 
 Memex stores four memory layers; pick the right tool for the layer you
-need (canonical source: research report §2.3 + §4 F3). The mapping is the
-same across MCP tool descriptions, the Hermes session briefing, and the
-Claude Code rule file (parity required per the agent-surface rule).
+need (canonical spec: research report §2.3 + §4 F3). The mapping is the
+same across all five agent surfaces — MCP tool descriptions, the Hermes
+session briefing, the Hermes templates fragment, the Claude Code rule
+file, and this section — enforced by `test_f3_layer_primer_parity.py`
+(parity required per the agent-surface rule).
 
 | Layer | What it stores | Retrieve with | Tiny example |
 |---|---|---|---|
@@ -204,10 +206,12 @@ Claude Code rule file (parity required per the agent-surface rule).
 
 Default to `memex_memory_search` for content-shaped questions and
 `memex_note_search` for source-shaped questions. The agent owns the verb;
-Memex owns the adverb. Authoritative copies live in
-`packages/mcp/src/memex_mcp/_f3_descriptions.py`,
-`packages/hermes-plugin/.../briefing.py` `_LAYER_ROUTING_PRIMER`, and
-`packages/claude-code-plugin/rules/memory-layers.md`.
+Memex owns the adverb. The single source of truth for the primer strings
+lives in `packages/common/src/memex_common/agent_surface.py`; consumers
+(`packages/mcp/.../server.py` via the `_f3_descriptions.py` shim,
+`packages/hermes-plugin/.../briefing.py` and `.../templates.py`,
+`packages/claude-code-plugin/rules/memory-layers.md`, and this section)
+all import or mirror that one module — never re-declare the text.
 
 ## When the user reports an issue resolved (§3.5 5-step flow)
 
