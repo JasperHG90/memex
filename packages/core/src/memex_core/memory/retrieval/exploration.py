@@ -176,6 +176,12 @@ def inject_exploration_units(
     for unit in exploration_units:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'exploration': True}
+        # HAZARD (Hermes round-20 LOW): in-place attribute swap on a
+        # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
+        # retrieval engine MUST pass list-copy snapshots (not aliased
+        # references) so this annotation does not leak into a parallel
+        # scoring stage that expects pristine metadata. Avoid
+        # ``copy.deepcopy`` here — this is a hot per-request path.
         unit.unit_metadata = metadata
 
     logger.debug(
@@ -302,6 +308,16 @@ def inject_edge_exploration(
     for unit in edges:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'edge_exploration': True}
+        # HAZARD (Hermes round-20 LOW): in-place attribute swap on a
+        # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
+        # F22-activation wiring (see TODO above) MUST pass list-copy
+        # snapshots so this annotation does not leak into a parallel
+        # scoring stage. Avoid ``copy.deepcopy`` here — this is a hot
+        # per-request path.
+        # TODO(F22-activation): when wiring this injector into
+        # ``RetrievalEngine._search``, audit the call site for
+        # snapshot-by-caller invariants alongside the F33
+        # ``inject_exploration_units`` site.
         unit.unit_metadata = metadata
 
     logger.debug(
