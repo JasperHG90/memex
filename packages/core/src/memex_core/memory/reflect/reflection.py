@@ -47,6 +47,7 @@ from memex_core.memory.reflect.utils import (
 from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
+from memex_core.memory.confidence import mean_and_variance
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
@@ -579,8 +580,6 @@ class ReflectionEngine:
         # per-tick LLM budget concentrates on uncertain units (highest
         # information yield). Stable sort preserves the existing
         # event_date DESC tiebreak from the SQL window function.
-        from memex_core.memory.confidence import mean_and_variance
-
         def _variance_key(unit: MemoryUnit) -> float:
             confidence = getattr(unit, 'confidence', 1.0) or 1.0
             count = getattr(unit, 'confidence_evidence_count', 0) or 0
