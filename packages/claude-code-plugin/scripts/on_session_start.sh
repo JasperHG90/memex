@@ -30,9 +30,18 @@ if [ -n "$_project_root" ]; then
     _rules_dst_dir="$_project_root/.claude/rules"
     if [ -d "$_rules_src_dir" ]; then
         mkdir -p "$_rules_dst_dir" 2>/dev/null || true
-        # Loops markdown rules; non-.md files are intentionally ignored to keep
-        # the install path simple. If we add yaml/json rule formats, broaden
-        # this glob.
+        # Warn loudly if a non-.md rule file is dropped into the source dir —
+        # the install loop only handles markdown, and silent skips would hide
+        # a missing rule when yaml/json formats are introduced.
+        for _foreign in "$_rules_src_dir"/*; do
+            [ -f "$_foreign" ] || continue
+            case "$_foreign" in
+                *.md) ;;
+                *)
+                    echo "memex on_session_start: ignoring non-.md rule file: $_foreign (extend the install loop to support new formats)" >&2
+                    ;;
+            esac
+        done
         for _rules_src in "$_rules_src_dir"/*.md; do
             [ -f "$_rules_src" ] || continue
             _rules_name="$(basename "$_rules_src")"
