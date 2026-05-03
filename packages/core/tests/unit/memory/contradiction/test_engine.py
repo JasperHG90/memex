@@ -386,8 +386,11 @@ class TestDetectContradictions:
             engine,
             '_process_flagged_unit',
             side_effect=[
-                ([link_early, link_unique], {flagged_a.id: 0.9}, {flagged_a.id: 1}),
-                ([link_duplicate], {flagged_b.id: 0.8}, {flagged_b.id: 1}),
+                # Realistic signed deltas from the post-rename API contract:
+                # weakens applies a -alpha (~-0.1) step; this test asserts link
+                # dedup, not confidence math, so any well-formed weaken delta works.
+                ([link_early, link_unique], {flagged_a.id: -0.1}, {flagged_a.id: 1}),
+                ([link_duplicate], {flagged_b.id: -0.1}, {flagged_b.id: 1}),
             ],
         ):
             # Mock _load_units to return the flagged units
