@@ -30,11 +30,17 @@ def engine_relaxed_config(mock_session):
 
 
 @pytest.mark.asyncio
-async def test_batch_fetch_recent_memories_sql_structure(engine, mock_session):
+async def test_batch_fetch_recent_memories_sql_structure(engine_relaxed_config, mock_session):
     """
     Verify that _batch_fetch_recent_memories constructs a valid query
     and handles the result grouping correctly.
+
+    Uses the relaxed_config fixture so the F22 variance-prioritisation
+    flag check (``config.server.memory.reflection.variance_prioritisation_enabled``,
+    Hermes round-10 HIGH) doesn't trip the MagicMock spec — the default
+    is False so the sort branch stays inert.
     """
+    engine = engine_relaxed_config
     entity_ids = [uuid4(), uuid4()]
 
     # Mock the DB response
@@ -237,3 +243,64 @@ async def test_batch_get_or_create_models_logic(engine, mock_session):
 
     # Verify new model was added
     mock_session.add.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# F22 — variance prioritisation gate (Hermes round-10 HIGH).
+#
+# The variance sort over each entity bucket is gated on
+# ``ReflectionConfig.variance_prioritisation_enabled``. Default False so the
+# F22 migration ships INERTLY — the reflection cron's per-tick processing
+# order MUST NOT change on deploy.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_variance_sort_off_by_default_preserves_sql_order(mock_session):
+    """Default config (flag off) → bucket order matches SQL row order."""
+    config = MemexConfig()
+    assert config.server.memory.reflection.variance_prioritisation_enabled is False
+    engine = ReflectionEngine(session=mock_session, config=config, embedder=MagicMock())
+
+    eid = uuid4()
+    # Three units: low/high/mid variance (descending count → ascending variance).
+    high_var = MemoryUnit(text='cold', confidence=1.0, confidence_evidence_count=0)
+    mid_var = MemoryUnit(text='mid', confidence=0.5, confidence_evidence_count=2)
+    low_var = MemoryUnit(text='warm', confidence=0.5, confidence_evidence_count=20)
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (low_var, eid),  # SQL emits in order: warm, mid, cold.
+        (mid_var, eid),
+        (high_var, eid),
+    ]
+    mock_session.exec.return_value = mock_result
+
+    out = await engine._batch_fetch_recent_memories([eid], limit_per_entity=10)
+    # Flag OFF → SQL order preserved (warm, mid, cold).
+    assert [u.text for u in out[eid]] == ['warm', 'mid', 'cold']
+
+
+@pytest.mark.asyncio
+async def test_variance_sort_on_orders_by_descending_variance(mock_session):
+    """Flag on → high-variance units land first within each bucket."""
+    config = MemexConfig()
+    config.server.memory.reflection.variance_prioritisation_enabled = True
+    engine = ReflectionEngine(session=mock_session, config=config, embedder=MagicMock())
+
+    eid = uuid4()
+    high_var = MemoryUnit(text='cold', confidence=1.0, confidence_evidence_count=0)
+    mid_var = MemoryUnit(text='mid', confidence=0.5, confidence_evidence_count=2)
+    low_var = MemoryUnit(text='warm', confidence=0.5, confidence_evidence_count=20)
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (low_var, eid),  # SQL order intentionally NOT variance-descending.
+        (mid_var, eid),
+        (high_var, eid),
+    ]
+    mock_session.exec.return_value = mock_result
+
+    out = await engine._batch_fetch_recent_memories([eid], limit_per_entity=10)
+    # Flag ON → reorder: cold (max variance) first, then mid, then warm.
+    assert [u.text for u in out[eid]] == ['cold', 'mid', 'warm']

@@ -599,6 +599,17 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Confidence score (0.0-1.0). Decreased when contradicted by newer information.',
     )
 
+    confidence_evidence_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'F22: negative-evidence event count — how many times the contradiction '
+            'engine has weakened or contradicted this unit. Pairs with the closed-form '
+            'Beta(1, 1) posterior at memex_core.memory.confidence.mean_and_variance to '
+            'derive variance without storing it. Cold-start (count=0) → variance = 1/12.'
+        ),
+    )
+
     revisit_due_at: datetime | None = Field(
         default=None,
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
@@ -737,6 +748,10 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         CheckConstraint(
             'confidence >= 0.0 AND confidence <= 1.0',
             name='memory_units_confidence_check',
+        ),
+        CheckConstraint(
+            'confidence_evidence_count >= 0',
+            name='memory_units_confidence_evidence_count_check',
         ),
         Index('idx_memory_units_note_id', 'note_id'),
         Index('idx_memory_units_chunk_id', 'chunk_id'),
@@ -1351,6 +1366,12 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
         Index('idx_memory_links_from', 'from_unit_id'),
         Index('idx_memory_links_to', 'to_unit_id'),
         Index('idx_memory_links_type', 'link_type'),
+        # Mirrors the migration-side definition in alembic/versions/
+        # 033_confidence_evidence_count.py (``_BACKFILL_INDEX_NAME``); name
+        # and column order MUST stay in sync with that migration so a fresh
+        # ``Base.metadata.create_all`` (test/dev path) lays down the same
+        # index that production migrations create.
+        Index('idx_memory_links_link_type_to_unit', 'link_type', 'to_unit_id'),
         Index(
             'idx_memory_links_entity',
             'entity_id',

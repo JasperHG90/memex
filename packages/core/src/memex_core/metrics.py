@@ -208,6 +208,20 @@ CONFIDENCE_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# F22: Two-Factor edge confidence — variance over (confidence, evidence_count)
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_VARIANCE_OBSERVED = Histogram(
+    'memex_confidence_variance',
+    'F22: closed-form Beta(1, 1) posterior variance derived at retrieval '
+    'hydration from (confidence, confidence_evidence_count). Bucketed for '
+    'the [0, 1/12 = 0.0833] range. Cold-start units (count=0) emit at 1/12. '
+    'Calibration metric for the certainty_modulation_enabled flip — observe '
+    'distribution before flipping the flag from False (ship default) to True.',
+    buckets=(0.0, 0.001, 0.005, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 1.0 / 12.0),
+)
+
+# ---------------------------------------------------------------------------
 # F11: FSFM-lite decay boost reranker composition metric
 # ---------------------------------------------------------------------------
 

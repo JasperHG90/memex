@@ -365,9 +365,9 @@ RerankerBackend: TypeAlias = Annotated[
 
 
 class NLIModelConfig(BaseModel):
-    """Configuration for F10b's polarity-discriminating NLI classifier.
+    """Configuration for the polarity-discriminating NLI classifier.
 
-    The NLI signal augments F10's surprise gate so polarity-inverting unit/peer
+    The NLI signal augments the surprise gate so polarity-inverting unit/peer
     pairs (e.g. "User prefers staging" vs "User prefers production") clear the
     gate even when MiniLM-L12 cosine surprise alone cannot lift them above the
     surprise threshold (POC-002).
@@ -379,15 +379,15 @@ class NLIModelConfig(BaseModel):
     )
     enabled: bool = Field(
         default=True,
-        description='Master kill-switch for the F10b NLI gate. If False the gate '
-        'collapses to F10 cosine-only behaviour.',
+        description='Master kill-switch for the NLI gate. If False the gate '
+        'collapses to cosine-only behaviour.',
     )
     polarity_threshold: float = Field(
         default=0.6,
         ge=0.0,
         le=1.0,
         description='Minimum NLI contradiction-probability for a peer pair to clear the '
-        'F10 surprise gate via the polarity branch.',
+        'surprise gate via the polarity branch.',
     )
     rate_limit_per_vault_per_hour: int | None = Field(
         default=None,
@@ -418,10 +418,10 @@ class DocSearchStrategiesConfig(BaseModel):
 
 
 class SummarizeNodeRateLimitConfig(BaseModel):
-    """F5: rate-limit config for memex_memory_summarize_node.
+    """Rate-limit config for memex_memory_summarize_node.
 
     Token bucket per (entity_id, vault_id), in-process LRU. Multi-worker
-    leakage is accepted in v1 (advisory limit, not security gate); F9's
+    leakage is accepted in v1 (advisory limit, not security gate); the
     distributed lock will close the cross-process gap.
     """
 
@@ -521,7 +521,19 @@ class ReflectionConfig(BaseModel):
     )
     summarize_node_rate_limit: 'SummarizeNodeRateLimitConfig' = Field(
         default_factory=lambda: SummarizeNodeRateLimitConfig(),
-        description='F5: per-(entity, vault) rate limit for memex_memory_summarize_node.',
+        description='per-(entity, vault) rate limit for memex_memory_summarize_node.',
+    )
+    variance_prioritisation_enabled: bool = Field(
+        default=False,
+        description=(
+            'When True, ``_batch_fetch_recent_memories`` sorts each entity '
+            'bucket by closed-form Beta(1, 1) posterior variance (descending) so '
+            'high-uncertainty units land first within the per-tick LLM budget. '
+            'Default False at ship time — ships INERTLY (column + backfill '
+            'only) so reflection ordering does not change on deploy. Pairs with '
+            '``RetrievalConfig.certainty_modulation_enabled``: flip both after '
+            'observing CONFIDENCE_VARIANCE_OBSERVED populates as expected.'
+        ),
     )
 
     @model_validator(mode='after')
@@ -658,8 +670,8 @@ class ExtractionConfig(BaseModel):
         'fact is forced to the schema defaults (durable / none) regardless of what the '
         'LLM emitted, and the per-fact classification distribution metrics are '
         'suppressed (since they would all read durable / none and pollute dashboards). '
-        'Note: F25 originally implemented intent + risk as a separate ``ClassifyMemoryUnit`` '
-        'LLM call; F25b folded those output fields into the extraction signature itself, '
+        'Note: intent + risk were originally implemented as a separate ``ClassifyMemoryUnit`` '
+        'LLM call; those output fields were later folded into the extraction signature itself, '
         'so this flag no longer gates a separate LLM call — it gates whether the '
         'inline-emitted classification is honored.',
     )
@@ -786,7 +798,7 @@ class RetrievalConfig(BaseModel):
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='F47: Multiplicative contradiction-derived confidence boost strength for '
+        description='Multiplicative contradiction-derived confidence boost strength for '
         'cross-encoder reranking. Default 0.0 (off) at ship time — flip to non-zero '
         '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
         'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
@@ -799,12 +811,21 @@ class RetrievalConfig(BaseModel):
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='F11: Multiplicative FSFM-lite decay boost strength for cross-encoder '
+        description='Multiplicative FSFM-lite decay boost strength for cross-encoder '
         'reranking. Default 0.0 (off) at ship time — composition is a no-op until the '
         'before/after benchmark validates the lift; flip to non-zero (target 0.3 to match '
         'recency/temporal/mw magnitude) in a follow-on config commit. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
         'the boost can go negative for stale low-importance units.',
+    )
+    certainty_modulation_enabled: bool = Field(
+        default=False,
+        description='When True, the confidence_boost is multiplied by a certainty '
+        'factor derived from the closed-form Beta(1, 1) posterior over '
+        '(confidence, confidence_evidence_count). Default False at ship time — the '
+        'migration ships the column + backfill INERTLY so the existing '
+        '1.0 + α × (confidence − 0.5) form is retained. Flip to True after observing the '
+        'CONFIDENCE_VARIANCE_OBSERVED histogram populates as expected.',
     )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
@@ -817,7 +838,7 @@ class RetrievalConfig(BaseModel):
     )
     cross_encoder_cache_enabled: bool = Field(
         default=True,
-        description='Enable in-process TTL cache for cross-encoder reranker scores (F41). '
+        description='Enable in-process TTL cache for cross-encoder reranker scores. '
         'Repeat queries (e.g. recurring briefings) get free reranking. Set False to bypass.',
     )
     cross_encoder_cache_size: int = Field(
@@ -874,7 +895,7 @@ class RetrievalConfig(BaseModel):
         description='Maximum number of exploration units to inject per retrieval call. '
         'Note: when the outer ε-greedy roll succeeds (governed by '
         '``exploration_epsilon``), ALL eligible units up to this cap are injected — '
-        'this is not per-unit independent sampling. Intentional for F44 self-correction: '
+        'this is not per-unit independent sampling. Intentional for self-correction: '
         'once the engine commits to exploring, it explores fully rather than re-rolling '
         'per candidate.',
     )
@@ -894,8 +915,8 @@ class RetrievalConfig(BaseModel):
     fsfm_branch_enabled: bool = Field(
         default=True,
         description=(
-            'F40 pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
-            'Default flipped to True by F11 (Wave 16) once the importance / stability / '
+            'Pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
+            'Default flipped to True once the importance / stability / '
             'last_outcome_at columns shipped on memory_units. Set to False to keep the '
             'pre-filter on MW + Confidence branches only — the column migration stays '
             'independently revertible from this flag flip.'
@@ -933,7 +954,7 @@ class ContradictionConfig(BaseModel):
 
 
 class ConsolidationConfig(BaseModel):
-    """F38 consolidation orchestrator configuration."""
+    """Consolidation orchestrator configuration."""
 
     enabled: bool = Field(
         default=True,
@@ -954,19 +975,19 @@ class ConsolidationConfig(BaseModel):
         ge=0.1,
         le=60.0,
         description=(
-            'Per-entity advisory-lock timeout the F38 tick uses when racing with '
-            'F9 reconsolidate; entities whose lock cannot be acquired in this '
+            'Per-entity advisory-lock timeout the consolidation tick uses when racing with '
+            'reconsolidate; entities whose lock cannot be acquired in this '
             'window are deferred to the next tick.'
         ),
     )
 
 
 class ConsolidateRateLimitConfig(BaseModel):
-    """F9: rate-limit config for memex_memory_consolidate (RFC-008 line 125).
+    """Rate-limit config for memex_memory_consolidate (RFC-008 line 125).
 
     Per-vault token bucket (default 1 call per vault per hour). LLM-intensive
-    workload + mass-mutation guard — reuses F5's TokenBucketRateLimiter
-    primitive. In-process LRU; multi-worker leakage matches F5's documented
+    workload + mass-mutation guard — reuses the TokenBucketRateLimiter
+    primitive. In-process LRU; multi-worker leakage matches the documented
     limitation (advisory, not security gate).
     """
 
@@ -1233,8 +1254,66 @@ class TracingConfig(BaseModel):
     )
 
 
+# Pin the cold-start variance ceiling once at module
+# scope so the Field default + ``le`` + ``is_active`` predicate all
+# reference the same float arithmetic instead of three independent
+# ``1.0 / 12.0`` evaluations. Mirrors
+# ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``; the cross-reference unit
+# test in ``test_confidence.py`` (TestDtoFormulaConsistency) pins
+# equivalence with the core constant.
+# Any edit here MUST be
+# mirrored in ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``.
+_MAX_VARIANCE: float = 1.0 / 12.0
+
+
+class LintConfidenceGate(BaseModel):
+    """Per-lint-type ``(confidence_min, variance_max)`` gate.
+
+    A finding is suppressed when ``confidence < confidence_min`` OR
+    ``variance > variance_max``. Cold-start units (no evidence) have
+    variance = 1/12 = MAX_VARIANCE so they fall above any non-trivial
+    ``variance_max`` ceiling and are skipped — preventing false-positive
+    "low confidence" findings on freshly extracted units.
+    """
+
+    confidence_min: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description='Minimum confidence (mean) for a finding to surface. '
+        'Default 0.0 = no floor (preserves prior behaviour).',
+    )
+    variance_max: float = Field(
+        default=_MAX_VARIANCE,
+        ge=0.0,
+        le=_MAX_VARIANCE,
+        description='Maximum variance for a finding to surface. Default = MAX_VARIANCE '
+        '(1/12) = no ceiling (preserves prior behaviour). Lowering this ceiling '
+        'suppresses findings on under-evidenced units. WARNING: '
+        '``variance_max = 0.0`` is a legal bound but acts as a near-total '
+        'suppression — the lint gate predicate is ``variance > variance_max``, '
+        'so any unit with positive variance (essentially every unit, since '
+        'variance hits 0 only in the limit of infinite evidence) would be '
+        'blocked. Operators wanting tight gating should use a small positive '
+        'value (e.g. ``0.001``), not ``0.0``.',
+    )
+
+    def is_active(self) -> bool:
+        """Return True iff this gate would suppress at least one shape of finding.
+
+        Collapses the duplicated
+        ``confidence_min > 0.0 or variance_max < (1/12)`` predicate
+        previously inlined in both ``lint.py`` and ``lint_llm.py`` to a
+        single source of truth so a future tweak to gate-active semantics
+        cannot drift across the two services.
+        """
+        return self.confidence_min > 0.0 or self.variance_max < _MAX_VARIANCE
+
+
 class LintConfig(BaseModel):
-    """Configuration for the F6 maintenance ledger / rule-based linter."""
+    """Configuration for the maintenance ledger / rule-based linter."""
 
     enabled: bool = Field(
         default=True,
@@ -1245,10 +1324,14 @@ class LintConfig(BaseModel):
         ge=60,
         description='Interval in seconds between lint runs. Default: 6 hours.',
     )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='confidence/variance gate for rule-based lint findings.',
+    )
 
 
 class RevisitConfig(BaseModel):
-    """Configuration for the F20 FSRS-5 revisitation scheduler."""
+    """Configuration for the FSRS-5 revisitation scheduler."""
 
     enabled: bool = Field(
         default=True,
@@ -1262,7 +1345,7 @@ class RevisitConfig(BaseModel):
 
 
 class LintLLMCheckConfig(BaseModel):
-    """Per-check feature flag for an F10 DSPy lint signature."""
+    """Per-check feature flag for a DSPy lint signature."""
 
     enabled: bool = Field(
         default=True,
@@ -1271,7 +1354,7 @@ class LintLLMCheckConfig(BaseModel):
 
 
 class LintLLMChecksConfig(BaseModel):
-    """Feature flags for the individual F10 DSPy lint signatures.
+    """Feature flags for the individual DSPy lint signatures.
 
     Default-on; ops can disable a check (e.g. ``semantic_contradiction``) if
     false-positives manifest in production. Tier B follow-up will revisit
@@ -1289,26 +1372,26 @@ class LintLLMChecksConfig(BaseModel):
 
 
 class LintLLMConfig(BaseModel):
-    """Configuration for F10 surprise-gated LLM-assisted lint.
+    """Configuration for surprise-gated LLM-assisted lint.
 
-    Default-on at the cap-zero gate: if ``cost_cap_per_24h`` is 0 the F10 tick
+    Default-on at the cap-zero gate: if ``cost_cap_per_24h`` is 0 the tick
     short-circuits before any work, including the surprise computation.
     """
 
     enabled: bool = Field(
         default=True,
-        description='Master switch; if False, the F10 tick is a no-op.',
+        description='Master switch; if False, the tick is a no-op.',
     )
     interval_seconds: int = Field(
         default=6 * 3600,
         ge=60,
-        description='Interval in seconds between F10 lint ticks. Default: 6 hours.',
+        description='Interval in seconds between lint ticks. Default: 6 hours.',
     )
     units_per_tick: int = Field(
         default=20,
         ge=1,
         description=(
-            'Maximum candidate units evaluated per F10 tick per vault. The '
+            'Maximum candidate units evaluated per tick per vault. The '
             'cost cap will short-circuit further work once exhausted.'
         ),
     )
@@ -1318,7 +1401,7 @@ class LintLLMConfig(BaseModel):
         le=1.0,
         description=(
             'Minimum surprise score for a unit to be eligible for LLM lint. '
-            'Validated by POC-F10 against synthetic topical-anomaly data.'
+            'Validated by POC against synthetic topical-anomaly data.'
         ),
     )
     cost_cap_per_24h: int = Field(
@@ -1326,7 +1409,7 @@ class LintLLMConfig(BaseModel):
         ge=0,
         description=(
             'Maximum LLM lint calls per vault per rolling 24h window. '
-            'Setting this to 0 disables F10 entirely.'
+            'Setting this to 0 disables the tick entirely.'
         ),
     )
     deferred_queue_cap: int = Field(
@@ -1349,9 +1432,15 @@ class LintLLMConfig(BaseModel):
         default_factory=LintLLMChecksConfig,
         description='Per-check feature flags for the DSPy lint signatures.',
     )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='confidence/variance gate applied to candidate units before '
+        'the LLM check runs. Skips cold-start (variance = MAX_VARIANCE) and '
+        'low-confidence units when the gate is configured.',
+    )
     polarity: NLIModelConfig = Field(
         default_factory=NLIModelConfig,
-        description='F10b NLI polarity classifier configuration (entailment / neutral / '
+        description='NLI polarity classifier configuration (entailment / neutral / '
         'contradiction). The NLI branch only fires when cosine surprise is below '
         'surprise_threshold, so this is a fallback signal — never a primary gate.',
     )
@@ -1381,12 +1470,12 @@ class MemoryConfig(BaseModel):
 
     consolidation: ConsolidationConfig = Field(
         default_factory=ConsolidationConfig,
-        description='F38 consolidation orchestrator configuration.',
+        description='Consolidation orchestrator configuration.',
     )
 
     consolidate_rate_limit: ConsolidateRateLimitConfig = Field(
         default_factory=ConsolidateRateLimitConfig,
-        description='F9: per-vault rate limit for memex_memory_consolidate (RFC-008 line 125).',
+        description='per-vault rate limit for memex_memory_consolidate (RFC-008 line 125).',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(
@@ -1396,17 +1485,17 @@ class MemoryConfig(BaseModel):
 
     lint: LintConfig = Field(
         default_factory=LintConfig,
-        description='Configuration for the F6 maintenance ledger / rule-based linter.',
+        description='Configuration for the maintenance ledger / rule-based linter.',
     )
 
     revisit: RevisitConfig = Field(
         default_factory=RevisitConfig,
-        description='F20 FSRS-5 revisitation scheduler configuration.',
+        description='FSRS-5 revisitation scheduler configuration.',
     )
 
     lint_llm: LintLLMConfig = Field(
         default_factory=LintLLMConfig,
-        description='Configuration for F10 surprise-gated LLM-assisted lint.',
+        description='Configuration for surprise-gated LLM-assisted lint.',
     )
 
 

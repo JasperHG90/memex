@@ -38,6 +38,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from memex_core.memory._lint_utils import enum_value as _enum_value
 from memex_core.memory.sql_models import LintType
 from memex_core.services.base import BaseService
+from memex_core.services.lint_confidence import (
+    bulk_load_confidence_map,
+    confidence_map_blocks,
+)
 
 try:
     from opentelemetry import trace as _otel_trace
@@ -432,6 +436,8 @@ class LintService(BaseService):
         }
 
         emitted = 0
+        gate = self.config.server.memory.lint.confidence_gate
+        gate_active = spec.target_type == 'memory_unit' and gate.is_active()
         ctx = (
             _tracer.start_as_current_span('memex.lint.run_rule', attributes=attrs)
             if _tracer
@@ -441,7 +447,50 @@ class LintService(BaseService):
             if ctx is not None:
                 ctx.__enter__()
             result = await session.execute(text(spec.select_sql), {'vault_id': str(vault_id)})
-            for row in result.mappings().all():
+            rows = result.mappings().all()
+            # F22 — bulk-fetch (confidence, evidence_count) for every candidate
+            # so the gate predicate runs against an in-memory map rather than
+            # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
+            confidence_map: dict[str, tuple[float, int]] = {}
+            if gate_active and rows:
+                # Hermes round-9 HIGH: cast through ``str()`` even though
+                # every rule SQL uses ``id::text AS target_id`` — asyncpg
+                # may surface ``uuid.UUID`` objects under some text() row
+                # adapters, and ``UUID(...) not in {str: ...}`` returns
+                # False, silently disabling the gate. The cast is a
+                # one-line guard against that drift class. Bulk-load keys
+                # are ``id::text`` (always str), so consumer-side normalise
+                # to str at the boundary.
+                target_ids = [str(row['target_id']) for row in rows]
+                confidence_map = await bulk_load_confidence_map(session, target_ids)
+                # Hermes round-6 MED: format-mismatch defence. The bulk map
+                # keys are `id::text` from PostgreSQL (canonical lowercase,
+                # hyphenated UUID). If any rule's `select_sql` somewhere
+                # ever returned a different string form, the per-id lookup
+                # in ``confidence_map_blocks`` would silently miss and the
+                # unit would surface (the documented "missing row → do not
+                # block" fallback). Surface the mismatch loudly so it
+                # doesn't manifest as a phantom finding.
+                missing = [tid for tid in target_ids if tid not in confidence_map]
+                if missing:
+                    logger.warning(
+                        'lint rule %s: confidence-gate bulk map missed %d/%d '
+                        'target_ids — these will fall through the gate '
+                        '(possibly stale or rule SQL emitting a non-canonical '
+                        'UUID string). Sample: %s',
+                        spec.name,
+                        len(missing),
+                        len(target_ids),
+                        missing[:5],
+                    )
+            for row in rows:
+                if gate_active and confidence_map_blocks(
+                    confidence_map,
+                    str(row['target_id']),
+                    gate.confidence_min,
+                    gate.variance_max,
+                ):
+                    continue
                 ins = await session.execute(
                     _INSERT_FINDING_SQL,
                     {

@@ -47,8 +47,30 @@ from memex_core.memory.reflect.utils import (
 from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
+from memex_core.memory.confidence import extract_confidence_and_count, mean_and_variance
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
+
+
+def _variance_key(unit: MemoryUnit) -> float:
+    """F22 reflection prioritisation key: closed-form Beta(1, 1) variance.
+
+    Hoisted to module scope (Hermes round-17 LOW) so the closure isn't
+    re-defined on every call to ``_batch_fetch_recent_memories``. Pure
+    function — no captured state.
+
+    Hermes round-22 MED: this helper is INERT until the operator-flip
+    ``ReflectionConfig.variance_prioritisation_enabled`` toggles to
+    True. The single call site is the ``if
+    self.config.server.memory.reflection.variance_prioritisation_enabled:``
+    branch in ``_batch_fetch_recent_memories`` (see this module's
+    ``reflect`` block). Defining this function does not affect
+    reflection behaviour; only the gated sort does.
+    """
+    confidence, count = extract_confidence_and_count(unit)
+    _, variance = mean_and_variance(confidence, count)
+    return variance
+
 
 # F5: hard ceiling on per-entity recent-memory fetch when ReflectionRequest
 # carries limit_recent_memories=None (scope='full'). Caps per-call LLM cost
@@ -129,8 +151,6 @@ class ReflectionEngine:
         """
         if not requests:
             return []
-
-        from collections import defaultdict
 
         # 1. Group by Vault ID to optimize DB fetching
         vault_groups = defaultdict(list)
@@ -574,6 +594,23 @@ class ReflectionEngine:
         memories_map = defaultdict(list)
         for unit, eid in results:
             memories_map[eid].append(unit)
+
+        # F22: prioritise high-variance edges within each entity bucket so the
+        # per-tick LLM budget concentrates on uncertain units (highest
+        # information yield). Stable sort preserves the existing
+        # event_date DESC tiebreak from the SQL window function.
+        #
+        # Hermes round-10 HIGH: gated on
+        # ``ReflectionConfig.variance_prioritisation_enabled`` (default
+        # False) so the F22 migration ships INERTLY — reflection ordering
+        # does not change on deploy. Operators flip the flag after the
+        # ``CONFIDENCE_VARIANCE_OBSERVED`` histogram (calibration metric
+        # in retrieval/engine.py) populates as expected. This pairs with
+        # ``RetrievalConfig.certainty_modulation_enabled`` for the F47
+        # boost gating.
+        if self.config.server.memory.reflection.variance_prioritisation_enabled:
+            for eid, units in memories_map.items():
+                units.sort(key=_variance_key, reverse=True)
 
         return memories_map
 

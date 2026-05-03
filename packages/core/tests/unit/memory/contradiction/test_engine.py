@@ -386,8 +386,11 @@ class TestDetectContradictions:
             engine,
             '_process_flagged_unit',
             side_effect=[
-                ([link_early, link_unique], {flagged_a.id: 0.9}),
-                ([link_duplicate], {flagged_b.id: 0.8}),
+                # Realistic signed deltas from the post-rename API contract:
+                # weakens applies a -alpha (~-0.1) step; this test asserts link
+                # dedup, not confidence math, so any well-formed weaken delta works.
+                ([link_early, link_unique], {flagged_a.id: -0.1}, {flagged_a.id: 1}),
+                ([link_duplicate], {flagged_b.id: -0.1}, {flagged_b.id: 1}),
             ],
         ):
             # Mock _load_units to return the flagged units
@@ -412,6 +415,112 @@ class TestDetectContradictions:
         # Verify dedup: 3 links in, but only 2 unique keys
         # The values in the INSERT should have 2 rows, not 3
         assert compiled.count('%(from_unit_id_') == 2 or 'VALUES' in compiled
+
+
+class TestConfidenceDeltaAccumulation:
+    """F22 — confidence deltas accumulate per-target so multiple weakens applied
+    to the same unit in one batch advance ``confidence`` and
+    ``confidence_evidence_count`` in lockstep (Hermes round-4 HIGH).
+
+    The pre-fix bug: ``confidence_updates`` was a dict keyed by unit_id with
+    absolute new values, so the last writer wins — a unit weakened twice
+    would land at ``c - alpha`` while ``confidence_evidence_count`` summed
+    to ``+2``, drifting the two columns out of sync.
+
+    Post-fix: ``confidence_deltas`` carries signed alpha-step deltas that are
+    summed per-target by ``_detect``, so ``c - 2*alpha`` lands alongside
+    ``+2`` evidence.
+    """
+
+    @pytest.mark.asyncio
+    async def test_two_weakens_on_same_target_apply_both_alpha_steps(self, engine):
+        vault_id = uuid4()
+        target = _make_unit(text='target', confidence=0.8)
+        flagged_a = _make_unit(text='A')
+        flagged_b = _make_unit(text='B')
+
+        session = AsyncMock()
+        # Default exec result: empty load for any mid-batch SELECT.
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+        session.exec.return_value = empty_result
+        # session.execute is the path used to apply UPDATE statements.
+        captured_updates: list[dict] = []
+
+        async def _capture_execute(stmt):
+            # Best-effort capture of the UPDATE values clause.
+            try:
+                params = stmt.compile().params
+            except Exception:
+                params = {}
+            captured_updates.append({'stmt': stmt, 'params': params})
+            r = MagicMock()
+            r.rowcount = 1
+            return r
+
+        session.execute = AsyncMock(side_effect=_capture_execute)
+
+        # Two flagged units each return a -alpha (=-0.1) delta on the same target.
+        delta = -engine.config.alpha
+
+        with patch.object(
+            engine,
+            '_process_flagged_unit',
+            side_effect=[
+                ([], {target.id: delta}, {target.id: 1}),
+                ([], {target.id: delta}, {target.id: 1}),
+            ],
+        ):
+            with patch.object(engine, '_load_units', return_value=[flagged_a, flagged_b]):
+                with patch.object(
+                    engine,
+                    '_triage',
+                    return_value=[str(flagged_a.id), str(flagged_b.id)],
+                ):
+                    # A non-flagged target so _detect must look it up to find
+                    # pre-batch confidence — exercise that path explicitly.
+                    target_lookup_result = MagicMock()
+                    target_lookup_result.all.return_value = [target]
+
+                    def _exec(stmt):
+                        stmt_str = str(stmt).lower()
+                        if 'where memory_units.id in' in stmt_str:
+                            return target_lookup_result
+                        return empty_result
+
+                    session.exec = AsyncMock(side_effect=_exec)
+                    await engine._detect(session, [flagged_a.id, flagged_b.id], vault_id)
+
+        # Find the UPDATE for the target unit.
+        updates_for_target = [
+            u for u in captured_updates if any(target.id == v for v in u['params'].values())
+        ]
+        assert updates_for_target, 'no UPDATE issued for the target unit'
+
+        # Round-5 HIGH: confidence is now updated via SQL-level arithmetic
+        # ``GREATEST(0.0, LEAST(1.0, memory_units.confidence + :delta))``
+        # so concurrent batches cannot drift the column. Inspect both the
+        # compiled SQL (clamp shape) and the bound delta (accumulated to
+        # ``2 * -alpha = -0.2``, NOT a single ``-0.1`` from the prior
+        # last-writer-wins bug).
+        compiled_sql = str(updates_for_target[0]['stmt']).lower()
+        assert 'greatest' in compiled_sql, 'expected SQL-level GREATEST clamp on confidence update'
+        assert 'least' in compiled_sql, 'expected SQL-level LEAST clamp on confidence update'
+        assert 'memory_units.confidence +' in compiled_sql or ('confidence + ' in compiled_sql), (
+            'expected confidence update to read from MemoryUnit.confidence '
+            'via SQL arithmetic, not application-level absolute write'
+        )
+
+        # Bound delta should be the SUMMED value (accumulation invariant
+        # from round-4 HIGH still holds).
+        delta_params = [
+            v for k, v in updates_for_target[0]['params'].items() if isinstance(v, float)
+        ]
+        assert delta_params, 'no float delta found in UPDATE params'
+        # Two -alpha (=-0.1) steps → -0.2 accumulated delta.
+        assert any(v == pytest.approx(-0.2, abs=1e-9) for v in delta_params), (
+            f'expected -0.2 accumulated delta, got float params: {delta_params}'
+        )
 
 
 class TestTemporalDefault:

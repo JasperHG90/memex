@@ -48,6 +48,11 @@ from memex_core.memory.lint_llm.types import (
     RunLLMCheck,
 )
 from memex_core.services.base import BaseService
+from memex_core.services.lint_confidence import (
+    bulk_load_confidence_map,
+    confidence_map_blocks,
+    gate_blocks_finding,
+)
 
 __all__ = [
     'LLMLintFinding',
@@ -86,6 +91,7 @@ class MaybeRunOutcome:
 
     skipped_below_threshold: bool = False
     skipped_disabled: bool = False
+    skipped_confidence_gate: bool = False
     deferred: bool = False
     finding_emitted: bool = False
     surprise_score: float | None = None
@@ -104,6 +110,7 @@ class LintLLMTickSummary:
     findings_emitted: int = 0
     deferred: int = 0
     skipped_below_threshold: int = 0
+    skipped_confidence_gate: int = 0
     deferred_processed: int = 0
 
 
@@ -570,6 +577,7 @@ class LintLLMService(BaseService):
         run_llm_check: RunLLMCheck,
         session: AsyncSession,
         polarity_classifier: PolarityClassifier | None = None,
+        confidence_map: dict[str, tuple[float, int]] | None = None,
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
@@ -583,6 +591,13 @@ class LintLLMService(BaseService):
         ``polarity_classifier.polarity_threshold`` the OR'd gate clears and
         the LLM check fires. The NLI invocation is skipped when cosine
         surprise is already at/above the threshold (cheap pre-filter).
+
+        ``confidence_map`` (Hermes round-5 MED): when supplied, the F22
+        confidence/variance gate runs against this prefetched
+        ``{unit_id_str: (confidence, evidence_count)}`` map instead of
+        firing one SELECT per unit. ``tick()`` builds the map once for all
+        candidates so the gate scales O(1) extra queries instead of O(N).
+        ``None`` falls back to the per-row SELECT for one-off callers.
         """
         outcome = MaybeRunOutcome()
         settings = self._settings
@@ -590,6 +605,22 @@ class LintLLMService(BaseService):
         if not settings.enabled or settings.cost_cap_per_24h <= 0:
             outcome.skipped_disabled = True
             return outcome
+
+        gate = settings.confidence_gate
+        gate_active = gate.is_active()
+        if gate_active:
+            if confidence_map is not None:
+                if confidence_map_blocks(
+                    confidence_map, str(unit_id), gate.confidence_min, gate.variance_max
+                ):
+                    outcome.skipped_confidence_gate = True
+                    return outcome
+            else:
+                if await gate_blocks_finding(
+                    session, str(unit_id), gate.confidence_min, gate.variance_max
+                ):
+                    outcome.skipped_confidence_gate = True
+                    return outcome
 
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
@@ -780,6 +811,21 @@ class LintLLMService(BaseService):
                 vault_id, limit=settings.units_per_tick, session=session
             )
 
+        # F22 confidence-gate bulk pre-fetch (Hermes round-5 MED): when the
+        # gate is active, hydrate ``(confidence, confidence_evidence_count)``
+        # for every candidate up front so per-unit ``maybe_run`` does NOT
+        # fire one SELECT per unit. Skipped entirely when the gate is off
+        # (the ship default), so the extra query is paid only when the
+        # operator opts into the gate.
+        gate = self._settings.confidence_gate
+        gate_active = gate.is_active()
+        confidence_map: dict[str, tuple[float, int]] | None = None
+        if gate_active and candidates:
+            async with self.metastore.session() as session:
+                confidence_map = await bulk_load_confidence_map(
+                    session, [str(uid) for uid in candidates]
+                )
+
         for unit_id in candidates:
             async with self.metastore.session() as session:
                 try:
@@ -789,6 +835,7 @@ class LintLLMService(BaseService):
                         run_llm_check=run_llm_check,
                         session=session,
                         polarity_classifier=polarity_classifier,
+                        confidence_map=confidence_map,
                     )
                     await session.commit()
                 except Exception:
@@ -802,6 +849,8 @@ class LintLLMService(BaseService):
             summary.candidates_evaluated += 1
             if outcome.skipped_below_threshold:
                 summary.skipped_below_threshold += 1
+            if outcome.skipped_confidence_gate:
+                summary.skipped_confidence_gate += 1
             if outcome.deferred:
                 summary.deferred += 1
             if outcome.finding_emitted:

@@ -52,10 +52,17 @@ from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, Co
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
+from memex_core.memory.confidence import (
+    HasConfidence,
+    certainty_from_variance,
+    extract_confidence_and_count,
+    mean_and_variance,
+)
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
+    CONFIDENCE_VARIANCE_OBSERVED,
     CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
     DECAY_BOOST_OBSERVED,
     MW_BOOST_OBSERVED,
@@ -64,15 +71,20 @@ from memex_core.metrics import (
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 
-def _get_confidence(unit: Any) -> float:
+def _get_confidence(unit: HasConfidence) -> float:
     """Resolve a unit's confidence with defensive fallback to 1.0.
 
-    Schema is NOT NULL DEFAULT 1.0; this guard handles stripped/stale model
-    objects (no attribute) and rows materialised with confidence=None before
-    the column default takes effect.
+    Thin wrapper over the shared
+    :func:`memex_core.memory.confidence.extract_confidence_and_count` so the
+    falsy-zero handling and ``None`` fallback stay in one place
+    (Hermes round-4 MED). Schema is NOT NULL DEFAULT 1.0; this guard
+    handles stripped/stale model objects (no attribute) and rows
+    materialised with confidence=None before the column default takes
+    effect. ``0.0`` is a legitimate value (unit contradicted to zero) and
+    is preserved verbatim — never coerced via ``or 1.0``.
     """
-    confidence = getattr(unit, 'confidence', 1.0)
-    return 1.0 if confidence is None else confidence
+    confidence, _ = extract_confidence_and_count(unit)
+    return confidence
 
 
 # F40 — pre-reranker filter at hydration.
@@ -181,7 +193,9 @@ def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.
     """Derive note-level status from unit confidences."""
     if not units:
         return 'active'
-    low_confidence = sum(1 for u in units if getattr(u, 'confidence', 1.0) < superseded_threshold)
+    low_confidence = sum(
+        1 for u in units if extract_confidence_and_count(u)[0] < superseded_threshold
+    )
     ratio = low_confidence / len(units)
     if ratio > 0.5:
         return 'superseded'
@@ -619,7 +633,9 @@ class RetrievalEngine:
         # 6b. Filter superseded units
         if not request.include_superseded:
             threshold = self.retrieval_config.superseded_threshold
-            final_results = [u for u in final_results if getattr(u, 'confidence', 1.0) >= threshold]
+            final_results = [
+                u for u in final_results if extract_confidence_and_count(u)[0] >= threshold
+            ]
 
         # Snapshot AFTER superseded filter so exploration injection cannot
         # surface superseded-but-ACTIVE units (PR #91 cycle3 MED-1).
@@ -703,8 +719,15 @@ class RetrievalEngine:
                     )
                     if not request.include_superseded:
                         threshold = self.retrieval_config.superseded_threshold
+                        # Hermes round-19 LOW: use the SSOT helper for the
+                        # confidence read so the falsy-zero handling and
+                        # ``None`` fallback are consistent with the rest of
+                        # the rerank path (engine.py:1507) and lint
+                        # (services/lint_confidence.py).
                         bypass_pool = [
-                            u for u in bypass_pool if getattr(u, 'confidence', 1.0) >= threshold
+                            u
+                            for u in bypass_pool
+                            if extract_confidence_and_count(u)[0] >= threshold
                         ]
                     exploration_pool = bypass_pool
 
@@ -1281,7 +1304,9 @@ class RetrievalEngine:
             fetched_models = {m.id: m for m in models}
 
         # Load supersession context for low-confidence units
-        low_conf_ids = [u.id for u in fetched_units.values() if getattr(u, 'confidence', 1.0) < 1.0]
+        low_conf_ids = [
+            u.id for u in fetched_units.values() if extract_confidence_and_count(u)[0] < 1.0
+        ]
         if low_conf_ids:
             from memex_core.memory.sql_models import MemoryLink
 
@@ -1485,11 +1510,48 @@ class RetrievalEngine:
 
                 # F47: contradiction-derived confidence boost.
                 # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
-                # Floor at 0.0 belt-and-suspenders with the config-level ge=0.0/le=2.0
-                # bounds — keeps boosted_score non-negative even if the constraint is
-                # later weakened.
-                confidence = _get_confidence(unit)
-                confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
+                # F22: when certainty_modulation_enabled is True, the boost is
+                # additionally multiplied by certainty = 1 - variance/MAX_VARIANCE
+                # (closed-form Beta(1, 1) posterior). Cold-start (count=0) →
+                # certainty = 0 → boost collapses to neutral (preserves F47 cold-start
+                # safety even with the multiplier active).
+                # Single extraction so confidence and evidence_count come
+                # from the same clamped read (Hermes round-10 MED).
+                confidence, evidence_count = extract_confidence_and_count(unit)
+                # Hermes round-8 MED: emit the calibration histogram on
+                # every rerank pass — including when ``certainty_modulation``
+                # is OFF (the ship default). Operators need the variance
+                # distribution BEFORE flipping the flag to make an informed
+                # decision; gating the metric on the flag would leave them
+                # blind. The single mean_and_variance call serves both the
+                # metric and the (conditional) certainty multiplier.
+                _, variance = mean_and_variance(confidence, evidence_count)
+                CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
+                # Boost-factor range (Hermes round-17 LOW): with
+                # ``confidence_alpha`` capped at 2.0 by the
+                # ``RetrievalConfig.confidence_alpha`` ``le=2.0`` field
+                # constraint and ``confidence ∈ [0, 1]`` enforced by
+                # ``extract_confidence_and_count``, ``confidence_boost``
+                # lies in ``[0.0, 2.0]`` (further compressed toward 1.0
+                # when ``certainty < 1`` under modulation, and pinned at
+                # 1.0 at cold-start with ``certainty = 0``). Downstream
+                # score multiplication therefore caps at a 2× lift / 0×
+                # pin. The ``max(..., 0.0)`` floor below is the only
+                # explicit guard; no separate ceiling is needed because
+                # the inputs cannot exceed those bounds.
+                if self.retrieval_config.certainty_modulation_enabled:
+                    # Reuse the variance from the metric line above instead
+                    # of round-tripping ``certainty(confidence, count)``
+                    # (which would re-evaluate ``mean_and_variance``).
+                    # The closed form lives in ``certainty_from_variance``
+                    # so both call sites share one source of truth (Hermes
+                    # round-4 MED + round-12 LOW).
+                    certainty_factor = certainty_from_variance(variance)
+                    confidence_boost = max(
+                        1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
+                    )
+                else:
+                    confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
                 CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
 
                 decay_boost = compute_decay_boost(unit, decay_alpha=decay_alpha, now=now)
