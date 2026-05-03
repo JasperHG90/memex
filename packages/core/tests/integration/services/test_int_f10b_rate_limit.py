@@ -114,9 +114,9 @@ async def test_per_vault_rate_limit_caps_nli_invocations(
             session=session,
             polarity_classifier=classifier,
         )
-        if outcome.polarity_invoked and outcome.polarity_contradiction_prob is not None:
+        if outcome.polarity_invoked:
             invoked_count += 1
-        elif outcome.polarity_invoked:
+        if outcome.polarity_rate_limited:
             fallback_count += 1
         await session.commit()
 

@@ -90,6 +90,7 @@ class MaybeRunOutcome:
     finding_emitted: bool = False
     surprise_score: float | None = None
     polarity_invoked: bool = False
+    polarity_rate_limited: bool = False
     polarity_contradiction_prob: float | None = None
 
 
@@ -246,6 +247,7 @@ _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL = text("""
         SELECT id, text, embedding
         FROM memory_units
         WHERE id = :unit_id
+          AND status = 'active'
     )
     SELECT
         (SELECT text FROM self) AS unit_text,
@@ -604,10 +606,12 @@ class LintLLMService(BaseService):
                     hypothesis=str(row.peer_text),
                     vault_id=vault_id,
                 )
-                outcome.polarity_invoked = True
                 if polarity_result is not None:
+                    outcome.polarity_invoked = True
                     polarity_contra_prob = polarity_result.contradiction_prob
                     outcome.polarity_contradiction_prob = polarity_contra_prob
+                else:
+                    outcome.polarity_rate_limited = True
 
         cleared = gate_passes(
             score,

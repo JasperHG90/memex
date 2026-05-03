@@ -7,11 +7,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from memex_core.memory.sql_models import LintType
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class PolarityLabel(str, Enum):
@@ -96,7 +100,25 @@ class CheckContext:
     polarity: 'PolarityResult | None' = None
 
 
-RunLLMCheck = Callable[
-    ...,
-    Awaitable['LLMLintFinding | None'],
-]
+@runtime_checkable
+class RunLLMCheck(Protocol):
+    """Protocol for an F10 LLM check.
+
+    The original F10 contract was ``async def(unit_id, vault_id, session)``;
+    F10b adds an optional ``context`` keyword so the orchestrator can plumb a
+    precomputed :class:`PolarityResult` through to the DSPy signature without
+    re-invoking the NLI model. Both signatures satisfy this protocol —
+    ``context`` is keyword-only with a default, so 3-arg implementations
+    remain valid checks. The service uses ``inspect.signature`` to decide
+    whether to pass the kwarg; a check that omits it is called with the
+    legacy 3-arg signature.
+    """
+
+    async def __call__(
+        self,
+        unit_id: UUID,
+        vault_id: UUID,
+        session: 'AsyncSession',
+        *,
+        context: 'CheckContext | None' = ...,
+    ) -> 'LLMLintFinding | None': ...

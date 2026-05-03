@@ -11,6 +11,7 @@ into ``{entailment, neutral, contradiction}`` probabilities.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import cast
 
@@ -22,6 +23,37 @@ logger = logging.getLogger('memex.core.memory.models.backends.onnx_nli')
 
 
 _LABEL_ORDER: tuple[str, str, str] = ('contradiction', 'entailment', 'neutral')
+
+
+def _load_label_order_from_config(model_dir: str) -> tuple[str, str, str] | None:
+    """Read ``config.json`` and return the model's logit-index → label tuple.
+
+    Returns ``None`` when the file is missing or malformed; the caller treats
+    that as "no validation possible" and proceeds with the supplied order.
+    HuggingFace transformer configs use string keys (``"0"``, ``"1"``, ``"2"``)
+    in ``id2label``; we normalise to ``int`` before sorting.
+    """
+    import pathlib
+
+    config_path = pathlib.Path(model_dir) / 'config.json'
+    if not config_path.exists():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    id2label = config.get('id2label')
+    if not isinstance(id2label, dict):
+        return None
+    try:
+        ordered = sorted(
+            ((int(k), str(v).lower()) for k, v in id2label.items()), key=lambda x: x[0]
+        )
+    except (TypeError, ValueError):
+        return None
+    if len(ordered) != 3 or [i for i, _ in ordered] != [0, 1, 2]:
+        return None
+    return cast(tuple[str, str, str], tuple(label for _, label in ordered))
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -47,7 +79,35 @@ class OnnxNLIClassifier(BaseOnnxModel):
     ) -> None:
         super().__init__(model_dir=model_dir, model_name=model_name)
         self._model_version = model_version
-        self._label_order = label_order or _LABEL_ORDER
+        config_label_order = _load_label_order_from_config(model_dir)
+        effective = label_order or config_label_order or _LABEL_ORDER
+        if (
+            label_order is not None
+            and config_label_order is not None
+            and tuple(label_order) != tuple(config_label_order)
+        ):
+            raise ValueError(
+                f'NLI label_order {label_order} does not match the model '
+                f'config.json id2label order {config_label_order}. Logits would '
+                'be silently misattributed.'
+            )
+        if (
+            label_order is None
+            and config_label_order is not None
+            and tuple(config_label_order) != tuple(_LABEL_ORDER)
+        ):
+            raise ValueError(
+                f'NLI model config.json declares id2label={config_label_order} '
+                f'but the F10b default expects {_LABEL_ORDER}. Pass an explicit '
+                "label_order=... to opt in to the model's ordering."
+            )
+        self._label_order = effective
+        logger.info(
+            'OnnxNLIClassifier initialised (model_version=%s, label_order=%s, config_validated=%s)',
+            model_version,
+            effective,
+            config_label_order is not None,
+        )
 
     @property
     def model_version(self) -> str:
