@@ -1277,7 +1277,13 @@ class LintConfidenceGate(BaseModel):
         le=1.0 / 12.0,
         description='Maximum variance for a finding to surface. Default = MAX_VARIANCE '
         '(1/12) = no ceiling (preserves pre-F22 behaviour). Lowering this ceiling '
-        'suppresses findings on under-evidenced units.',
+        'suppresses findings on under-evidenced units. WARNING (Hermes round-22 '
+        'MED): ``variance_max = 0.0`` is a legal bound but acts as a near-total '
+        'suppression — the lint gate predicate is ``variance > variance_max``, '
+        'so any unit with positive variance (essentially every unit, since '
+        'variance hits 0 only in the limit of infinite evidence) would be '
+        'blocked. Operators wanting tight gating should use a small positive '
+        'value (e.g. ``0.001``), not ``0.0``.',
     )
 
     def is_active(self) -> bool:
