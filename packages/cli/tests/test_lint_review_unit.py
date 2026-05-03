@@ -177,6 +177,45 @@ def test_apply_with_dismiss_calls_dismiss_path(runner, mock_config, mock_api, st
     assert mock_api.lint_resolve.await_count == 0
 
 
+def test_apply_error_isolated_per_finding(runner, mock_config, mock_api, strip_ansi):
+    """One ``lint_resolve`` raising must NOT abort the loop.
+
+    Verdicts: ``a, a, s`` with ``--apply``. The first resolve call raises;
+    the second succeeds. The session must traverse all three findings,
+    surface the failure (``apply failed``), and still print a final summary
+    that records the error count.
+    """
+    mock_api.lint_findings = AsyncMock(
+        return_value={'count': len(_FINDINGS), 'findings': _FINDINGS}
+    )
+    mock_api.lint_dismiss = AsyncMock(
+        side_effect=lambda fid: {'finding_id': fid, 'status': 'dismissed'}
+    )
+
+    call_count = {'n': 0}
+
+    async def _flaky_resolve(fid):
+        call_count['n'] += 1
+        if call_count['n'] == 1:
+            raise RuntimeError('boom')
+        return {'finding_id': fid, 'status': 'resolved'}
+
+    mock_api.lint_resolve = AsyncMock(side_effect=_flaky_resolve)
+
+    with patch('memex_cli.lint.get_api_context') as gac:
+        gac.return_value.__aenter__.return_value = mock_api
+        gac.return_value.__aexit__.return_value = None
+        result = runner.invoke(
+            app, ['review', '--all', '--apply'], obj=mock_config, input='a\na\ns\n'
+        )
+
+    assert result.exit_code == 0, strip_ansi(result.stdout)
+    text = strip_ansi(result.stdout).lower()
+    assert 'apply failed' in text
+    assert 'apply errors' in text
+    assert mock_api.lint_resolve.await_count == 2
+
+
 # ---------------------------------------------------------------------------
 # help-text fence
 # ---------------------------------------------------------------------------
