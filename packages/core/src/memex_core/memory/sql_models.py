@@ -1366,6 +1366,7 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
         Index('idx_memory_links_from', 'from_unit_id'),
         Index('idx_memory_links_to', 'to_unit_id'),
         Index('idx_memory_links_type', 'link_type'),
+        Index('idx_memory_links_link_type_to_unit', 'link_type', 'to_unit_id'),
         Index(
             'idx_memory_links_entity',
             'entity_id',

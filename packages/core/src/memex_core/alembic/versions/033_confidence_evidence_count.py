@@ -55,6 +55,13 @@ depends_on: str | Sequence[str] | None = None
 
 _CHECK_CONSTRAINT_NAME = 'memory_units_confidence_evidence_count_check'
 
+# Hermes round-11 MED: composite index on ``(link_type, to_unit_id)`` so the
+# backfill subquery and any future "negative-evidence count for this unit"
+# query can range-scan instead of seq-scanning ``memory_links`` on every
+# batch. The existing ``idx_memory_links_to`` and ``idx_memory_links_type``
+# are single-column and don't combine for this access pattern.
+_BACKFILL_INDEX_NAME = 'idx_memory_links_link_type_to_unit'
+
 # Hermes round-10 LOW: chunk the backfill so a vault with millions of
 # memory_units doesn't hold a long-running row-level lock on the entire
 # table during the single-shot ``UPDATE … FROM (subquery)``. 5000 strikes
@@ -91,6 +98,20 @@ def _constraint_exists(conn, name: str) -> bool:
     return bool(result.scalar())
 
 
+def _index_exists(conn, name: str) -> bool:
+    result = conn.execute(
+        sa.text(
+            'SELECT EXISTS ('
+            '  SELECT 1 FROM pg_indexes'
+            '  WHERE schemaname = current_schema()'
+            '    AND indexname = :name'
+            ')'
+        ),
+        {'name': name},
+    )
+    return bool(result.scalar())
+
+
 def upgrade() -> None:
     conn = op.get_bind()
 
@@ -103,6 +124,16 @@ def upgrade() -> None:
                 nullable=False,
                 server_default='0',
             ),
+        )
+
+    # Composite index for the backfill access pattern (Hermes round-11
+    # MED). Created BEFORE the loop so each batch range-scans instead of
+    # seq-scanning ``memory_links``.
+    if not _index_exists(conn, _BACKFILL_INDEX_NAME):
+        op.create_index(
+            _BACKFILL_INDEX_NAME,
+            'memory_links',
+            ['link_type', 'to_unit_id'],
         )
 
     # Chunked backfill (Hermes round-10 LOW). Each batch runs in its own
@@ -152,6 +183,9 @@ def downgrade() -> None:
 
     if _constraint_exists(conn, _CHECK_CONSTRAINT_NAME):
         op.drop_constraint(_CHECK_CONSTRAINT_NAME, 'memory_units', type_='check')
+
+    if _index_exists(conn, _BACKFILL_INDEX_NAME):
+        op.drop_index(_BACKFILL_INDEX_NAME, table_name='memory_links')
 
     if _column_exists(conn, 'memory_units', 'confidence_evidence_count'):
         op.drop_column('memory_units', 'confidence_evidence_count')
