@@ -144,6 +144,23 @@ def inject_exploration_units(
 
     Returns:
         New list with exploration units appended (if selected).
+
+    Mutation contract (Hermes round-13 LOW)
+    ---------------------------------------
+    Mirrors :func:`inject_edge_exploration`: each injected ``MemoryUnit``
+    has its ``unit_metadata`` attribute REPLACED with a fresh dict
+    containing the existing keys plus ``exploration=True``. The original
+    metadata dict on the unit is not mutated, but the attribute swap IS
+    observable to any caller that holds the same object.
+
+    Cross-function hazard: do NOT pipeline this injector and
+    :func:`inject_edge_exploration` on the same candidate list. Both
+    annotate ``unit_metadata`` in place; chaining them on overlapping
+    pools could let one path see the other's annotation. The retrieval
+    engine calls each injector at most once per request, with disjoint
+    selection pools (the second injector's ``all_candidates`` excludes
+    units already in ``results``), so the in-place attribute swap is
+    safe at the documented call site only.
     """
     exploration_units = select_exploration_candidates(
         results,
@@ -240,6 +257,16 @@ def inject_edge_exploration(
     until the request is fully served. The retrieval engine uses these
     objects exactly once per request (no cross-request reuse), so the
     in-place attribute swap is safe in the documented call site.
+
+    Cross-function hazard (Hermes round-13 LOW): do NOT pipeline this
+    injector and :func:`inject_exploration_units` (F33) on the same
+    candidate list. Both annotate ``unit_metadata`` in place; chaining
+    them on overlapping pools could surface a unit injected by F33 as a
+    candidate for F22 edge exploration. The retrieval engine calls each
+    injector at most once per request, with disjoint selection pools
+    (the second injector's ``all_candidates`` excludes units already in
+    ``results``), so the in-place attribute swap is safe at the
+    documented call site only.
     """
     edges = select_edge_exploration_candidates(
         results,
