@@ -593,12 +593,12 @@ class ExtractedFact(BaseFact):
     where: str | None = Field(
         default=None, description='Location information associated with the fact.'
     )
-    intent_class: str = Field(
+    intent_class: IntentLiteral = Field(
         default='durable',
         description='Write-time lifecycle class produced by the extraction LLM '
         '(permanent | durable | ephemeral). Coerced to default on invalid input.',
     )
-    risk_class: str = Field(
+    risk_class: RiskLiteral = Field(
         default='none',
         description='Write-time risk class produced by the extraction LLM '
         '(none | sensitive | private | safety). Coerced to default on invalid input.',
@@ -611,17 +611,21 @@ class ExtractedFact(BaseFact):
     # every construction site coming from a validated RawFact. Mirror RawFact's
     # default-on-fail behavior so a future direct ``ExtractedFact(...)`` with
     # an invalid string degrades gracefully instead of raising ValueError.
+    # (Hermes round-3 MED: types tightened to IntentLiteral / RiskLiteral so
+    # mypy can flag bad assignments at construction sites; validator names
+    # mirror RawFact's public ``coerce_intent_class`` / ``coerce_risk_class``
+    # for grep consistency within this module.)
 
     @field_validator('intent_class', mode='before')
     @classmethod
-    def _coerce_intent_class(cls, v: object) -> str:
+    def coerce_intent_class(cls, v: object) -> str:
         if isinstance(v, str) and v in {c.value for c in IntentClass}:
             return v
         return IntentClass.DURABLE.value
 
     @field_validator('risk_class', mode='before')
     @classmethod
-    def _coerce_risk_class(cls, v: object) -> str:
+    def coerce_risk_class(cls, v: object) -> str:
         if isinstance(v, str) and v in {c.value for c in RiskClass}:
             return v
         return RiskClass.NONE.value
