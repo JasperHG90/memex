@@ -177,6 +177,39 @@ def test_apply_with_dismiss_calls_dismiss_path(runner, mock_config, mock_api, st
     assert mock_api.lint_resolve.await_count == 0
 
 
+def test_missing_id_skips_finding_without_prompting(runner, mock_config, mock_api, strip_ansi):
+    """Finding without ``id`` is skipped + flagged; loop never prompts on the bad row."""
+    bad_findings = [
+        # No 'id' key at all — defensive guard must catch this.
+        {
+            'lint_type': 'quality',
+            'rule_name': 'malformed_no_id',
+            'target_type': 'memory_unit',
+            'target_id': 'unit-zzz',
+            'evidence': {},
+            'suggested_action': 'inspect',
+            'status': 'pending',
+        },
+        _FINDINGS[0],
+    ]
+    mock_api.lint_findings = AsyncMock(
+        return_value={'count': len(bad_findings), 'findings': bad_findings}
+    )
+    mock_api.lint_resolve = AsyncMock()
+    mock_api.lint_dismiss = AsyncMock()
+
+    with patch('memex_cli.lint.get_api_context') as gac:
+        gac.return_value.__aenter__.return_value = mock_api
+        gac.return_value.__aexit__.return_value = None
+        result = runner.invoke(app, ['review', '--all', '--apply'], obj=mock_config, input='s\n')
+
+    assert result.exit_code == 0, strip_ansi(result.stdout)
+    text = strip_ansi(result.stdout).lower()
+    assert 'missing' in text and 'id' in text
+    assert mock_api.lint_resolve.await_count == 0
+    assert mock_api.lint_dismiss.await_count == 0
+
+
 def test_empty_findings_short_circuits(runner, mock_config, mock_api, strip_ansi):
     """Empty findings list → loop exits immediately, no API mutations, summary still prints."""
     mock_api.lint_findings = AsyncMock(return_value={'count': 0, 'findings': []})

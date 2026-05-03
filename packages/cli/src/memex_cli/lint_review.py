@@ -137,8 +137,12 @@ async def run_review_loop(
 
     for idx, finding in enumerate(findings, start=1):
         _render_finding(console, idx, total, finding)
+        finding_id = finding.get('id') or ''
+        if not finding_id:
+            console.print(f'[red]Finding at position {idx} is missing ``id`` — skipping.[/red]')
+            summary.skipped.append('')
+            continue
         verdict = await asyncio.to_thread(_prompt_verdict, console)
-        finding_id = finding.get('id', '')
 
         if verdict == 'q':
             summary.quit_early = True
