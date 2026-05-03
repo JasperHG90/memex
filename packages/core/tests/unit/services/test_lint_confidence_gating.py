@@ -55,7 +55,7 @@ class TestGatePredicate:
 
         # variance_max = 0.05 < MAX_VARIANCE (1/12 ≈ 0.0833) → cold-start blocked.
         blocked = await gate_blocks_finding(
-            session, 'unit-id', confidence_min=0.0, variance_max=0.05
+            session, '11111111-1111-4111-a111-111111111111', confidence_min=0.0, variance_max=0.05
         )
         assert blocked is True
 
@@ -70,7 +70,10 @@ class TestGatePredicate:
         session.execute = AsyncMock(return_value=result)
 
         blocked = await gate_blocks_finding(
-            session, 'unit-id', confidence_min=0.0, variance_max=MAX_VARIANCE
+            session,
+            '11111111-1111-4111-a111-111111111111',
+            confidence_min=0.0,
+            variance_max=MAX_VARIANCE,
         )
         assert blocked is False
 
@@ -84,7 +87,10 @@ class TestGatePredicate:
         session.execute = AsyncMock(return_value=result)
 
         blocked = await gate_blocks_finding(
-            session, 'unit-id', confidence_min=0.3, variance_max=MAX_VARIANCE
+            session,
+            '11111111-1111-4111-a111-111111111111',
+            confidence_min=0.3,
+            variance_max=MAX_VARIANCE,
         )
         assert blocked is True
 
@@ -99,7 +105,7 @@ class TestGatePredicate:
         session.execute = AsyncMock(return_value=result)
 
         blocked = await gate_blocks_finding(
-            session, 'unit-id', confidence_min=0.5, variance_max=0.001
+            session, '11111111-1111-4111-a111-111111111111', confidence_min=0.5, variance_max=0.001
         )
         assert blocked is False
 
@@ -114,9 +120,31 @@ class TestGatePredicate:
         session.execute = AsyncMock(return_value=result)
 
         blocked = await gate_blocks_finding(
-            session, 'unit-id', confidence_min=0.5, variance_max=0.005
+            session, '11111111-1111-4111-a111-111111111111', confidence_min=0.5, variance_max=0.005
         )
         assert blocked is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_unit_id_does_not_block_or_query(self) -> None:
+        """Hermes round-23 HIGH: a non-UUID ``unit_id`` MUST short-circuit
+        to ``False`` before the SQL CAST fires — parity with the
+        ``row is None`` branch (do not block) and crash-avoidance for
+        the lint pipeline.
+        """
+        from memex_core.services.lint_confidence import gate_blocks_finding
+
+        session = MagicMock()
+        session.execute = AsyncMock()
+
+        # Truncated, non-hex, and a literal "unit-id" all malformed.
+        for bad in ('not-a-uuid', '11111111', 'unit-id', 'zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz'):
+            blocked = await gate_blocks_finding(
+                session, bad, confidence_min=0.5, variance_max=0.001
+            )
+            assert blocked is False, f'malformed {bad!r} must not block'
+
+        # Critical: zero queries fire — the guard runs before SQL.
+        session.execute.assert_not_called()
 
 
 class TestBulkConfidenceLoad:

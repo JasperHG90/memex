@@ -9,6 +9,8 @@ and there is no private-API coupling between the two services.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +29,15 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int) -> tuple[floa
     the clamp engages, or delegating fully to
     ``extract_confidence_and_count`` — lands once instead of three
     times.
+
+    Privacy (Hermes round-23 LOW): kept under the ``_`` prefix
+    deliberately — this is a module-internal implementation detail of
+    the three lint helpers, not a public API. External callers that
+    need the same clamp should use
+    ``memex_core.memory.confidence.extract_confidence_and_count``,
+    which is the canonical defensive read for unit-shaped objects
+    across the retrieval, lint, and reflection paths. Promoting this
+    helper to public would create a second canonical clamp surface.
     """
     return max(0.0, min(1.0, confidence)), max(0, evidence_count)
 
@@ -86,7 +97,20 @@ async def gate_blocks_finding(
     :func:`bulk_load_confidence_map` + :func:`confidence_map_blocks` —
     the bulk pair is exactly this predicate against a single query's
     worth of data.
+
+    Input validation (Hermes round-23 HIGH): ``unit_id`` is parsed as a
+    UUID before the query. A malformed ID (truncated, non-hex, etc.)
+    returns ``False`` ("do not block") rather than letting asyncpg
+    raise an unhandled ``DataError`` deep in the lint path — parity
+    with the ``row is None`` branch below.
     """
+    try:
+        UUID(unit_id)
+    except (TypeError, ValueError, AttributeError):
+        # A malformed unit_id cannot identify a row; treat as
+        # "do not block" so the lint pipeline degrades gracefully
+        # rather than 500-ing the request.
+        return False
     row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
     if row is None:
         return False
