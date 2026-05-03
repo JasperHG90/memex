@@ -53,6 +53,11 @@ async def gate_blocks_finding(
         return False
     confidence = float(row[0]) if row[0] is not None else 1.0
     evidence_count = int(row[1]) if row[1] is not None else 0
+    # Clamp parallels the retrieval path's ``extract_confidence_and_count``
+    # (Hermes round-11 MED): the DB CHECK guards production writes, but a
+    # stale/in-memory caller mustn't crash ``mean_and_variance`` on an
+    # out-of-range confidence — defence-in-depth across both paths.
+    confidence = max(0.0, min(1.0, confidence))
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max
 
@@ -100,5 +105,7 @@ def confidence_map_blocks(
     if entry is None:
         return False
     confidence, evidence_count = entry
+    # See ``gate_blocks_finding`` for the clamp rationale (Hermes round-11 MED).
+    confidence = max(0.0, min(1.0, confidence))
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max
