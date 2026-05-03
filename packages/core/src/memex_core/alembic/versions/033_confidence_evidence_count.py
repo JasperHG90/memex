@@ -197,6 +197,13 @@ def upgrade() -> None:
     # and only the first batch would ever land. The inner filter
     # advances the candidate window through the link target set as each
     # batch flips ``confidence_evidence_count`` non-zero.
+    # ``RETURNING 1`` (Hermes round-18 MED): with asyncpg as the driver,
+    # ``result.rowcount`` on an UPDATE without RETURNING can theoretically
+    # report ``-1`` ("not supported by driver"), which would make
+    # ``not result.rowcount`` falsy and skip loop termination. Adding
+    # ``RETURNING 1`` makes ``result.rowcount`` driver-independent — every
+    # returned row is counted by SQLAlchemy itself, not the underlying
+    # DBAPI. The 1-int payload is the cheapest possible RETURNING shape.
     backfill_sql = sa.text(
         'UPDATE memory_units mu '
         'SET confidence_evidence_count = sub.cnt '
@@ -215,7 +222,8 @@ def upgrade() -> None:
         '    LIMIT :batch_size '
         ') sub '
         'WHERE mu.id = sub.unit_id '
-        '  AND mu.confidence_evidence_count = 0'
+        '  AND mu.confidence_evidence_count = 0 '
+        'RETURNING 1'
     )
     # Hermes round-16 LOW: per-batch progress logging so operators
     # running the migration on a vault with millions of qualifying
@@ -226,7 +234,11 @@ def upgrade() -> None:
     batch_index = 0
     while True:
         result = conn.execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
-        if not result.rowcount:
+        # ``len(result.all())`` over the RETURNING payload (Hermes round-18
+        # MED): driver-independent counting that does not rely on
+        # ``result.rowcount`` (which asyncpg may report as ``-1``).
+        batch_rowcount = len(result.all())
+        if not batch_rowcount:
             logger.info(
                 'F22 backfill complete: %d batches, %d units backfilled total.',
                 batch_index,
@@ -234,11 +246,11 @@ def upgrade() -> None:
             )
             break
         batch_index += 1
-        backfilled_total += result.rowcount
+        backfilled_total += batch_rowcount
         logger.info(
             'F22 backfill batch %d: updated %d units (%d total).',
             batch_index,
-            result.rowcount,
+            batch_rowcount,
             backfilled_total,
         )
 
@@ -252,6 +264,46 @@ def upgrade() -> None:
             _CHECK_CONSTRAINT_NAME,
             'memory_units',
             'confidence_evidence_count >= 0',
+        )
+
+    # Backfill verification (Hermes round-18 MED): emit a logger.warning
+    # if any unit's ``confidence_evidence_count`` does not match the
+    # actual count of incoming contradicts/weakens links. This is the
+    # programmatic guard the docstring's "operational requirement"
+    # section calls for: it does not fail the migration (the undercount
+    # is conservative and the column is operational), but it WILL appear
+    # in deploy logs so operators see immediately if a hot-online run
+    # raced with the contradiction engine. The query is bounded by an
+    # implicit ``LIMIT 100`` on the worst-case mismatch list so a vault
+    # with millions of post-race mismatches doesn't dump megabytes into
+    # the deploy log.
+    mismatch_check_sql = sa.text("""
+        WITH actual AS (
+            SELECT to_unit_id AS unit_id, COUNT(*) AS cnt
+            FROM memory_links
+            WHERE link_type IN ('contradicts', 'weakens')
+            GROUP BY to_unit_id
+        )
+        SELECT COUNT(*) AS mismatched
+        FROM memory_units mu
+        JOIN actual a ON a.unit_id = mu.id
+        WHERE mu.confidence_evidence_count <> a.cnt
+    """)
+    mismatch_count = conn.execute(mismatch_check_sql).scalar() or 0
+    if mismatch_count > 0:
+        logger.warning(
+            'F22 backfill verification: %d units have '
+            'confidence_evidence_count mismatched against actual link counts. '
+            'Likely cause: contradiction engine bumped a unit between '
+            'backfill iterations (see migration docstring "Operational '
+            'requirement" section). The undercount is conservative '
+            '(unit reads as higher-variance than warranted) but does '
+            'not self-correct on subsequent F22 reads. Mitigation: run a '
+            'post-deploy ``UPDATE memory_units mu SET '
+            'confidence_evidence_count = sub.cnt FROM (...) sub WHERE '
+            'mu.id = sub.unit_id AND mu.confidence_evidence_count <> sub.cnt`` '
+            'with the contradiction engine paused.',
+            mismatch_count,
         )
 
 
