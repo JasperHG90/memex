@@ -968,7 +968,8 @@ The user's home address is "permanent" even though it's not exciting.
 
 **5. Surface impact:**
 - Invisible to the agent — extraction is internal pipeline machinery.
-- MCP / Hermes / Claude Code: no change. The user-facing ``intent_override`` / ``risk_override`` parameters on ingestion still work and still take precedence over the LLM's classification.
+- MCP / Hermes / Claude Code: no change to the *parameter surface*. The user-facing ``intent_override`` / ``risk_override`` parameters on ingestion still work and still take precedence over the LLM's classification.
+- **Override semantics are per-dimension after the fold.** F25 v1 used a coarser semantic: setting *either* override skipped the entire (separate) classifier call, so the non-overridden dimension fell back to ``ProcessedFact``'s schema default (``durable`` / ``none``). After F25b there is no longer a separate classifier to skip — intent + risk arrive on each fact together with extraction itself — so per-dimension overrides are the only coherent semantics. Concretely: a caller passing ``intent_override='ephemeral'`` without a ``risk_override`` now keeps the LLM's ``risk_class`` (which can be ``private`` / ``sensitive`` / ``safety``) instead of being forced back to ``none``. This is more useful (the override channel applies precisely where the caller has signal) and a strictly more expressive contract — the previous coarser behavior is recoverable by passing both overrides explicitly. The kill-switch (``intent_risk_classifier_enabled=False``) takes precedence over overrides in both code paths and forces durable / none, since "ignore intent/risk entirely" is the explicit intent.
 
 **6. Agent prompt text:** none — the classifier guidance is embedded in the extraction signature docstring (where the LLM sees it during the same forward pass that produces facts).
 

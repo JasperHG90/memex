@@ -407,3 +407,116 @@ class TestClassifyAndFilterMetricsGating:
         assert len(out) == 1
         assert after_intent - before_intent == 1
         assert after_risk - before_risk == 1
+
+
+class TestPartialOverrideSemantics:
+    """F25b — per-dimension overrides preserve the LLM's classification on
+    the non-overridden dimension.
+
+    Hermes round-3 HIGH flagged this as a contract change vs. F25 v1, where
+    setting *either* override skipped the entire classifier and the
+    non-overridden dimension fell back to schema defaults. After the fold
+    there is no separate classifier to skip — intent + risk arrive together
+    with extraction — so per-dimension overrides are the only coherent
+    semantics. These tests pin the new contract so a future refactor cannot
+    silently revert it.
+    """
+
+    @staticmethod
+    def _processed(intent: str, risk: str) -> ProcessedFact:
+        from memex_common.schemas import IntentClass, RiskClass
+
+        pf = ProcessedFact(
+            fact_text=f'fact-{uuid4()}',
+            fact_type='world',
+            embedding=[0.0] * 384,
+            mentioned_at=datetime.now(timezone.utc),
+            vault_id=uuid4(),
+        )
+        pf.intent_class = IntentClass(intent)
+        pf.risk_class = RiskClass(risk)
+        return pf
+
+    def test_intent_override_only_keeps_llm_risk(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """``intent_override='ephemeral'`` alone → intent overwritten, risk
+        kept from the LLM (here: ``private``).
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(facts, intent_override='ephemeral', risk_override=None)
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.EPHEMERAL
+        assert out[0].risk_class == RiskClass.PRIVATE  # NOT default ``none``
+
+    def test_risk_override_only_keeps_llm_intent(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """``risk_override='sensitive'`` alone → risk overwritten, intent
+        kept from the LLM.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('ephemeral', 'none')]
+        out = engine._classify_and_filter(facts, intent_override=None, risk_override='sensitive')
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.EPHEMERAL  # NOT default ``durable``
+        assert out[0].risk_class == RiskClass.SENSITIVE
+
+    def test_both_overrides_overwrite_both_dimensions(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Setting both overrides recovers the F25 v1 'override everything'
+        behavior — the previous coarser semantic is opt-in via this call shape.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(facts, intent_override='durable', risk_override='none')
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE
+
+    def test_kill_switch_takes_precedence_over_overrides(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """The kill-switch is "ignore intent/risk entirely" — overrides do
+        not bypass it.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        out = engine._classify_and_filter(
+            facts, intent_override='ephemeral', risk_override='sensitive'
+        )
+
+        assert len(out) == 1
+        # Force-defaults win over the overrides.
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE

@@ -231,8 +231,17 @@ class ExtractionEngine:
         ``ExtractSemanticFacts``) and arrive on each fact already. This method
         handles the post-extraction concerns:
 
-        * If ``intent_override`` / ``risk_override`` is supplied, the explicit
-          value replaces the LLM's classification on every fact.
+        * **Per-dimension overrides.** ``intent_override`` and ``risk_override``
+          are applied independently. A caller passing only ``intent_override``
+          replaces the intent on every fact while leaving the LLM-produced
+          ``risk_class`` intact, and vice versa. This is a deliberate post-fold
+          contract change from the F25 v1 behavior, where setting *either*
+          override skipped the entire (separate) classifier call and the
+          non-overridden dimension fell back to schema defaults. After the
+          fold there is no separate classifier to skip — intent + risk arrive
+          together with extraction — so per-dimension overrides are the only
+          coherent semantics. See cognitive-memory-research-report.md §F25b
+          (Surface impact) for the full rationale.
         * Distribution metrics are incremented for the *final* intent / risk
           values (post-override), so dashboards reflect what was actually
           persisted.
@@ -242,7 +251,9 @@ class ExtractionEngine:
 
         When ``config.intent_risk_classifier_enabled`` is False, every fact is
         forced to the schema defaults (durable / none) regardless of LLM
-        output — this is the kill-switch for intent/risk handling.
+        output — this is the kill-switch for intent/risk handling. Overrides
+        are *not* honored when the kill-switch is engaged, since the explicit
+        intent of disabling the classifier is "ignore intent/risk entirely".
         """
         if not processed_facts:
             return processed_facts
