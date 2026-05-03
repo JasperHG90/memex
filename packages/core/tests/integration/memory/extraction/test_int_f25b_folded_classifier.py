@@ -34,11 +34,6 @@ from memex_core.config import ExtractionConfig, ModelConfig, SimpleTextSplitting
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_common.schemas import IntentClass, RiskClass
 from memex_core.memory.extraction.classifier import filter_safety_blocked
-
-# Hermes round-5 retired ``DEFAULT_INTENT`` / ``DEFAULT_RISK`` from
-# classifier.py — derive them directly from the canonical enums.
-DEFAULT_INTENT = IntentClass.DURABLE.value
-DEFAULT_RISK = RiskClass.NONE.value
 from memex_core.memory.extraction.core import ExtractSemanticFacts
 from memex_core.memory.extraction.engine import ExtractionEngine
 from memex_core.memory.extraction.models import (
@@ -50,6 +45,11 @@ from memex_core.memory.extraction.models import (
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.sql_models import MemoryUnit
 from memex_core.metrics import CLASSIFIER_BLOCKED_TOTAL
+
+# Hermes round-5 retired ``DEFAULT_INTENT`` / ``DEFAULT_RISK`` from
+# classifier.py — derive them directly from the canonical enums.
+DEFAULT_INTENT = IntentClass.DURABLE.value
+DEFAULT_RISK = RiskClass.NONE.value
 
 
 # ---------------------------------------------------------------------------

@@ -565,6 +565,26 @@ class TestPartialOverrideSemantics:
         assert out[0].intent_class == IntentClass.DURABLE
         assert out[0].risk_class == RiskClass.NONE
 
+    def test_invalid_intent_override_raises_when_classifier_enabled(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-7 LOW: pin the normal-path contract — invalid
+        overrides DO raise ``ValueError`` when the classifier is enabled.
+        Pairs with ``test_kill_switch_does_not_validate_ignored_overrides``
+        which covers the kill-switch fast-path.
+        """
+        cfg = ExtractionConfig()  # default: enabled
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+        facts = [self._processed('durable', 'none')]
+
+        with pytest.raises(ValueError, match='intent_override must be one of'):
+            engine._classify_and_filter(facts, intent_override='nonsense')
+
+        with pytest.raises(ValueError, match='risk_override must be one of'):
+            engine._classify_and_filter(facts, risk_override='also-nonsense')
+
     def test_kill_switch_does_not_validate_ignored_overrides(
         self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
     ) -> None:
