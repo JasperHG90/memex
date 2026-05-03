@@ -386,8 +386,8 @@ class TestDetectContradictions:
             engine,
             '_process_flagged_unit',
             side_effect=[
-                ([link_early, link_unique], {flagged_a.id: 0.9}),
-                ([link_duplicate], {flagged_b.id: 0.8}),
+                ([link_early, link_unique], {flagged_a.id: 0.9}, {flagged_a.id: 1}),
+                ([link_duplicate], {flagged_b.id: 0.8}, {flagged_b.id: 1}),
             ],
         ):
             # Mock _load_units to return the flagged units

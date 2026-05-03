@@ -88,6 +88,7 @@ class ContradictionEngine:
 
             all_links: list[MemoryLink] = []
             confidence_updates: dict[UUID, float] = {}
+            evidence_bumps: dict[UUID, int] = {}
 
             tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -96,9 +97,11 @@ class ContradictionEngine:
                 if isinstance(result, BaseException):
                     logger.error('Error processing flagged unit: %s', result)
                     continue
-                links, updates = result
+                links, updates, bumps = result
                 all_links.extend(links)
                 confidence_updates.update(updates)
+                for unit_id, bump in bumps.items():
+                    evidence_bumps[unit_id] = evidence_bumps.get(unit_id, 0) + bump
 
             if all_links:
                 deduped: dict[tuple[UUID, UUID, str], MemoryLink] = {}
@@ -128,17 +131,21 @@ class ContradictionEngine:
                 all_links = list(deduped.values())
 
             for unit_id, new_confidence in confidence_updates.items():
-                stmt = (
-                    update(MemoryUnit)
-                    .where(MemoryUnit.id == unit_id)
-                    .values(confidence=new_confidence)
-                )
+                values: dict[str, Any] = {'confidence': new_confidence}
+                bump = evidence_bumps.get(unit_id, 0)
+                if bump:
+                    values['confidence_evidence_count'] = (
+                        MemoryUnit.confidence_evidence_count + bump
+                    )
+                stmt = update(MemoryUnit).where(MemoryUnit.id == unit_id).values(**values)
                 await session.execute(stmt)
 
             logger.info(
-                'Contradiction detection: created %d links, updated %d confidences',
+                'Contradiction detection: created %d links, updated %d confidences '
+                '(evidence bumps: %d)',
                 len(all_links),
                 len(confidence_updates),
+                sum(evidence_bumps.values()),
             )
 
     async def _load_units(self, session: AsyncSession, unit_ids: list[UUID]) -> list[MemoryUnit]:
@@ -168,8 +175,13 @@ class ContradictionEngine:
         session: AsyncSession,
         unit: MemoryUnit,
         vault_id: UUID,
-    ) -> tuple[list[MemoryLink], dict[UUID, float]]:
-        """Process a single flagged unit: get candidates, classify, adjust."""
+    ) -> tuple[list[MemoryLink], dict[UUID, float], dict[UUID, int]]:
+        """Process a single flagged unit: get candidates, classify, adjust.
+
+        Returns ``(links, confidence_updates, evidence_bumps)`` — F22 adds the
+        third element to track per-unit ``confidence_evidence_count`` bumps so
+        the caller can update both fields in the same atomic statement.
+        """
         candidates = await get_candidates(
             session,
             unit,
@@ -184,12 +196,13 @@ class ContradictionEngine:
                 unit.id,
                 self.config.similarity_threshold,
             )
-            return [], {}
+            return [], {}, {}
 
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
         confidence_updates: dict[UUID, float] = {}
+        evidence_bumps: dict[UUID, int] = {}
 
         for rel in relationships:
             relation = rel.relation
@@ -214,10 +227,12 @@ class ContradictionEngine:
             elif relation == 'weaken':
                 new_conf = max(superseded.confidence - self.config.alpha, 0.0)
                 confidence_updates[superseded.id] = new_conf
+                evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'weakens'
             elif relation == 'contradict':
                 new_conf = max(superseded.confidence - 2 * self.config.alpha, 0.0)
                 confidence_updates[superseded.id] = new_conf
+                evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'contradicts'
             else:
                 continue
@@ -242,7 +257,7 @@ class ContradictionEngine:
             )
             links.append(link)
 
-        return links, confidence_updates
+        return links, confidence_updates, evidence_bumps
 
     async def _classify(
         self, unit: MemoryUnit, candidates: list[MemoryUnit]
