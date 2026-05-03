@@ -603,7 +603,14 @@ class MemoryUnitDTO(MemoryUnitBase):
         'COMPUTED-ONLY: any value passed via constructor kwarg is replaced by the '
         '``_compute_confidence_variance`` model validator (Hermes round-14 LOW). '
         'Do not pass ``confidence_variance=...`` expecting it to be respected — '
-        'set ``confidence`` and ``confidence_evidence_count`` instead.',
+        'set ``confidence`` and ``confidence_evidence_count`` instead. '
+        'BELT-AND-SUSPENDERS (Hermes round-23 LOW): the ``ge=0.0, le=_MAX_VARIANCE`` '
+        'constraints here are NOT enforced for the normal construction path — the '
+        '``_compute_confidence_variance`` after-validator overwrites the field via '
+        '``object.__setattr__``, which bypasses Pydantic field validation. The '
+        'constraints fire only for ``model_validate`` / ``model_construct`` paths '
+        'that skip the after-validator. Kept for documentation + the explicit '
+        'in-validator bounds check on the computed value.',
     )
 
     superseded_by: list[SupersessionInfo] | None = Field(
