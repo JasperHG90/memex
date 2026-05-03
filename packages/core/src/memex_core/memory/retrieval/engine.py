@@ -52,7 +52,11 @@ from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, Co
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
-from memex_core.memory.confidence import MAX_VARIANCE, mean_and_variance
+from memex_core.memory.confidence import (
+    certainty,
+    extract_confidence_and_count,
+    mean_and_variance,
+)
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     CONFIDENCE_BOOST_OBSERVED,
@@ -69,23 +73,31 @@ logger = logging.getLogger('memex.core.memory.retrieval.engine')
 def _get_confidence(unit: Any) -> float:
     """Resolve a unit's confidence with defensive fallback to 1.0.
 
-    Schema is NOT NULL DEFAULT 1.0; this guard handles stripped/stale model
-    objects (no attribute) and rows materialised with confidence=None before
-    the column default takes effect.
+    Thin wrapper over the shared
+    :func:`memex_core.memory.confidence.extract_confidence_and_count` so the
+    falsy-zero handling and ``None`` fallback stay in one place
+    (Hermes round-4 MED). Schema is NOT NULL DEFAULT 1.0; this guard
+    handles stripped/stale model objects (no attribute) and rows
+    materialised with confidence=None before the column default takes
+    effect. ``0.0`` is a legitimate value (unit contradicted to zero) and
+    is preserved verbatim — never coerced via ``or 1.0``.
     """
-    confidence = getattr(unit, 'confidence', 1.0)
-    return 1.0 if confidence is None else confidence
+    confidence, _ = extract_confidence_and_count(unit)
+    return confidence
 
 
 def _get_evidence_count(unit: Any) -> int:
     """Resolve a unit's confidence_evidence_count with defensive fallback to 0.
 
-    Schema is NOT NULL DEFAULT 0; this guard handles stripped/stale model
-    objects (no attribute) and rows materialised before F22's migration.
-    Cold-start (0) yields max variance and certainty = 0 — neutral boost.
+    Thin wrapper over the shared
+    :func:`memex_core.memory.confidence.extract_confidence_and_count`
+    (Hermes round-4 MED). Schema is NOT NULL DEFAULT 0; this guard handles
+    stripped/stale model objects (no attribute) and rows materialised
+    before F22's migration. Cold-start (0) yields max variance and
+    certainty = 0 — neutral boost.
     """
-    count = getattr(unit, 'confidence_evidence_count', 0)
-    return 0 if count is None else int(count)
+    _, count = extract_confidence_and_count(unit)
+    return count
 
 
 # F40 — pre-reranker filter at hydration.
@@ -1505,11 +1517,17 @@ class RetrievalEngine:
                 # safety even with the multiplier active).
                 confidence = _get_confidence(unit)
                 if self.retrieval_config.certainty_modulation_enabled:
-                    _, variance = mean_and_variance(confidence, _get_evidence_count(unit))
+                    evidence_count = _get_evidence_count(unit)
+                    # Single source of truth — both the variance metric and
+                    # the certainty multiplier come from the closed-form
+                    # helpers in ``memex_core.memory.confidence`` (Hermes
+                    # round-4 MED: removes the prior inline duplication of
+                    # ``1.0 - variance / MAX_VARIANCE``).
+                    _, variance = mean_and_variance(confidence, evidence_count)
                     CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
-                    certainty = 1.0 - variance / MAX_VARIANCE
+                    certainty_factor = certainty(confidence, evidence_count)
                     confidence_boost = max(
-                        1.0 + confidence_alpha * (confidence - 0.5) * certainty, 0.0
+                        1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
                     )
                 else:
                     confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
