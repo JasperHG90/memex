@@ -945,6 +945,35 @@ The user's home address is "permanent" even though it's not exciting.
 
 ---
 
+#### F25b. Fold intent + risk classifier into the extraction signature
+
+**1. Source citation:**
+- D-MEM (arXiv:2603.14597v1) §4.1 *Long-term Utility*: the Critic Router does lifecycle classification *as part of* the same forward pass that ingests content — there is no separate classification call. F25 v1 implemented intent + risk as a second LLM call (``ClassifyMemoryUnit``) layered on top of the extraction call; F25b restores the single-call structure D-MEM describes.
+- Direct user direction (2026-05-03): *"wire the separate DSPy model into the extraction DSPy model. No reason to have separate models here."*
+
+**2. New code location:** none — refactor in place.
+
+**3. Code adapted:**
+- `packages/core/src/memex_core/memory/extraction/core.py` — ``ExtractSemanticFacts`` and ``ExtractFrontmatterMetadata`` docstrings absorb the classifier prose; intent + risk are read off each ``RawFact`` (pydantic-validated for default-on-fail).
+- `packages/core/src/memex_core/memory/extraction/models.py` — ``RawFact`` gains ``intent_class`` + ``risk_class`` fields with default-on-fail validators; ``ExtractedFact`` carries them through; ``ProcessedFact.from_extracted_fact`` populates them.
+- `packages/core/src/memex_core/memory/extraction/engine.py` — every ``ExtractedFact`` construction site now copies intent + risk from the ``RawFact``; ``_classify_and_filter`` no longer issues a classifier LLM call (the values arrived with the fact); distribution-metric increments live here.
+- `packages/core/src/memex_core/memory/extraction/classifier.py` — drops ``ClassifyMemoryUnit``, ``_classify_one``, ``classify_facts``; keeps ``filter_safety_blocked`` + the coerce helpers.
+- `packages/core/src/memex_core/metrics.py` — ``CLASSIFIER_CALLS_TOTAL`` is dropped (no separate call to count); distribution + blocked counters retained.
+
+**4. Impact:**
+- **Effort:** S-M (~1 week)
+- **Halves classifier LLM cost** — the second call per fact is gone; intent + risk are output fields on the existing extraction prediction.
+- **Lower per-ingest latency** — N facts no longer cost N+1 LLM calls (one extraction + N classifications); they cost 1 extraction.
+- **Default-on-fail is now coupled to extraction-fail.** If the extraction LLM omits intent or risk on a fact, the pydantic validator on ``RawFact`` coerces it to ``durable`` / ``none`` — the same outcome F25 v1 produced when the standalone classifier raised. A fact with no fields at all is dropped at the existing extraction validation step (no regression).
+
+**5. Surface impact:**
+- Invisible to the agent — extraction is internal pipeline machinery.
+- MCP / Hermes / Claude Code: no change. The user-facing ``intent_override`` / ``risk_override`` parameters on ingestion still work and still take precedence over the LLM's classification.
+
+**6. Agent prompt text:** none — the classifier guidance is embedded in the extraction signature docstring (where the LLM sees it during the same forward pass that produces facts).
+
+---
+
 #### F33. MW exploration floor
 
 **1. Source citation:**

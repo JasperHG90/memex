@@ -56,6 +56,13 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~3-4w for Tier-A 
   - Subsumes F26; affects every future extraction
   - LLM cost per ingest — needs per-vault rate-limit
 
+- [ ] **F25b** — Fold intent+risk classifier into the extraction DSPy signature — see report §4 F25b
+  - Size: S-M (~1w) · Effort: Low
+  - Refactor of F25: ``ClassifyMemoryUnit`` collapses into ``ExtractSemanticFacts`` (and ``ExtractFrontmatterMetadata``) so each fact is one LLM call instead of two. Halves classifier LLM cost; lower per-ingest latency.
+  - Pydantic validators on ``RawFact`` enforce default-on-fail (intent → ``durable``, risk → ``none``) when the LLM omits or returns invalid values, preserving F25's non-blocking guarantee.
+  - ``filter_safety_blocked`` + ``CLASSIFIER_BLOCKED_TOTAL`` retained; ``CLASSIFIER_CALLS_TOTAL`` dropped (no separate call to count).
+  - User-driven (2026-05-03): "no reason to have separate models here". Pure internal refactor — no agent-surface impact.
+
 - [x] **F33** — MW exploration floor — see report §4 F33 + §3.4.1 (rich-get-richer counter-pressure)
   - Size: S (1-2w) · Effort: Low
   - Prevents rich-get-richer; depends only on F1a (data) — F1c makes injection meaningful
@@ -280,7 +287,7 @@ Six follow-ups surfaced during Phase 3 adversarial review and close-out. All Tie
 |---|---|---|
 | **0 — Pre-conditions (executed v6.9)** | ~1.5 days | All 7 W0 items resolved; **no code change** (originally-planned archive `cascade_to_models=False` revert dropped — destructive cascade kept as intentional cleanup; F4 is the non-destructive verb). See [WAVE-0-PREWORK.md](./WAVE-0-PREWORK.md) |
 | 1 — Foundation | 4-6w | F1a, F1b, F1c, F2, F33 |
-| 2 — Write-time judgment | 3-4w | F25 |
+| 2 — Write-time judgment | 3-4w | F25 (+F25b refactor — fold classifier into extraction signature) |
 | 3 — Agent control | 4-5w | F4, F5, F8 |
 | 4 — Linter + orchestration | 5-7w | F6, F10, F38 |
 | 5 — Procedural observations | ~1w | F14 |

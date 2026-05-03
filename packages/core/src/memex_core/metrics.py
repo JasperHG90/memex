@@ -208,30 +208,30 @@ CONFIDENCE_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
-# Write-time classifier metrics (F25)
+# Write-time classifier metrics (F25 / F25b)
 # ---------------------------------------------------------------------------
-
-CLASSIFIER_CALLS_TOTAL = Counter(
-    'memex_classifier_calls_total',
-    'Write-time classifier calls by status (success | error | fallback).',
-    ['status'],
-)
+# F25b folded the standalone classifier into the fact-extraction signature, so
+# the per-call success/error counter (CLASSIFIER_CALLS_TOTAL) was dropped —
+# extraction errors are tracked under the extraction-engine instrumentation.
+# Distribution + blocked counters are still emitted from the engine's
+# post-extraction handling (intent + risk distribution) and the safety filter
+# (blocked) respectively.
 
 CLASSIFIER_INTENT_DISTRIBUTION = Counter(
     'memex_classifier_intent_total',
-    'Distribution of intent classifications produced by the write-time classifier.',
+    'Distribution of intent classifications attached to extracted facts.',
     ['intent_class'],
 )
 
 CLASSIFIER_RISK_DISTRIBUTION = Counter(
     'memex_classifier_risk_total',
-    'Distribution of risk classifications produced by the write-time classifier.',
+    'Distribution of risk classifications attached to extracted facts.',
     ['risk_class'],
 )
 
 CLASSIFIER_BLOCKED_TOTAL = Counter(
     'memex_classifier_blocked_total',
-    'Facts refused at ingestion because the classifier flagged risk_class=safety.',
+    'Facts refused at ingestion because risk_class=safety.',
     ['vault_id'],
 )
 

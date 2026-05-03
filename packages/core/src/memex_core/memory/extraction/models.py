@@ -14,7 +14,7 @@ from pydantic import BaseModel, field_serializer, field_validator, model_validat
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
-from memex_common.schemas import IntentClass, RiskClass
+from memex_common.schemas import IntentClass, IntentLiteral, RiskClass, RiskLiteral
 
 DATE_REGEX = r'^-?\d{4,}-\d{2}-\d{2}$'
 
@@ -436,6 +436,30 @@ class RawFact(BaseFact):
         description="'dated' = specific datable occurrence (set occurred dates), "
         "'conversation' = general info (no occurred dates)",
     )
+    intent_class: IntentLiteral = Field(
+        default='durable',
+        description='Lifecycle class — how durable the fact is, NOT how important it feels. '
+        "'permanent' = identity/preferences/key facts that should never decay (e.g. 'user has a "
+        "peanut allergy', 'user prefers ruff over black'). 'durable' = project decisions, "
+        'relationship state, multi-week relevance — DEFAULT for unclear cases. '
+        "'ephemeral' = task context, session details, days-to-weeks relevance only (e.g. "
+        "'tomorrow's standup is at 10am', 'Bob is on vacation this week'). Set based on the "
+        "fact's actual durability, not perceived importance: a specific date for next week is "
+        "ephemeral even if the event is important; the user's home address is permanent even "
+        'though it is not exciting.',
+    )
+    risk_class: RiskLiteral = Field(
+        default='none',
+        description='Sensitivity class. '
+        "'none' = default, public-safe content. "
+        "'sensitive' = flagged for linter review; still retrievable in default scope. "
+        "'private' = excluded from default retrieval; surfaced only on explicit query "
+        '(passwords, financial details, medical specifics). '
+        "'safety' = blocked entirely (Memex refuses to ingest). Use ONLY for content that "
+        'would cause real-world harm if surfaced (e.g. self-harm planning, instructions for '
+        "violence). Be conservative — when in doubt, prefer 'sensitive' or 'private' over "
+        "'safety'.",
+    )
     occurred_start: str | None = Field(
         default=None,
         description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
@@ -460,6 +484,22 @@ class RawFact(BaseFact):
         if v in ('assistant', 'experience'):
             return 'event'
         return v
+
+    @field_validator('intent_class', mode='before')
+    @classmethod
+    def coerce_intent_class(cls, v: object) -> str:
+        # F25b default-on-fail: LLM-omitted or invalid intent → 'durable'.
+        if isinstance(v, str) and v in {c.value for c in IntentClass}:
+            return v
+        return IntentClass.DURABLE.value
+
+    @field_validator('risk_class', mode='before')
+    @classmethod
+    def coerce_risk_class(cls, v: object) -> str:
+        # F25b default-on-fail: LLM-omitted or invalid risk → 'none'.
+        if isinstance(v, str) and v in {c.value for c in RiskClass}:
+            return v
+        return RiskClass.NONE.value
 
     @field_validator('occurred_start', 'occurred_end')
     @classmethod
@@ -552,6 +592,16 @@ class ExtractedFact(BaseFact):
     who: str | None = Field(default=None, description='People/entities involved in the fact.')
     where: str | None = Field(
         default=None, description='Location information associated with the fact.'
+    )
+    intent_class: str = Field(
+        default='durable',
+        description='Write-time lifecycle class produced by the extraction LLM '
+        '(permanent | durable | ephemeral). Coerced to default on invalid input.',
+    )
+    risk_class: str = Field(
+        default='none',
+        description='Write-time risk class produced by the extraction LLM '
+        '(none | sensitive | private | safety). Coerced to default on invalid input.',
     )
 
 
@@ -663,4 +713,6 @@ class ProcessedFact(SQLModel):
             chunk_id=chunk_id,
             content_index=extracted_fact.content_index,
             vault_id=extracted_fact.vault_id,  # Explicitly pass vault_id
+            intent_class=IntentClass(extracted_fact.intent_class),
+            risk_class=RiskClass(extracted_fact.risk_class),
         )

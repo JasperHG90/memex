@@ -59,14 +59,15 @@ from memex_core.memory.extraction.pipeline.fact_processing import (
     add_temporal_offsets,
     process_embeddings,
 )
-from memex_core.memory.extraction.classifier import (
-    ClassifyMemoryUnit,
-    classify_facts,
-    filter_safety_blocked,
-)
+from memex_core.memory.extraction.classifier import filter_safety_blocked
 from memex_core.memory.entity_resolver import EntityResolver
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
+from memex_core.metrics import (
+    CLASSIFIER_INTENT_DISTRIBUTION,
+    CLASSIFIER_RISK_DISTRIBUTION,
+)
 from memex_core.processing.titles import resolve_title_from_page_index
+from memex_common.schemas import IntentClass, RiskClass
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
 
@@ -217,9 +218,6 @@ class ExtractionEngine:
         )
         self.semaphore = asyncio.Semaphore(config.max_concurrency)
         self.page_index_lm = page_index_lm
-        self._classifier_predictor: dspy.Module | None = (
-            dspy.Predict(ClassifyMemoryUnit) if config.intent_risk_classifier_enabled else None
-        )
 
     async def _classify_and_filter(
         self,
@@ -227,17 +225,27 @@ class ExtractionEngine:
         intent_override: str | None = None,
         risk_override: str | None = None,
     ) -> list[ProcessedFact]:
-        """F25 — classify intent + risk, then drop facts marked safety.
+        """F25b — apply overrides, emit distribution metrics, drop safety facts.
 
-        If overrides are supplied the explicit values win and the classifier
-        is bypassed for those dimensions. When both overrides are set the
-        classifier is skipped entirely. The safety filter still runs so an
-        override of ``risk_class='safety'`` is honored.
+        Intent + risk are produced by the extraction LLM (folded into
+        ``ExtractSemanticFacts``) and arrive on each fact already. This method
+        handles the post-extraction concerns:
+
+        * If ``intent_override`` / ``risk_override`` is supplied, the explicit
+          value replaces the LLM's classification on every fact.
+        * Distribution metrics are incremented for the *final* intent / risk
+          values (post-override), so dashboards reflect what was actually
+          persisted.
+        * Facts with ``risk_class='safety'`` are dropped before persistence
+          via :func:`filter_safety_blocked`. This honors both LLM-classified
+          safety and a deliberate ``risk_override='safety'`` from the caller.
+
+        When ``config.intent_risk_classifier_enabled`` is False, every fact is
+        forced to the schema defaults (durable / none) regardless of LLM
+        output — this is the kill-switch for intent/risk handling.
         """
         if not processed_facts:
             return processed_facts
-
-        from memex_common.schemas import IntentClass, RiskClass
 
         if intent_override is not None and intent_override not in {c.value for c in IntentClass}:
             allowed = [c.value for c in IntentClass]
@@ -246,29 +254,27 @@ class ExtractionEngine:
             allowed = [c.value for c in RiskClass]
             raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
 
-        skip_classifier = bool(intent_override or risk_override)
-        if not skip_classifier and self._classifier_predictor is not None:
-            await classify_facts(
-                processed_facts,
-                lm=self.lm,
-                semaphore=self.semaphore,
-                predictor=self._classifier_predictor,
-            )
+        if not self.config.intent_risk_classifier_enabled:
+            for f in processed_facts:
+                f.intent_class = IntentClass.DURABLE
+                f.risk_class = RiskClass.NONE
 
         if intent_override:
-            intent_value = (
-                IntentClass(intent_override)
-                if isinstance(intent_override, str)
-                else intent_override
-            )
+            intent_value = IntentClass(intent_override)
             for f in processed_facts:
                 f.intent_class = intent_value
         if risk_override:
-            risk_value = (
-                RiskClass(risk_override) if isinstance(risk_override, str) else risk_override
-            )
+            risk_value = RiskClass(risk_override)
             for f in processed_facts:
                 f.risk_class = risk_value
+
+        for f in processed_facts:
+            intent_label = (
+                f.intent_class.value if hasattr(f.intent_class, 'value') else f.intent_class
+            )
+            risk_label = f.risk_class.value if hasattr(f.risk_class, 'value') else f.risk_class
+            CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=intent_label).inc()
+            CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=risk_label).inc()
 
         return filter_safety_blocked(processed_facts)
 
@@ -562,6 +568,8 @@ class ExtractionEngine:
                         who=raw_fact.who,
                         where=raw_fact.where,
                         vault_id=vault_id,
+                        intent_class=raw_fact.intent_class,
+                        risk_class=raw_fact.risk_class,
                     )
                     all_extracted_facts.append(ef)
 
@@ -597,6 +605,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         all_extracted_facts.append(ef)
                 if user_notes_text:
@@ -631,6 +641,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         all_extracted_facts.append(ef)
 
@@ -958,6 +970,8 @@ class ExtractionEngine:
                             who=f.who,
                             where=f.where,
                             vault_id=vault_id,
+                            intent_class=f.intent_class,
+                            risk_class=f.risk_class,
                         )
                         extracted_facts.append(ef)
                         global_fact_idx += 1
@@ -1197,6 +1211,8 @@ class ExtractionEngine:
                     who=f.who,
                     where=f.where,
                     vault_id=vault_id,
+                    intent_class=f.intent_class,
+                    risk_class=f.risk_class,
                 )
                 extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1232,6 +1248,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1265,6 +1283,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1489,6 +1509,8 @@ class ExtractionEngine:
                         payload=content.payload or {},  # Ensure payload is dict
                         where=f.where,
                         vault_id=content.vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1527,6 +1549,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
             if user_notes_text:
@@ -1559,6 +1583,8 @@ class ExtractionEngine:
                         who=f.who,
                         where=f.where,
                         vault_id=contents[0].vault_id,
+                        intent_class=f.intent_class,
+                        risk_class=f.risk_class,
                     )
                     extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1719,6 +1745,8 @@ class ExtractionEngine:
                 who=f.who,
                 where=f.where,
                 vault_id=vault_id,
+                intent_class=f.intent_class,
+                risk_class=f.risk_class,
             )
             for f in un_facts
         ]
