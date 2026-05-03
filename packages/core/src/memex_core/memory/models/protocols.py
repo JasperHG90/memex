@@ -1,4 +1,4 @@
-"""Protocols for inference model backends (embedding, reranking).
+"""Protocols for inference model backends (embedding, reranking, NLI).
 
 These define the contracts that all backends must satisfy.
 Both the built-in ONNX models and litellm-based adapters
@@ -53,3 +53,27 @@ class RerankerModel(Protocol):
         return 'unknown'
 
     def score(self, query: str, texts: list[str]) -> Any: ...
+
+
+@runtime_checkable
+class NLIClassifierModel(Protocol):
+    """Three-way NLI classifier: returns probabilities for entailment / neutral / contradiction.
+
+    F10b uses this to disambiguate "topically related" peers from "polarity-inverting"
+    peers when the cosine surprise gate alone cannot lift them above threshold (POC-002).
+
+    ``classify`` accepts a ``(premise, hypothesis)`` pair and returns a dict whose
+    values sum to ~1.0::
+
+        {'entailment': p, 'neutral': p, 'contradiction': p}
+
+    ``model_version`` mirrors :class:`RerankerModel.model_version` semantics — a stable
+    string identifier that changes when the underlying weights are upgraded so any
+    downstream caches can invalidate structurally.
+    """
+
+    @property
+    def model_version(self) -> str:
+        return 'unknown'
+
+    async def classify(self, premise: str, hypothesis: str) -> dict[str, float]: ...

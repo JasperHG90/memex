@@ -8,6 +8,7 @@ from memex_core.memory.models.base import (
 )
 from memex_core.memory.models.protocols import (
     EmbeddingsModel,
+    NLIClassifierModel,
     RerankerModel,
 )
 from memex_core.memory.models.embedding import (
@@ -19,6 +20,8 @@ from memex_core.memory.models.reranking import (
     get_reranking_model,
 )
 from memex_core.memory.models.ner import get_ner_model, FastNERModel
+from memex_core.memory.models.nli import get_nli_model
+from memex_core.memory.models.backends.onnx_nli import OnnxNLIClassifier
 from memex_core.memory.models.anisotropy import (
     AnisotropyCorrector,
     AnisotropyCorrectorGroup,
@@ -32,6 +35,7 @@ __all__ = [
     'configure_cache_dir',
     'get_cache_dir',
     'EmbeddingsModel',
+    'NLIClassifierModel',
     'RerankerModel',
     'FastEmbedder',
     'get_embedding_model',
@@ -39,6 +43,8 @@ __all__ = [
     'get_reranking_model',
     'FastNERModel',
     'get_ner_model',
+    'OnnxNLIClassifier',
+    'get_nli_model',
     'AnisotropyCorrector',
     'AnisotropyCorrectorGroup',
 ]

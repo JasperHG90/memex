@@ -33,8 +33,18 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from memex_core.memory.lint_llm.polarity import (
+    DEFAULT_POLARITY_THRESHOLD,
+    PolarityClassifier,
+    gate_passes,
+)
 from memex_core.memory.lint_llm.surprise import compute_unit_surprise
-from memex_core.memory.lint_llm.types import LLMLintFinding, RunLLMCheck
+from memex_core.memory.lint_llm.types import (
+    CheckContext,
+    LLMLintFinding,
+    PolarityResult,
+    RunLLMCheck,
+)
 from memex_core.services.base import BaseService
 
 __all__ = [
@@ -77,6 +87,8 @@ class MaybeRunOutcome:
     deferred: bool = False
     finding_emitted: bool = False
     surprise_score: float | None = None
+    polarity_invoked: bool = False
+    polarity_contradiction_prob: float | None = None
 
 
 @dataclass
@@ -227,6 +239,28 @@ _EVICT_OLDEST_DEFERRED_SQL = text("""
 """)
 
 
+_LOAD_UNIT_AND_TOP_PEER_TEXT_SQL = text("""
+    WITH self AS (
+        SELECT id, text, embedding
+        FROM memory_units
+        WHERE id = :unit_id
+    )
+    SELECT
+        (SELECT text FROM self) AS unit_text,
+        (
+            SELECT m.text
+            FROM memory_units m, self
+            WHERE m.vault_id = :vault_id
+              AND m.id != :unit_id
+              AND m.status = 'active'
+              AND m.embedding IS NOT NULL
+              AND self.embedding IS NOT NULL
+            ORDER BY (m.embedding <=> self.embedding)
+            LIMIT 1
+        ) AS peer_text
+""")
+
+
 _SELECT_TICK_CANDIDATES_SQL = text("""
     SELECT m.id
     FROM memory_units m
@@ -253,6 +287,27 @@ _SELECT_TICK_CANDIDATES_SQL = text("""
 
 def _truncate_to_hour(dt: datetime) -> datetime:
     return dt.replace(minute=0, second=0, microsecond=0)
+
+
+async def _invoke_check(
+    run_llm_check: RunLLMCheck,
+    unit_id: UUID,
+    vault_id: UUID,
+    session: AsyncSession,
+    context: CheckContext,
+) -> LLMLintFinding | None:
+    """Invoke ``run_llm_check`` with backward-compatible context plumbing.
+
+    F10's original check signature was ``(unit_id, vault_id, session)``; F10b
+    adds an optional ``context`` kwarg so the cosine-OR-polarity gate can pass
+    the precomputed :class:`PolarityResult` through to the DSPy signature
+    without re-invoking the NLI model. Existing 3-arg checks (and existing
+    tests that mock 3-arg lambdas) continue to work unchanged.
+    """
+    try:
+        return await run_llm_check(unit_id, vault_id, session, context=context)
+    except TypeError:
+        return await run_llm_check(unit_id, vault_id, session)
 
 
 class LintLLMService(BaseService):
@@ -474,12 +529,20 @@ class LintLLMService(BaseService):
         *,
         run_llm_check: RunLLMCheck,
         session: AsyncSession,
+        polarity_classifier: PolarityClassifier | None = None,
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
         Single-unit orchestration. Caller (the F10 scheduler tick) commits the
         session after each unit so quota increments are durable even if a
         later unit fails.
+
+        F10b: when ``polarity_classifier`` is supplied AND cosine surprise is
+        below the threshold, the service runs an NLI invocation against the
+        unit's top-1 nearest peer. If the contradiction-probability crosses
+        ``polarity_classifier.polarity_threshold`` the OR'd gate clears and
+        the LLM check fires. The NLI invocation is skipped when cosine
+        surprise is already at/above the threshold (cheap pre-filter).
         """
         outcome = MaybeRunOutcome()
         settings = self._settings
@@ -491,7 +554,37 @@ class LintLLMService(BaseService):
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
 
-        if score < settings.surprise_threshold:
+        polarity_result: PolarityResult | None = None
+        polarity_contra_prob: float | None = None
+        if polarity_classifier is not None and score < settings.surprise_threshold:
+            row = (
+                await session.execute(
+                    _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL,
+                    {'unit_id': str(unit_id), 'vault_id': str(vault_id)},
+                )
+            ).first()
+            if row is not None and row.unit_text and row.peer_text:
+                polarity_result = await polarity_classifier.classify_pair(
+                    premise=str(row.unit_text),
+                    hypothesis=str(row.peer_text),
+                    vault_id=vault_id,
+                )
+                outcome.polarity_invoked = True
+                if polarity_result is not None:
+                    polarity_contra_prob = polarity_result.contradiction_prob
+                    outcome.polarity_contradiction_prob = polarity_contra_prob
+
+        cleared = gate_passes(
+            score,
+            polarity_contra_prob,
+            surprise_threshold=settings.surprise_threshold,
+            polarity_threshold=(
+                polarity_classifier.polarity_threshold
+                if polarity_classifier is not None
+                else DEFAULT_POLARITY_THRESHOLD
+            ),
+        )
+        if not cleared:
             outcome.skipped_below_threshold = True
             return outcome
 
@@ -507,7 +600,8 @@ class LintLLMService(BaseService):
             outcome.deferred = True
             return outcome
 
-        finding = await run_llm_check(unit_id, vault_id, session)
+        context = CheckContext(polarity=polarity_result)
+        finding = await _invoke_check(run_llm_check, unit_id, vault_id, session, context)
         if finding is not None:
             inserted = await self.write_finding(finding, vault_id, session=session)
             outcome.finding_emitted = inserted
@@ -548,7 +642,9 @@ class LintLLMService(BaseService):
                     admitted = await self.check_and_increment_quota(vault_id, session=session)
                     if not admitted:
                         break
-                    finding = await run_llm_check(unit_id, vault_id, session)
+                    finding = await _invoke_check(
+                        run_llm_check, unit_id, vault_id, session, CheckContext()
+                    )
                     if finding is not None:
                         await self.write_finding(finding, vault_id, session=session)
                     await self.dismiss_deferred(proposal_id, session=session)
@@ -591,6 +687,7 @@ class LintLLMService(BaseService):
         vault_id: UUID,
         *,
         run_llm_check: RunLLMCheck,
+        polarity_classifier: PolarityClassifier | None = None,
     ) -> LintLLMTickSummary:
         """Single F10 scheduler-tick for ``vault_id``.
 
@@ -636,6 +733,7 @@ class LintLLMService(BaseService):
                         vault_id,
                         run_llm_check=run_llm_check,
                         session=session,
+                        polarity_classifier=polarity_classifier,
                     )
                     await session.commit()
                 except Exception:

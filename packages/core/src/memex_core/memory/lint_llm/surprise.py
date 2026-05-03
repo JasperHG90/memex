@@ -16,8 +16,8 @@ high surprise.
 
 Validated by POC-F10 (`pocs/002-f10-surprise-threshold/result.md`):
 - PASS topical-anomaly recall @ 0.7 threshold.
-- FAIL polarity-inversion recall — known structural limit of MiniLM-L12
-  embeddings; polarity discrimination is deferred to Tier B (NLI follow-up).
+- Polarity-inversion recall is bridged by F10b: see ``polarity.py`` and
+  :func:`gate_passes` — cosine surprise OR'd with NLI contradiction-probability.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from memex_core.memory.lint_llm.polarity import (
+    DEFAULT_POLARITY_THRESHOLD,
+    gate_passes as _polarity_gate_passes,
+)
 from memex_core.memory.models.anisotropy import (
     AnisotropyCorrector,
     get_shared_corrector,
@@ -34,6 +38,31 @@ from memex_core.memory.models.anisotropy import (
 
 
 DEFAULT_K = 8
+
+
+def gate_passes(
+    cosine_surprise: float,
+    polarity_contra_prob: float | None,
+    *,
+    surprise_threshold: float,
+    polarity_threshold: float = DEFAULT_POLARITY_THRESHOLD,
+) -> bool:
+    """F10 + F10b composed gate.
+
+    Returns ``True`` when the cosine surprise alone clears ``surprise_threshold``
+    OR (when cosine is below threshold) the supplied NLI contradiction-probability
+    crosses ``polarity_threshold``.
+
+    Callers MUST pass ``polarity_contra_prob=None`` when cosine surprise is
+    already above the threshold so NLI is not invoked unnecessarily — the
+    short-circuit on the cosine branch enforces this.
+    """
+    return _polarity_gate_passes(
+        cosine_surprise,
+        polarity_contra_prob,
+        surprise_threshold=surprise_threshold,
+        polarity_threshold=polarity_threshold,
+    )
 
 
 async def compute_unit_surprise(

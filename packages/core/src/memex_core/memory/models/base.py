@@ -43,6 +43,10 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         repo_id='JasperHG90/distilbert-hindsight-ner',
         revision='main',
     ),
+    'nli': ModelSpec(
+        repo_id='cross-encoder/nli-deberta-v3-small',
+        revision='main',
+    ),
 }
 
 

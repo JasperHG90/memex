@@ -6,12 +6,47 @@ between ``memory.lint_llm.checks`` (which produces findings) and
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
-from uuid import UUID
+from enum import Enum
+from typing import Any, Awaitable, Callable, Literal
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field, field_validator
 
 from memex_core.memory.sql_models import LintType
+
+
+class PolarityLabel(str, Enum):
+    """Three-way NLI label produced by F10b's polarity classifier."""
+
+    ENTAILMENT = 'entailment'
+    NEUTRAL = 'neutral'
+    CONTRADICTION = 'contradiction'
+
+
+PolarityLiteral = Literal['entailment', 'neutral', 'contradiction']
+
+
+class PolarityResult(BaseModel):
+    """Argmax label + per-class probabilities from F10b's NLI classifier.
+
+    Probabilities are stored verbatim (no rounding) so the gate can apply its
+    threshold to the contradiction-probability without re-deriving it. The
+    ``model_validator`` enforces the three-key shape and that probabilities sum
+    to within tolerance of 1.0.
+    """
+
+    label: PolarityLabel = Field(description='Argmax of the three-class probabilities.')
+    contradiction_prob: float = Field(ge=0.0, le=1.0)
+    entailment_prob: float = Field(ge=0.0, le=1.0)
+    neutral_prob: float = Field(ge=0.0, le=1.0)
+
+    @field_validator('label', mode='before')
+    @classmethod
+    def _coerce_label(cls, v: Any) -> Any:
+        if isinstance(v, PolarityLabel):
+            return v
+        if isinstance(v, str):
+            return PolarityLabel(v.lower())
+        return v
 
 
 @dataclass
@@ -35,4 +70,20 @@ class LLMLintFinding:
     lint_type: LintType = LintType.QUALITY
 
 
-RunLLMCheck = Callable[[UUID, UUID, AsyncSession], Awaitable['LLMLintFinding | None']]
+@dataclass
+class CheckContext:
+    """Optional context the F10 service threads into a check invocation.
+
+    Currently carries the F10b polarity result computed by the orchestrator's
+    OR'd gate so the check does not re-invoke the NLI model. Forwards the
+    argmax label to the DSPy signature as ``polarity_hint`` and the
+    probabilities into the finding's ``extra_evidence`` payload.
+    """
+
+    polarity: 'PolarityResult | None' = None
+
+
+RunLLMCheck = Callable[
+    ...,
+    Awaitable['LLMLintFinding | None'],
+]

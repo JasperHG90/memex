@@ -1316,8 +1316,10 @@ memory_reconsolidate.
 
 #### F10b. Polarity-discriminating NLI classifier on top of F10's surprise gate
 
+**Status:** implemented in `wave-17/F10b-polarity-nli` (2026-05-03).
+
 **1. Source citation:**
-- Deferred from F10 on 2026-05-01 in #22 — see `packages/core/src/memex_core/memory/lint_llm/signatures.py:15-19`: *"Polarity discrimination is a known structural limit of MiniLM-L12 embeddings — POC-F10 found that the surprise gate cannot raise polarity inversions to threshold. F10 ships these signatures with that constraint in place; Tier B will revisit via NLI-scored gate input."*
+- Deferred from F10 on 2026-05-01 in #22 — the original "Tier B will revisit" docstring at `packages/core/src/memex_core/memory/lint_llm/signatures.py:15-19` was struck on F10b ship and replaced with a pointer to `lint_llm/polarity.py` and the OR'd `surprise.gate_passes` composition.
 - POC writeup: `.dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/002-f10-surprise-threshold/result.md`. Concrete failure: *"User prefers staging"* vs *"User prefers production"* are a polarity inversion that cosine surprise on MiniLM-L12 cannot push above the 0.7 threshold, so F10's `CheckSemanticContradiction` signature is never invoked even though the units genuinely contradict.
 - D-MEM §4.1 (referenced by F10) only proves surprise *gating* works for "different topic" cases; entailment-class gating is the standard remedy for sign-of-meaning inversion in the NLI literature.
 
