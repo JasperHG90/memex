@@ -25,6 +25,20 @@ _logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
 
 
+# F22 — variance of Uniform(0, 1) = Beta(1, 1), the cold-start posterior
+# variance ceiling. Mirrors ``memex_core.memory.confidence.MAX_VARIANCE``;
+# duplicated here because ``memex_common`` MUST NOT depend on
+# ``memex_core`` (the dependency direction is core → common). The
+# cross-reference unit test in
+# ``packages/core/tests/unit/memory/test_confidence.py`` (see
+# ``TestDtoFormulaConsistency``) pins equivalence between this constant
+# and the formula in ``memex_core.memory.confidence.mean_and_variance``.
+# Hermes round-20 LOW: extracted from inline ``1.0 / 12.0`` literals so
+# the Field constraint and the validator formula reference a single
+# source of truth.
+_MAX_VARIANCE: float = 1.0 / 12.0
+
+
 def decode_base64(v: Any) -> bytes:
     """Validate and return Base64 encoded bytes."""
     if isinstance(v, str):
@@ -558,9 +572,9 @@ class MemoryUnitDTO(MemoryUnitBase):
     )
 
     confidence_variance: float = Field(
-        default=1.0 / 12.0,
+        default=_MAX_VARIANCE,
         ge=0.0,
-        le=1.0 / 12.0,
+        le=_MAX_VARIANCE,
         description='F22: closed-form Beta(1, 1) posterior variance derived at '
         'hydration from (confidence, confidence_evidence_count). Range [0, 1/12]. '
         'Cold-start (count=0) lands at 1/12 (max); shrinks toward 0 as evidence '
@@ -650,7 +664,7 @@ class MemoryUnitDTO(MemoryUnitBase):
         beta = 1.0 + (1.0 - confidence_clamped) * self.confidence_evidence_count
         n = alpha + beta
         variance = (alpha * beta) / (n * n * (n + 1.0))
-        if not (0.0 <= variance <= 1.0 / 12.0):
+        if not (0.0 <= variance <= _MAX_VARIANCE):
             raise ValueError(
                 f'F22 invariant violated: computed confidence_variance={variance!r} '
                 f'is outside [0, 1/12] (confidence={self.confidence!r}, '
