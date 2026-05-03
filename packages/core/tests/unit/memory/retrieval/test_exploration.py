@@ -50,7 +50,7 @@ class TestSelectExplorationCandidates:
         selected = select_exploration_candidates(results, candidates, epsilon=0.0)
         assert selected == []
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injection_when_random_below_epsilon(self, _mock):
         results = [_make_unit(success=10, failure=2)]
         # A cold-start unit that's NOT in results
@@ -60,7 +60,7 @@ class TestSelectExplorationCandidates:
         assert len(selected) == 1
         assert selected[0].id == cold.id
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.99)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.99)
     def test_no_injection_when_random_above_epsilon(self, _mock):
         results = [_make_unit(success=10, failure=2)]
         cold = _make_unit(success=0, failure=0)
@@ -73,7 +73,7 @@ class TestSelectExplorationCandidates:
         # Unit with high outcome count (>5) should not be eligible
         high_mw = _make_unit(success=10, failure=5)
         candidates = [results[0], high_mw]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_exploration_candidates(results, candidates, epsilon=0.05)
         assert len(selected) == 0
 
@@ -81,7 +81,7 @@ class TestSelectExplorationCandidates:
         unit = _make_unit(success=0, failure=0)
         results = [unit]
         candidates = [unit]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_exploration_candidates(results, candidates, epsilon=0.05)
         assert len(selected) == 0
 
@@ -89,7 +89,7 @@ class TestSelectExplorationCandidates:
         results = [_make_unit()]
         eligible = [_make_unit(success=0, failure=0) for _ in range(5)]
         candidates = [results[0]] + eligible
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_exploration_candidates(
                 results, candidates, epsilon=0.05, max_injections=1
             )
@@ -100,7 +100,7 @@ class TestSelectExplorationCandidates:
         results = [_make_unit(success=10, failure=2)]
         deprioritized_cold = _make_unit(success=0, failure=0, is_deprioritized=True)
         candidates = [results[0], deprioritized_cold]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -109,7 +109,7 @@ class TestSelectExplorationCandidates:
         results = [_make_unit(success=10, failure=2)]
         stale_cold = _make_unit(success=0, failure=0, status=ContentStatus.STALE)
         candidates = [results[0], stale_cold]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -118,7 +118,7 @@ class TestSelectExplorationCandidates:
         # Unit with 3 total outcomes — below default threshold of 5
         lowish = _make_unit(success=2, failure=1)
         candidates = [results[0], lowish]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             # threshold=2 → this unit has 3 outcomes → NOT eligible
             selected = select_exploration_candidates(
                 results, candidates, epsilon=0.05, low_mw_threshold=2
@@ -129,7 +129,7 @@ class TestSelectExplorationCandidates:
 class TestInjectExplorationUnits:
     """Integration of exploration candidates into results."""
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.99)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.99)
     def test_no_injection_returns_original_list(self, _mock):
         results = [_make_unit()]
         candidates = [results[0]]
@@ -138,7 +138,7 @@ class TestInjectExplorationUnits:
         # (never the input object), so identity must not be checked.
         assert output == results
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injected_units_appended_to_end(self, _mock):
         results = [_make_unit(success=10, failure=2, text='regular')]
         cold = _make_unit(success=0, failure=0, text='exploration')
@@ -147,7 +147,7 @@ class TestInjectExplorationUnits:
         assert len(output) == 2
         assert output[-1].text == 'exploration'
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injected_units_marked_exploration(self, _mock):
         results = [_make_unit(success=10, failure=2)]
         cold = _make_unit(success=0, failure=0)
@@ -156,7 +156,7 @@ class TestInjectExplorationUnits:
         injected = output[-1]
         assert injected.unit_metadata.get('exploration') is True
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_regular_units_not_marked_exploration(self, _mock):
         results = [_make_unit(success=10, failure=2)]
         cold = _make_unit(success=0, failure=0)
@@ -193,7 +193,7 @@ class TestSelectEdgeExplorationCandidates:
         selected = select_edge_exploration_candidates(results, candidates, epsilon=0.0)
         assert selected == []
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injection_when_random_below_epsilon(self, _mock):
         # Already-selected: well-evidenced (low variance, NOT eligible).
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
@@ -204,7 +204,7 @@ class TestSelectEdgeExplorationCandidates:
         assert len(selected) == 1
         assert selected[0].id == cold.id
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.99)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.99)
     def test_no_injection_when_random_above_epsilon(self, _mock):
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
         cold = _make_unit(confidence=1.0, confidence_evidence_count=0)
@@ -218,7 +218,7 @@ class TestSelectEdgeExplorationCandidates:
         # 1000 negative events → variance ≪ threshold.
         well_evidenced = _make_unit(confidence=0.5, confidence_evidence_count=1000)
         candidates = [results[0], well_evidenced]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_edge_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -226,7 +226,7 @@ class TestSelectEdgeExplorationCandidates:
         unit = _make_unit(confidence=1.0, confidence_evidence_count=0)
         results = [unit]
         candidates = [unit]  # cold-start qualifies, but it's already in results.
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_edge_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -234,7 +234,7 @@ class TestSelectEdgeExplorationCandidates:
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
         eligible = [_make_unit(confidence=1.0, confidence_evidence_count=0) for _ in range(5)]
         candidates = [results[0]] + eligible
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_edge_exploration_candidates(
                 results, candidates, epsilon=0.05, max_injections=1
             )
@@ -246,7 +246,7 @@ class TestSelectEdgeExplorationCandidates:
             confidence=1.0, confidence_evidence_count=0, is_deprioritized=True
         )
         candidates = [results[0], deprioritized]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_edge_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -254,7 +254,7 @@ class TestSelectEdgeExplorationCandidates:
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
         stale = _make_unit(confidence=1.0, confidence_evidence_count=0, status=ContentStatus.STALE)
         candidates = [results[0], stale]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             selected = select_edge_exploration_candidates(results, candidates, epsilon=0.05)
         assert selected == []
 
@@ -265,7 +265,7 @@ class TestSelectEdgeExplorationCandidates:
         # at count = 1, c = 0.5: variance = (1.5*1.5) / (3^2 * 4) = 0.0625
         moderate = _make_unit(confidence=0.5, confidence_evidence_count=1)
         candidates = [results[0], moderate]
-        with patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01):
+        with patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01):
             # default threshold = 0.5 * 1/12 ≈ 0.0417 → 0.0625 IS eligible.
             default = select_edge_exploration_candidates(results, candidates, epsilon=0.05)
             # threshold = 0.95 * 1/12 ≈ 0.0792 → 0.0625 is NOT eligible.
@@ -333,7 +333,7 @@ class TestSelectEdgeExplorationCandidates:
 class TestInjectEdgeExploration:
     """Integration of edge candidates into results."""
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.99)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.99)
     def test_no_injection_returns_original_list(self, _mock):
         results = [_make_unit()]
         candidates = [results[0]]
@@ -342,7 +342,7 @@ class TestInjectEdgeExploration:
         # (never the input object), so identity must not be checked.
         assert output == results
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injected_units_appended_to_end(self, _mock):
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200, text='regular')]
         cold = _make_unit(confidence=1.0, confidence_evidence_count=0, text='edge')
@@ -351,7 +351,7 @@ class TestInjectEdgeExploration:
         assert len(output) == 2
         assert output[-1].text == 'edge'
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_injected_units_marked_edge_exploration(self, _mock):
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
         cold = _make_unit(confidence=1.0, confidence_evidence_count=0)
@@ -360,7 +360,7 @@ class TestInjectEdgeExploration:
         injected = output[-1]
         assert injected.unit_metadata.get('edge_exploration') is True
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_regular_units_not_marked_edge_exploration(self, _mock):
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
         cold = _make_unit(confidence=1.0, confidence_evidence_count=0)
@@ -369,7 +369,7 @@ class TestInjectEdgeExploration:
         # The result-side unit must NOT pick up the edge_exploration flag.
         assert output[0].unit_metadata.get('edge_exploration') is not True
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_does_not_overwrite_existing_metadata(self, _mock):
         """Existing metadata keys survive the edge_exploration annotation."""
         results = [_make_unit(confidence=0.5, confidence_evidence_count=200)]
@@ -385,7 +385,7 @@ class TestInjectEdgeExploration:
         output = inject_edge_exploration([], [])
         assert output == []
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_does_not_dedupe_against_already_selected(self, _mock):
         """Units already in `results` (by id) are NOT re-selected as edge candidates."""
         already = _make_unit(confidence=1.0, confidence_evidence_count=0)  # cold-start
@@ -452,7 +452,7 @@ class TestCrossPathInjectionGuard:
     selector, even if the call-site disjoint-pool invariant is broken.
     """
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_low_mw_selector_skips_already_exploration_annotated(self, _mock):
         """A unit already annotated ``exploration=True`` must not be
         re-selected by ``select_exploration_candidates`` — defends against
@@ -468,7 +468,7 @@ class TestCrossPathInjectionGuard:
         # The clean cold-start unit IS still eligible.
         assert cold_clean.id in selected_ids
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_low_mw_selector_skips_already_edge_exploration_annotated(self, _mock):
         results = [_make_unit(success=10, failure=2)]
         cold_clean = _make_unit(success=0, failure=0)
@@ -480,7 +480,7 @@ class TestCrossPathInjectionGuard:
         assert cold_already.id not in selected_ids
         assert cold_clean.id in selected_ids
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_edge_selector_skips_already_exploration_annotated(self, _mock):
         """A unit already annotated ``exploration=True`` must not be
         re-selected by ``select_edge_exploration_candidates``."""
@@ -501,7 +501,7 @@ class TestCrossPathInjectionGuard:
         assert hv_already.id not in selected_ids
         assert hv_clean.id in selected_ids
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_edge_selector_skips_already_edge_exploration_annotated(self, _mock):
         results = [_make_unit()]
         hv_clean = _make_unit(confidence=0.5, confidence_evidence_count=0)
@@ -519,7 +519,7 @@ class TestCrossPathInjectionGuard:
         assert hv_already.id not in selected_ids
         assert hv_clean.id in selected_ids
 
-    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    @patch('memex_core.memory.retrieval.exploration._rng.random', return_value=0.01)
     def test_guard_uses_presence_not_truthy_check(self, _mock):
         """Hermes round-22 HIGH: the guard checks ``key in metadata``,
         not ``metadata.get(key)`` truthiness. A unit annotated with

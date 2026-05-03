@@ -2,19 +2,19 @@
 
 Prevents rich-get-richer dynamics by occasionally surfacing memories that
 haven't had a chance to demonstrate value.  See Memory Worth §5.3 and
-cognitive-memory-research-report.md F33.
+cognitive-memory-research-report.md.
 
 The injection happens after MMR diversity filtering but before the final
 limit is applied.  Injected units carry ``exploration: True`` in their
 metadata so the caller can distinguish them and route outcome signals
 appropriately.
 
-F22 ``edge_exploration``
-========================
+``edge_exploration``
+====================
 
 The same epsilon-greedy scaffolding generalises from MW to confidence
 variance: ``inject_edge_exploration`` surfaces high-variance units
-(uncertain edges) for re-validation, mirroring F33's low-MW path. Same
+(uncertain edges) for re-validation, mirroring the low-MW path. Same
 pattern, different signal — eligibility is variance > threshold rather
 than total outcome count < threshold.
 """
@@ -38,7 +38,7 @@ from memex_core.memory.sql_models import ContentStatus, MemoryUnit
 def _coerce_metadata_to_dict(value: Any) -> dict[str, Any]:
     """Best-effort coercion of a unit's existing metadata into a plain dict.
 
-    Hermes round-2 MED: the prior ``isinstance(..., dict)`` check would
+    The prior ``isinstance(..., dict)`` check would
     silently drop a non-dict Mapping (e.g. a Pydantic model surfaced by a
     future SQLModel adapter change). Now we accept any Mapping and convert
     it to a dict so existing keys survive the injection annotation.
@@ -53,7 +53,7 @@ def _coerce_metadata_to_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-# Hermes round-21 HIGH: cross-path injection guard. Both exploration
+# Cross-path injection guard. Both exploration
 # injectors annotate ``unit.unit_metadata`` in-place; if a unit is fed
 # into both selection pools (in violation of the documented call-site
 # invariant), the second injector could surface a unit already
@@ -65,14 +65,14 @@ _INJECTION_ANNOTATION_KEYS: frozenset[str] = frozenset({'exploration', 'edge_exp
 def _already_injected(unit: MemoryUnit) -> bool:
     """Return True if ``unit`` already carries any injection annotation.
 
-    Hermes round-21 HIGH: belt-and-suspenders runtime guard against
+    Belt-and-suspenders runtime guard against
     cross-path mutation pipelining. The retrieval engine's call-site
     invariant (disjoint pools) is the primary defence; this helper
     backs it up so a future caller that breaks the invariant does NOT
     get a unit with both ``exploration=True`` and
     ``edge_exploration=True``.
 
-    Hermes round-22 HIGH: uses ``key in metadata`` (presence check)
+    Uses ``key in metadata`` (presence check)
     rather than ``metadata.get(key)`` (truthy check). The intent is
     "has this annotation been set", not "is this value truthy" — so
     a future caller setting ``exploration=False`` (e.g. for a
@@ -80,7 +80,7 @@ def _already_injected(unit: MemoryUnit) -> bool:
     re-injection. The injectors themselves only ever write ``True``,
     but the presence check is correct-by-construction.
 
-    Hermes round-25 MED: ``not frozenset.isdisjoint(dict)`` replaces
+    ``not frozenset.isdisjoint(dict)`` replaces
     the prior ``any(key in metadata for key in ...)`` generator.
     Both are O(k) where k = ``len(_INJECTION_ANNOTATION_KEYS)`` (2),
     but ``isdisjoint`` short-circuits on the first shared key without
@@ -93,6 +93,10 @@ def _already_injected(unit: MemoryUnit) -> bool:
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
 
+# Module-scoped RNG avoids contention on the global Mersenne Twister lock
+# (parity with RetrievalEngine.__init__ which uses self._rng).
+_rng = random.Random()
+
 # Default exploration probability (ε).  5% means roughly 1 in 20 retrieval
 # calls will inject an exploration unit.
 DEFAULT_EPSILON = 0.05
@@ -104,7 +108,7 @@ DEFAULT_MAX_INJECTIONS = 2
 # threshold.  Cold-start units (0/0) always qualify.
 DEFAULT_LOW_MW_THRESHOLD = 5
 
-# F22: a unit is considered "high-variance" if the closed-form Beta(1, 1)
+# A unit is considered "high-variance" if the closed-form Beta(1, 1)
 # posterior variance is at least this fraction of MAX_VARIANCE = 1/12.
 DEFAULT_HIGH_VARIANCE_FRACTION = 0.5
 
@@ -135,15 +139,15 @@ def select_exploration_candidates(
     Returns:
         List of exploration-injection units (may be empty).
     """
-    if random.random() > epsilon:
+    if _rng.random() > epsilon:
         return []
 
     result_ids = {u.id for u in results}
 
     # Eligible: not already in results, ACTIVE, not deprioritized, and low total outcome count.
     # Excludes stale (superseded by reflection) and deprioritized units to avoid surfacing
-    # content the system has already de-emphasised. Hermes round-21 HIGH:
-    # also exclude units already carrying an injection annotation
+    # content the system has already de-emphasised. Also exclude
+    # units already carrying an injection annotation
     # (``exploration`` or ``edge_exploration``) so a caller that breaks
     # the disjoint-pool invariant cannot produce a unit annotated by
     # both paths.
@@ -161,7 +165,7 @@ def select_exploration_candidates(
         return []
 
     n = min(max_injections, len(eligible))
-    return random.sample(eligible, n)
+    return _rng.sample(eligible, n)
 
 
 def inject_exploration_units(
@@ -189,7 +193,7 @@ def inject_exploration_units(
         New list (always a fresh list — never the input ``results`` object)
         with exploration units appended (if selected).
 
-    Mutation contract (Hermes round-13 LOW)
+    Mutation contract
     ---------------------------------------
     Mirrors :func:`inject_edge_exploration`: each injected ``MemoryUnit``
     has its ``unit_metadata`` attribute REPLACED with a fresh dict
@@ -220,7 +224,7 @@ def inject_exploration_units(
     for unit in exploration_units:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'exploration': True}
-        # HAZARD (Hermes round-20 LOW): in-place attribute swap on a
+        # HAZARD: in-place attribute swap on a
         # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
         # retrieval engine MUST pass list-copy snapshots (not aliased
         # references) so this annotation does not leak into a parallel
@@ -251,7 +255,7 @@ def select_edge_exploration_candidates(
     max_injections: int = DEFAULT_MAX_INJECTIONS,
     high_variance_fraction: float = DEFAULT_HIGH_VARIANCE_FRACTION,
 ) -> list[MemoryUnit]:
-    """F22: select high-variance candidates for re-validation injection.
+    """Select high-variance candidates for re-validation injection.
 
     Mirror of :func:`select_exploration_candidates` but eligibility is keyed
     on variance (not outcome count). Units whose closed-form Beta(1, 1)
@@ -259,12 +263,12 @@ def select_edge_exploration_candidates(
     qualify. With probability ``epsilon``, up to ``max_injections`` of these
     are randomly selected and returned.
     """
-    if random.random() > epsilon:
+    if _rng.random() > epsilon:
         return []
 
     threshold = high_variance_fraction * MAX_VARIANCE
     result_ids = {u.id for u in results}
-    # Hermes round-21 HIGH: exclude units already carrying an injection
+    # Exclude units already carrying an injection
     # annotation (``exploration`` or ``edge_exploration``) so a caller
     # that breaks the disjoint-pool invariant cannot produce a unit
     # annotated by both paths.
@@ -281,7 +285,7 @@ def select_edge_exploration_candidates(
         return []
 
     n = min(max_injections, len(eligible))
-    return random.sample(eligible, n)
+    return _rng.sample(eligible, n)
 
 
 def inject_edge_exploration(
@@ -292,35 +296,34 @@ def inject_edge_exploration(
     max_injections: int = DEFAULT_MAX_INJECTIONS,
     high_variance_fraction: float = DEFAULT_HIGH_VARIANCE_FRACTION,
 ) -> list[MemoryUnit]:
-    """F22: epsilon-greedy injection of high-variance edges for re-validation.
+    """Epsilon-greedy injection of high-variance edges for re-validation.
 
-    Pairs with :func:`inject_exploration_units` (the F33 low-MW path) — same
+    Pairs with :func:`inject_exploration_units` (the low-MW path) — same
     scaffolding, different signal. Injected units carry
     ``edge_exploration=True`` in their ``unit_metadata`` so the caller can
-    distinguish them from F33 injections.
+    distinguish them from low-MW injections.
 
-    Wiring status (Hermes round-14 LOW): this function ships INERTLY in the
-    F22 PR — defined and tested but NOT yet called from
-    :mod:`memex_core.memory.retrieval.engine`. F22's ship-time guard
+    Wiring status: this function ships inertly — defined and tested but NOT yet called from
+    :mod:`memex_core.memory.retrieval.engine`. The ship-time guard
     ``RetrievalConfig.certainty_modulation_enabled = False`` keeps the
     feature column-only; wiring the edge-exploration injector requires a
-    paired ``edge_exploration_*`` config flag (mirroring F33's
+    paired ``edge_exploration_*`` config flag (mirroring
     ``exploration_epsilon`` / ``exploration_max_injections``) which lands
     in the activation PR after operators observe the
     ``CONFIDENCE_VARIANCE_OBSERVED`` distribution post-backfill. The
     function is exposed publicly so the activation PR is a pure call-site
     + config addition with no signature churn here.
 
-    TODO(F22-activation, Hermes round-15 LOW): wire this injector into
-    ``RetrievalEngine._search`` alongside the F33 ``inject_exploration_units``
+    TODO: wire this injector into
+    ``RetrievalEngine._search`` alongside the ``inject_exploration_units``
     call site at ``engine.py:736-749``. The activation PR also adds the
     ``edge_exploration_epsilon`` / ``edge_exploration_max_injections`` /
     ``edge_exploration_high_variance_fraction`` config knobs on
     ``RetrievalConfig``, gated on the same operator decision as the
     ``certainty_modulation_enabled`` flip described in the BACKLOG
-    F22 entry ("Ship-time guard" bullet).
+    entry ("Ship-time guard" bullet).
 
-    Mutation contract (Hermes round-1 MED)
+    Mutation contract
     --------------------------------------
     Each injected ``MemoryUnit`` has its ``unit_metadata`` REPLACED with a
     fresh dict containing the existing keys plus ``edge_exploration=True``.
@@ -334,11 +337,11 @@ def inject_edge_exploration(
     objects exactly once per request (no cross-request reuse), so the
     in-place attribute swap is safe in the documented call site.
 
-    Cross-function hazard (Hermes round-13 LOW): do NOT pipeline this
-    injector and :func:`inject_exploration_units` (F33) on the same
+    Cross-function hazard: do NOT pipeline this
+    injector and :func:`inject_exploration_units` on the same
     candidate list. Both annotate ``unit_metadata`` in place; chaining
-    them on overlapping pools could surface a unit injected by F33 as a
-    candidate for F22 edge exploration. The retrieval engine calls each
+    them on overlapping pools could surface a unit injected by the low-MW path as a
+    candidate for edge exploration. The retrieval engine calls each
     injector at most once per request, with disjoint selection pools
     (the second injector's ``all_candidates`` excludes units already in
     ``results``), so the in-place attribute swap is safe at the
@@ -357,15 +360,15 @@ def inject_edge_exploration(
     for unit in edges:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'edge_exploration': True}
-        # HAZARD (Hermes round-20 LOW): in-place attribute swap on a
+        # HAZARD: in-place attribute swap on a
         # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
-        # F22-activation wiring (see TODO above) MUST pass list-copy
+        # The activation wiring (see TODO above) MUST pass list-copy
         # snapshots so this annotation does not leak into a parallel
         # scoring stage. Avoid ``copy.deepcopy`` here — this is a hot
         # per-request path.
-        # TODO(F22-activation): when wiring this injector into
+        # TODO: when wiring this injector into
         # ``RetrievalEngine._search``, audit the call site for
-        # snapshot-by-caller invariants alongside the F33
+        # snapshot-by-caller invariants alongside the
         # ``inject_exploration_units`` site.
         unit.unit_metadata = metadata
 

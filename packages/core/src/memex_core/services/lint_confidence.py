@@ -1,6 +1,6 @@
-"""Shared F22 confidence-gate primitives for lint and lint_llm.
+"""Shared confidence-gate primitives for lint and lint_llm.
 
-Hermes round-10 MED: ``lint_llm`` previously reached into ``lint``'s private
+``lint_llm`` previously reached into ``lint``'s private
 symbols (``_gate_blocks_finding``, ``_bulk_load_confidence_map``,
 ``_confidence_map_blocks``) to share the gate predicate. Promote the gate
 helpers to a third module so both call sites import the SAME public symbol
@@ -19,9 +19,9 @@ from memex_core.memory.confidence import mean_and_variance
 
 
 def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tuple[float, int]:
-    """Clamp a (confidence, evidence_count) pair to the F22 valid ranges.
+    """Clamp a (confidence, evidence_count) pair to the valid ranges.
 
-    Hermes round-16 MED: the three lint paths (``gate_blocks_finding``,
+    The three lint paths (``gate_blocks_finding``,
     ``bulk_load_confidence_map``, ``confidence_map_blocks``) all need
     the same ``confidence ∈ [0, 1]`` + ``evidence_count >= 0``
     belt-and-suspenders clamp before calling ``mean_and_variance``
@@ -31,7 +31,7 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tu
     ``extract_confidence_and_count`` — lands once instead of three
     times.
 
-    Privacy (Hermes round-23 LOW): kept under the ``_`` prefix
+    Privacy: kept under the ``_`` prefix
     deliberately — this is a module-internal implementation detail of
     the three lint helpers, not a public API. External callers that
     need the same clamp should use
@@ -40,7 +40,7 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tu
     across the retrieval, lint, and reflection paths. Promoting this
     helper to public would create a second canonical clamp surface.
 
-    NaN / inf guard (Hermes round-24 HIGH): a non-finite ``confidence``
+    NaN / inf guard: a non-finite ``confidence``
     (``NaN`` or ``±inf``) propagates through ``min``/``max`` in Python
     (``max(0.0, NaN) -> NaN``) and would land in
     ``mean_and_variance`` as a non-finite shape parameter, producing
@@ -52,7 +52,7 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tu
     attribute fallback in ``extract_confidence_and_count``); a
     non-finite ``evidence_count`` is treated as ``0``.
 
-    Type handling (Hermes round-25 HIGH): ``evidence_count`` accepts
+    Type handling: ``evidence_count`` accepts
     ``int | float`` because callers that read the DB column via
     ``int(row[...])`` can still produce a ``float`` from a stale or
     mocked row. Non-integer, non-float types (e.g. ``Decimal``,
@@ -77,7 +77,7 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tu
     return max(0.0, min(1.0, confidence)), max(0, safe_count)
 
 
-# Hermes round-14 MED: explicit CAST to ``uuid`` so a non-UUID string
+# Explicit CAST to ``uuid`` so a non-UUID string
 # parameter raises a clear, predictable Postgres ``invalid input syntax``
 # error rather than a partial implicit-cast failure deep in asyncpg's
 # prepared-statement machinery. The column is UUID-typed; matching the
@@ -89,7 +89,7 @@ _LOAD_UNIT_CONFIDENCE_SQL = text("""
 """)
 
 
-# Hermes round-5 MED: ``expanding=True`` is the portable analogue of the
+# ``expanding=True`` is the portable analogue of the
 # prior ``CAST(:unit_ids AS uuid[]) + ANY``. SQLAlchemy expands ``:unit_ids``
 # into ``(:p1, :p2, ...)`` at compile time and asyncpg infers the column
 # type from the LHS of IN, so an explicit per-parameter cast is unnecessary.
@@ -108,7 +108,7 @@ async def gate_blocks_finding(
 ) -> bool:
     """Return True iff (confidence, variance) violates the lint gate.
 
-    Boundary semantics (Hermes round-21 MED)
+    Boundary semantics
     ----------------------------------------
     The blocking predicate is ``variance > variance_max`` — strictly
     greater. So a cold-start unit (``evidence_count=0``,
@@ -126,20 +126,20 @@ async def gate_blocks_finding(
     rule-runner path uses :func:`bulk_load_confidence_map` to avoid the
     N+1 query that would otherwise fire on rules with many candidate rows.
 
-    DO NOT use this in a hot loop (Hermes round-18 LOW): each call fires
+    DO NOT use this in a hot loop: each call fires
     one round-trip to Postgres. If you find yourself iterating over a
     candidate set and calling this per-unit, switch to
     :func:`bulk_load_confidence_map` + :func:`confidence_map_blocks` —
     the bulk pair is exactly this predicate against a single query's
     worth of data.
 
-    Input validation (Hermes round-23 HIGH): ``unit_id`` accepts
+    Input validation: ``unit_id`` accepts
     ``UUID | str``. A ``UUID`` is used directly; a ``str`` is parsed
     first. A malformed string ID returns ``False`` ("do not block")
     rather than letting asyncpg raise an unhandled ``DataError``
     deep in the lint path — parity with the ``row is None`` branch.
 
-    Normalisation (Hermes round-25 MED): the normalised
+    Normalisation: the normalised
     ``str(UUID(...))`` form is always passed to the query so
     hyphenated and non-hyphenated representations resolve identically
     in both logs and the DB, and the query plan cache is not
@@ -157,8 +157,8 @@ async def gate_blocks_finding(
         return False
     confidence = float(row[0]) if row[0] is not None else 1.0
     evidence_count = int(row[1]) if row[1] is not None else 0
-    # Clamp parallels the retrieval path's ``extract_confidence_and_count``
-    # (Hermes round-11 MED): the DB CHECK guards production writes, but a
+    # Clamp parallels the retrieval path's ``extract_confidence_and_count``:
+    # the DB CHECK guards production writes, but a
     # stale/in-memory caller mustn't crash ``mean_and_variance`` on an
     # out-of-range confidence — defence-in-depth across both paths.
     confidence, evidence_count = _clamp_confidence_pair(confidence, evidence_count)
@@ -176,18 +176,18 @@ async def bulk_load_confidence_map(
     the row was not found — callers should treat this as "do not block"
     (parity with :func:`gate_blocks_finding`'s ``row is None`` branch).
 
-    F22: replaces the per-row SELECT inside the rule-runner loop so a rule
+    Replaces the per-row SELECT inside the rule-runner loop so a rule
     that returns N candidates issues exactly one extra query (not N).
     """
     if not unit_ids:
         return {}
-    # Hermes round-17 MED: the SQL bind uses ``expanding=True`` which
+    # The SQL bind uses ``expanding=True`` which
     # SQLAlchemy expands as ``(:p1, :p2, ...)`` — passing a single
     # string here would expand char-by-char and fire a UUID-mismatch
     # error deep in asyncpg. The type annotation already says
     # ``list[str]``; assert at runtime so a caller violating the contract
     # gets a clear ``TypeError`` instead of a confusing DB error.
-    # Hermes round-22 MED: also reject non-(list/tuple/set) iterables
+    # Also reject non-(list/tuple/set) iterables
     # (e.g. generators) — SQLAlchemy's ``expanding=True`` consumes the
     # iterable lazily and a single-shot generator would silently expand
     # to an empty tuple after the first internal iteration.
@@ -213,7 +213,7 @@ async def bulk_load_confidence_map(
             if row['confidence_evidence_count'] is not None
             else 0
         )
-        # Hermes round-15 MED: clamp here so any new caller of this map
+        # Clamp here so any new caller of this map
         # cannot pass an out-of-range confidence into ``mean_and_variance``
         # and trip its ``[0, 1]`` invariant. Parity with the inline clamp
         # already done in ``gate_blocks_finding`` and
@@ -238,7 +238,7 @@ def confidence_map_blocks(
     if entry is None:
         return False
     confidence, evidence_count = entry
-    # See ``gate_blocks_finding`` for the clamp rationale (Hermes round-11 MED).
+    # See ``gate_blocks_finding`` for the clamp rationale.
     confidence, evidence_count = _clamp_confidence_pair(confidence, evidence_count)
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max

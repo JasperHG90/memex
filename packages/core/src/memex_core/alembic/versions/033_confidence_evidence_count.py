@@ -1,11 +1,11 @@
-"""F22 — confidence_evidence_count column on memory_units (Two-Factor edge confidence).
+"""confidence_evidence_count column on memory_units (Two-Factor edge confidence).
 
 Adds the negative-evidence event count companion to ``memory_units.confidence``
 so the closed-form Beta(1, 1) posterior at
 ``memex_core.memory.confidence.mean_and_variance`` can derive variance from
 ``(confidence, confidence_evidence_count)`` without storing variance separately.
 
-Operational requirement (Hermes round-16 MED)
+Operational requirement
 =============================================
 
 This migration MUST run with the contradiction engine paused
@@ -18,7 +18,7 @@ just the new event — rather than the correct ``backfilled_count + 1``).
 The undercount is *conservative* (the unit reads as higher-variance than
 warranted), the window is narrow (one migration runtime), and the
 forward path itself remains correct — but the column does not
-self-correct on subsequent F22 reads.
+self-correct on subsequent reads.
 
 Standard Memex deploy procedure (migrations run during the deploy
 window with the application paused) avoids this race entirely. If a
@@ -39,7 +39,7 @@ events keeps ``confidence_evidence_count`` semantically aligned with the
 ``confidence`` mean — both track negative-evidence accumulation.
 
 Including ``reinforces`` in the backfill would give pre-existing units a
-*higher* evidence count than equivalent post-F22 units that had only
+*higher* evidence count than equivalent units that had only
 experienced reinforcement events (same age, same link profile, different
 certainty). The known-v1 limitation here is that a well-reinforced unit
 (say 20 ``reinforces``, 0 ``contradicts``/``weakens``) post-backfill has
@@ -54,7 +54,7 @@ Ship-time guard
 ===============
 
 The column ships INERTLY: ``confidence_evidence_count`` is populated by the
-backfill, but the F47 reranker boost stays at the existing
+backfill, but the reranker boost stays at the existing
 ``1.0 + α × (confidence − 0.5)`` form until ``RetrievalConfig.certainty_modulation_enabled``
 is flipped to ``True``. The migration alone is therefore zero-behaviour-change.
 
@@ -80,14 +80,14 @@ depends_on: str | Sequence[str] | None = None
 
 _CHECK_CONSTRAINT_NAME = 'memory_units_confidence_evidence_count_check'
 
-# Hermes round-11 MED: composite index on ``(link_type, to_unit_id)`` so the
+# Composite index on ``(link_type, to_unit_id)`` so the
 # backfill subquery and any future "negative-evidence count for this unit"
 # query can range-scan instead of seq-scanning ``memory_links`` on every
 # batch. The existing ``idx_memory_links_to`` and ``idx_memory_links_type``
 # are single-column and don't combine for this access pattern.
 _BACKFILL_INDEX_NAME = 'idx_memory_links_link_type_to_unit'
 
-# Hermes round-10 LOW: chunk the backfill so a vault with millions of
+# Chunk the backfill so a vault with millions of
 # memory_units doesn't hold a long-running row-level lock on the entire
 # table during the single-shot ``UPDATE … FROM (subquery)``. 5000 strikes
 # the standard balance between per-statement overhead and lock duration —
@@ -124,7 +124,7 @@ def _constraint_exists(conn, name: str) -> bool:
 
 
 def _index_exists(conn, name: str) -> bool:
-    # Hermes round-17 LOW: ``pg_indexes`` is queried here while the
+    # ``pg_indexes`` is queried here while the
     # column / constraint helpers above use ``information_schema``.
     # ``information_schema`` lacks a portable view on Postgres indexes
     # (its ``statistics`` view is MySQL-shaped; Postgres exposes index
@@ -157,8 +157,8 @@ def upgrade() -> None:
             ),
         )
 
-    # Composite index for the backfill access pattern (Hermes round-11
-    # MED). Created BEFORE the loop so each batch range-scans instead of
+    # Composite index for the backfill access pattern.
+    # Created BEFORE the loop so each batch range-scans instead of
     # seq-scanning ``memory_links``.
     if not _index_exists(conn, _BACKFILL_INDEX_NAME):
         op.create_index(
@@ -167,7 +167,7 @@ def upgrade() -> None:
             ['link_type', 'to_unit_id'],
         )
 
-    # Chunked backfill (Hermes round-10 LOW). Each batch processes at most
+    # Chunked backfill. Each batch processes at most
     # ``_BACKFILL_BATCH_SIZE`` rows so the per-statement work — and therefore
     # the per-statement lock-acquisition window — is bounded regardless of
     # the total candidate count in the vault. The inner SELECT picks the
@@ -176,7 +176,7 @@ def upgrade() -> None:
     # so the outer UPDATE always touches exactly the rows we just chose.
     # The loop terminates when a batch updates 0 rows.
     #
-    # Note (Hermes round-13 LOW): the prior implementation wrapped each
+    # Note: the prior implementation wrapped each
     # batch in ``op.get_context().autocommit_block()`` so locks would be
     # released between batches. That broke against the project's env.py,
     # which runs migrations inside the implicit ``connect()`` transaction
@@ -188,8 +188,7 @@ def upgrade() -> None:
     # follows. The chunked LIMIT still bounds per-statement work.
     # The inner ``JOIN memory_units mu_inner ... AND
     # mu_inner.confidence_evidence_count = 0`` filter is REQUIRED for
-    # loop progress, not a redundant idempotency check (Hermes round-14
-    # MED — flagged as removable; verified-incorrect): the inner SELECT
+    # loop progress, not a redundant idempotency check: the inner SELECT
     # picks the next ``_BACKFILL_BATCH_SIZE`` unit_ids ordered by
     # ``to_unit_id``, and without the inner filter every iteration would
     # re-pick the SAME first ``batch_size`` unit_ids. The outer
@@ -198,7 +197,7 @@ def upgrade() -> None:
     # and only the first batch would ever land. The inner filter
     # advances the candidate window through the link target set as each
     # batch flips ``confidence_evidence_count`` non-zero.
-    # ``RETURNING 1`` (Hermes round-18 MED): with asyncpg as the driver,
+    # ``RETURNING 1``: with asyncpg as the driver,
     # ``result.rowcount`` on an UPDATE without RETURNING can theoretically
     # report ``-1`` ("not supported by driver"), which would make
     # ``not result.rowcount`` falsy and skip loop termination. Adding
@@ -215,10 +214,18 @@ def upgrade() -> None:
         "    WHERE ml.link_type IN ('contradicts', 'weakens') "
         '      AND mu_inner.confidence_evidence_count = 0 '
         '    GROUP BY ml.to_unit_id '
-        # ORDER BY (Hermes round-12 MED) makes batch selection deterministic
+        # ORDER BY makes batch selection deterministic
         # so partial-progress logging is reproducible. The composite index
         # added above already orders on ``(link_type, to_unit_id)`` so the
         # ORDER BY is index-served — no extra sort cost.
+        # GROUP BY + LIMIT tradeoff: the subquery
+        # scans ALL remaining contradicts/weakens links before GROUP BY
+        # collapses them per unit and LIMIT trims the output. Per-iteration
+        # I/O is proportional to the total qualifying link count, not to
+        # batch_size. For very large vaults, early iterations are expensive.
+        # An outer cursor on ``to_unit_id`` ranges would bound per-iteration
+        # scan work, but adds complexity; the current approach is simpler
+        # and the migration is a one-time operation.
         '    ORDER BY ml.to_unit_id '
         '    LIMIT :batch_size '
         ') sub '
@@ -326,7 +333,7 @@ def upgrade() -> None:
             'backfill iterations (see migration docstring "Operational '
             'requirement" section). The undercount is conservative '
             '(unit reads as higher-variance than warranted) but does '
-            'not self-correct on subsequent F22 reads. Mitigation: run a '
+            'not self-correct on subsequent reads. Mitigation: run a '
             'post-deploy ``UPDATE memory_units mu SET '
             'confidence_evidence_count = sub.cnt FROM (...) sub WHERE '
             'mu.id = sub.unit_id AND mu.confidence_evidence_count <> sub.cnt`` '
