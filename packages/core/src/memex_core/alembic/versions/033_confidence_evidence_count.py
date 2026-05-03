@@ -280,6 +280,21 @@ def upgrade() -> None:
     # round-20 LOW: the query returns a single ``COUNT`` row (not a
     # per-unit list), so the deploy-log payload is bounded by
     # construction — only the aggregate mismatch count is logged.
+    #
+    # Race window (Hermes round-23 MED, refinement-not-blocker):
+    # this verification can produce a false-positive between the CTE
+    # snapshot and the JOIN if the forward path bumps a unit
+    # mid-statement. Under READ COMMITTED the CTE materialises a
+    # snapshot-time count of links while ``mu.confidence_evidence_count``
+    # is read at JOIN time, so a single in-flight bump can transiently
+    # appear as a mismatch. The migration docstring's "Operational
+    # requirement" already calls for the contradiction engine to be
+    # paused; a tighter SQL filter (e.g. ``AND mu.confidence_evidence_count
+    # > 0``) was considered but rejected because it would also miss
+    # genuine zero-vs-N mismatches where the backfill skipped a unit.
+    # Operators encountering the error log should re-run with the engine
+    # paused; the count-only payload makes false positives observable
+    # without flooding logs.
     mismatch_check_sql = sa.text("""
         WITH actual AS (
             SELECT to_unit_id AS unit_id, COUNT(*) AS cnt
