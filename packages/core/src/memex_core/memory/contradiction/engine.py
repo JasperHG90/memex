@@ -143,6 +143,12 @@ class ContradictionEngine:
             # against the atomic confidence_evidence_count increment
             # (Hermes round-5 HIGH). ``LEAST/GREATEST`` clamp matches the
             # prior application-level ``max(0.0, min(1.0, ...))``.
+            #
+            # TODO(perf, post-v1): one UPDATE per distinct unit_id is fine
+            # for typical contradiction-batch sizes (≤ a few units), but a
+            # single bulk ``UPDATE … FROM (VALUES …)`` or ``executemany``
+            # would collapse this to one round-trip if/when batch fan-out
+            # grows (Hermes round-7 MED — non-blocking).
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(
