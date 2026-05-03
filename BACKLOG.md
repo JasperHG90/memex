@@ -76,7 +76,7 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~3-4w for Tier-A 
 
 ### Layer formalization (~3d, promoted 2026-05-02)
 
-- [ ] **F3** — Layer formalization in agent-facing tool documentation (docs only) (~3d) — see report §4 F3 + §2.3 (memory-types mapping) + §2.4 (current-services reality table). Source: Issue #64 Comment 2. **Concrete scope:**
+- [x] **F3** — Layer formalization in agent-facing tool documentation (docs only) (~3d) — see report §4 F3 + §2.3 (memory-types mapping) + §2.4 (current-services reality table). Source: Issue #64 Comment 2. (shipped 2026-05-03 via `wave-14/F3-layer-formalization`). **Concrete scope:**
   - Append a 4-layer routing primer (Episodic / Semantic / Conceptual / Procedural-observations) to the descriptions of `memex_note_search`, `memex_memory_search`, `memex_survey`, `memex_get_entity_mentions`, `memex_kv_search` in `packages/mcp/src/memex_mcp/server.py`. Same primer text across surfaces.
   - Extend the existing storage-model primer in `packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py` and `templates.py` with the layer-routing table from §2.3 verbatim.
   - Add a single `memory-layers.md` rule file under `packages/claude-code-plugin/rules/` and reference it from `/recall` and `/remember` skill descriptions.

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from memex_common.agent_surface import (
+    LAYER_ROUTING_PRIMER_FRAGMENT as _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT,
+)
+
 # Template used for the per-session transcript note ingested on exit.
 HERMES_SESSION_TEMPLATE = 'hermes-session'
 
@@ -77,6 +81,14 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
 )
 
 
+# --- F3 --- (4-layer memory-routing primer — single source of truth lives in
+# `memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`. Re-exported here
+# under the `_PROMPT_FRAGMENT` suffix to match the templates.py naming
+# convention for prompt fragments. The briefing.py `_LAYER_ROUTING_PRIMER`
+# (table form) is sourced from the same module.)
+LAYER_ROUTING_PROMPT_FRAGMENT = _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT
+
+
 # --- F43 --- (historical / audit-query routing rule)
 HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
     'When the user asks HOW THINGS CHANGED (not "what is true now"), do NOT\n'
@@ -96,5 +108,6 @@ HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
 
 __all__ += [
     'HISTORICAL_ROUTING_PROMPT_FRAGMENT',
+    'LAYER_ROUTING_PROMPT_FRAGMENT',
     'RESOLUTION_FLOW_PROMPT_FRAGMENT',
 ]

@@ -25,6 +25,16 @@ You have been invoked via the `/remember` slash command.
    - **tags**: Always include `"claude-code"` and `"manual-capture"`. Add 1-3 additional
      topic tags derived from the content.
 
+   **Pick the right memory layer (§2.3 / F3)** before saving — see
+   `.claude/rules/memory-layers.md` for the 4-layer table. A note
+   (`memex_add_note` / `memex_append_note`) is the right surface for
+   Episodic / Semantic / Conceptual content (events, facts, decisions,
+   reflections). For Procedural-observations ("for this user, X means Y")
+   write to the `procedure:` KV namespace instead — see "Capturing a
+   learned procedure" below. Episodic and Semantic flow into MemoryUnits
+   automatically at ingestion; Conceptual MentalModels are synthesised by
+   background reflection.
+
 3. **Consider a template (for structured content).**
    If the memory is an architectural decision, technical brief, retro, or RFC,
    call `memex_list_templates` then `memex_get_template(slug)`, follow the

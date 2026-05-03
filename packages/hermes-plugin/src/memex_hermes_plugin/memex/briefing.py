@@ -13,6 +13,8 @@ import threading
 from typing import Any
 from uuid import UUID
 
+from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE
+
 from .async_bridge import run_sync
 
 logger = logging.getLogger(__name__)
@@ -159,6 +161,9 @@ NOT use the resolution flow. Route differently:
 
 Disambiguation between resolution-flow and historical-routing is the
 agent's responsibility."""
+
+
+_LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE
 
 
 _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
@@ -309,6 +314,7 @@ def format_briefing_block(
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
     lines.append('\n' + _STORAGE_MODEL_PRIMER)
+    lines.append('\n' + _LAYER_ROUTING_PRIMER)
     lines.append('\n' + _RESOLUTION_FLOW_PRIMER)
 
     lines.append(

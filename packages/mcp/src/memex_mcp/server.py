@@ -27,6 +27,9 @@ import json
 from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
+from memex_mcp._f3_descriptions import (
+    LAYER_ROUTING_PRIMER_PROSE as _F3_LAYER_ROUTING_PRIMER_PROSE,
+)
 from memex_mcp.models import (
     McpAddAssetsResult,
     McpAddNoteResult,
@@ -1532,6 +1535,7 @@ def _build_memory_unit_model(
         'Contradiction links are always included on returned units. '
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -1842,6 +1846,7 @@ async def memex_search_user_notes(
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -2798,7 +2803,11 @@ async def memex_get_entities(
 
 @mcp.tool(
     name='memex_get_entity_mentions',
-    description='Get facts, observations, and events that mention an entity. Each mention links to its source note, revealing cross-note connections.',
+    description=(
+        'Get facts, observations, and events that mention an entity. '
+        'Each mention links to its source note, revealing cross-note connections.'
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
+    ),
     tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -3432,6 +3441,7 @@ async def memex_kv_get(
         'Fuzzy search KV entries by semantic similarity. '
         'Returns the closest matching entries. '
         'Optionally filter by namespace prefixes (global, user, project).'
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3529,6 +3539,7 @@ async def memex_kv_list(
         'runs parallel searches, deduplicates, and returns facts grouped by source note. '
         'Use for panoramic queries like "what do you know about X?" instead of '
         'making many manual search calls.'
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},

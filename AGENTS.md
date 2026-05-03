@@ -188,6 +188,31 @@ Async mode: `asyncio_mode = "auto"` — all async tests run automatically.
 - Ensure `ensure_db_env_vars` fixture is active for E2E tests.
 </constraint>
 
+## Memory layers and tool routing
+
+Memex stores four memory layers; pick the right tool for the layer you
+need (canonical spec: research report §2.3 + §4 F3). The mapping is the
+same across all five agent surfaces — MCP tool descriptions, the Hermes
+session briefing, the Hermes templates fragment, the Claude Code rule
+file, and this section — enforced by `test_f3_layer_primer_parity.py`
+(parity required per the agent-surface rule).
+
+| Layer | What it stores | Retrieve with | Tiny example |
+|---|---|---|---|
+| **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
+| **Semantic** ("decontextualised facts") | MemoryUnits — short fact/observation/event statements extracted from notes | `memex_memory_search` / `memex_get_memory_units` / `memex_get_entity_mentions` | "What does v2 use for auth?" |
+| **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
+| **Procedural-observations** ("adaptations to context") | KV entries under `procedure:<verb>:<context-tag>` — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='procedure:'` | "For this user, `deploy` means staging — never prod after 6pm" |
+
+Default to `memex_memory_search` for content-shaped questions and
+`memex_note_search` for source-shaped questions. The agent owns the verb;
+Memex owns the adverb. The single source of truth for the primer strings
+lives in `packages/common/src/memex_common/agent_surface.py`; consumers
+(`packages/mcp/.../server.py` via the `_f3_descriptions.py` shim,
+`packages/hermes-plugin/.../briefing.py` and `.../templates.py`,
+`packages/claude-code-plugin/rules/memory-layers.md`, and this section)
+all import or mirror that one module — never re-declare the text.
+
 ## When the user reports an issue resolved (§3.5 5-step flow)
 
 When the user says "the X bug is fixed" / "we shipped Y" / "issue Z is no
