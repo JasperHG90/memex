@@ -73,22 +73,29 @@ async def _gather_mcp_descriptions() -> dict[str, str]:
     return out
 
 
-def _mcp_concatenated_tool_descriptions() -> str:
-    descriptions = asyncio.run(_gather_mcp_descriptions())
-    return '\n'.join(descriptions.values())
+@pytest.fixture(scope='module')
+def mcp_tool_descriptions() -> dict[str, str]:
+    """Return the per-tool description dict for the 5 F3 search tools.
+
+    Computed once per module: `_gather_mcp_descriptions` is async and runs
+    via `asyncio.run(...)` so the event-loop spin-up cost is paid exactly
+    once for all tests that need to inspect MCP tool descriptions
+    (`test_mcp_search_tools_carry_prose_primer` and the `surfaces` fixture
+    which derives `mcp` from this dict).
+    """
+    return asyncio.run(_gather_mcp_descriptions())
 
 
 @pytest.fixture(scope='module')
-def surfaces() -> dict[str, str]:
+def surfaces(mcp_tool_descriptions: dict[str, str]) -> dict[str, str]:
     """Return the five surface texts keyed by surface name.
 
-    Computed once per module: `_mcp_concatenated_tool_descriptions` runs an
-    `asyncio.run(...)` event loop, so a module-scoped fixture amortises that
-    cost across the parametrized layer × tool tests instead of paying it on
-    every parametrized case.
+    Sourced from the module-scoped `mcp_tool_descriptions` fixture (which
+    runs the `asyncio.run(...)` event loop exactly once), so the
+    parametrized layer × tool tests pay zero per-case event-loop cost.
     """
     return {
-        'mcp': _mcp_concatenated_tool_descriptions(),
+        'mcp': '\n'.join(mcp_tool_descriptions.values()),
         'hermes_briefing': _LAYER_ROUTING_PRIMER,
         'hermes_template': LAYER_ROUTING_PROMPT_FRAGMENT,
         'claude_code_rule': _CC_RULE_PATH.read_text(),
@@ -138,11 +145,14 @@ def test_canonical_tool_present_in_all_surfaces(
     )
 
 
-def test_mcp_search_tools_carry_prose_primer() -> None:
+def test_mcp_search_tools_carry_prose_primer(
+    mcp_tool_descriptions: dict[str, str],
+) -> None:
     """All 5 F3 MCP search tools must include the prose primer verbatim."""
-    descriptions = asyncio.run(_gather_mcp_descriptions())
     missing = [
-        name for name, desc in descriptions.items() if LAYER_ROUTING_PRIMER_PROSE not in desc
+        name
+        for name, desc in mcp_tool_descriptions.items()
+        if LAYER_ROUTING_PRIMER_PROSE not in desc
     ]
     assert not missing, (
         'F3 MCP tool description drift — these tools do not carry the '

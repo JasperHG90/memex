@@ -2,9 +2,13 @@
 
 The canonical strings live in ``memex_common.agent_surface`` so all four
 agent surfaces (MCP, Hermes briefing, Hermes templates, Claude Code rule)
-import from a single module. This file re-exports them under their
-historical names so existing call sites in ``memex_mcp.server`` keep
-working without churn.
+import from a single module. This file is a same-package re-export shim:
+``memex_mcp.server`` imports from here (a sibling module within the MCP
+package) so the only memex_common dependency surface for the MCP package
+is the well-typed ``memex_common.agent_surface`` module rather than a
+bare ``from memex_common.agent_surface import ...`` line scattered through
+``server.py``. Cross-package consumers (``memex_hermes_plugin``) skip the
+shim and import directly from ``memex_common.agent_surface``.
 
 Sourced from cognitive-memory-research-report.md §2.3 (Memory types and
 how Memex covers them) + §4 F3 ("Agent prompt text"). When the spec
