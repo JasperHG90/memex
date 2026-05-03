@@ -17,6 +17,9 @@ Both descriptions teach the same flow because both verbs participate in it.
 
 from __future__ import annotations
 
+from memex_mcp._f1a_descriptions import (
+    MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_PREAMBLE,
+)
 from memex_mcp._f4_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F4_DEPRIORITIZE_DESCRIPTION,
 )
@@ -151,19 +154,11 @@ _DO_NOT_ADD = (
 # Composed tool descriptions (the strings the MCP server actually serves).
 # ---------------------------------------------------------------------------
 
-# F1a's outcome-recording verb. Original short docstring is preserved verbatim
-# at the top so MW counter discoverability is unchanged for non-resolution
-# call-sites; the §3.5 flow + axes table append below it.
-_RECORD_OUTCOME_PREAMBLE = (
-    'Record whether previously retrieved memories or a stored procedure '
-    'contributed to a successful outcome. Default mode increments MW '
-    'counters on memory units (target_type="memory_unit", '
-    'unit_ids=[...]); set target_type="kv_key" with kv_key='
-    '"procedure:<verb>:<context-tag>" to score a stored procedure. Call '
-    'after you actually used the retrieved memory or the procedure.\n\n'
-    'Call generously. Silence provides no learning signal.\n'
-)
-
+# F1a's outcome-recording verb. The original short docstring is imported from
+# `_f1a_descriptions` (single source of truth) so MW counter discoverability
+# stays in sync between the standalone tool description and the F43-augmented
+# composite. F1a's verbatim test pins the constant against the spec; F43
+# appends the §3.5 flow + axes table below it.
 MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     _RECORD_OUTCOME_PREAMBLE
     + '\n'
