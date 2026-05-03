@@ -37,14 +37,31 @@ F47 boost neutral.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Protocol, runtime_checkable
 
 # Variance of Uniform(0, 1) = Beta(1, 1) — the cold-start ceiling.
 # Pinned in tests so a future prior change is a deliberate edit.
 MAX_VARIANCE: float = 1.0 / 12.0
 
 
-def extract_confidence_and_count(unit: Any) -> tuple[float, int]:
+@runtime_checkable
+class HasConfidence(Protocol):
+    """Structural type for objects carrying F22 confidence + evidence-count fields.
+
+    Hermes round-13 LOW: replaces the prior ``Any`` annotation on
+    ``extract_confidence_and_count`` so mypy can verify each call site
+    (engine, reflection, exploration) actually passes a unit-shaped object
+    rather than tunneling arbitrary values through the helper. Both
+    attributes are typed ``| None`` because production rows can carry
+    ``NULL`` (cold-start, stripped/stale model rows); the helper itself
+    handles the ``None`` fallback.
+    """
+
+    confidence: float | None
+    confidence_evidence_count: int | None
+
+
+def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
     """Defensively extract ``(confidence, confidence_evidence_count)`` from a unit.
 
     Single source of truth (Hermes round-4 MED) — used by ``engine.py``,
