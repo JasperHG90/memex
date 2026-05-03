@@ -1514,6 +1514,18 @@ class RetrievalEngine:
                 # metric and the (conditional) certainty multiplier.
                 _, variance = mean_and_variance(confidence, evidence_count)
                 CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
+                # Boost-factor range (Hermes round-17 LOW): with
+                # ``confidence_alpha`` capped at 2.0 by the
+                # ``RetrievalConfig.confidence_alpha`` ``le=2.0`` field
+                # constraint and ``confidence ∈ [0, 1]`` enforced by
+                # ``extract_confidence_and_count``, ``confidence_boost``
+                # lies in ``[0.0, 2.0]`` (further compressed toward 1.0
+                # when ``certainty < 1`` under modulation, and pinned at
+                # 1.0 at cold-start with ``certainty = 0``). Downstream
+                # score multiplication therefore caps at a 2× lift / 0×
+                # pin. The ``max(..., 0.0)`` floor below is the only
+                # explicit guard; no separate ceiling is needed because
+                # the inputs cannot exceed those bounds.
                 if self.retrieval_config.certainty_modulation_enabled:
                     # Reuse the variance from the metric line above instead
                     # of round-tripping ``certainty(confidence, count)``
