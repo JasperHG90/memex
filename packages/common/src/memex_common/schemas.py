@@ -589,7 +589,14 @@ class MemoryUnitDTO(MemoryUnitBase):
         ge=0,
         description='F22: negative-evidence event count (number of contradicts/weakens '
         'links pointing at this unit). Cold-start = 0; bumped on each weaken/contradict '
-        'step in the contradiction engine.',
+        'step in the contradiction engine. UPPER BOUND (Hermes round-24 MED): no '
+        '``le`` constraint is set — the DB column is ``INTEGER NOT NULL`` so values '
+        'up to ``2**31 - 1`` are legal at the storage layer. The Beta variance '
+        'formula ``alpha = 1 + confidence * evidence_count`` performs float '
+        'multiplication, so integer precision degrades above ``2**53`` (the float64 '
+        'mantissa cap). In practice this ceiling is unreachable — a single unit '
+        'would need 9 quadrillion contradicting links — so no validator is added; '
+        'documenting the threshold here is the right tradeoff.',
     )
 
     confidence_variance: float = Field(
