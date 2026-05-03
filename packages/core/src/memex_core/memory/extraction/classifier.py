@@ -6,18 +6,22 @@ the fact-extraction signature itself (see ``ExtractSemanticFacts`` in
 ``extraction/core.py``), so intent + risk now arrive **with** each fact in the
 single extraction call. This module is what's left after the fold:
 
-* ``_coerce_intent`` / ``_coerce_risk`` — default-on-fail coercion of the
-  LLM-produced strings into the canonical enum values. If the LLM omits a
-  field or returns gibberish, the fact keeps the schema defaults
-  (intent=durable, risk=none). Extraction must never be blocked by a
-  classification mishap.
 * ``filter_safety_blocked`` — post-extraction filter that drops facts the
   LLM flagged as ``risk_class='safety'`` *before* persistence. Counter-side
   effect tracks the drop rate per vault for dashboards.
 
+Default-on-fail coercion of the LLM-produced ``intent_class`` / ``risk_class``
+strings happens at parse time on ``RawFact`` itself (pydantic
+``@field_validator``s in ``extraction/models.py``). The previous module-level
+``_coerce_intent`` / ``_coerce_risk`` helpers were retired in the F25b
+follow-up — they had become dead production code that duplicated the
+validators, with the only consumers being their own unit tests. Single
+source of truth for the coercion lives on ``RawFact`` (and, post-Hermes
+round-2 MED, on ``ExtractedFact`` too).
+
 Pipeline placement (post-F25b):
-    extract_facts → coerce intent/risk on each fact → dedup → embedding →
-    filter_safety_blocked → persist.
+    extract_facts (LLM emits intent/risk; RawFact validators coerce on the
+    way in) → dedup → embedding → filter_safety_blocked → persist.
 
 The two-verb risk policy (unchanged from F25):
     none      — public-safe content (default).
@@ -47,18 +51,6 @@ RISK_VALUES: tuple[str, ...] = tuple(c.value for c in RiskClass)
 
 DEFAULT_INTENT = IntentClass.DURABLE.value
 DEFAULT_RISK = RiskClass.NONE.value
-
-
-def _coerce_intent(value: object) -> str:
-    if isinstance(value, str) and value in INTENT_VALUES:
-        return value
-    return DEFAULT_INTENT
-
-
-def _coerce_risk(value: object) -> str:
-    if isinstance(value, str) and value in RISK_VALUES:
-        return value
-    return DEFAULT_RISK
 
 
 def filter_safety_blocked(facts: list[ProcessedFact]) -> list[ProcessedFact]:

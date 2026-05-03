@@ -3,11 +3,13 @@
 After F25b the standalone classifier predictor is gone — intent + risk arrive
 on each fact directly from the extraction LLM. What remains is:
 
-- ``_coerce_intent`` / ``_coerce_risk`` default-on-fail coercion helpers.
 - ``filter_safety_blocked`` — drops ``risk_class='safety'`` facts before
   persistence.
-- The per-fact pydantic validators on ``RawFact`` that enforce the same
-  default-on-fail behavior at parse time.
+- The per-fact pydantic validators on ``RawFact`` that enforce default-on-fail
+  coercion at parse time. (The module-level ``_coerce_intent`` / ``_coerce_risk``
+  helpers were retired in the F25b follow-up — they had become dead production
+  code duplicating the validators. Default-on-fail behavior is now exercised
+  through ``RawFact`` directly in ``TestRawFactValidators``.)
 """
 
 from __future__ import annotations
@@ -21,8 +23,6 @@ from memex_core.memory.extraction.classifier import (
     DEFAULT_RISK,
     INTENT_VALUES,
     RISK_VALUES,
-    _coerce_intent,
-    _coerce_risk,
     filter_safety_blocked,
 )
 from memex_core.memory.extraction.models import ProcessedFact, RawFact
@@ -37,26 +37,6 @@ def _make_fact(text: str = 'a fact', context: str = '') -> ProcessedFact:
         context=context,
         vault_id=uuid4(),
     )
-
-
-class TestCoerce:
-    @pytest.mark.parametrize('value', INTENT_VALUES)
-    def test_intent_passthrough_for_valid_values(self, value: str) -> None:
-        assert _coerce_intent(value) == value
-
-    @pytest.mark.parametrize('value', RISK_VALUES)
-    def test_risk_passthrough_for_valid_values(self, value: str) -> None:
-        assert _coerce_risk(value) == value
-
-    @pytest.mark.parametrize(
-        'garbage', ['', 'unknown', None, 42, ['durable'], {'intent': 'durable'}]
-    )
-    def test_intent_defaults_on_garbage(self, garbage: object) -> None:
-        assert _coerce_intent(garbage) == DEFAULT_INTENT
-
-    @pytest.mark.parametrize('garbage', ['', 'unknown', None, 42, ['none']])
-    def test_risk_defaults_on_garbage(self, garbage: object) -> None:
-        assert _coerce_risk(garbage) == DEFAULT_RISK
 
 
 class TestRawFactValidators:
@@ -91,6 +71,21 @@ class TestRawFactValidators:
     def test_omitted_classification_takes_field_defaults(self) -> None:
         rf = RawFact(what='x', fact_type='world')
         assert rf.intent_class == DEFAULT_INTENT
+        assert rf.risk_class == DEFAULT_RISK
+
+    @pytest.mark.parametrize(
+        'garbage', ['', 'unknown', None, 42, ['durable'], {'intent': 'durable'}]
+    )
+    def test_intent_non_string_garbage_falls_back_to_default(self, garbage: object) -> None:
+        # Coverage previously held by ``TestCoerce`` against ``_coerce_intent``;
+        # after the helper was retired, RawFact's validator must absorb the
+        # same non-string garbage shapes (None, int, list, dict).
+        rf = RawFact(what='x', fact_type='world', intent_class=garbage, risk_class='none')  # type: ignore[arg-type]
+        assert rf.intent_class == DEFAULT_INTENT
+
+    @pytest.mark.parametrize('garbage', ['', 'unknown', None, 42, ['none']])
+    def test_risk_non_string_garbage_falls_back_to_default(self, garbage: object) -> None:
+        rf = RawFact(what='x', fact_type='world', intent_class='durable', risk_class=garbage)  # type: ignore[arg-type]
         assert rf.risk_class == DEFAULT_RISK
 
 
