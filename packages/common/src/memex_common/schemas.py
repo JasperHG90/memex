@@ -592,11 +592,27 @@ class MemoryUnitDTO(MemoryUnitBase):
         depending on memex_core. The formula MUST stay in lockstep with
         ``memex_core.memory.confidence.mean_and_variance`` — guarded by the
         cross-reference unit test in ``test_confidence.py``.
+
+        Defence-in-depth (Hermes round-2 MED): ``confidence_variance`` has a
+        ``ge=0.0, le=1/12`` field constraint, but ``object.__setattr__``
+        bypasses Pydantic validation. We assert the computed value stays
+        inside ``[0, 1/12]`` so a future formula bug or out-of-range
+        ``confidence`` (e.g. agent-supplied ``> 1.0``) surfaces immediately
+        instead of silently shipping a nonsensical variance downstream.
         """
         alpha = 1.0 + self.confidence * self.confidence_evidence_count
         beta = 1.0 + (1.0 - self.confidence) * self.confidence_evidence_count
         n = alpha + beta
         variance = (alpha * beta) / (n * n * (n + 1.0))
+        if not (0.0 <= variance <= 1.0 / 12.0):
+            raise ValueError(
+                f'F22 invariant violated: computed confidence_variance={variance!r} '
+                f'is outside [0, 1/12] (confidence={self.confidence!r}, '
+                f'evidence_count={self.confidence_evidence_count!r}). '
+                f'This indicates either a formula drift from '
+                f'memex_core.memory.confidence.mean_and_variance or an '
+                f'out-of-range confidence input.'
+            )
         object.__setattr__(self, 'confidence_variance', variance)
         return self
 
