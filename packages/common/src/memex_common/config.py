@@ -795,6 +795,17 @@ class RetrievalConfig(BaseModel):
         'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
         'low-confidence units.',
     )
+    decay_alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description='F11: Multiplicative FSFM-lite decay boost strength for cross-encoder '
+        'reranking. Default 0.0 (off) at ship time — composition is a no-op until the '
+        'before/after benchmark validates the lift; flip to non-zero (target 0.3 to match '
+        'recency/temporal/mw magnitude) in a follow-on config commit. '
+        'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
+        'the boost can go negative for stale low-importance units.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',

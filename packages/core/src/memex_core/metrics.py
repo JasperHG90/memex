@@ -208,6 +208,17 @@ CONFIDENCE_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# F11: FSFM-lite decay boost reranker composition metric
+# ---------------------------------------------------------------------------
+
+DECAY_BOOST_OBSERVED = Histogram(
+    'memex_decay_boost',
+    'F11 decay boost factors applied during reranking. Neutral is 1.0 '
+    '(NULL importance OR NULL last_outcome_at OR decay_alpha=0).',
+    buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
+)
+
+# ---------------------------------------------------------------------------
 # Write-time classifier metrics (F25 / F25b)
 # ---------------------------------------------------------------------------
 # F25b folded the standalone classifier into the fact-extraction signature, so
