@@ -261,6 +261,31 @@ class TestBulkConfidenceLoad:
         assert session.execute.call_count == 2
 
 
+class TestClampConfidencePairNonFinite:
+    """Hermes round-24 HIGH: ``_clamp_confidence_pair`` must guard
+    against non-finite ``confidence`` (``NaN`` / ``±inf``) — otherwise
+    these survive ``min``/``max`` and propagate ``NaN`` variance into
+    downstream scoring.
+    """
+
+    @pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+    def test_nonfinite_confidence_falls_back_to_one(self, bad: float) -> None:
+        from memex_core.services.lint_confidence import _clamp_confidence_pair
+
+        c, n = _clamp_confidence_pair(bad, 5)
+        assert c == 1.0
+        assert n == 5
+
+    def test_nonfinite_evidence_count_falls_back_to_zero(self) -> None:
+        from memex_core.services.lint_confidence import _clamp_confidence_pair
+
+        # ``evidence_count`` is typed ``int`` but a defensive caller
+        # could feed a float ``inf`` mid-pipeline.
+        c, n = _clamp_confidence_pair(0.5, float('inf'))  # type: ignore[arg-type]
+        assert c == 0.5
+        assert n == 0
+
+
 class TestMaybeRunConfidenceMapFastPath:
     """F22 — ``maybe_run`` short-circuits via the prefetched ``confidence_map``.
 

@@ -219,6 +219,17 @@ class TestDtoFormulaConsistency:
 
         assert _MAX_VARIANCE == MAX_VARIANCE
 
+    def test_config_max_variance_constant_matches_core(self) -> None:
+        """Hermes round-24 MED: the config.py ``_MAX_VARIANCE`` constant
+        used by ``LintConfidenceGate.variance_max``'s Field constraints
+        and ``is_active`` predicate MUST equal the core ``MAX_VARIANCE``
+        constant. Same dependency-direction caveat as the schemas.py
+        constant: ``memex_common`` cannot depend on ``memex_core``.
+        """
+        from memex_common.config import _MAX_VARIANCE as CONFIG_MAX_VARIANCE
+
+        assert CONFIG_MAX_VARIANCE == MAX_VARIANCE
+
 
 class TestExtractConfidenceAndCount:
     """``extract_confidence_and_count`` — single source of truth for the
@@ -415,6 +426,38 @@ class TestExtractConfidenceAndCount:
         assert n == 1
         # And ``False`` floors at 0 via the rounding path.
         _U.confidence_evidence_count = False  # type: ignore[assignment]
+        _, n = extract_confidence_and_count(_U())
+        assert n == 0
+
+
+class TestExtractNonFiniteGuard:
+    """Hermes round-24 HIGH: ``NaN`` and ``inf`` must NOT propagate
+    through the defensive ``extract_confidence_and_count`` path —
+    they would silently produce ``NaN`` variance via Python's
+    NaN-passthrough through ``min``/``max``.
+    """
+
+    @pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+    def test_nonfinite_confidence_falls_back_to_one(self, bad: float) -> None:
+        class _U:
+            confidence = bad
+            confidence_evidence_count = 5
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 1.0
+        assert n == 5
+        # Downstream MUST stay finite.
+        m, v = mean_and_variance(c, n)
+        assert math.isfinite(m)
+        assert math.isfinite(v)
+        assert 0.0 <= v <= MAX_VARIANCE
+
+    @pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+    def test_nonfinite_evidence_count_falls_back_to_zero(self, bad: float) -> None:
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = bad
+
         _, n = extract_confidence_and_count(_U())
         assert n == 0
 

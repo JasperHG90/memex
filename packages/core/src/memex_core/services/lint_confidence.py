@@ -9,6 +9,7 @@ and there is no private-API coupling between the two services.
 
 from __future__ import annotations
 
+import math
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
@@ -38,8 +39,25 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int) -> tuple[floa
     which is the canonical defensive read for unit-shaped objects
     across the retrieval, lint, and reflection paths. Promoting this
     helper to public would create a second canonical clamp surface.
+
+    NaN / inf guard (Hermes round-24 HIGH): a non-finite ``confidence``
+    (``NaN`` or ``±inf``) propagates through ``min``/``max`` in Python
+    (``max(0.0, NaN) -> NaN``) and would land in
+    ``mean_and_variance`` as a non-finite shape parameter, producing
+    a ``NaN`` variance that taints downstream scoring. The DB CHECK
+    constraint prevents this for production rows, but the helper
+    exists for defensive parity with in-memory mocks and stale model
+    objects — those code paths must stay safe. A non-finite
+    ``confidence`` is treated as ``1.0`` (parity with the missing-
+    attribute fallback in ``extract_confidence_and_count``); a
+    non-finite ``evidence_count`` is treated as ``0``.
     """
-    return max(0.0, min(1.0, confidence)), max(0, evidence_count)
+    if not math.isfinite(confidence):
+        confidence = 1.0
+    safe_count = evidence_count
+    if isinstance(evidence_count, float) and not math.isfinite(evidence_count):
+        safe_count = 0
+    return max(0.0, min(1.0, confidence)), max(0, safe_count)
 
 
 # Hermes round-14 MED: explicit CAST to ``uuid`` so a non-UUID string

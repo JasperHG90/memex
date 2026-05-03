@@ -126,6 +126,16 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
     """
     raw_confidence = getattr(unit, 'confidence', 1.0)
     confidence = 1.0 if raw_confidence is None else float(raw_confidence)
+    # NaN / inf guard (Hermes round-24 HIGH): a non-finite confidence
+    # would survive the ``min``/``max`` clamp (Python's NaN propagates
+    # through both) and produce a non-finite Beta shape parameter,
+    # silently tainting downstream variance with ``NaN``. The DB CHECK
+    # constraint prevents this for production rows; the guard keeps
+    # the defensive path safe for in-memory mocks / stale model
+    # objects. ``NaN`` falls back to ``1.0`` for parity with the
+    # missing-attribute branch above.
+    if not math.isfinite(confidence):
+        confidence = 1.0
     confidence = max(0.0, min(1.0, confidence))
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
     if raw_count is None:
@@ -139,6 +149,13 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
         # ``isinstance(True, int)`` is True in Python — a confused
         # caller passing ``True`` would otherwise short-circuit to 1.
         evidence_count = raw_count
+    elif isinstance(raw_count, float) and not math.isfinite(raw_count):
+        # NaN / inf guard (Hermes round-24 HIGH): ``float('nan')`` and
+        # ``float('inf')`` would survive the half-up round below
+        # (``math.floor(NaN + 0.5)`` is ``NaN``, then ``int(NaN)``
+        # raises ``ValueError``). Fall back to 0 so the rerank path
+        # cannot 500 on a stale in-memory unit.
+        evidence_count = 0
     else:
         # Half-up rounding (Hermes round-21 MED): ``math.floor(x + 0.5)``
         # gives ``2.5 → 3`` and ``2.9 → 3`` consistently, unlike the
