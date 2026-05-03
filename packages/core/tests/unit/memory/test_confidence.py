@@ -206,6 +206,18 @@ class TestDtoFormulaConsistency:
         _, expected = mean_and_variance(confidence, count)
         assert math.isclose(dto.confidence_variance, expected, rel_tol=REL_TOL)
 
+    def test_dto_max_variance_constant_matches_core(self) -> None:
+        """Hermes round-20 LOW: the schemas.py ``_MAX_VARIANCE`` constant
+        used by ``MemoryUnitDTO.confidence_variance``'s ``Field(le=…)``
+        constraint and validator bounds check MUST equal the core
+        ``MAX_VARIANCE`` constant. The two are deliberately duplicated
+        because ``memex_common`` cannot depend on ``memex_core``; this
+        test pins their equivalence per release.
+        """
+        from memex_common.schemas import _MAX_VARIANCE
+
+        assert _MAX_VARIANCE == MAX_VARIANCE
+
 
 class TestExtractConfidenceAndCount:
     """``extract_confidence_and_count`` — single source of truth for the
@@ -267,13 +279,36 @@ class TestExtractConfidenceAndCount:
         assert c == 1.0
         assert n == 3
 
-    def test_float_evidence_count_truncates_to_int(self):
+    def test_float_evidence_count_rounds_to_nearest_int(self):
+        """Hermes round-20 MED: float evidence counts are rounded, not truncated.
+
+        ``int(2.9) = 2`` silently drops nearly a full evidence event; the
+        helper now uses ``round()`` so a mid-pipeline float snaps to the
+        nearest integer. This pins the rejection of ``int()`` semantics
+        and the acceptance of ``round()`` semantics.
+        """
+
         class _U:
             confidence = 0.5
-            confidence_evidence_count = 7.9  # weird but legal mid-pipeline
+            confidence_evidence_count = 2.9  # weird but legal mid-pipeline
 
         c, n = extract_confidence_and_count(_U())
-        assert n == 7
+        # Reject ``int(2.9) = 2`` semantics — that's the bug.
+        assert n != 2
+        # Accept ``round(2.9) = 3`` semantics — that's the fix.
+        assert n == 3
+        assert isinstance(n, int)
+
+    def test_float_evidence_count_rounds_down_for_below_half(self):
+        """Symmetric pin: ``2.4`` rounds down to ``2`` (banker's rounding edge cases
+        are not exercised here — ``2.4`` is unambiguous)."""
+
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = 2.4
+
+        _, n = extract_confidence_and_count(_U())
+        assert n == 2
         assert isinstance(n, int)
 
     def test_out_of_range_confidence_clamped_not_raised(self):

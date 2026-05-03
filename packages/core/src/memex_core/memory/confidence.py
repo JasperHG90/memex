@@ -102,13 +102,18 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
         would 500 the request. This mirrors the ``schemas.py`` DTO
         validator's defence-in-depth clamp.
       - ``confidence_evidence_count`` falls back to ``0`` on missing/None
-        and is floored at ``0`` for the same reason.
+        and is floored at ``0`` for the same reason. Hermes round-20 MED:
+        a non-integer ``raw_count`` (e.g. an in-flight ``2.9`` mid-pipeline)
+        is rounded via ``round()`` rather than truncated via ``int()`` —
+        ``int(2.9) = 2`` silently drops nearly a full evidence event,
+        which biases variance downward; ``round(2.9) = 3`` snaps to the
+        nearest integer, which is the intent for an evidence counter.
     """
     raw_confidence = getattr(unit, 'confidence', 1.0)
     confidence = 1.0 if raw_confidence is None else float(raw_confidence)
     confidence = max(0.0, min(1.0, confidence))
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
-    evidence_count = 0 if raw_count is None else int(raw_count)
+    evidence_count = 0 if raw_count is None else round(raw_count)
     evidence_count = max(0, evidence_count)
     return confidence, evidence_count
 
