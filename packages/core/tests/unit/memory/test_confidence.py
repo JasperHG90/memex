@@ -149,10 +149,13 @@ class TestSampleConcentration:
 
 
 class TestMeanIsInputConfidence:
-    """The posterior mean returned is the input confidence (counts shape variance, not mean).
+    """The first tuple element is the *input* confidence — NOT the Beta-posterior mean.
 
-    By construction in this F22 helper: ``mean_and_variance`` returns
-    ``(confidence, variance)`` so consumers don't re-derive the mean.
+    F22 uses the stored ``confidence`` as the point estimate for downstream
+    scoring (see ``confidence.py`` module docstring). The true Beta-posterior
+    mean ``(1 + c·n) / (2 + n)`` is intentionally NOT returned here so the
+    F47 boost stays anchored on the row's stored confidence value rather
+    than drifting toward 0.5 as evidence accumulates with c ≠ 0.5.
     """
 
     @pytest.mark.parametrize(

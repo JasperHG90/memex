@@ -12,10 +12,23 @@ With prior ``Beta(1, 1)``, posterior parameters are::
     alpha = 1 + confidence × confidence_evidence_count
     beta  = 1 + (1 − confidence) × confidence_evidence_count
 
-The posterior mean is the input ``confidence`` itself (counts shape variance,
-not the mean — by construction the posterior preserves the supplied
-confidence as its central tendency). The posterior variance is the standard
-Beta variance ``(α × β) / ((α + β)² × (α + β + 1))``.
+The actual Beta-posterior mean is ``alpha / (alpha + beta) = (1 + c·n) /
+(2 + n)``, which only equals the input ``confidence`` ``c`` when ``n = 0``
+or in the ``n → ∞`` limit (e.g. for ``c = 0.3, n = 20`` the true posterior
+mean is ``7/22 ≈ 0.318 ≠ 0.3``).
+
+This module deliberately uses the **input ``confidence``** as the
+*point estimate* downstream scoring composes against — F22 treats the
+stored ``confidence`` field as the canonical mean and uses
+``confidence_evidence_count`` only to *shape variance* (and therefore the
+``certainty`` factor that gates the F47 boost). The full Beta-posterior
+mean is intentionally NOT used here so the boost site at
+``retrieval/engine.py`` doesn't drift away from the row's
+``confidence`` value. ``mean_and_variance`` therefore returns
+``(confidence, beta_posterior_variance)``.
+
+The posterior variance is the standard Beta variance
+``(α × β) / ((α + β)² × (α + β + 1))``.
 
 Cold-start (``confidence_evidence_count = 0``) collapses the posterior to the
 Beta(1, 1) prior — variance = ``MAX_VARIANCE = 1/12``, certainty = 0,
@@ -30,13 +43,20 @@ MAX_VARIANCE: float = 1.0 / 12.0
 
 
 def mean_and_variance(confidence: float, evidence_count: int) -> tuple[float, float]:
-    """Closed-form Beta(1, 1) posterior mean + variance.
+    """Closed-form Beta(1, 1) posterior variance + the unit's input mean.
 
     Returns:
-        ``(mean, variance)`` where mean is the input ``confidence`` and
-        variance is in ``[0, MAX_VARIANCE]``. Variance is ``MAX_VARIANCE``
-        at ``evidence_count = 0`` (cold-start: posterior collapses to prior)
+        ``(mean, variance)`` where ``mean`` is the **input** ``confidence``
+        (used as the F22 point estimate for downstream scoring — see this
+        module's docstring) and ``variance`` is the Beta-posterior variance
+        in ``[0, MAX_VARIANCE]``. Variance is ``MAX_VARIANCE`` at
+        ``evidence_count = 0`` (cold-start: posterior collapses to prior)
         and shrinks toward 0 as evidence accumulates.
+
+        The returned ``mean`` is NOT the Beta-posterior mean
+        ``(1 + c·n) / (2 + n)`` — F22 deliberately uses the row's stored
+        confidence as the point estimate so the F47 boost stays anchored
+        on the same value the lint gate and contradiction engine see.
     """
     alpha = 1.0 + confidence * evidence_count
     beta = 1.0 + (1.0 - confidence) * evidence_count
