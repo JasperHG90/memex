@@ -28,6 +28,19 @@ from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
 from memex_core.metrics import CONFIDENCE_BOOST_OBSERVED
 
 
+def _histogram_sum(histogram) -> float:
+    """Read the cumulative sum of a Prometheus histogram (single source of truth).
+
+    Hermes round-16 MED: ``_sum`` is a private implementation detail of the
+    Prometheus client. Wrap the access in one helper so a future
+    ``prometheus_client`` upgrade that renames or removes the attribute
+    needs to be updated in exactly one place across this test module.
+    Mirrors the helper in
+    ``packages/core/tests/unit/memory/retrieval/test_f22_certainty_modulation.py``.
+    """
+    return histogram._sum.get()
+
+
 def _make_note(vault_id, title: str = 'F22 test note') -> Note:
     return Note(
         id=uuid4(),
@@ -182,13 +195,13 @@ async def test_ship_default_boost_bit_for_bit_with_f47_baseline(
     reranker.score.return_value = [0.0]
     engine = RetrievalEngine(embedder=MagicMock(), reranker=reranker, retrieval_config=config)
 
-    sum_before_a = CONFIDENCE_BOOST_OBSERVED._sum.get()
+    sum_before_a = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
     await engine._rerank_results('q', [unit_low_evidence])
-    boost_a = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before_a
+    boost_a = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before_a
 
-    sum_before_b = CONFIDENCE_BOOST_OBSERVED._sum.get()
+    sum_before_b = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
     await engine._rerank_results('q', [unit_high_evidence])
-    boost_b = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before_b
+    boost_b = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before_b
 
     expected = 1.0 + 0.3 * (0.85 - 0.5)
     assert math.isclose(boost_a, expected, rel_tol=1e-6)
@@ -234,9 +247,9 @@ async def test_flag_on_modulates_boost_per_evidence_count(session: AsyncSession)
         reranker = MagicMock()
         reranker.score.return_value = [0.0]
         engine = RetrievalEngine(embedder=MagicMock(), reranker=reranker, retrieval_config=config)
-        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit])
-        boosts.append(CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before)
+        boosts.append(_histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before)
 
     boost_cold, boost_one, boost_well = boosts
     assert math.isclose(boost_cold, 1.0, rel_tol=1e-6)
