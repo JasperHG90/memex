@@ -227,6 +227,42 @@ def test_table_primer_single_source_of_truth() -> None:
     )
 
 
+def test_mcp_shim_single_source_of_truth() -> None:
+    """The `memex_mcp._f3_descriptions` shim MUST re-export the canonical
+    primer strings from `memex_common.agent_surface` (object identity, not
+    just equality).
+
+    Pins the architecture: `_f3_descriptions.py` is intentionally a thin
+    same-package shim for `memex_mcp.server`. If a future change replaces
+    a re-export with a locally-defined copy, this test fails — even if the
+    new copy passes the `LAYER_ROUTING_PRIMER_PROSE in description`
+    substring check used by `test_mcp_search_tools_carry_prose_primer`
+    (which would miss whitespace-only or formatting drift that preserves
+    substring containment).
+    """
+    from memex_mcp import _f3_descriptions as mcp_shim
+
+    failures: list[str] = []
+    for name, canonical in (
+        ('LAYER_ROUTING_PRIMER_PROSE', LAYER_ROUTING_PRIMER_PROSE),
+        ('LAYER_ROUTING_PRIMER_TABLE', LAYER_ROUTING_PRIMER_TABLE),
+        ('LAYER_ROUTING_PRIMER_FRAGMENT', LAYER_ROUTING_PRIMER_FRAGMENT),
+    ):
+        shim_value = getattr(mcp_shim, name)
+        if shim_value is not canonical:
+            failures.append(
+                f'{name!r}: shim value is not the canonical '
+                '`memex_common.agent_surface` object (re-export drifted '
+                'into a locally-defined copy)'
+            )
+    assert not failures, (
+        '`memex_mcp._f3_descriptions` SoT shim drifted:\n'
+        + '\n'.join('  - ' + f for f in failures)
+        + '\nThe shim must re-export from `memex_common.agent_surface` '
+        'with no local redefinition.'
+    )
+
+
 def test_prompt_fragment_single_source_of_truth() -> None:
     """`templates.LAYER_ROUTING_PROMPT_FRAGMENT` MUST be the same string as
     the canonical `memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`.
