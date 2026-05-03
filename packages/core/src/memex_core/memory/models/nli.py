@@ -24,7 +24,20 @@ from memex_core.memory.models.protocols import NLIClassifierModel
 logger = logging.getLogger('memex.core.memory.models.nli')
 
 _onnx_nli_cache: 'OnnxNLIClassifier | None' = None
-_onnx_nli_init_lock = asyncio.Lock()
+_onnx_nli_init_lock: 'asyncio.Lock | None' = None
+
+
+def _get_init_lock() -> asyncio.Lock:
+    """Lazy-initialise the cache-init Lock to avoid binding to no-loop import.
+
+    Creating ``asyncio.Lock()`` at module load triggers a deprecation warning
+    in Python 3.12+ (and may hard-error in future versions) when no event loop
+    is running. Lazy creation defers the bind to the first ``await`` site.
+    """
+    global _onnx_nli_init_lock
+    if _onnx_nli_init_lock is None:
+        _onnx_nli_init_lock = asyncio.Lock()
+    return _onnx_nli_init_lock
 
 
 async def get_nli_model(config: NLIModelConfig | None = None) -> NLIClassifierModel | None:
@@ -48,7 +61,7 @@ async def get_nli_model(config: NLIModelConfig | None = None) -> NLIClassifierMo
     if _onnx_nli_cache is not None:
         return _onnx_nli_cache
 
-    async with _onnx_nli_init_lock:
+    async with _get_init_lock():
         if _onnx_nli_cache is not None:
             return _onnx_nli_cache
 

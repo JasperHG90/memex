@@ -101,17 +101,28 @@ class CheckContext:
 
 
 @runtime_checkable
-class RunLLMCheck(Protocol):
-    """Protocol for an F10 LLM check.
+class LegacyRunLLMCheck(Protocol):
+    """F10's original 3-positional check signature (kept for backwards compat).
 
-    The original F10 contract was ``async def(unit_id, vault_id, session)``;
-    F10b adds an optional ``context`` keyword so the orchestrator can plumb a
-    precomputed :class:`PolarityResult` through to the DSPy signature without
-    re-invoking the NLI model. Both signatures satisfy this protocol —
-    ``context`` is keyword-only with a default, so 3-arg implementations
-    remain valid checks. The service uses ``inspect.signature`` to decide
-    whether to pass the kwarg; a check that omits it is called with the
-    legacy 3-arg signature.
+    The service uses ``inspect.signature`` to decide whether to call this form
+    or :class:`ContextAwareRunLLMCheck`; new checks should accept ``context``.
+    """
+
+    async def __call__(
+        self,
+        unit_id: UUID,
+        vault_id: UUID,
+        session: 'AsyncSession',
+    ) -> 'LLMLintFinding | None': ...
+
+
+@runtime_checkable
+class ContextAwareRunLLMCheck(Protocol):
+    """F10b's context-aware check signature.
+
+    Receives a keyword-only :class:`CheckContext` so the orchestrator can plumb
+    a precomputed :class:`PolarityResult` through to the DSPy signature without
+    re-invoking the NLI model.
     """
 
     async def __call__(
@@ -122,3 +133,12 @@ class RunLLMCheck(Protocol):
         *,
         context: 'CheckContext | None' = ...,
     ) -> 'LLMLintFinding | None': ...
+
+
+# Union of the legacy 3-positional and F10b context-aware check signatures.
+# Either form is accepted at the service boundary; ``_invoke_check`` routes via
+# ``inspect.signature`` so the right call shape is used at runtime. Using a
+# union (rather than a single Protocol that covers both) keeps positional-arg
+# type-checking precise for each form — a stricter alternative to the
+# ``Callable[..., ...]`` ellipsis form that sacrificed all positional safety.
+RunLLMCheck = LegacyRunLLMCheck | ContextAwareRunLLMCheck

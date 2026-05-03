@@ -17,7 +17,6 @@ Maps to ACs:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
 from uuid import UUID, uuid4
 
 import pytest
@@ -25,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_common.config import MemexConfig
+from memex_core.memory.lint_llm.types import LegacyRunLLMCheck
 from memex_core.memory.sql_models import LintType, Vault
 from memex_core.services.lint_llm import (
     LLMLintFinding,
@@ -79,7 +79,7 @@ def _make_finding(unit_id: UUID, surprise: float = 0.85) -> LLMLintFinding:
 
 def _stub_check(
     *, returns: LLMLintFinding | None = None, raises: Exception | None = None
-) -> Callable[[UUID, UUID, AsyncSession], Awaitable[LLMLintFinding | None]]:
+) -> LegacyRunLLMCheck:
     """Inject-able run_llm_check; defaults to returning ``None`` (no finding)."""
 
     async def _impl(unit_id: UUID, vault_id: UUID, session: AsyncSession) -> LLMLintFinding | None:
