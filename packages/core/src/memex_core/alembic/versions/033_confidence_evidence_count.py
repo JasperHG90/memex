@@ -53,6 +53,9 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+_CHECK_CONSTRAINT_NAME = 'memory_units_confidence_evidence_count_check'
+
+
 def _column_exists(conn, table: str, column: str) -> bool:
     result = conn.execute(
         sa.text(
@@ -63,6 +66,20 @@ def _column_exists(conn, table: str, column: str) -> bool:
             ')'
         ),
         {'table': table, 'column': column},
+    )
+    return bool(result.scalar())
+
+
+def _constraint_exists(conn, name: str) -> bool:
+    result = conn.execute(
+        sa.text(
+            'SELECT EXISTS ('
+            '  SELECT 1 FROM information_schema.table_constraints'
+            '  WHERE table_schema = current_schema()'
+            '    AND constraint_name = :name'
+            ')'
+        ),
+        {'name': name},
     )
     return bool(result.scalar())
 
@@ -96,9 +113,24 @@ def upgrade() -> None:
         )
     )
 
+    # Hermes round-6 MED: production runs migrations only (not
+    # ``Base.metadata.create_all``), so the SQLModel-level
+    # ``CheckConstraint('confidence_evidence_count >= 0', ...)`` would
+    # otherwise be missing in the live DB. Idempotent — guarded by the
+    # information_schema lookup so re-running this migration is a no-op.
+    if not _constraint_exists(conn, _CHECK_CONSTRAINT_NAME):
+        op.create_check_constraint(
+            _CHECK_CONSTRAINT_NAME,
+            'memory_units',
+            'confidence_evidence_count >= 0',
+        )
+
 
 def downgrade() -> None:
     conn = op.get_bind()
+
+    if _constraint_exists(conn, _CHECK_CONSTRAINT_NAME):
+        op.drop_constraint(_CHECK_CONSTRAINT_NAME, 'memory_units', type_='check')
 
     if _column_exists(conn, 'memory_units', 'confidence_evidence_count'):
         op.drop_column('memory_units', 'confidence_evidence_count')
