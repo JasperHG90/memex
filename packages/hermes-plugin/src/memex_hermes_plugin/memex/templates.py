@@ -94,7 +94,7 @@ HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
 )
 
 
-__all__ += [  # noqa: PLE0604 — extend the existing __all__ with F43 fragments
+__all__ += [
     'HISTORICAL_ROUTING_PROMPT_FRAGMENT',
     'RESOLUTION_FLOW_PROMPT_FRAGMENT',
 ]
