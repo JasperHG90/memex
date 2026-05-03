@@ -58,6 +58,14 @@ def _variance_key(unit: MemoryUnit) -> float:
     Hoisted to module scope (Hermes round-17 LOW) so the closure isn't
     re-defined on every call to ``_batch_fetch_recent_memories``. Pure
     function — no captured state.
+
+    Hermes round-22 MED: this helper is INERT until the operator-flip
+    ``ReflectionConfig.variance_prioritisation_enabled`` toggles to
+    True. The single call site is the ``if
+    self.config.server.memory.reflection.variance_prioritisation_enabled:``
+    branch in ``_batch_fetch_recent_memories`` (see this module's
+    ``reflect`` block). Defining this function does not affect
+    reflection behaviour; only the gated sort does.
     """
     confidence, count = extract_confidence_and_count(unit)
     _, variance = mean_and_variance(confidence, count)
