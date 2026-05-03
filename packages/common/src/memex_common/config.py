@@ -806,6 +806,15 @@ class RetrievalConfig(BaseModel):
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
         'the boost can go negative for stale low-importance units.',
     )
+    certainty_modulation_enabled: bool = Field(
+        default=False,
+        description='F22: when True, the F47 confidence_boost is multiplied by a certainty '
+        'factor derived from the closed-form Beta(1, 1) posterior over '
+        '(confidence, confidence_evidence_count). Default False at ship time — the '
+        'migration ships the column + backfill INERTLY so F47 retains its existing '
+        '1.0 + α × (confidence − 0.5) form. Flip to True after observing the '
+        'CONFIDENCE_VARIANCE_OBSERVED histogram populates as expected.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',
@@ -1233,6 +1242,33 @@ class TracingConfig(BaseModel):
     )
 
 
+class LintConfidenceGate(BaseModel):
+    """F22: per-lint-type ``(confidence_min, variance_max)`` gate.
+
+    A finding is suppressed when ``confidence < confidence_min`` OR
+    ``variance > variance_max``. Cold-start units (no evidence) have
+    variance = 1/12 = MAX_VARIANCE so they fall above any non-trivial
+    ``variance_max`` ceiling and are skipped — preventing false-positive
+    "low confidence" findings on freshly extracted units.
+    """
+
+    confidence_min: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description='Minimum confidence (mean) for a finding to surface. '
+        'Default 0.0 = no floor (preserves pre-F22 behaviour).',
+    )
+    variance_max: float = Field(
+        default=1.0 / 12.0,
+        ge=0.0,
+        le=1.0 / 12.0,
+        description='Maximum variance for a finding to surface. Default = MAX_VARIANCE '
+        '(1/12) = no ceiling (preserves pre-F22 behaviour). Lowering this ceiling '
+        'suppresses findings on under-evidenced units.',
+    )
+
+
 class LintConfig(BaseModel):
     """Configuration for the F6 maintenance ledger / rule-based linter."""
 
@@ -1244,6 +1280,10 @@ class LintConfig(BaseModel):
         default=6 * 3600,
         ge=60,
         description='Interval in seconds between lint runs. Default: 6 hours.',
+    )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='F22: confidence/variance gate for rule-based lint findings.',
     )
 
 
@@ -1348,6 +1388,12 @@ class LintLLMConfig(BaseModel):
     checks: LintLLMChecksConfig = Field(
         default_factory=LintLLMChecksConfig,
         description='Per-check feature flags for the DSPy lint signatures.',
+    )
+    confidence_gate: LintConfidenceGate = Field(
+        default_factory=LintConfidenceGate,
+        description='F22: confidence/variance gate applied to candidate units before '
+        'the LLM check runs. Skips cold-start (variance = MAX_VARIANCE) and '
+        'low-confidence units when the gate is configured.',
     )
     polarity: NLIModelConfig = Field(
         default_factory=NLIModelConfig,

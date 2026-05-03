@@ -52,10 +52,12 @@ from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, Co
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
+from memex_core.memory.confidence import MAX_VARIANCE, mean_and_variance
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
+    CONFIDENCE_VARIANCE_OBSERVED,
     CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
     DECAY_BOOST_OBSERVED,
     MW_BOOST_OBSERVED,
@@ -73,6 +75,17 @@ def _get_confidence(unit: Any) -> float:
     """
     confidence = getattr(unit, 'confidence', 1.0)
     return 1.0 if confidence is None else confidence
+
+
+def _get_evidence_count(unit: Any) -> int:
+    """Resolve a unit's confidence_evidence_count with defensive fallback to 0.
+
+    Schema is NOT NULL DEFAULT 0; this guard handles stripped/stale model
+    objects (no attribute) and rows materialised before F22's migration.
+    Cold-start (0) yields max variance and certainty = 0 — neutral boost.
+    """
+    count = getattr(unit, 'confidence_evidence_count', 0)
+    return 0 if count is None else int(count)
 
 
 # F40 — pre-reranker filter at hydration.
@@ -1485,11 +1498,21 @@ class RetrievalEngine:
 
                 # F47: contradiction-derived confidence boost.
                 # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
-                # Floor at 0.0 belt-and-suspenders with the config-level ge=0.0/le=2.0
-                # bounds — keeps boosted_score non-negative even if the constraint is
-                # later weakened.
+                # F22: when certainty_modulation_enabled is True, the boost is
+                # additionally multiplied by certainty = 1 - variance/MAX_VARIANCE
+                # (closed-form Beta(1, 1) posterior). Cold-start (count=0) →
+                # certainty = 0 → boost collapses to neutral (preserves F47 cold-start
+                # safety even with the multiplier active).
                 confidence = _get_confidence(unit)
-                confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
+                if self.retrieval_config.certainty_modulation_enabled:
+                    _, variance = mean_and_variance(confidence, _get_evidence_count(unit))
+                    CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
+                    certainty = 1.0 - variance / MAX_VARIANCE
+                    confidence_boost = max(
+                        1.0 + confidence_alpha * (confidence - 0.5) * certainty, 0.0
+                    )
+                else:
+                    confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
                 CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
 
                 decay_boost = compute_decay_boost(unit, decay_alpha=decay_alpha, now=now)
