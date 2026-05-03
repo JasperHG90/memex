@@ -1254,6 +1254,17 @@ class TracingConfig(BaseModel):
     )
 
 
+# Hermes round-24 MED: pin the cold-start variance ceiling once at module
+# scope so the Field default + ``le`` + ``is_active`` predicate all
+# reference the same float arithmetic instead of three independent
+# ``1.0 / 12.0`` evaluations. Mirrors
+# ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``; the cross-reference unit
+# test in ``test_confidence.py`` (TestDtoFormulaConsistency) pins
+# equivalence with the core constant.
+_MAX_VARIANCE: float = 1.0 / 12.0
+
+
 class LintConfidenceGate(BaseModel):
     """F22: per-lint-type ``(confidence_min, variance_max)`` gate.
 
@@ -1272,9 +1283,9 @@ class LintConfidenceGate(BaseModel):
         'Default 0.0 = no floor (preserves pre-F22 behaviour).',
     )
     variance_max: float = Field(
-        default=1.0 / 12.0,
+        default=_MAX_VARIANCE,
         ge=0.0,
-        le=1.0 / 12.0,
+        le=_MAX_VARIANCE,
         description='Maximum variance for a finding to surface. Default = MAX_VARIANCE '
         '(1/12) = no ceiling (preserves pre-F22 behaviour). Lowering this ceiling '
         'suppresses findings on under-evidenced units. WARNING (Hermes round-22 '
@@ -1295,7 +1306,7 @@ class LintConfidenceGate(BaseModel):
         single source of truth so a future tweak to gate-active semantics
         cannot drift across the two services.
         """
-        return self.confidence_min > 0.0 or self.variance_max < (1.0 / 12.0)
+        return self.confidence_min > 0.0 or self.variance_max < _MAX_VARIANCE
 
 
 class LintConfig(BaseModel):
