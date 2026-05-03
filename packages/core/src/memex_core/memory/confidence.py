@@ -69,6 +69,15 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
     so the falsy-zero handling, ``None`` fallback, and integer cast cannot
     drift across call sites.
 
+    Protocol vs. runtime gap (Hermes round-14 LOW): the ``HasConfidence``
+    annotation gives mypy a structural contract for the three first-party
+    callers, but the body uses ``getattr`` with explicit defaults so a
+    ``MemoryUnit`` instance with neither attribute (e.g. a stripped DTO
+    or a partial mock) does NOT raise — it returns the documented
+    fallbacks. The intent is defensive parity with the column NULL-able
+    fallback the storage layer already provides; do not interpret the
+    Protocol as a runtime invariant.
+
     Behaviour:
       - ``confidence`` falls back to ``1.0`` when the attribute is missing
         OR explicitly ``None`` (stripped/stale model rows). ``0.0`` is
