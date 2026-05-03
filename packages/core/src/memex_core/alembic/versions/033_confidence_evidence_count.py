@@ -5,6 +5,27 @@ so the closed-form Beta(1, 1) posterior at
 ``memex_core.memory.confidence.mean_and_variance`` can derive variance from
 ``(confidence, confidence_evidence_count)`` without storing variance separately.
 
+Operational requirement (Hermes round-16 MED)
+=============================================
+
+This migration MUST run with the contradiction engine paused
+(``server.memory.contradiction.enabled = False`` or the app process stopped).
+The chunked backfill filters on ``mu.confidence_evidence_count = 0`` to skip
+already-backfilled rows; if the forward path bumps a candidate from 0 → 1
+between iterations, that unit's pre-existing link count is silently lost
+and ``confidence_evidence_count`` permanently undercount (it lands at 1 —
+just the new event — rather than the correct ``backfilled_count + 1``).
+The undercount is *conservative* (the unit reads as higher-variance than
+warranted), the window is narrow (one migration runtime), and the
+forward path itself remains correct — but the column does not
+self-correct on subsequent F22 reads.
+
+Standard Memex deploy procedure (migrations run during the deploy
+window with the application paused) avoids this race entirely. If a
+hot-online migration is unavoidable, run a post-migration
+verification UPDATE that compares ``confidence_evidence_count`` to
+``COUNT(*)`` over the link table for affected units.
+
 Backfill semantics — symmetric with the forward path
 ====================================================
 
