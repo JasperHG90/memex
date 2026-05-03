@@ -123,6 +123,12 @@ def _constraint_exists(conn, name: str) -> bool:
 
 
 def _index_exists(conn, name: str) -> bool:
+    # Hermes round-17 LOW: ``pg_indexes`` is queried here while the
+    # column / constraint helpers above use ``information_schema``.
+    # ``information_schema`` lacks a portable view on Postgres indexes
+    # (its ``statistics`` view is MySQL-shaped; Postgres exposes index
+    # metadata only via ``pg_indexes`` / ``pg_class``). The inconsistency
+    # is intentional, not a refactor opportunity.
     result = conn.execute(
         sa.text(
             'SELECT EXISTS ('
