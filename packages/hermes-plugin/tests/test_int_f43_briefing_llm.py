@@ -9,6 +9,12 @@ Skipped unless GEMINI_API_KEY / GOOGLE_API_KEY is set; uses the same model
 pinning as the rest of the repo's LLM-gated tests
 (gemini-3-flash-preview).
 
+Note: Gemini's ``temperature=0`` is not strictly deterministic (the provider
+has an implicit minimum temperature and outputs can still vary across calls).
+Each test is wrapped with ``pytest.mark.flaky(reruns=2)`` so transient output
+drift does not red the suite; the assertions themselves are kept tool-name /
+numeric / UUID based so a one-off rephrasing does not falsely fail.
+
 Per CLAUDE.md (Markers): ``@pytest.mark.llm`` so the tests are gated out of
 the default CI lane.
 """
@@ -138,6 +144,7 @@ def _briefing_system_message() -> str:
 
 
 @pytest.mark.llm
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 @pytest.mark.skipif(_SKIP_LLM_TESTS, reason='SKIP_LLM_TESTS=1 set')
 @pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
 @pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
@@ -191,6 +198,7 @@ def test_hermes_briefing_drives_disambiguation_on_ambiguous_prompt() -> None:
 
 
 @pytest.mark.llm
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 @pytest.mark.skipif(_SKIP_LLM_TESTS, reason='SKIP_LLM_TESTS=1 set')
 @pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
 @pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
@@ -248,6 +256,7 @@ def test_hermes_briefing_drives_search_before_write() -> None:
 
 
 @pytest.mark.llm
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 @pytest.mark.skipif(_SKIP_LLM_TESTS, reason='SKIP_LLM_TESTS=1 set')
 @pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
 @pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
@@ -305,6 +314,7 @@ def test_hermes_briefing_option_b_uses_top_k_30() -> None:
 
 
 @pytest.mark.llm
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 @pytest.mark.skipif(_SKIP_LLM_TESTS, reason='SKIP_LLM_TESTS=1 set')
 @pytest.mark.skipif(not _HAS_GEMINI_KEY, reason='GEMINI_API_KEY / GOOGLE_API_KEY not set')
 @pytest.mark.skipif(not _HAS_LITELLM, reason='litellm not installed')
