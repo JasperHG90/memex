@@ -62,9 +62,19 @@ async def gate_blocks_finding(
 ) -> bool:
     """Return True iff (confidence, variance) violates the lint gate.
 
-    Cold-start units (count=0, variance=1/12) are blocked when ``variance_max``
-    is set below 1/12 — so freshly extracted units don't surface as
+    Boundary semantics (Hermes round-21 MED)
+    ----------------------------------------
+    The blocking predicate is ``variance > variance_max`` — strictly
+    greater. So a cold-start unit (``evidence_count=0``,
+    ``variance=MAX_VARIANCE=1/12``) is blocked ONLY when ``variance_max``
+    is set strictly BELOW ``1/12``. The ship-time default is
+    ``variance_max = MAX_VARIANCE``, which means cold-start units PASS
+    the gate by construction (``1/12 > 1/12`` is False). This is
+    intentional: freshly extracted units shouldn't surface as
     "low-confidence" findings purely because they have no evidence yet.
+
+    Operators who want to block cold-start units MUST configure
+    ``variance_max`` strictly below ``MAX_VARIANCE`` (e.g. ``0.083``).
 
     The per-row fetch is retained for tests and one-off callers; the
     rule-runner path uses :func:`bulk_load_confidence_map` to avoid the
