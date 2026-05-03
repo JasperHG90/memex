@@ -202,6 +202,20 @@ def inject_edge_exploration(
     scaffolding, different signal. Injected units carry
     ``edge_exploration=True`` in their ``unit_metadata`` so the caller can
     distinguish them from F33 injections.
+
+    Mutation contract (Hermes round-1 MED)
+    --------------------------------------
+    Each injected ``MemoryUnit`` has its ``unit_metadata`` REPLACED with a
+    fresh dict containing the existing keys plus ``edge_exploration=True``.
+    The original metadata dict on the unit is not mutated, but the unit's
+    attribute assignment IS observable to any caller that holds the same
+    object. This mirrors :func:`inject_exploration_units`. Callers MUST NOT
+    feed the same ``MemoryUnit`` instances through both this path and
+    another scoring stage that expects pristine metadata — and MUST treat
+    units returned by this function as carrying the injection annotation
+    until the request is fully served. The retrieval engine uses these
+    objects exactly once per request (no cross-request reuse), so the
+    in-place attribute swap is safe in the documented call site.
     """
     edges = select_edge_exploration_candidates(
         results,
