@@ -117,6 +117,15 @@ def mean_and_variance(confidence: float, evidence_count: int) -> tuple[float, fl
     return confidence, variance
 
 
+def certainty_from_variance(variance: float) -> float:
+    """Certainty factor in ``[0, 1]`` from a precomputed variance.
+
+    Lets callers that already evaluated ``mean_and_variance`` reuse the
+    result instead of re-running the closed form (Hermes round-12 LOW).
+    """
+    return 1.0 - variance / MAX_VARIANCE
+
+
 def certainty(confidence: float, evidence_count: int) -> float:
     """Certainty factor in ``[0, 1]`` — used by the F22 F47 boost extension.
 
@@ -124,7 +133,7 @@ def certainty(confidence: float, evidence_count: int) -> float:
     (boost collapses to neutral) and well-evidenced → ~1 (full F47 lift).
     """
     _, variance = mean_and_variance(confidence, evidence_count)
-    return 1.0 - variance / MAX_VARIANCE
+    return certainty_from_variance(variance)
 
 
 def sample_concentration(alpha: float, beta: float) -> float:

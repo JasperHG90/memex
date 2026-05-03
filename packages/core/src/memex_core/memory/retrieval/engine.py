@@ -53,7 +53,7 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.confidence import (
-    certainty,
+    certainty_from_variance,
     extract_confidence_and_count,
     mean_and_variance,
 )
@@ -1528,12 +1528,13 @@ class RetrievalEngine:
                 _, variance = mean_and_variance(confidence, evidence_count)
                 CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
                 if self.retrieval_config.certainty_modulation_enabled:
-                    # Single source of truth — the certainty multiplier
-                    # comes from the closed-form helper in
-                    # ``memex_core.memory.confidence`` (Hermes round-4 MED:
-                    # removes the prior inline duplication of
-                    # ``1.0 - variance / MAX_VARIANCE``).
-                    certainty_factor = certainty(confidence, evidence_count)
+                    # Reuse the variance from the metric line above instead
+                    # of round-tripping ``certainty(confidence, count)``
+                    # (which would re-evaluate ``mean_and_variance``).
+                    # The closed form lives in ``certainty_from_variance``
+                    # so both call sites share one source of truth (Hermes
+                    # round-4 MED + round-12 LOW).
+                    certainty_factor = certainty_from_variance(variance)
                     confidence_boost = max(
                         1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
                     )
