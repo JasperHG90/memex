@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from typing import cast
 
 import numpy as np
@@ -102,6 +103,12 @@ class OnnxNLIClassifier(BaseOnnxModel):
                 "label_order=... to opt in to the model's ordering."
             )
         self._label_order = effective
+        # ONNX Runtime documents `Run()` as thread-safe on a shared session,
+        # but `_score_pair` is invoked via `asyncio.to_thread` and the F10
+        # scheduler can drive multiple vault ticks; serialise inference with
+        # a `threading.Lock` so the path is safe under any provider/runtime
+        # where that guarantee weakens (e.g. some EP combinations).
+        self._inference_lock = threading.Lock()
         logger.info(
             'OnnxNLIClassifier initialised (model_version=%s, label_order=%s, config_validated=%s)',
             model_version,
@@ -126,7 +133,8 @@ class OnnxNLIClassifier(BaseOnnxModel):
         if 'token_type_ids' in expected:
             inputs['token_type_ids'] = np.array([encoding.type_ids], dtype=np.int64)
 
-        outputs = cast(list[np.ndarray], self.session.run(None, inputs))
+        with self._inference_lock:
+            outputs = cast(list[np.ndarray], self.session.run(None, inputs))
         logits = outputs[0].flatten().astype(np.float32)
         if logits.shape[0] != 3:
             raise ValueError(
