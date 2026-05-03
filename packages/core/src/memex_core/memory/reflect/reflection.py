@@ -575,6 +575,21 @@ class ReflectionEngine:
         for unit, eid in results:
             memories_map[eid].append(unit)
 
+        # F22: prioritise high-variance edges within each entity bucket so the
+        # per-tick LLM budget concentrates on uncertain units (highest
+        # information yield). Stable sort preserves the existing
+        # event_date DESC tiebreak from the SQL window function.
+        from memex_core.memory.confidence import mean_and_variance
+
+        def _variance_key(unit: MemoryUnit) -> float:
+            confidence = getattr(unit, 'confidence', 1.0) or 1.0
+            count = getattr(unit, 'confidence_evidence_count', 0) or 0
+            _, variance = mean_and_variance(float(confidence), int(count))
+            return variance
+
+        for eid, units in memories_map.items():
+            units.sort(key=_variance_key, reverse=True)
+
         return memories_map
 
     async def reflect_on_entity(self, request: ReflectionRequest) -> MentalModel:

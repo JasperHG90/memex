@@ -36,6 +36,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory._lint_utils import enum_value as _enum_value
+from memex_core.memory.confidence import mean_and_variance
 from memex_core.memory.sql_models import LintType
 from memex_core.services.base import BaseService
 
@@ -317,6 +318,34 @@ _INSERT_FINDING_SQL = text("""
 """)
 
 
+_LOAD_UNIT_CONFIDENCE_SQL = text("""
+    SELECT confidence, confidence_evidence_count
+    FROM memory_units
+    WHERE id = :unit_id
+""")
+
+
+async def _gate_blocks_finding(
+    session: AsyncSession,
+    unit_id: str,
+    confidence_min: float,
+    variance_max: float,
+) -> bool:
+    """F22: returns True iff (confidence, variance) violates the lint gate.
+
+    Cold-start units (count=0, variance=1/12) are blocked when ``variance_max``
+    is set below 1/12 — so freshly extracted units don't surface as
+    "low-confidence" findings purely because they have no evidence yet.
+    """
+    row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
+    if row is None:
+        return False
+    confidence = float(row[0]) if row[0] is not None else 1.0
+    evidence_count = int(row[1]) if row[1] is not None else 0
+    _, variance = mean_and_variance(confidence, evidence_count)
+    return confidence < confidence_min or variance > variance_max
+
+
 @dataclass
 class RuleRunResult:
     rule_name: str
@@ -432,6 +461,10 @@ class LintService(BaseService):
         }
 
         emitted = 0
+        gate = self.config.server.memory.lint.confidence_gate
+        gate_active = spec.target_type == 'memory_unit' and (
+            gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
+        )
         ctx = (
             _tracer.start_as_current_span('memex.lint.run_rule', attributes=attrs)
             if _tracer
@@ -442,6 +475,10 @@ class LintService(BaseService):
                 ctx.__enter__()
             result = await session.execute(text(spec.select_sql), {'vault_id': str(vault_id)})
             for row in result.mappings().all():
+                if gate_active and await _gate_blocks_finding(
+                    session, row['target_id'], gate.confidence_min, gate.variance_max
+                ):
+                    continue
                 ins = await session.execute(
                     _INSERT_FINDING_SQL,
                     {

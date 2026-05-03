@@ -86,6 +86,7 @@ class MaybeRunOutcome:
 
     skipped_below_threshold: bool = False
     skipped_disabled: bool = False
+    skipped_confidence_gate: bool = False
     deferred: bool = False
     finding_emitted: bool = False
     surprise_score: float | None = None
@@ -104,6 +105,7 @@ class LintLLMTickSummary:
     findings_emitted: int = 0
     deferred: int = 0
     skipped_below_threshold: int = 0
+    skipped_confidence_gate: int = 0
     deferred_processed: int = 0
 
 
@@ -591,6 +593,17 @@ class LintLLMService(BaseService):
             outcome.skipped_disabled = True
             return outcome
 
+        gate = settings.confidence_gate
+        gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
+        if gate_active:
+            from memex_core.services.lint import _gate_blocks_finding
+
+            if await _gate_blocks_finding(
+                session, str(unit_id), gate.confidence_min, gate.variance_max
+            ):
+                outcome.skipped_confidence_gate = True
+                return outcome
+
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
 
@@ -802,6 +815,8 @@ class LintLLMService(BaseService):
             summary.candidates_evaluated += 1
             if outcome.skipped_below_threshold:
                 summary.skipped_below_threshold += 1
+            if outcome.skipped_confidence_gate:
+                summary.skipped_confidence_gate += 1
             if outcome.deferred:
                 summary.deferred += 1
             if outcome.finding_emitted:

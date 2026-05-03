@@ -8,6 +8,15 @@ The injection happens after MMR diversity filtering but before the final
 limit is applied.  Injected units carry ``exploration: True`` in their
 metadata so the caller can distinguish them and route outcome signals
 appropriately.
+
+F22 ``edge_exploration``
+========================
+
+The same epsilon-greedy scaffolding generalises from MW to confidence
+variance: ``inject_edge_exploration`` surfaces high-variance units
+(uncertain edges) for re-validation, mirroring F33's low-MW path. Same
+pattern, different signal — eligibility is variance > threshold rather
+than total outcome count < threshold.
 """
 
 from __future__ import annotations
@@ -16,6 +25,7 @@ import random
 
 import structlog
 
+from memex_core.memory.confidence import MAX_VARIANCE, mean_and_variance
 from memex_core.memory.sql_models import ContentStatus, MemoryUnit
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
@@ -30,6 +40,10 @@ DEFAULT_MAX_INJECTIONS = 2
 # A unit is considered "low-MW" if its total outcome count is below this
 # threshold.  Cold-start units (0/0) always qualify.
 DEFAULT_LOW_MW_THRESHOLD = 5
+
+# F22: a unit is considered "high-variance" if the closed-form Beta(1, 1)
+# posterior variance is at least this fraction of MAX_VARIANCE = 1/12.
+DEFAULT_HIGH_VARIANCE_FRACTION = 0.5
 
 
 def select_exploration_candidates(
@@ -129,3 +143,85 @@ def inject_exploration_units(
     )
 
     return results + exploration_units
+
+
+def _unit_variance(unit: MemoryUnit) -> float:
+    confidence = getattr(unit, 'confidence', 1.0) or 1.0
+    evidence_count = getattr(unit, 'confidence_evidence_count', 0) or 0
+    _, variance = mean_and_variance(float(confidence), int(evidence_count))
+    return variance
+
+
+def select_edge_exploration_candidates(
+    results: list[MemoryUnit],
+    all_candidates: list[MemoryUnit],
+    *,
+    epsilon: float = DEFAULT_EPSILON,
+    max_injections: int = DEFAULT_MAX_INJECTIONS,
+    high_variance_fraction: float = DEFAULT_HIGH_VARIANCE_FRACTION,
+) -> list[MemoryUnit]:
+    """F22: select high-variance candidates for re-validation injection.
+
+    Mirror of :func:`select_exploration_candidates` but eligibility is keyed
+    on variance (not outcome count). Units whose closed-form Beta(1, 1)
+    posterior variance is at least ``high_variance_fraction × MAX_VARIANCE``
+    qualify. With probability ``epsilon``, up to ``max_injections`` of these
+    are randomly selected and returned.
+    """
+    if random.random() > epsilon:
+        return []
+
+    threshold = high_variance_fraction * MAX_VARIANCE
+    result_ids = {u.id for u in results}
+    eligible = [
+        u
+        for u in all_candidates
+        if u.id not in result_ids
+        and not u.is_deprioritized
+        and u.status == ContentStatus.ACTIVE
+        and _unit_variance(u) >= threshold
+    ]
+    if not eligible:
+        return []
+
+    n = min(max_injections, len(eligible))
+    return random.sample(eligible, n)
+
+
+def inject_edge_exploration(
+    results: list[MemoryUnit],
+    all_candidates: list[MemoryUnit],
+    *,
+    epsilon: float = DEFAULT_EPSILON,
+    max_injections: int = DEFAULT_MAX_INJECTIONS,
+    high_variance_fraction: float = DEFAULT_HIGH_VARIANCE_FRACTION,
+) -> list[MemoryUnit]:
+    """F22: epsilon-greedy injection of high-variance edges for re-validation.
+
+    Pairs with :func:`inject_exploration_units` (the F33 low-MW path) — same
+    scaffolding, different signal. Injected units carry
+    ``edge_exploration=True`` in their ``unit_metadata`` so the caller can
+    distinguish them from F33 injections.
+    """
+    edges = select_edge_exploration_candidates(
+        results,
+        all_candidates,
+        epsilon=epsilon,
+        max_injections=max_injections,
+        high_variance_fraction=high_variance_fraction,
+    )
+    if not edges:
+        return results
+
+    for unit in edges:
+        metadata = unit.unit_metadata if isinstance(unit.unit_metadata, dict) else {}
+        metadata = {**metadata, 'edge_exploration': True}
+        unit.unit_metadata = metadata
+
+    logger.debug(
+        'edge_exploration_injection',
+        count=len(edges),
+        unit_ids=[str(u.id) for u in edges],
+    )
+
+    return results + edges
