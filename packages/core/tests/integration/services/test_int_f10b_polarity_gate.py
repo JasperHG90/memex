@@ -280,6 +280,8 @@ async def test_polarity_inversion_clears_gate_and_writes_proposal(
     await session.commit()
 
     assert outcome.polarity_invoked is True
+    assert outcome.polarity_rate_limited is False
+    assert outcome.polarity_model_failed is False
     assert outcome.polarity_contradiction_prob is not None
     assert outcome.polarity_contradiction_prob >= 0.6, (
         f'polarity contradiction prob too low: {outcome.polarity_contradiction_prob}'
@@ -345,6 +347,8 @@ async def test_compatible_fact_does_not_clear_gate(
     await session.commit()
 
     assert outcome.polarity_invoked is True
+    assert outcome.polarity_rate_limited is False
+    assert outcome.polarity_model_failed is False
     assert outcome.polarity_contradiction_prob is not None
     assert outcome.polarity_contradiction_prob < 0.6, (
         f'polarity contradiction prob too high: {outcome.polarity_contradiction_prob}'
@@ -420,5 +424,7 @@ async def test_cosine_already_clears_skips_nli(
 
     assert outcome.surprise_score == 0.95
     assert outcome.polarity_invoked is False
+    assert outcome.polarity_rate_limited is False
+    assert outcome.polarity_model_failed is False
     nli_model.classify.assert_not_awaited()
     assert outcome.finding_emitted is True

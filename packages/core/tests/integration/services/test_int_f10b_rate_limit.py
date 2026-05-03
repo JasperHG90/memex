@@ -82,7 +82,11 @@ async def test_per_vault_rate_limit_caps_nli_invocations(
     monkeypatch,
 ):
     """First ``cap`` units invoke NLI; subsequent units fall back to cosine-only
-    (gate stays closed because cosine surprise is below threshold)."""
+    (gate stays closed because cosine surprise is below threshold).
+
+    Asserts both observability flags explicitly so a future regression that
+    re-conflates rate-limit with model-failure shows up here (Hermes round-7
+    MED 1)."""
     monkeypatch.setattr(
         'memex_core.services.lint_llm.compute_unit_surprise',
         AsyncMock(return_value=0.4),
@@ -114,15 +118,65 @@ async def test_per_vault_rate_limit_caps_nli_invocations(
             session=session,
             polarity_classifier=classifier,
         )
+        assert outcome.polarity_model_failed is False
         if outcome.polarity_invoked:
             invoked_count += 1
+            assert outcome.polarity_rate_limited is False
         if outcome.polarity_rate_limited:
             fallback_count += 1
+            assert outcome.polarity_invoked is False
         await session.commit()
 
     assert nli_model.classify.await_count == cap
     assert invoked_count == cap
     assert fallback_count == len(unit_ids) - cap
+
+
+@pytest.mark.asyncio
+async def test_nli_model_failure_does_not_burn_rate_limit_slot(
+    session: AsyncSession,
+    metastore,
+    filestore,
+    memex_config,
+    monkeypatch,
+):
+    """Hermes round-7 MED 2: a model-side failure (raised exception) must NOT
+    consume a rate-limit slot, and the orchestrator surfaces the failure as
+    ``polarity_model_failed`` (NOT ``polarity_rate_limited``) so observability
+    can disambiguate. The classifier is invoked on every unit (no slot
+    pressure) since slots are refunded on every failure."""
+    monkeypatch.setattr(
+        'memex_core.services.lint_llm.compute_unit_surprise',
+        AsyncMock(return_value=0.4),
+    )
+
+    nli_model = AsyncMock()
+    nli_model.classify = AsyncMock(side_effect=RuntimeError('onnx session crashed'))
+    cap = 2
+    rate_limiter = PolarityRateLimiter(max_per_vault_per_hour=cap)
+    classifier = PolarityClassifier(nli_model, rate_limiter=rate_limiter)
+
+    vault_id = await _make_vault(session)
+    unit_ids = [await _seed_unit(session, vault_id, f'fact {i}') for i in range(5)]
+    for i in range(8):
+        await _seed_unit(session, vault_id, f'peer {i}')
+
+    svc = _service(metastore, memex_config, filestore)
+    for uid in unit_ids:
+        outcome = await svc.maybe_run(
+            uid,
+            vault_id,
+            run_llm_check=AsyncMock(return_value=None),
+            session=session,
+            polarity_classifier=classifier,
+        )
+        assert outcome.polarity_invoked is False
+        assert outcome.polarity_rate_limited is False
+        assert outcome.polarity_model_failed is True
+        await session.commit()
+
+    assert nli_model.classify.await_count == len(unit_ids)
+    assert await rate_limiter.used(vault_id) == 0
 
 
 @pytest.mark.asyncio

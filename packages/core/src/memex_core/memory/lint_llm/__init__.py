@@ -16,6 +16,7 @@ from memex_core.memory.lint_llm.checks import (
 from memex_core.memory.lint_llm.polarity import (
     DEFAULT_POLARITY_THRESHOLD,
     PolarityClassifier,
+    PolarityClassifyOutcome,
     PolarityRateLimiter,
     gate_passes,
 )
@@ -42,6 +43,7 @@ __all__ = [
     'DEFAULT_K',
     'DEFAULT_POLARITY_THRESHOLD',
     'PolarityClassifier',
+    'PolarityClassifyOutcome',
     'PolarityLabel',
     'PolarityLiteral',
     'PolarityRateLimiter',

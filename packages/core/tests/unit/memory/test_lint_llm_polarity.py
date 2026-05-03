@@ -10,6 +10,7 @@ import pytest
 from memex_core.memory.lint_llm.polarity import (
     DEFAULT_POLARITY_THRESHOLD,
     PolarityClassifier,
+    PolarityClassifyOutcome,
     PolarityRateLimiter,
     gate_passes,
 )
@@ -84,12 +85,15 @@ class TestPolarityClassifier:
             return_value={'contradiction': 0.7, 'entailment': 0.2, 'neutral': 0.1}
         )
         clf = PolarityClassifier(model)
-        result = await clf.classify_pair('a', 'b', vault_id=uuid4())
-        assert result is not None
-        assert result.label == PolarityLabel.CONTRADICTION
-        assert result.contradiction_prob == pytest.approx(0.7)
-        assert result.entailment_prob == pytest.approx(0.2)
-        assert result.neutral_prob == pytest.approx(0.1)
+        outcome = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert isinstance(outcome, PolarityClassifyOutcome)
+        assert outcome.rate_limited is False
+        assert outcome.model_failed is False
+        assert outcome.result is not None
+        assert outcome.result.label == PolarityLabel.CONTRADICTION
+        assert outcome.result.contradiction_prob == pytest.approx(0.7)
+        assert outcome.result.entailment_prob == pytest.approx(0.2)
+        assert outcome.result.neutral_prob == pytest.approx(0.1)
 
     @pytest.mark.asyncio
     async def test_classify_pair_argmax_neutral(self):
@@ -98,12 +102,14 @@ class TestPolarityClassifier:
             return_value={'contradiction': 0.1, 'entailment': 0.3, 'neutral': 0.6}
         )
         clf = PolarityClassifier(model)
-        result = await clf.classify_pair('a', 'b', vault_id=uuid4())
-        assert result is not None
-        assert result.label == PolarityLabel.NEUTRAL
+        outcome = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert outcome.result is not None
+        assert outcome.result.label == PolarityLabel.NEUTRAL
+        assert outcome.rate_limited is False
+        assert outcome.model_failed is False
 
     @pytest.mark.asyncio
-    async def test_rate_limit_returns_none_over_cap(self):
+    async def test_rate_limit_signals_rate_limited_over_cap(self):
         model = AsyncMock()
         model.classify = AsyncMock(
             return_value={'contradiction': 0.9, 'entailment': 0.05, 'neutral': 0.05}
@@ -115,8 +121,12 @@ class TestPolarityClassifier:
         vault = uuid4()
         first = await clf.classify_pair('a', 'b', vault_id=vault)
         second = await clf.classify_pair('a', 'b', vault_id=vault)
-        assert first is not None
-        assert second is None
+        assert first.result is not None
+        assert first.rate_limited is False
+        assert first.model_failed is False
+        assert second.result is None
+        assert second.rate_limited is True
+        assert second.model_failed is False
         assert model.classify.await_count == 1
 
     @pytest.mark.asyncio
@@ -125,33 +135,68 @@ class TestPolarityClassifier:
             PolarityClassifier(AsyncMock(), polarity_threshold=1.1)
 
     @pytest.mark.asyncio
-    async def test_classify_pair_returns_none_on_empty_probs(self, caplog):
+    async def test_classify_pair_signals_model_failed_on_empty_probs(self, caplog):
         """An empty probability dict from the NLI model is logged and surfaces
-        as ``None`` so the orchestrator falls back to cosine-only without
-        burning the per-vault rate-limit slot on a malformed result.
-        ``_argmax_label`` still raises (preserving the explicit-failure
-        contract for direct callers); ``classify_pair`` translates that to
-        the rate-limit-style ``None`` contract its caller already handles."""
+        with ``model_failed=True`` so the orchestrator can disambiguate this
+        from a rate-limit fallback. ``_argmax_label`` still raises (preserving
+        the explicit-failure contract for direct callers); ``classify_pair``
+        catches it and emits the discriminated outcome."""
         model = AsyncMock()
         model.classify = AsyncMock(return_value={})
         clf = PolarityClassifier(model)
         with caplog.at_level('ERROR'):
-            result = await clf.classify_pair('a', 'b', vault_id=uuid4())
-        assert result is None
+            outcome = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert outcome.result is None
+        assert outcome.model_failed is True
+        assert outcome.rate_limited is False
         assert any('NLI classify failed' in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_classify_pair_returns_none_on_model_exception(self, caplog):
-        """A model error (e.g. ONNX session crash) is logged and translated to
-        ``None`` rather than propagated — same contract as the rate-limit
-        path, so callers don't need a separate failure branch."""
+    async def test_classify_pair_signals_model_failed_on_exception(self, caplog):
+        """A model error (e.g. ONNX session crash) is logged and surfaces with
+        ``model_failed=True`` rather than propagated — separate from the
+        rate-limit branch so observability can distinguish them."""
         model = AsyncMock()
         model.classify = AsyncMock(side_effect=RuntimeError('onnx session died'))
         clf = PolarityClassifier(model)
         with caplog.at_level('ERROR'):
-            result = await clf.classify_pair('a', 'b', vault_id=uuid4())
-        assert result is None
+            outcome = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert outcome.result is None
+        assert outcome.model_failed is True
+        assert outcome.rate_limited is False
         assert any('NLI classify failed' in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_model_failure_does_not_burn_rate_limit_slot(self):
+        """Hermes round-7 MED 2: when the model raises mid-call the reserved
+        slot must be refunded so a hot-failing model cannot silently exhaust
+        the per-vault reliability budget."""
+        model = AsyncMock()
+        model.classify = AsyncMock(side_effect=RuntimeError('onnx died'))
+        rl = PolarityRateLimiter(max_per_vault_per_hour=2)
+        clf = PolarityClassifier(model, rate_limiter=rl)
+        vault = uuid4()
+        for _ in range(5):
+            outcome = await clf.classify_pair('a', 'b', vault_id=vault)
+            assert outcome.model_failed is True
+        assert await rl.used(vault) == 0
+        assert model.classify.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_successful_call_consumes_rate_limit_slot(self):
+        """Counterpart to the model-failure refund test: a well-formed model
+        result (any label, including ``neutral``) keeps the slot consumed."""
+        model = AsyncMock()
+        model.classify = AsyncMock(
+            return_value={'contradiction': 0.05, 'entailment': 0.05, 'neutral': 0.9}
+        )
+        rl = PolarityRateLimiter(max_per_vault_per_hour=3)
+        clf = PolarityClassifier(model, rate_limiter=rl)
+        vault = uuid4()
+        for _ in range(2):
+            outcome = await clf.classify_pair('a', 'b', vault_id=vault)
+            assert outcome.result is not None
+        assert await rl.used(vault) == 2
 
     def test_polarity_result_label_coerces_string(self):
         result = PolarityResult(

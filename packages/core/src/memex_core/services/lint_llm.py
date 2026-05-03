@@ -91,6 +91,7 @@ class MaybeRunOutcome:
     surprise_score: float | None = None
     polarity_invoked: bool = False
     polarity_rate_limited: bool = False
+    polarity_model_failed: bool = False
     polarity_contradiction_prob: float | None = None
 
 
@@ -603,17 +604,20 @@ class LintLLMService(BaseService):
                 )
             ).first()
             if row is not None and row.unit_text and row.peer_text:
-                polarity_result = await polarity_classifier.classify_pair(
+                classify_outcome = await polarity_classifier.classify_pair(
                     premise=str(row.unit_text),
                     hypothesis=str(row.peer_text),
                     vault_id=vault_id,
                 )
-                if polarity_result is not None:
+                if classify_outcome.result is not None:
+                    polarity_result = classify_outcome.result
                     outcome.polarity_invoked = True
                     polarity_contra_prob = polarity_result.contradiction_prob
                     outcome.polarity_contradiction_prob = polarity_contra_prob
-                else:
+                elif classify_outcome.rate_limited:
                     outcome.polarity_rate_limited = True
+                elif classify_outcome.model_failed:
+                    outcome.polarity_model_failed = True
 
         cleared = gate_passes(
             score,
