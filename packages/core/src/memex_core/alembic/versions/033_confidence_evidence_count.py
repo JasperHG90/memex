@@ -63,10 +63,13 @@ Revises: 032_fsfm_decay_columns
 Create Date: 2026-05-03
 """
 
+import logging
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+
+logger = logging.getLogger('alembic.runtime.migration')
 
 revision: str = '033_confidence_evidence_count'
 down_revision: str | None = '032_fsfm_decay_columns'
@@ -208,10 +211,30 @@ def upgrade() -> None:
         'WHERE mu.id = sub.unit_id '
         '  AND mu.confidence_evidence_count = 0'
     )
+    # Hermes round-16 LOW: per-batch progress logging so operators
+    # running the migration on a vault with millions of qualifying
+    # units can see forward progress instead of staring at a hung
+    # process. The cumulative total is also logged on the terminal
+    # (zero-rowcount) iteration so the final tally is unambiguous.
+    backfilled_total = 0
+    batch_index = 0
     while True:
         result = conn.execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
         if not result.rowcount:
+            logger.info(
+                'F22 backfill complete: %d batches, %d units backfilled total.',
+                batch_index,
+                backfilled_total,
+            )
             break
+        batch_index += 1
+        backfilled_total += result.rowcount
+        logger.info(
+            'F22 backfill batch %d: updated %d units (%d total).',
+            batch_index,
+            result.rowcount,
+            backfilled_total,
+        )
 
     # Hermes round-6 MED: production runs migrations only (not
     # ``Base.metadata.create_all``), so the SQLModel-level
