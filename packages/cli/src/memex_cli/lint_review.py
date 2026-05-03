@@ -13,7 +13,7 @@ Defaults to dry-run preview. ``--apply`` is required to write.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import typer
 from rich.console import Console
@@ -23,6 +23,20 @@ from rich.table import Table
 
 _VALID_KEYS = {'a', 'd', 's', 'q'}
 _DEFAULT_KEY = 's'
+
+
+class LintApplyProto(Protocol):
+    """Minimal API surface ``run_review_loop`` writes through.
+
+    Narrower than the full ``RemoteMemexAPI`` so type-checkers catch
+    signature drift between this CLI and the API client. Both methods
+    return a dict from the resolve/dismiss endpoint; ``run_review_loop``
+    ignores the payload and only cares about success vs raised exception.
+    """
+
+    async def lint_resolve(self, finding_id: str) -> dict[str, Any]: ...
+
+    async def lint_dismiss(self, finding_id: str) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -103,7 +117,7 @@ async def run_review_loop(
     findings: list[dict[str, Any]],
     *,
     apply: bool,
-    api: Any,
+    api: LintApplyProto,
     console: Console,
 ) -> ReviewSummary:
     """Walk the user through ``findings``; collect verdicts; optionally apply.
