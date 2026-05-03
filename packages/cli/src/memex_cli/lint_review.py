@@ -174,8 +174,10 @@ def render_summary(console: Console, summary: ReviewSummary, *, apply: bool) -> 
     table = Table(title='lint review summary')
     table.add_column('verdict')
     table.add_column('count', justify='right')
-    table.add_row('accepted (would resolve)', str(len(summary.accepted)))
-    table.add_row('dismissed (would dismiss)', str(len(summary.dismissed)))
+    accept_label = 'accepted' if apply else 'accepted (would resolve)'
+    dismiss_label = 'dismissed' if apply else 'dismissed (would dismiss)'
+    table.add_row(accept_label, str(len(summary.accepted)))
+    table.add_row(dismiss_label, str(len(summary.dismissed)))
     table.add_row('skipped', str(len(summary.skipped)))
     if apply:
         table.add_row('applied (resolved)', str(len(summary.applied_resolved)))

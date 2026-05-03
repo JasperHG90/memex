@@ -177,6 +177,24 @@ def test_apply_with_dismiss_calls_dismiss_path(runner, mock_config, mock_api, st
     assert mock_api.lint_resolve.await_count == 0
 
 
+def test_empty_findings_short_circuits(runner, mock_config, mock_api, strip_ansi):
+    """Empty findings list → loop exits immediately, no API mutations, summary still prints."""
+    mock_api.lint_findings = AsyncMock(return_value={'count': 0, 'findings': []})
+    mock_api.lint_resolve = AsyncMock()
+    mock_api.lint_dismiss = AsyncMock()
+
+    with patch('memex_cli.lint.get_api_context') as gac:
+        gac.return_value.__aenter__.return_value = mock_api
+        gac.return_value.__aexit__.return_value = None
+        result = runner.invoke(app, ['review', '--all'], obj=mock_config, input='')
+
+    assert result.exit_code == 0, strip_ansi(result.stdout)
+    text = strip_ansi(result.stdout).lower()
+    assert 'no pending findings' in text
+    assert mock_api.lint_resolve.await_count == 0
+    assert mock_api.lint_dismiss.await_count == 0
+
+
 def test_apply_error_isolated_per_finding(runner, mock_config, mock_api, strip_ansi):
     """One ``lint_resolve`` raising must NOT abort the loop.
 
