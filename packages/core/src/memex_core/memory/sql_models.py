@@ -635,6 +635,38 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         ),
     )
 
+    importance: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description=(
+            'F11: importance signal derived from F25 intent_class at write time '
+            '(permanent=1.0, durable=0.7, ephemeral=0.3). NULL for pre-F25 '
+            'unclassified units; the F11 decay boost treats NULL as no signal '
+            '-> neutral 1.0.'
+        ),
+    )
+
+    stability: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description=(
+            'F11: per-intent-class stability in days (durable=180, ephemeral=14, '
+            'permanent=NULL meaning infinity). The F11 decay boost treats '
+            'NULL as the stability -> infinity limit (decay term = 1.0).'
+        ),
+    )
+
+    last_outcome_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'F11: wall-clock timestamp of the most recent record_outcome call. '
+            'NULL on units that have never had an outcome recorded; the F11 '
+            'decay boost treats NULL as no temporal anchor -> neutral 1.0. '
+            'Distinct from procedure_outcomes.last_outcome_at (separate table).'
+        ),
+    )
+
     unit_metadata: dict[str, Any] = Field(
         default={},
         sa_column=Column('metadata', JSONB, server_default=sql_text("'{}'::jsonb")),
