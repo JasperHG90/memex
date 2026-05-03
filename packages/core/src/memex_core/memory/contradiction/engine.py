@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy import update
+from sqlalchemy import func as sa_func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -87,27 +87,19 @@ class ContradictionEngine:
             )
 
             all_links: list[MemoryLink] = []
-            # Hermes round-4 HIGH: accumulate signed alpha-step deltas per
-            # target instead of overwriting with absolute new-confidence
-            # values. ``evidence_bumps`` was already summed; mirroring the
-            # accumulation here keeps ``confidence`` and
-            # ``confidence_evidence_count`` consistent when the same target
-            # is touched by multiple flagged units in one batch.
+            # Hermes round-4 HIGH (intra-batch) + round-5 HIGH (cross-batch):
+            # accumulate signed alpha-step deltas per target so multiple
+            # weakens against the same unit in one batch all land, AND apply
+            # them via SQL-level arithmetic (``confidence = clamp(confidence +
+            # :delta, 0, 1)``) so concurrent batches that touch overlapping
+            # units cannot drift the column out of sync with the SQL-atomic
+            # ``confidence_evidence_count`` increment.
             confidence_deltas: dict[UUID, float] = {}
             evidence_bumps: dict[UUID, int] = {}
-            # Snapshot pre-batch confidence per affected unit so we can
-            # apply ``unit.confidence + sum(deltas)`` deterministically
-            # without re-reading the row mid-loop.
-            pre_batch_confidence: dict[UUID, float] = {}
-            for u in flagged_units:
-                pre_batch_confidence[u.id] = float(u.confidence)
 
             tasks = [self._process_flagged_unit(session, unit, vault_id) for unit in flagged_units]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Capture pre-batch confidence for any candidate units surfaced
-            # by classification (these are loaded inside _process_flagged_unit
-            # via get_candidates). We extract them from the link rows.
             for result in results:
                 if isinstance(result, BaseException):
                     logger.error('Error processing flagged unit: %s', result)
@@ -118,16 +110,6 @@ class ContradictionEngine:
                     confidence_deltas[unit_id] = confidence_deltas.get(unit_id, 0.0) + delta
                 for unit_id, bump in bumps.items():
                     evidence_bumps[unit_id] = evidence_bumps.get(unit_id, 0) + bump
-
-            # Resolve pre-batch confidence for any units not in flagged_units
-            # (i.e., existing candidate units that received deltas). Load
-            # them once in a single SELECT to keep this a constant-cost step.
-            unknown_ids = [uid for uid in confidence_deltas if uid not in pre_batch_confidence]
-            if unknown_ids:
-                stmt_load = select(MemoryUnit).where(col(MemoryUnit.id).in_(unknown_ids))
-                result_load = await session.exec(stmt_load)
-                for u in result_load.all():
-                    pre_batch_confidence[u.id] = float(u.confidence)
 
             if all_links:
                 deduped: dict[tuple[UUID, UUID, str], MemoryLink] = {}
@@ -156,20 +138,18 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
+            # Apply confidence deltas via SQL-level arithmetic so concurrent
+            # _detect calls on overlapping units cannot drift confidence
+            # against the atomic confidence_evidence_count increment
+            # (Hermes round-5 HIGH). ``LEAST/GREATEST`` clamp matches the
+            # prior application-level ``max(0.0, min(1.0, ...))``.
             for unit_id, delta in confidence_deltas.items():
-                base = pre_batch_confidence.get(unit_id)
-                if base is None:
-                    # Defensive: if the unit was deleted between
-                    # _process_flagged_unit's read and now, skip rather
-                    # than silently writing a corrupted confidence.
-                    logger.warning(
-                        'Skipping confidence update for unit %s: pre-batch '
-                        'confidence unavailable (unit may have been removed).',
-                        unit_id,
-                    )
-                    continue
-                new_confidence = max(0.0, min(1.0, base + delta))
-                values: dict[str, Any] = {'confidence': new_confidence}
+                values: dict[str, Any] = {
+                    'confidence': sa_func.greatest(
+                        0.0,
+                        sa_func.least(1.0, MemoryUnit.confidence + delta),
+                    ),
+                }
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
                     values['confidence_evidence_count'] = (

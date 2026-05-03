@@ -493,16 +493,30 @@ class TestConfidenceDeltaAccumulation:
             u for u in captured_updates if any(target.id == v for v in u['params'].values())
         ]
         assert updates_for_target, 'no UPDATE issued for the target unit'
-        # The new confidence parameter — find the float in the params dict.
-        update_params = updates_for_target[0]['params']
-        confidence_params = [v for k, v in update_params.items() if isinstance(v, float)]
-        assert confidence_params, 'no confidence value found in UPDATE params'
-        new_confidence = confidence_params[0]
-        # Pre-fix: 0.7 (only one alpha-step lands due to dict overwrite).
-        # Post-fix: 0.6 (both alpha-steps accumulate).
-        assert new_confidence == pytest.approx(0.6, abs=1e-9), (
-            f'expected 0.6 (two -alpha steps applied) got {new_confidence}; '
-            'this is the Hermes round-4 HIGH accumulation invariant'
+
+        # Round-5 HIGH: confidence is now updated via SQL-level arithmetic
+        # ``GREATEST(0.0, LEAST(1.0, memory_units.confidence + :delta))``
+        # so concurrent batches cannot drift the column. Inspect both the
+        # compiled SQL (clamp shape) and the bound delta (accumulated to
+        # ``2 * -alpha = -0.2``, NOT a single ``-0.1`` from the prior
+        # last-writer-wins bug).
+        compiled_sql = str(updates_for_target[0]['stmt']).lower()
+        assert 'greatest' in compiled_sql, 'expected SQL-level GREATEST clamp on confidence update'
+        assert 'least' in compiled_sql, 'expected SQL-level LEAST clamp on confidence update'
+        assert 'memory_units.confidence +' in compiled_sql or ('confidence + ' in compiled_sql), (
+            'expected confidence update to read from MemoryUnit.confidence '
+            'via SQL arithmetic, not application-level absolute write'
+        )
+
+        # Bound delta should be the SUMMED value (accumulation invariant
+        # from round-4 HIGH still holds).
+        delta_params = [
+            v for k, v in updates_for_target[0]['params'].items() if isinstance(v, float)
+        ]
+        assert delta_params, 'no float delta found in UPDATE params'
+        # Two -alpha (=-0.1) steps → -0.2 accumulated delta.
+        assert any(v == pytest.approx(-0.2, abs=1e-9) for v in delta_params), (
+            f'expected -0.2 accumulated delta, got float params: {delta_params}'
         )
 
 
