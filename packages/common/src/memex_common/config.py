@@ -619,14 +619,17 @@ class ExtractionConfig(BaseModel):
 
     intent_risk_classifier_enabled: bool = Field(
         default=True,
-        description='F25 / F25b: enable the write-time intent + risk classification. '
-        'F25b folded the classifier into the fact-extraction signature, so this flag '
-        'no longer gates a separate LLM call — it gates whether the LLM-produced '
-        'intent / risk are *honored*. When True, each extracted fact carries the '
-        'classification produced by the extraction model (intent ∈ {permanent, durable, '
-        'ephemeral}; risk ∈ {none, sensitive, private, safety}); safety-class facts '
-        'are dropped at write time. When False, every fact is forced to the schema '
-        'defaults (durable / none) regardless of LLM output.',
+        description='Kill switch for write-time intent + risk handling. '
+        'When True, the LLM-produced intent / risk on each extracted fact are honored '
+        '(intent ∈ {permanent, durable, ephemeral}; risk ∈ {none, sensitive, private, '
+        'safety}) and safety-class facts are dropped at write time. When False, every '
+        'fact is forced to the schema defaults (durable / none) regardless of what the '
+        'LLM emitted, and the per-fact classification distribution metrics are '
+        'suppressed (since they would all read durable / none and pollute dashboards). '
+        'Note: F25 originally implemented intent + risk as a separate ``ClassifyMemoryUnit`` '
+        'LLM call; F25b folded those output fields into the extraction signature itself, '
+        'so this flag no longer gates a separate LLM call — it gates whether the '
+        'inline-emitted classification is honored.',
     )
 
     @property

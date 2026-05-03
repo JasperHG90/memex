@@ -286,12 +286,14 @@ class ExtractionEngine:
                 f.risk_class = risk_value
 
         for f in processed_facts:
-            intent_label = (
-                f.intent_class.value if hasattr(f.intent_class, 'value') else f.intent_class
-            )
-            risk_label = f.risk_class.value if hasattr(f.risk_class, 'value') else f.risk_class
-            CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=intent_label).inc()
-            CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=risk_label).inc()
+            # ``ProcessedFact.intent_class`` / ``risk_class`` are typed as
+            # ``IntentClass`` / ``RiskClass`` enums and every construction
+            # path assigns the enum value (kill-switch, override, and
+            # ``from_extracted_fact``). The previous ``hasattr`` defensive
+            # else-branch was dead code; if a non-enum ever lands here it's
+            # a type-safety bug worth surfacing, not silently masking.
+            CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=f.intent_class.value).inc()
+            CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=f.risk_class.value).inc()
 
         return filter_safety_blocked(processed_facts)
 

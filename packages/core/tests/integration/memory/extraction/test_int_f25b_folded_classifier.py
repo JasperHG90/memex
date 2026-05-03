@@ -57,6 +57,13 @@ from memex_core.metrics import CLASSIFIER_BLOCKED_TOTAL
 
 
 async def _build_engine() -> ExtractionEngine:
+    # Note: this builds a real ``dspy.LM`` without an api_key kwarg. The
+    # mocked-LLM tests below patch ``run_dspy_operation`` at the call site,
+    # so the LM is never actually invoked — but if a future test forgets the
+    # patch and the real predictor runs, the resulting auth error will be
+    # confusing rather than a clear pytest skip. The ``@pytest.mark.llm``
+    # test path constructs its own ``dspy.LM`` with an explicit api_key so
+    # it never reaches this helper.
     config = ExtractionConfig(
         model=ModelConfig(model='gemini/gemini-3-flash-preview'),
         text_splitting=SimpleTextSplitting(chunk_size_tokens=2000, chunk_overlap_tokens=200),
