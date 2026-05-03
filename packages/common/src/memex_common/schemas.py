@@ -560,7 +560,14 @@ class MemoryUnitDTO(MemoryUnitBase):
 
     confidence: float = Field(
         default=1.0,
-        description='Confidence score (0.0-1.0).',
+        description='Confidence score (0.0-1.0). VALIDATOR ORDERING (Hermes '
+        'round-21 MED): the ``_compute_confidence_variance`` after-validator '
+        'clamps out-of-range values via ``object.__setattr__``. Adding a '
+        '``ge=0.0, le=1.0`` field constraint here would cause Pydantic to '
+        'REJECT ``1.0001`` at field-validation time (before the after-validator '
+        'runs), turning the current defence-in-depth clamp into a hard '
+        'failure. If a field-level constraint is required, the after-validator '
+        'must be promoted to a ``mode="before"`` validator first.',
     )
 
     confidence_evidence_count: int = Field(
