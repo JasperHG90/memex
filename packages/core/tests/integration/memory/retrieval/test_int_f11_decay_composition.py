@@ -92,6 +92,19 @@ class TestF11ReWritingComposition:
             'no-op until the before/after benchmark validates the lift.'
         )
 
+    @staticmethod
+    def _histogram_count(hist) -> int:
+        """Read an unlabeled prometheus_client Histogram's _count via samples.
+
+        Unlabeled histograms (no labelnames) do not expose ``_count`` as a
+        direct attribute — only labeled child histograms do. Walk the
+        ``collect()`` samples for the ``*_count`` row instead.
+        """
+        for sample in hist.collect()[0].samples:
+            if sample.name.endswith('_count') and not sample.labels:
+                return int(sample.value)
+        return 0
+
     async def test_decay_boost_observed_emits_during_rerank(self, session: AsyncSession, embedder):
         """Composition pinning: with decay_alpha=0.3, a fresh durable unit's
         boost is recorded in DECAY_BOOST_OBSERVED — proves the sixth factor
@@ -134,7 +147,8 @@ class TestF11ReWritingComposition:
             ),
         )
 
-        count_before = DECAY_BOOST_OBSERVED._sum.get()
+        sum_before = DECAY_BOOST_OBSERVED._sum.get()
+        count_before = self._histogram_count(DECAY_BOOST_OBSERVED)
         results, _ = await engine.retrieve(
             session,
             RetrievalRequest(
@@ -143,21 +157,45 @@ class TestF11ReWritingComposition:
                 vault_ids=[GLOBAL_VAULT_ID],
             ),
         )
-        count_after = DECAY_BOOST_OBSERVED._sum.get()
+        sum_after = DECAY_BOOST_OBSERVED._sum.get()
+        count_after = self._histogram_count(DECAY_BOOST_OBSERVED)
 
         assert any(r.id == unit_id for r in results), 'Seeded unit must be retrievable.'
-        delta = count_after - count_before
-        assert delta > 0, (
+        count_delta = count_after - count_before
+        sum_delta = sum_after - sum_before
+        # Cardinality check first — without it, the assertion conflates
+        # "the seeded unit's boost" with "cumulative sum across N units"
+        # if other rows interleave through the reranker (possible in a
+        # live integration DB).
+        assert count_delta > 0, (
             'F11 regression: DECAY_BOOST_OBSERVED histogram saw no observations '
             'during rerank — the sixth factor is not wired into the chain.'
         )
 
         decay_term = math.exp(-7.0 / 180.0)
         expected_boost = 1.0 + 0.3 * (0.7 * decay_term - 0.5)
-        assert math.isclose(delta, expected_boost, abs_tol=1e-6), (
-            f'F11 regression: observed decay boost ({delta}) does not match '
-            f'expected closed form ({expected_boost}).'
-        )
+        # Validate via mean (sum_delta / count_delta) rather than raw sum so
+        # the assertion remains correct if multiple units pass through the
+        # reranker. When count_delta == 1 the mean equals the seeded unit's
+        # exact boost — pin strictly. Otherwise assert the mean is bounded
+        # by the 1.0 neutral floor and the histogram's 1.30 upper bucket
+        # so a silent regression to all-1.0 or to inflated boosts still
+        # trips the test without false-positives from interleaved rows.
+        observed_mean = sum_delta / count_delta
+        if count_delta == 1:
+            assert math.isclose(sum_delta, expected_boost, abs_tol=1e-6), (
+                f'F11 regression: observed decay boost ({sum_delta}) does not match '
+                f'expected closed form ({expected_boost}).'
+            )
+        else:
+            assert 1.0 - 1e-6 <= observed_mean, (
+                f'F11 regression: observed mean boost ({observed_mean}) is below '
+                f'the 1.0 neutral floor — composition emitted negative boosts.'
+            )
+            assert observed_mean <= max(expected_boost, 1.30) + 1e-6, (
+                f'F11 regression: observed mean boost ({observed_mean}) exceeds '
+                f'the {max(expected_boost, 1.30)} histogram upper bucket.'
+            )
 
 
 @pytest.mark.integration
