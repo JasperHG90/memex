@@ -154,6 +154,11 @@ def upgrade() -> None:
         "    WHERE ml.link_type IN ('contradicts', 'weakens') "
         '      AND mu_inner.confidence_evidence_count = 0 '
         '    GROUP BY ml.to_unit_id '
+        # ORDER BY (Hermes round-12 MED) makes batch selection deterministic
+        # so partial-progress logging is reproducible. The composite index
+        # added above already orders on ``(link_type, to_unit_id)`` so the
+        # ORDER BY is index-served — no extra sort cost.
+        '    ORDER BY ml.to_unit_id '
         '    LIMIT :batch_size '
         ') sub '
         'WHERE mu.id = sub.unit_id '
