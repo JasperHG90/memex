@@ -57,6 +57,7 @@ from memex_core.metrics import (
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
     CROSS_ENCODER_INPUT_COUNT_HISTOGRAM,
+    DECAY_BOOST_OBSERVED,
     MW_BOOST_OBSERVED,
 )
 
@@ -75,11 +76,15 @@ def _get_confidence(unit: Any) -> float:
 
 
 # F40 — pre-reranker filter at hydration.
-# Magic-number documentation: STABILITY_SECONDS_PER_DAY converts the
-# Postgres `EXTRACT(EPOCH ...)` output (seconds) to days for the FSFM
-# decay term. If F11 ever changes `stability`'s unit convention, this
-# divisor must change in lockstep.
-STABILITY_SECONDS_PER_DAY: float = 86400.0
+# STABILITY_SECONDS_PER_DAY is re-exported from
+# memex_core.memory.retrieval.constants so F40's SQL builder and F11's
+# Python boost share one source of truth. Numeric values flow into SQL via
+# parameter binding (asyncpg ``$N`` placeholder), never f-string
+# interpolation — see _build_pre_filter_clause's SECURITY INVARIANT.
+from memex_core.memory.retrieval.constants import (  # noqa: E402
+    STABILITY_SECONDS_PER_DAY,
+    STABILITY_THRESHOLD,
+)
 
 
 def _build_pre_filter_clause(
@@ -94,14 +99,17 @@ def _build_pre_filter_clause(
     entire pre-filter must drop out (``apply_pre_filter=False`` or no
     branches active).
 
-    SECURITY INVARIANT: this function MUST NEVER interpolate values
-    derived from user input or runtime data. Every interpolated value is
-    a module-level constant (currently only ``STABILITY_SECONDS_PER_DAY``
-    in the FSFM branch). If you add a new branch, the values you
-    interpolate MUST come from constants. The pinning tests in
-    ``tests/unit/retrieval/test_f40_sql_builder.py`` assert this at the
-    SQL-string level — touching that suite when adding a branch is
-    deliberate.
+    SECURITY / parameter-binding INVARIANT: every numeric this builder
+    substitutes flows through ``bindparams(...)`` (asyncpg ``$N``
+    placeholder), NOT f-string interpolation — regardless of provenance.
+    The current FSFM branch reads ``STABILITY_SECONDS_PER_DAY`` and
+    ``STABILITY_THRESHOLD`` from
+    ``memex_core.memory.retrieval.constants``, but the convention applies
+    uniformly: the next iteration of this builder may take per-vault or
+    per-class overrides that ARE user-controlled, and routing some values
+    through interpolation while others use binding creates an inconsistent
+    surface where the wrong code path can leak. Pinning test asserts the
+    rendered SQL string is independent of the constants' values.
 
     Implementation pitfall (round-3 review): the FSFM branch is included
     via a **Python-level conditional**, NOT a SQL-side runtime flag like
@@ -119,6 +127,7 @@ def _build_pre_filter_clause(
         return None
 
     branches: list[str] = []
+    binds: dict[str, float] = {}
 
     # MW branch (always on — columns exist since F1a).
     # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
@@ -133,15 +142,19 @@ def _build_pre_filter_clause(
     # so SQL three-valued logic ``FALSE OR NULL OR FALSE -> NULL`` doesn't
     # poison the surrounding ``NOT`` and exclude cold-start rows. NULLIF on
     # ``stability`` keeps zero-stability rows from filtering (degenerate
-    # state — observability surfaces it).
+    # state — observability surfaces it). STABILITY_SECONDS_PER_DAY and
+    # STABILITY_THRESHOLD are bound parameters (see invariant above).
     if fsfm_branch_enabled:
         branches.append(
             'COALESCE('
             'memory_units.importance * '
             'exp(-EXTRACT(EPOCH FROM (now() - memory_units.last_outcome_at)) / '
-            f'{STABILITY_SECONDS_PER_DAY} / NULLIF(memory_units.stability, 0)) < 0.10, '
+            ':stability_seconds_per_day / NULLIF(memory_units.stability, 0)) '
+            '< :stability_threshold, '
             'FALSE)'
         )
+        binds['stability_seconds_per_day'] = STABILITY_SECONDS_PER_DAY
+        binds['stability_threshold'] = STABILITY_THRESHOLD
 
     # F48 — confidence branch (always on; column is NOT NULL DEFAULT 1.0,
     # so cold-start units never match). Strict ``<`` keeps the 0.2 boundary
@@ -158,7 +171,10 @@ def _build_pre_filter_clause(
     # cross-encoder. Cold-start safeguards (MW >= 5 outcomes, FSFM exp(elapsed))
     # are inside the individual branches.
     pre_filter_clause = ' OR '.join(branches)
-    return text(f'NOT ({pre_filter_clause})')
+    clause = text(f'NOT ({pre_filter_clause})')
+    if binds:
+        clause = clause.bindparams(**binds)
+    return clause
 
 
 def derive_note_status(units: list[MemoryUnit], superseded_threshold: float = 0.3) -> str:
@@ -1430,7 +1446,9 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, MW, and F47 confidence boosts
+            # Apply multiplicative recency, temporal proximity, MW, F47 confidence,
+            # and F11 decay boosts.
+            from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost
 
             now = datetime.now(timezone.utc)
@@ -1438,6 +1456,7 @@ class RetrievalEngine:
             temporal_alpha = self.retrieval_config.reranking_temporal_alpha
             mw_alpha = self.retrieval_config.reranking_mw_alpha
             confidence_alpha = self.retrieval_config.confidence_alpha
+            decay_alpha = self.retrieval_config.decay_alpha
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1473,8 +1492,16 @@ class RetrievalEngine:
                 confidence_boost = max(1.0 + confidence_alpha * (confidence - 0.5), 0.0)
                 CONFIDENCE_BOOST_OBSERVED.observe(confidence_boost)
 
+                decay_boost = compute_decay_boost(unit, decay_alpha=decay_alpha, now=now)
+                DECAY_BOOST_OBSERVED.observe(decay_boost)
+
                 boosted_scores.append(
-                    ce_score * recency_boost * temporal_boost * mw_boost * confidence_boost
+                    ce_score
+                    * recency_boost
+                    * temporal_boost
+                    * mw_boost
+                    * confidence_boost
+                    * decay_boost
                 )
 
             scored_results = []

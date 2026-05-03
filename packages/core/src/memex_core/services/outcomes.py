@@ -15,6 +15,7 @@ Cold-start units (0/0) get mw_score = 0.5 → mw_boost = 1.0 (neutral).
 from __future__ import annotations
 
 import warnings
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -183,11 +184,23 @@ class OutcomeService:
             log.warning('outcome.no_valid_ids')
             return {'units_updated': 0, 'entities_updated': 0, 'models_updated': 0}
 
-        # Atomic increment on MemoryUnit rows (SQL-level, no race condition)
+        # F11 — single ``now`` snapshot per record_outcome call so every
+        # decay-clock bump shares one reference time with the audit log
+        # event. Same convention as the reranker's per-query snapshot.
+        now = datetime.now(timezone.utc)
+
+        # Atomic increment on MemoryUnit rows (SQL-level, no race condition).
+        # F11: bump last_outcome_at on every counter update — recent
+        # behavioural signal resets the decay clock.
         stmt = (
             update(MU)
             .where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
-            .values({counter_field: MU.__table__.c[counter_field] + 1})
+            .values(
+                {
+                    counter_field: MU.__table__.c[counter_field] + 1,
+                    'last_outcome_at': now,
+                }
+            )
         )
         result = await session.exec(stmt)
         units_updated = result.rowcount  # type: ignore[union-attr]

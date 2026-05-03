@@ -795,6 +795,17 @@ class RetrievalConfig(BaseModel):
         'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
         'low-confidence units.',
     )
+    decay_alpha: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description='F11: Multiplicative FSFM-lite decay boost strength for cross-encoder '
+        'reranking. Default 0.0 (off) at ship time — composition is a no-op until the '
+        'before/after benchmark validates the lift; flip to non-zero (target 0.3 to match '
+        'recency/temporal/mw magnitude) in a follow-on config commit. '
+        'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
+        'the boost can go negative for stale low-importance units.',
+    )
     reranker: RerankerBackend = Field(
         default_factory=OnnxBackend,
         description='Reranker model backend. Default: built-in ONNX cross-encoder.',
@@ -881,13 +892,13 @@ class RetrievalConfig(BaseModel):
         description='Settings for note/unit relationship enrichment in search results.',
     )
     fsfm_branch_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             'F40 pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
-            'OFF by default because the columns it references (importance, stability, '
-            'last_outcome_at on memory_units) ship with F11. F11 flips this to True in the '
-            'same PR that lands the migration. The MW branch (success_co_count / '
-            'failure_co_count) ships ON unconditionally — those columns already exist.'
+            'Default flipped to True by F11 (Wave 16) once the importance / stability / '
+            'last_outcome_at columns shipped on memory_units. Set to False to keep the '
+            'pre-filter on MW + Confidence branches only — the column migration stays '
+            'independently revertible from this flag flip.'
         ),
     )
 

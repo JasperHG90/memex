@@ -99,8 +99,16 @@ class TestF40PreFilterBuilder:
         assert ', 1.0)' not in sql
         assert ', 0.5)' not in sql
 
-        # The unit-conversion divisor must come from the named constant.
-        assert str(STABILITY_SECONDS_PER_DAY) in sql
+        # F11 parameter-binding invariant: the unit-conversion divisor flows
+        # in via bindparams (``:stability_seconds_per_day``) — never f-string
+        # interpolated. The literal integer must NOT appear in the rendered
+        # SQL string (it lives in the parameter list).
+        assert ':stability_seconds_per_day' in sql
+        assert str(int(STABILITY_SECONDS_PER_DAY)) not in sql, (
+            'STABILITY_SECONDS_PER_DAY literal leaked into the rendered SQL — '
+            'F11 parameter-binding invariant broken. Numeric values must flow '
+            'through bindparams, not f-string interpolation.'
+        )
 
         # NULLIF guards zero-stability rows from filtering (degenerate state
         # that observability surfaces).
