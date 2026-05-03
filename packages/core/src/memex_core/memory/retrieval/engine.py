@@ -53,6 +53,7 @@ from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
 from memex_core.memory.confidence import (
+    HasConfidence,
     certainty_from_variance,
     extract_confidence_and_count,
     mean_and_variance,
@@ -70,7 +71,7 @@ from memex_core.metrics import (
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 
-def _get_confidence(unit: Any) -> float:
+def _get_confidence(unit: HasConfidence) -> float:
     """Resolve a unit's confidence with defensive fallback to 1.0.
 
     Thin wrapper over the shared
@@ -84,20 +85,6 @@ def _get_confidence(unit: Any) -> float:
     """
     confidence, _ = extract_confidence_and_count(unit)
     return confidence
-
-
-def _get_evidence_count(unit: Any) -> int:
-    """Resolve a unit's confidence_evidence_count with defensive fallback to 0.
-
-    Thin wrapper over the shared
-    :func:`memex_core.memory.confidence.extract_confidence_and_count`
-    (Hermes round-4 MED). Schema is NOT NULL DEFAULT 0; this guard handles
-    stripped/stale model objects (no attribute) and rows materialised
-    before F22's migration. Cold-start (0) yields max variance and
-    certainty = 0 — neutral boost.
-    """
-    _, count = extract_confidence_and_count(unit)
-    return count
 
 
 # F40 — pre-reranker filter at hydration.
