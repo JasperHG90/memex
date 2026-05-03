@@ -982,6 +982,54 @@ record success=false. This is how Memex avoids rich-get-richer dynamics.
 
 ### TIER A — High-value additions
 
+#### F3. Layer formalization in agent-facing tool documentation (docs only)
+
+**1. Source citation:**
+- Issue #64 Comment 2 (JasperHG90, 2026-04-28): *"Hierarchical Memory Layers... is implicitly exists in the current schema (Episodic: `Note`, Semantic: `MemoryUnit`, Conceptual: `MentalModel`). No major DB refactor needed. Instead, formalize these layers in the MCP tool documentation to help the LLM route its queries (e.g., 'Use VaultSummary for conceptual context; use NoteSearch for episodic evidence')."*
+- Cross-referenced in §2.3 *Memory types and how Memex covers them* (this report) and §2.4 (`Note` = episodic, `MemoryUnit` = semantic, `MentalModel` = conceptual mapping). KinthAI's pragmatic 3-way split (#64 comment): *"Do something → procedural; Know something → semantic; Need context → episodic."*
+
+**2. New code location:** None. Pure documentation.
+
+**3. Code adapted:**
+- `packages/mcp/src/memex_mcp/server.py` — append a layer-routing primer to the descriptions of `memex_note_search`, `memex_memory_search`, `memex_survey`, `memex_get_entity_mentions`, and `memex_kv_search` so each tool description states which cognitive layer it serves (episodic / semantic / conceptual / procedural-observations).
+- `packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py` and `templates.py` — extend the existing storage-model primer (notes / memory units / KV) with the layer-routing table from §2.3 verbatim. Per CLAUDE.md rule 24 (agent-surface parity), the same primer must appear on all three surfaces.
+- `packages/claude-code-plugin/rules/` — add a single rule file (`memory-layers.md`) that names the four layers and the canonical tool per layer; update `/recall` and `/remember` skill descriptions to reference it.
+- `CLAUDE.md` (root) — add a one-paragraph "Memory layers and tool routing" section pointing to the three above.
+- Cross-references inside the report itself (§2.3 already names the mapping; §3.5 and §3.6 already name the tools per layer) — no change needed in the report.
+
+**4. Impact:**
+- **Effort:** ~3 days (XS). Pure prose; no behaviour change; ships on a docs-only PR.
+- **Architectural choices:** none — this codifies an existing implicit mapping rather than introducing a new one.
+- **Cascades:** unblocks F43 (agent-surface codification of the §3.5 5-step flow) by establishing the layer vocabulary the 5-step flow's Step-2 routing rule already leans on. Lowers onboarding cost for any new agent surface.
+
+**5. Surface impact:** docs-only. CLI/MCP/Hermes/Claude Code plugin surfaces all gain prose; no signatures or schemas change.
+
+**6. Agent prompt text:**
+
+Layer-routing primer to append to MCP tool descriptions, the Hermes session briefing, and the Claude Code rule file (verbatim across surfaces — agent-surface parity per CLAUDE.md rule 24):
+
+```
+Memex stores four memory layers. Pick the right tool for the layer you need:
+
+- Episodic ("what happened, when") → memex_note_search / memex_recent_notes /
+  memex_find_note. Notes are timestamped, source-attributed records of sessions,
+  reflections, and decisions.
+- Semantic ("decontextualised facts") → memex_memory_search /
+  memex_get_memory_units / memex_get_entity_mentions. MemoryUnits are short
+  fact/observation/event statements extracted from notes.
+- Conceptual ("synthesised mental models") → memex_survey /
+  memex_get_entities (with mental_models=True). MentalModels are reflection
+  output: strengthening / weakening / stable trends per entity.
+- Procedural-observations ("adaptations to context") → memex_kv_search /
+  memex_kv_get with prefix='procedure:'. Memex stores observations about how
+  to adapt your existing skills, not the procedures themselves.
+
+If unsure, default to memex_memory_search for content-shaped questions and
+memex_note_search for source-shaped questions ("show me the notes about X").
+```
+
+---
+
 #### F4. `memory_deprioritize` MCP tool
 
 **1. Source:** KinthAI comment on #64 — *"forgetting is not about deleting data — it is about adjusting retrieval weights."* Issue #53 introduces the broader memory-control tool family. The non-destructive principle (§3.1) makes this safe.
@@ -1123,6 +1171,36 @@ low-risk ones (deprioritize, mark stale).
 
 ---
 
+#### F7. `memex lint review` interactive CLI
+
+**1. Source citation:**
+- Issue #18 Comment 1 (JasperHG90, 2026-04-28): *"We also build a `memex lint review` interactive command (analogous to `git add -p`) for users who prefer to review the flags manually without an agent."*
+- §3.5 (this report) *Worked example: cron reflection → user-driven resolution* — F7 is the human-side parity verb for the agent-driven F8 / `memex_get_lint_flags` flow. Where F8 lets an agent triage the maintenance ledger, F7 lets a human do the same triage without an agent in the loop.
+
+**2. New code location:**
+- `packages/cli/src/memex_cli/lint.py` — extend the existing F6 lint app (already houses `status`, `findings`, `dismiss`, `resolve`) with a new `review` subcommand. NEW interactive prompt module if needed: `packages/cli/src/memex_cli/lint_review.py` for the per-finding render + prompt loop, kept narrow so the existing four subcommands stay simple.
+
+**3. Code adapted:**
+- `packages/cli/src/memex_cli/lint.py:27` — register `@app.command('review')` alongside the four shipped subcommands. Reuses `_resolve_scope` (`lint.py:37`) for `--vault / --global / --all` flag handling so behaviour matches `lint findings`.
+- `packages/cli/src/memex_cli/lint.py:23` — reuse `async_command`, `get_api_context`, `handle_api_error`, `parse_uuid` helpers; no new util surface.
+- `packages/core/src/memex_core/services/lint.py` (F6) — no API change needed; F7 reads via the existing query method that `lint findings` already uses, then writes resolutions through the existing `dismiss` / `resolve` paths (no new service verbs).
+- `packages/cli/src/memex_cli/__init__.py` — no change (the lint Typer app is already wired in).
+
+**4. Impact:**
+- **Effort:** 1-2 weeks (S). The hard work shipped in F6 (the maintenance ledger) and F8 (the query API). F7 is a pure UX wrapper: paginate findings, render each one with rich.Console, prompt user, dispatch to the existing dismiss/resolve verbs. Default to dry-run (preview only) and require an explicit `--apply` flag for the first version, matching the non-destructive default established in §3.1.
+- **Architectural choices:** non-destructive default (preview unless `--apply`); agent-surface parity is *not* required here — F7 is human-only by design (F8 is the agent counterpart). Resolution actions go through the same service paths as `lint dismiss / lint resolve`, so the audit log entry is identical regardless of which CLI verb the human used.
+- **Cascades:** none. Pure consumer of F6 + F8's existing surfaces.
+
+**5. Surface impact:**
+- **CLI:** new `memex lint review [--vault X | --global | --all] [--type ...] [--apply]` subcommand. Flag shape mirrors `memex lint findings` so users don't have to learn a second filter syntax.
+- **MCP:** none — F8 already covers the agent-driven path.
+- **Hermes:** none — Hermes uses F8 in session briefings.
+- **Claude Code plugin:** none — agent path is F8.
+
+**6. Agent prompt text:** None. F7 is human-only; the agent stays on F8.
+
+---
+
 #### F9. `memory_reconsolidate` + `memory_consolidate` MCP tools + per-entity advisory lock
 
 **1. Source:** Issue #53. ZenBrain §B.7 ReconsolidationEngine (rollback logs concept).
@@ -1191,6 +1269,38 @@ memory_reconsolidate.
 - **Hermes:** unchanged surface
 
 **6. Agent prompt text:** Same as F8 — agent doesn't need to know whether a finding came from rule-based or LLM-triggered check.
+
+---
+
+#### F10b. Polarity-discriminating NLI classifier on top of F10's surprise gate
+
+**1. Source citation:**
+- Deferred from F10 on 2026-05-01 in #22 — see `packages/core/src/memex_core/memory/lint_llm/signatures.py:15-19`: *"Polarity discrimination is a known structural limit of MiniLM-L12 embeddings — POC-F10 found that the surprise gate cannot raise polarity inversions to threshold. F10 ships these signatures with that constraint in place; Tier B will revisit via NLI-scored gate input."*
+- POC writeup: `.dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/002-f10-surprise-threshold/result.md`. Concrete failure: *"User prefers staging"* vs *"User prefers production"* are a polarity inversion that cosine surprise on MiniLM-L12 cannot push above the 0.7 threshold, so F10's `CheckSemanticContradiction` signature is never invoked even though the units genuinely contradict.
+- D-MEM §4.1 (referenced by F10) only proves surprise *gating* works for "different topic" cases; entailment-class gating is the standard remedy for sign-of-meaning inversion in the NLI literature.
+
+**2. New code location:**
+- `packages/core/src/memex_core/memory/lint_llm/polarity.py` — NEW module wrapping a small NLI model (entailment / neutral / contradiction). v1 candidates: `cross-encoder/nli-deberta-v3-small` (ONNX-friendly, ~140 MB) or a quantized MNLI head reusing the existing reranker substrate.
+- `packages/core/src/memex_core/memory/lint_llm/types.py` — add `PolarityLabel` enum.
+
+**3. Code adapted:**
+- `packages/core/src/memex_core/memory/lint_llm/surprise.py` — extend the gate to OR the existing cosine-distance signal with an NLI `contradiction`-probability signal: a unit/peer pair clears the gate when EITHER `surprise_score >= surprise_threshold` OR `nli_contradiction_prob >= polarity_threshold` (default 0.6). NLI runs only when the cosine surprise is *below* the threshold (cheap pre-filter to avoid running NLI on every chunk).
+- `packages/core/src/memex_core/memory/lint_llm/checks.py` — pass NLI label through to `CheckSemanticContradiction` as an additional input field so the LLM check has both "novel" and "contradictory" framings available.
+- `packages/core/src/memex_core/memory/lint_llm/signatures.py:15-19` — strike the "Tier B will revisit" docstring (becomes obsolete once F10b ships). Add a `polarity_hint` field on `CheckSemanticContradiction`.
+- `packages/core/src/memex_core/memory/models/__init__.py` — register the NLI classifier alongside the existing embedding/reranker model factories so the model lifecycle (download, ONNX session, eviction) reuses existing infrastructure.
+
+**4. Impact:**
+- **Effort:** 2-3 weeks (S-M). Most of the cost is model selection + a real-LLM golden test that exercises polarity-inversion pairs (the staging/production case from POC-F10) and verifies they now reach the F10 LLM check. Includes per-vault rate-limit so NLI invocations are capped (NLI inference is cheap but not free).
+- **Architectural choices:** OR'd composition with cosine surprise (preserves all existing F10 fires; adds polarity coverage on top — never *removes* a fire); NLI runs as a fallback when surprise is sub-threshold, not on every chunk; ONNX-only, no remote-API surface. The NLI model is configurable through `lint_llm.polarity` config block analogous to the existing `embedding_model` / `reranker` factories.
+- **Cascades:** unblocks the linter's polarity-inversion blind spot; folds back into F6's maintenance ledger via the same `MaintenanceProposal` write path. Trigger: ≥10 false-contradiction findings/month in production logs.
+
+**5. Surface impact:**
+- **CLI:** `memex lint findings` may show more (genuine) contradictions; no new flag.
+- **MCP:** none — F8 returns the same shape, just with better recall.
+- **Hermes:** unchanged surface.
+- **Claude Code plugin:** unchanged.
+
+**6. Agent prompt text:** None — same as F10. F10b changes the *gate input*, not the agent surface; agents continue to read findings via F8's tool description unchanged.
 
 ---
 
@@ -1302,6 +1412,43 @@ less often; memories that need correction get reviewed more.
 
 ---
 
+#### F11. FSFM-lite decay scoring (Ebbinghaus × importance, composed at the reranker)
+
+**1. Source citation:**
+- FSFM (arXiv:2604.20300v2) §3.1.1 *Passive Decay-Based Forgetting*: formal definition `R(t) = exp(-t/S)` with stability `S` modulated by importance.
+- FSFM §4.5.1 explicit head-to-head experiment vs pure Ebbinghaus baseline shows importance-weighted decay outperforms both pure-time decay and no-decay.
+- FSFM §5.5 *Limitations and Future Work* notes the modulation through importance is the load-bearing piece — pure time decay underfits long-tail content.
+- Foundational: Ebbinghaus (1885) — `R = exp(-t/S)` retention curve.
+- ZenBrain (vault note `5992f782`) §H.1 NoDecay finding caveat: that result is about decay layered on top of an already-rich retention model (FSRS + Two-Factor + Sim-Select), not about importance-weighted decay alone — does not refute F11.
+- Stacks on F25: F25 supplies the `intent_class` (`permanent` / `durable` / `ephemeral`) which drives the per-class stability constant `S`. Composes at the same reranker site as F1c.
+
+**2. New code location:**
+- `packages/core/src/memex_core/memory/retrieval/decay.py` — NEW module exporting `compute_decay_boost(unit, decay_alpha, now)` analogous to `compute_mw_boost` in `services/outcomes.py:45`. Closed-form `boost = 1.0 + decay_alpha × (importance × exp(-elapsed_days / stability) − 0.5)`. `now` is an injected parameter (matching F35's `compute_mw_ema_score(..., now)` signature pattern), not a bare in-function `now()` call — keeps the function deterministic under unit tests and lets the reranker share one timestamp across all per-unit boosts in a query. **NULL-handling contract** is a *split guard*, not a single early-return — each NULL input maps to a different semantic: `importance is None` → return `1.0` (genuine missing classification, no boost signal); `last_outcome_at is None` → return `1.0` (no temporal anchor for decay); `stability is None` → treat the decay term as `1.0` (the `stability → ∞` limit — permanent units get the importance-based lift `1.0 + decay_alpha × (importance − 0.5)` rather than being silently exempted from the composition). Permanent units are *importance-lifted, not decay-suppressed*. The only synthetic value is `stability=None → ∞`, which is mathematically the closed-form limit, not a guess — never substitute synthetic defaults for `importance` or `last_outcome_at`. Tests must cover all three NULL cases independently. Mirrors F40's branch-level `COALESCE(..., FALSE)` pattern at the boost-result level.
+- `packages/core/alembic/versions/XXX_fsfm_decay_columns.py` — migration adding `importance: float`, `stability: float`, `last_outcome_at: datetime` to `MemoryUnit`. Existing rows get importance from F25's classifier output (`intent_class` → default importance map: permanent=1.0, durable=0.7, ephemeral=0.3) and stability from a per-class table (permanent=∞ via NULL handling, durable=180 days, ephemeral=14 days). **`last_outcome_at` is left NULL on backfill** for existing rows that have never had `record_outcome` called — this preserves the NULL-handling contract ("no temporal anchor → neutral boost"). The first `record_outcome` call transitions a unit from `last_outcome_at = NULL` (no decay) to `last_outcome_at = now()` (decay clock starts), matching the lifecycle of a brand-new post-migration unit. Backfilling to `created_at` would synthesise an age-based penalty on never-touched units; NULL is the correct invariant.
+
+**3. Code adapted:**
+- `packages/core/src/memex_core/memory/sql_models.py:566-636` (`MemoryUnit`) — append the three new columns alongside the existing FSRS revisit columns. Constants for the intent→stability map live in `memex_core.memory.retrieval.constants` so F40's FSFM SQL clause and F11's Python boost share one source of truth (the `STABILITY_SECONDS_PER_DAY` constant referenced in BACKLOG.md F40 lives here too).
+- `packages/core/src/memex_core/memory/retrieval/engine.py:1442-1478` — extend the existing reranker chain (`ce_score × recency_boost × temporal_boost × mw_boost × confidence_boost`) with a sixth multiplicative `decay_boost` factor. The composition site is the same `boosted_scores.append(...)` line F1c and F47 already extend.
+- `packages/core/src/memex_core/memory/retrieval/config.py` — new config knob `decay_alpha` (default `0.0` at ship time — composition is a no-op until the post-merge benchmark passes; flip to `0.3` to match `mw_alpha` and `recency_alpha`'s shape, per BACKLOG F11 ship-time guard) and `decay_intent_stability` map (per-class days). Shipping with `0.0` is one of the three independent kill-switches (migration / `decay_alpha` / `fsfm_branch_enabled`) that decouples the column migration from the behavioural change.
+- `packages/core/src/memex_core/services/outcomes.py:65` — extend `record_outcome` to bump `last_outcome_at` to `now()` on every counter update so decay is reset by recent behavioral signal.
+- `packages/core/src/memex_core/metrics.py` — `DECAY_BOOST_OBSERVED` Prometheus histogram (mirrors `MW_BOOST_OBSERVED` and `CONFIDENCE_BOOST_OBSERVED`).
+- F40 (Tier-A latency-optimization) FSFM clause becomes active: `apply_pre_filter=True` queries can now prune long-stale low-importance units pre-reranker. F40 ships the SQL inert; F11's PR flips `fsfm_branch_enabled` to True as a *separate config commit within the same PR* — the column migration and the FSFM-active flag are two independent revertible commits. Ship-time `decay_alpha` default is `0.0` (composition no-op); flipping to `0.3` is a separate post-merge config commit gated on the benchmark — three independent kill-switches keep the rollback story granular (column migration / decay_alpha / fsfm_branch_enabled).
+
+**4. Impact:**
+- **Effort:** 3-4 weeks (S-M). Migration + per-class stability calibration + before/after benchmark on a representative workload account for most of the time. The composition itself is a few lines — same shape as F1c.
+- **Architectural choices:** *additive-marginal* boost shape (cold-start neutrality — `importance=0.7, elapsed=0 → exp(0) = 1.0 → boost = 1.0 + 0.3 × (0.7 − 0.5) = 1.06`, mild lift); per-class stability rather than per-unit (avoids exposing a tunable per-unit knob agents would mis-set); composes at the reranker, never filters; pre-reranker filtering only via F40's already-in-place FSFM clause — F11 does not introduce a separate filter path.
+- **Cascades:** activates F40's FSFM branch; deepens the §3.4 composition to the full five-signal chain (`ce × recency × temporal × mw × confidence × decay`); per BACKLOG.md F47's "composition variance bounds" note, MMR diversity λ may need re-tuning when this lands — track as a sequenced follow-up.
+
+**5. Surface impact:**
+- **CLI:** `memex memory show <unit_id>` displays current `decay_boost` alongside `mw_score`. No new commands.
+- **MCP:** none — invisible at the agent surface (composes inside the reranker, mirrors F1c). No new tools, no new params.
+- **Hermes:** unchanged.
+- **Claude Code plugin:** unchanged.
+
+**6. Agent prompt text:** None — purely retrieval-side numerics, invisible to the agent. The agent's existing `record_outcome` calls already drive `last_outcome_at` updates which reset decay; no new prompt fragment is required.
+
+---
+
 #### F38. Consolidation orchestration (replaces F21)
 
 **1. Source citation:**
@@ -1399,6 +1546,94 @@ type, retrieval-cluster count, average MW score, top-5 most-retrieved entities.
 Visual diagnostics (manifold UMAP, heatmaps) are CLI-only; surface to user via
 "run `memex diagnose manifold` to see the memory structure."
 ```
+
+---
+
+#### F22. Two-Factor edge confidence (variance alongside mean)
+
+**1. Source citation:**
+- ZenBrain (arXiv:2604.23878v1) §B.1 *Two-Factor Edge Confidence*: confidence is *not* a scalar — it is a `(mean, variance)` pair carried per edge in the entity graph and per inferred fact. Mean encodes the central tendency ("how likely is this true"); variance encodes the *evidence concentration* ("how much do we trust the mean — was it built from one source or twenty"). Two facts at `confidence = 0.85` are not equivalent if one was estimated from 1 supporting unit and the other from 20: the second is far less likely to flip on the next contradiction event.
+- Memory Worth (arXiv:2604.12007v1) §3.4 *Two Counts Are Necessary* — the same architectural argument the MW paper makes for `(success, failure)` counters versus a single ratio. ZenBrain §B.1 generalises it from MW counters to all confidence-bearing edges.
+- Existing F47 spec (BACKLOG.md, this branch) already records `confidence` as a scalar under `MemoryUnit.confidence` and uses it as a multiplicative reranker boost; F22 lifts that to the full `(mean, variance)` pair so downstream consumers (F8 linter, F47 reranker, contradiction engine, reflection cron) can gate on certainty in addition to point estimate.
+
+**2. New code location:**
+- `packages/core/src/memex_core/memory/confidence.py` — NEW module with the Beta-Bernoulli posterior helpers (`mean_and_variance(alpha, beta) -> tuple[float, float]`, `sample_concentration(alpha + beta) -> float`). Pure Python, no DB I/O. **Prior is Beta(1, 1) uniform** — posterior parameters are `alpha = 1 + confidence × confidence_evidence_count`, `beta = 1 + (1 − confidence) × confidence_evidence_count`, so `max_variance = 1/12 ≈ 0.0833` (the variance of Uniform(0, 1)). The Beta(1, 1) choice keeps the prior consistent with F1a's existing `Beta(success + 1, failure + 1)` in `outcomes.py:35-55` — single-prior convention across MW counters and confidence variance, no second prior to reason about.
+- `packages/core/alembic/versions/XXX_add_confidence_variance.py` — migration adding a `confidence_evidence_count: int` column to `MemoryUnit` (default 0). Variance is then derived inline from `(confidence, confidence_evidence_count)` via the closed-form Beta posterior — no separate `variance` column. (The existing `confidence` column at `sql_models.py:596` stays as the mean; F22 only adds the evidence-count companion.) At `confidence_evidence_count = 0`, the posterior collapses to the Beta(1, 1) prior, `variance = max_variance = 1/12`, and `certainty = 1 − variance/max_variance = 0` — F47's cold-start neutrality is preserved exactly. **Backfill on existing rows** counts incoming `MemoryLink` rows of type `contradicts` / `weakens` per unit (per `engine.py:225-227` link convention) — `reinforces` is intentionally excluded so the backfill semantics stay symmetric with the forward path at `engine.py:211-219`, which only bumps `confidence_evidence_count` on the weaken / contradict α-steps. `confidence_evidence_count` is therefore a "negative-evidence event count" aligned with how `confidence` itself is adjusted (both track the same set of events). If reinforcement ever starts to adjust `confidence` upward (currently it does not), the backfill and the forward path must extend together. Combined with a ship-time `certainty_modulation_enabled: bool = False` flag on `RetrievalConfig`, F22 ships the column + backfill *inert* — the F47 boost stays at the existing form `1.0 + α × (confidence − 0.5)` until the flag is flipped, decoupling migration from behavioural change in the same way F11 ships `decay_alpha = 0.0`.
+
+**3. Code adapted:**
+- `packages/core/src/memex_core/memory/sql_models.py:596` (`MemoryUnit.confidence`) — leave the mean untouched; add `confidence_evidence_count` alongside it. Cold-start units get `(confidence=1.0, evidence_count=0)` → variance high (= we have no evidence yet).
+- `packages/core/src/memex_core/memory/contradiction/engine.py:211-219` — the existing `α=0.1` weaken / `2α=0.2` contradict steps continue to adjust the *mean*; F22 also bumps `confidence_evidence_count` by 1 on every step so the variance shrinks as evidence accumulates. The link-construction site at `engine.py:225-227` (referenced by BACKLOG.md F49) is untouched.
+- `packages/core/src/memex_core/memory/retrieval/engine.py:1467-1474` (the F47 confidence-boost composition site) — extend the `confidence_boost` formula from `1.0 + α × (confidence − 0.5)` to attenuate by certainty: `1.0 + α × (confidence − 0.5) × certainty`, where `certainty = 1 − variance/max_variance` and `max_variance = 1/12` from the Beta(1, 1) prior (zero-evidence units land near `boost = 1.0` neutral; well-evidenced units get the full boost / penalty). This is a *strict generalisation* of F47 — when `confidence_evidence_count = 0`, the Beta posterior collapses to the prior, `variance = max_variance` exactly, `certainty = 0`, and the boost collapses to neutral — exactly the cold-start safety F47 already requires.
+- `packages/core/src/memex_core/services/lint.py` (F6) and `packages/core/src/memex_core/services/lint_llm.py` (F10) — gate findings on `confidence ≥ X AND variance ≤ Y`, configurable per lint type. Default reduces false-positive findings on freshly-extracted units that would have surfaced as "low confidence" purely because they had no evidence yet.
+- `packages/core/src/memex_core/memory/reflect/reflection.py` — reflection cron prioritisation: skip stable low-variance edges (high mean × low variance), focus per-tick LLM budget on high-variance edges (uncertain — re-evaluation has the highest information yield).
+- `packages/core/src/memex_core/memory/retrieval/exploration.py` (F33 module) — add an `edge_exploration` mode that surfaces high-variance edges for re-validation, mirroring F33's low-MW exploration. Same pattern: epsilon-greedy injection of uncertain edges so they can accumulate evidence rather than calcify at their first observation.
+- `packages/common/src/memex_common/schemas.py` — add `confidence_variance: float` derived field to the `MemoryUnit` DTO (computed at hydration; not stored). Surfaces certainty to MCP / Hermes consumers.
+
+**4. Impact:**
+- **Effort:** 3-4 weeks (M). Migration is small; the architectural lift is touching every consumer (F47 reranker boost, F6/F10 linter gating, reflection prioritisation, F33 exploration parallel) consistently. Most of the time is the cross-cutting test matrix.
+- **Architectural choices:** strict generalisation of F47 (cold-start neutral, zero behaviour change at `confidence_alpha = 0.0` default); zero new tools / endpoints — the variance is a derived field on existing DTOs; reuses F33's exploration scaffolding for the high-variance-edge surface; aligned with KinthAI principle (no destructive curation — variance just re-routes attention, never removes).
+- **Cascades:** F47 (composition becomes certainty-aware — sharper signal); F6/F10 (cleaner findings — fewer "this fact has confidence 0.6" lint flags on units with 0 evidence); reflection cron (LLM budget concentrates where it pays off); F33 (extends exploration from low-MW units to high-variance edges, same scaffolding); explainability (UI / agent can surface "we're 87% sure based on tight evidence — 12 supporting units" vs "we're 87% sure but it's wobbly — 1 supporting unit").
+
+**5. Surface impact:**
+- **CLI:** `memex memory show <unit_id>` displays `confidence (mean ± variance)` instead of a bare scalar.
+- **MCP:** retrieval DTOs (`memex_memory_search`, `memex_get_memory_units`, etc.) include `confidence_variance` alongside the existing `confidence` field.
+- **Hermes:** session briefings can phrase certainty ("X is established (high mean, tight evidence)" vs "X is provisional (high mean, thin evidence)").
+- **Claude Code plugin:** updates to `/recall` skill description naming the variance — agents can reason about it when judging which retrievals to lean on.
+
+**6. Agent prompt text:**
+
+Append to retrieval tool descriptions (verbatim across MCP / Hermes / Claude Code per CLAUDE.md rule 24):
+
+```
+Each returned memory unit carries two confidence fields:
+
+- confidence (0.0-1.0): point estimate — how likely is this fact true.
+- confidence_variance (0.0-1.0): how much evidence backs the point estimate.
+  Lower variance = more supporting evidence = more trustworthy.
+
+A unit at confidence=0.85, variance=0.02 is "we are sure based on many sources".
+A unit at confidence=0.85, variance=0.20 is "we landed at 0.85 from a single
+observation; the next contradiction may flip it".
+
+When deciding which retrieved units to lean on for a load-bearing claim, prefer
+the low-variance ones. When investigating drift or anomalies, prefer the
+high-variance ones — they are where the system most needs validation.
+```
+
+---
+
+#### F35. Non-stationary EMA mode for MW counters
+
+**1. Source citation:**
+- Memory Worth (arXiv:2604.12007v1) §6 *Toward Memory Governance Systems*: addresses the non-stationary regime — *"In environments where the relevance of memories changes over time… an exponentially-weighted moving counter replaces the accumulating Bernoulli counters"* — i.e., when the user's preferences or project context drifts, an accumulating counter encodes obsolete signal indefinitely. The paper proposes EMA-decayed counters as the principled fix.
+- Theorem 4.1 caveat (cross-referenced in §3.4.2 of this report): MW's almost-sure convergence guarantee holds only in *stationary* environments. Memex is multi-tenant continuous ingestion — drift is the rule, not the exception — so the EMA mode is a closer architectural fit for vaults where drift has been observed.
+- Stacks on F1c (counters) and F33 (exploration). Replaces accumulating Bernoulli arithmetic with EMA-decayed counters when `mw_mode = ema` is set per vault.
+
+**2. New code location:**
+- `packages/core/alembic/versions/XXX_add_mw_mode.py` — migration adding `mw_mode` (`stationary` / `ema`) to the `vaults` table (`sql_models.py:42`) with database-level enforcement (PostgreSQL ENUM type OR `CHECK (mw_mode IN ('stationary', 'ema'))`) so a typo like `'emma'` is rejected at the constraint, not silently accepted. Python side uses a `StrEnum` (`MWMode.STATIONARY` / `MWMode.EMA`) so the read path branches on the enum, not a magic string. Default `stationary` — no behaviour change for existing vaults.
+- `packages/core/src/memex_core/memory/retrieval/mw_ema.py` — NEW module exposing `compute_mw_ema_score(success, failure, last_outcome_at, half_life_days, now)` for the EMA-decayed posterior. **Full closed form**: `decay_factor = exp(-elapsed_days × ln(2) / half_life_days)`, `success_decay = success × decay_factor`, `failure_decay = failure × decay_factor`, then `mw_ema_score = (success_decay + 1.0) / (success_decay + failure_decay + 2.0)` — the posterior is `Beta(success_decay + 1, failure_decay + 1)`, the **same Beta(1, 1) uniform prior** as F1a's `compute_mw_score` in `outcomes.py:35-55` so a vault flipping `mw_mode` does not also implicitly switch its prior. `record_outcome` writes integer increments; decay applies at read time only — historical counters are never mutated. Cold-start (`last_outcome_at IS NULL`) early-returns the prior mean `0.5` so never-touched units behave identically across `stationary` and `ema` modes.
+
+**3. Code adapted:**
+- `packages/core/src/memex_core/memory/sql_models.py:42` (`Vault`) — add `mw_mode: str` column (default `stationary`). Vault-scoped, not global, so different vaults can opt into EMA independently.
+- `packages/core/src/memex_core/memory/retrieval/config.py` — new config knob `mw_ema_half_life_days` (default 60). Per-vault override would attach to the vault row in a follow-up; v1 ships a single global default so the lever is cheap to flip.
+- `packages/core/src/memex_core/services/outcomes.py:35-55` (`compute_mw_score` / `compute_mw_boost`) — at the call site in the reranker, branch on `vault.mw_mode`: if `stationary`, use the existing closed-form Beta-Bernoulli posterior; if `ema`, call into `mw_ema.compute_mw_ema_score(...)` instead. Same `mw_boost` shape downstream — only the score input changes.
+- `packages/core/src/memex_core/memory/retrieval/engine.py:1460-1465` (the `mw_boost` site) — pass through the resolved vault and `now()` so the EMA branch can compute its decay factor without an extra DB roundtrip. F1c's `compute_mw_boost` signature gains an optional `mode` and `last_outcome_at` parameter; defaults preserve current behaviour.
+- `packages/core/src/memex_core/services/outcomes.py:65` (`record_outcome`) — writes `last_outcome_at = now()` on every counter update (already required by F11; F35 piggybacks on the same column).
+- `packages/core/src/memex_core/metrics.py` — extend `MW_SCORE_DISTRIBUTION` histogram with a `mode` label so the cron can compare `stationary` vs `ema` distributions side-by-side per vault.
+- `packages/cli/src/memex_cli/vaults.py` — new `memex vaults set-mw-mode <vault> {stationary|ema}` admin command for flipping the per-vault setting after drift has been observed.
+
+**4. Impact:**
+- **Effort:** 1-2 weeks (S). Most cost is in the comparison benchmark (drift-bearing vault test fixture + before/after comparison) rather than the formula itself, which is a half-page closed-form.
+- **Architectural choices:** per-vault opt-in, default OFF — no behaviour change at ship time; preserves §3.4 composition site (only the `mw_score` input changes; the `mw_boost = 1.0 + mw_alpha × (mw_score − 0.5)` shape is unchanged); EMA half-life as config (per-vault override deferred to follow-up); no new tables or rewrite of historical counters — the decay applies at read time over the existing `success_co_count` / `failure_co_count` plus `last_outcome_at`.
+- **Cascades:** activates only when an operator (or future drift-detection signal) flips a vault to `ema`. Composes naturally with F33 (exploration injection unchanged), F11 (decay's `last_outcome_at` is reused), F47 (`confidence_boost` independent), F1c (boost shape unchanged).
+
+**5. Surface impact:**
+- **CLI:** `memex vaults set-mw-mode <vault> {stationary|ema}` admin command; `memex vaults show <vault>` displays the current mode.
+- **MCP:** none — invisible at the agent surface (composes inside the reranker, mirrors F1c). No new tools, no new params.
+- **Hermes:** unchanged.
+- **Claude Code plugin:** unchanged.
+
+**6. Agent prompt text:** None — purely retrieval-side numerics, invisible to the agent. Operators / users flip the mode out-of-band after observing drift.
 
 ---
 
