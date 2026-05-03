@@ -155,6 +155,18 @@ def upgrade() -> None:
     # are now held until the migration commits, which is the standard
     # transactional-DDL convention every other migration in this project
     # follows. The chunked LIMIT still bounds per-statement work.
+    # The inner ``JOIN memory_units mu_inner ... AND
+    # mu_inner.confidence_evidence_count = 0`` filter is REQUIRED for
+    # loop progress, not a redundant idempotency check (Hermes round-14
+    # MED — flagged as removable; verified-incorrect): the inner SELECT
+    # picks the next ``_BACKFILL_BATCH_SIZE`` unit_ids ordered by
+    # ``to_unit_id``, and without the inner filter every iteration would
+    # re-pick the SAME first ``batch_size`` unit_ids. The outer
+    # ``mu.confidence_evidence_count = 0`` would then reject all updates
+    # on the second iteration, ``rowcount=0`` would terminate the loop,
+    # and only the first batch would ever land. The inner filter
+    # advances the candidate window through the link target set as each
+    # batch flips ``confidence_evidence_count`` non-zero.
     backfill_sql = sa.text(
         'UPDATE memory_units mu '
         'SET confidence_evidence_count = sub.cnt '
