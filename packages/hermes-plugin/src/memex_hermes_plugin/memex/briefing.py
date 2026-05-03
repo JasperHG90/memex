@@ -13,6 +13,8 @@ import threading
 from typing import Any
 from uuid import UUID
 
+from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE
+
 from .async_bridge import run_sync
 
 logger = logging.getLogger(__name__)
@@ -161,22 +163,7 @@ Disambiguation between resolution-flow and historical-routing is the
 agent's responsibility."""
 
 
-_LAYER_ROUTING_PRIMER = """### Memory layers and tool routing
-
-Memex stores four memory layers. Pick the right tool for the layer you need:
-
-| Layer | What it stores | Retrieve with | Tiny example |
-|---|---|---|---|
-| **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
-| **Semantic** ("decontextualised facts") | MemoryUnits — short fact/observation/event statements extracted from notes | `memex_memory_search` / `memex_get_memory_units` / `memex_get_entity_mentions` | "What does v2 use for auth?" |
-| **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
-| **Procedural-observations** ("adaptations to context") | KV entries under `procedure:<verb>:<context-tag>` — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='procedure:'` | "For this user, `deploy` means staging — never prod after 6pm" |
-
-**Rule of thumb.** If unsure, default to `memex_memory_search` for content-shaped
-questions ("what about X?") and `memex_note_search` for source-shaped questions
-("show me the notes about X"). Agents own the verb (the executable how-to);
-Memex owns the adverb (observations about how to adapt it). Core / Cross-Context
-layers are informational only — not first-class in Memex today."""
+_LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE
 
 
 _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge

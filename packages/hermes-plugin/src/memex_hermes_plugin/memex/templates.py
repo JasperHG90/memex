@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from memex_common.agent_surface import (
+    LAYER_ROUTING_PRIMER_FRAGMENT as _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT,
+)
+
 # Template used for the per-session transcript note ingested on exit.
 HERMES_SESSION_TEMPLATE = 'hermes-session'
 
@@ -77,24 +81,12 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
 )
 
 
-# --- F3 --- (4-layer memory-routing primer — see briefing.py `_LAYER_ROUTING_PRIMER`
-# for the canonical text rendered in the system prompt; this fragment is the
-# same primer rendered as a tool-call planning template.)
-LAYER_ROUTING_PROMPT_FRAGMENT = (
-    'Memex memory layers (route by query type):\n'
-    '\n'
-    '  - Episodic ("what happened, when") → memex_note_search /\n'
-    '    memex_recent_notes / memex_find_note. Source: timestamped Notes.\n'
-    '  - Semantic ("decontextualised facts") → memex_memory_search /\n'
-    '    memex_get_memory_units / memex_get_entity_mentions. Source: MemoryUnits.\n'
-    '  - Conceptual ("synthesised mental models") → memex_survey /\n'
-    '    memex_get_entities(mental_models=True). Source: MentalModels.\n'
-    '  - Procedural-observations ("adaptations to context") → memex_kv_search /\n'
-    "    memex_kv_get(prefix='procedure:'). Source: KV `procedure:<verb>:<tag>`.\n"
-    '\n'
-    'Default: memex_memory_search for content-shaped questions; memex_note_search\n'
-    'for source-shaped questions. The agent owns the verb; Memex owns the adverb.'
-)
+# --- F3 --- (4-layer memory-routing primer — single source of truth lives in
+# `memex_mcp._f3_descriptions.LAYER_ROUTING_PRIMER_FRAGMENT`. Re-exported here
+# under the `_PROMPT_FRAGMENT` suffix to match the templates.py naming
+# convention for prompt fragments. The briefing.py `_LAYER_ROUTING_PRIMER`
+# (table form) is sourced from the same module.)
+LAYER_ROUTING_PROMPT_FRAGMENT = _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT
 
 
 # --- F43 --- (historical / audit-query routing rule)
