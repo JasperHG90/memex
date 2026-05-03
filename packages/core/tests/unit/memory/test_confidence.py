@@ -13,6 +13,7 @@ import pytest
 from memex_core.memory.confidence import (
     MAX_VARIANCE,
     certainty,
+    extract_confidence_and_count,
     mean_and_variance,
     sample_concentration,
 )
@@ -213,3 +214,73 @@ class TestDtoFormulaConsistency:
         )
         _, expected = mean_and_variance(confidence, count)
         assert math.isclose(dto.confidence_variance, expected, rel_tol=REL_TOL)
+
+
+class TestExtractConfidenceAndCount:
+    """``extract_confidence_and_count`` — single source of truth for the
+    defensive ``(confidence, evidence_count)`` extraction (Hermes round-4 MED).
+
+    Replaces three previously-duplicated copies of the pattern in
+    ``engine.py``, ``reflection.py``, and ``exploration.py``.
+    """
+
+    def test_normal_attributes_pass_through(self):
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = 7
+
+        assert extract_confidence_and_count(_U()) == (0.5, 7)
+
+    def test_zero_confidence_preserved_not_coerced(self):
+        """``0.0`` is a legitimate value — must NOT be silently coerced to 1.0."""
+
+        class _U:
+            confidence = 0.0
+            confidence_evidence_count = 5
+
+        assert extract_confidence_and_count(_U()) == (0.0, 5)
+
+    def test_none_confidence_falls_back_to_one(self):
+        class _U:
+            confidence = None
+            confidence_evidence_count = 5
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 1.0
+        assert n == 5
+
+    def test_none_evidence_count_falls_back_to_zero(self):
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = None
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 0.5
+        assert n == 0
+
+    def test_missing_attributes_use_defaults(self):
+        class _U:
+            pass
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 1.0
+        assert n == 0
+
+    def test_int_confidence_coerced_to_float(self):
+        class _U:
+            confidence = 1
+            confidence_evidence_count = 3
+
+        c, n = extract_confidence_and_count(_U())
+        assert isinstance(c, float)
+        assert c == 1.0
+        assert n == 3
+
+    def test_float_evidence_count_truncates_to_int(self):
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = 7.9  # weird but legal mid-pipeline
+
+        c, n = extract_confidence_and_count(_U())
+        assert n == 7
+        assert isinstance(n, int)

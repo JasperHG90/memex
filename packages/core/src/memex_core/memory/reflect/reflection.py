@@ -47,7 +47,7 @@ from memex_core.memory.reflect.utils import (
 from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
-from memex_core.memory.confidence import mean_and_variance
+from memex_core.memory.confidence import extract_confidence_and_count, mean_and_variance
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
@@ -581,15 +581,7 @@ class ReflectionEngine:
         # information yield). Stable sort preserves the existing
         # event_date DESC tiebreak from the SQL window function.
         def _variance_key(unit: MemoryUnit) -> float:
-            # ``confidence=0.0`` is a legitimate value (unit contradicted to
-            # zero); ``or 1.0`` would silently coerce it back to 1.0
-            # because ``0.0`` is falsy — mirror the None-check pattern
-            # from engine.py so a contradicted unit's variance reflects
-            # its actual mean during reflection prioritisation.
-            raw_confidence = getattr(unit, 'confidence', 1.0)
-            confidence = 1.0 if raw_confidence is None else float(raw_confidence)
-            raw_count = getattr(unit, 'confidence_evidence_count', 0)
-            count = 0 if raw_count is None else int(raw_count)
+            confidence, count = extract_confidence_and_count(unit)
             _, variance = mean_and_variance(confidence, count)
             return variance
 

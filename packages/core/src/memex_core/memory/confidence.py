@@ -37,9 +37,33 @@ F47 boost neutral.
 
 from __future__ import annotations
 
+from typing import Any
+
 # Variance of Uniform(0, 1) = Beta(1, 1) — the cold-start ceiling.
 # Pinned in tests so a future prior change is a deliberate edit.
 MAX_VARIANCE: float = 1.0 / 12.0
+
+
+def extract_confidence_and_count(unit: Any) -> tuple[float, int]:
+    """Defensively extract ``(confidence, confidence_evidence_count)`` from a unit.
+
+    Single source of truth (Hermes round-4 MED) — used by ``engine.py``,
+    ``reflection.py:_variance_key``, and ``exploration.py:_unit_variance``
+    so the falsy-zero handling, ``None`` fallback, and integer cast cannot
+    drift across call sites.
+
+    Behaviour:
+      - ``confidence`` falls back to ``1.0`` when the attribute is missing
+        OR explicitly ``None`` (stripped/stale model rows). ``0.0`` is
+        preserved verbatim — it is a legitimate value (a unit thoroughly
+        contradicted to zero) and must NOT be coerced via ``or 1.0``.
+      - ``confidence_evidence_count`` falls back to ``0`` on missing/None.
+    """
+    raw_confidence = getattr(unit, 'confidence', 1.0)
+    confidence = 1.0 if raw_confidence is None else float(raw_confidence)
+    raw_count = getattr(unit, 'confidence_evidence_count', 0)
+    evidence_count = 0 if raw_count is None else int(raw_count)
+    return confidence, evidence_count
 
 
 def mean_and_variance(confidence: float, evidence_count: int) -> tuple[float, float]:
