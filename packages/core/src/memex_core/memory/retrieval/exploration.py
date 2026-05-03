@@ -53,6 +53,29 @@ def _coerce_metadata_to_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+# Hermes round-21 HIGH: cross-path injection guard. Both exploration
+# injectors annotate ``unit.unit_metadata`` in-place; if a unit is fed
+# into both selection pools (in violation of the documented call-site
+# invariant), the second injector could surface a unit already
+# annotated by the first. This set is the runtime defence: a unit
+# carrying ANY of these keys is excluded from re-injection.
+_INJECTION_ANNOTATION_KEYS: frozenset[str] = frozenset({'exploration', 'edge_exploration'})
+
+
+def _already_injected(unit: MemoryUnit) -> bool:
+    """Return True if ``unit`` already carries any injection annotation.
+
+    Hermes round-21 HIGH: belt-and-suspenders runtime guard against
+    cross-path mutation pipelining. The retrieval engine's call-site
+    invariant (disjoint pools) is the primary defence; this helper
+    backs it up so a future caller that breaks the invariant does NOT
+    get a unit with both ``exploration=True`` and
+    ``edge_exploration=True``.
+    """
+    metadata = _coerce_metadata_to_dict(unit.unit_metadata)
+    return any(metadata.get(key) for key in _INJECTION_ANNOTATION_KEYS)
+
+
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
 
 # Default exploration probability (ε).  5% means roughly 1 in 20 retrieval
@@ -104,7 +127,11 @@ def select_exploration_candidates(
 
     # Eligible: not already in results, ACTIVE, not deprioritized, and low total outcome count.
     # Excludes stale (superseded by reflection) and deprioritized units to avoid surfacing
-    # content the system has already de-emphasised.
+    # content the system has already de-emphasised. Hermes round-21 HIGH:
+    # also exclude units already carrying an injection annotation
+    # (``exploration`` or ``edge_exploration``) so a caller that breaks
+    # the disjoint-pool invariant cannot produce a unit annotated by
+    # both paths.
     eligible = [
         u
         for u in all_candidates
@@ -112,6 +139,7 @@ def select_exploration_candidates(
         and not u.is_deprioritized
         and u.status == ContentStatus.ACTIVE
         and (u.success_co_count + u.failure_co_count) < low_mw_threshold
+        and not _already_injected(u)
     ]
 
     if not eligible:
@@ -220,6 +248,10 @@ def select_edge_exploration_candidates(
 
     threshold = high_variance_fraction * MAX_VARIANCE
     result_ids = {u.id for u in results}
+    # Hermes round-21 HIGH: exclude units already carrying an injection
+    # annotation (``exploration`` or ``edge_exploration``) so a caller
+    # that breaks the disjoint-pool invariant cannot produce a unit
+    # annotated by both paths.
     eligible = [
         u
         for u in all_candidates
@@ -227,6 +259,7 @@ def select_edge_exploration_candidates(
         and not u.is_deprioritized
         and u.status == ContentStatus.ACTIVE
         and _unit_variance(u) >= threshold
+        and not _already_injected(u)
     ]
     if not eligible:
         return []

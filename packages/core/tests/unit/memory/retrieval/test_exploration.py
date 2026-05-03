@@ -441,3 +441,77 @@ class TestMetadataCoercion:
         # the original isinstance(..., dict) check provided.
         assert _coerce_metadata_to_dict('not a dict') == {}
         assert _coerce_metadata_to_dict(42) == {}
+
+
+class TestCrossPathInjectionGuard:
+    """Hermes round-21 HIGH: a unit already carrying ``exploration`` or
+    ``edge_exploration`` metadata MUST NOT be re-injected by either
+    selector, even if the call-site disjoint-pool invariant is broken.
+    """
+
+    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    def test_low_mw_selector_skips_already_exploration_annotated(self, _mock):
+        """A unit already annotated ``exploration=True`` must not be
+        re-selected by ``select_exploration_candidates`` — defends against
+        a caller that breaks the disjoint-pool invariant."""
+        results = [_make_unit(success=10, failure=2)]
+        cold_clean = _make_unit(success=0, failure=0)
+        cold_already = _make_unit(success=0, failure=0)
+        cold_already.unit_metadata = {'exploration': True}
+        candidates = [results[0], cold_clean, cold_already]
+        selected = select_exploration_candidates(results, candidates, epsilon=1.0)
+        selected_ids = {u.id for u in selected}
+        assert cold_already.id not in selected_ids
+        # The clean cold-start unit IS still eligible.
+        assert cold_clean.id in selected_ids
+
+    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    def test_low_mw_selector_skips_already_edge_exploration_annotated(self, _mock):
+        results = [_make_unit(success=10, failure=2)]
+        cold_clean = _make_unit(success=0, failure=0)
+        cold_already = _make_unit(success=0, failure=0)
+        cold_already.unit_metadata = {'edge_exploration': True}
+        candidates = [results[0], cold_clean, cold_already]
+        selected = select_exploration_candidates(results, candidates, epsilon=1.0)
+        selected_ids = {u.id for u in selected}
+        assert cold_already.id not in selected_ids
+        assert cold_clean.id in selected_ids
+
+    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    def test_edge_selector_skips_already_exploration_annotated(self, _mock):
+        """A unit already annotated ``exploration=True`` must not be
+        re-selected by ``select_edge_exploration_candidates``."""
+        results = [_make_unit()]
+        # High-variance candidate (cold-start gives MAX_VARIANCE).
+        hv_clean = _make_unit(confidence=0.5, confidence_evidence_count=0)
+        hv_already = _make_unit(confidence=0.5, confidence_evidence_count=0)
+        hv_already.unit_metadata = {'exploration': True}
+        candidates = [results[0], hv_clean, hv_already]
+        selected = select_edge_exploration_candidates(
+            results,
+            candidates,
+            epsilon=1.0,
+            high_variance_fraction=DEFAULT_HIGH_VARIANCE_FRACTION,
+            max_injections=10,
+        )
+        selected_ids = {u.id for u in selected}
+        assert hv_already.id not in selected_ids
+        assert hv_clean.id in selected_ids
+
+    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    def test_edge_selector_skips_already_edge_exploration_annotated(self, _mock):
+        results = [_make_unit()]
+        hv_clean = _make_unit(confidence=0.5, confidence_evidence_count=0)
+        hv_already = _make_unit(confidence=0.5, confidence_evidence_count=0)
+        hv_already.unit_metadata = {'edge_exploration': True}
+        candidates = [results[0], hv_clean, hv_already]
+        selected = select_edge_exploration_candidates(
+            results,
+            candidates,
+            epsilon=1.0,
+            high_variance_fraction=DEFAULT_HIGH_VARIANCE_FRACTION,
+            max_injections=10,
+        )
+        selected_ids = {u.id for u in selected}
+        assert hv_already.id not in selected_ids
+        assert hv_clean.id in selected_ids
