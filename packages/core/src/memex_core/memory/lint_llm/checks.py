@@ -18,7 +18,7 @@ References: RFC-006 §"LLM check types — DSPy signatures",
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import dspy
@@ -166,7 +166,7 @@ def make_semantic_contradiction_check(
         polarity_hint: PolarityLiteral | None = None
         polarity_result = context.polarity if context is not None else None
         if polarity_result is not None:
-            polarity_hint = polarity_result.label.value  # type: ignore[assignment]
+            polarity_hint = cast(PolarityLiteral, polarity_result.label.value)
 
         prediction = await _llm.run_dspy_operation(
             lm=lm,

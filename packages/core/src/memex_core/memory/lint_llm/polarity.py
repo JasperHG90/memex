@@ -122,8 +122,19 @@ class PolarityClassifier:
 
 
 def _argmax_label(probs: dict[str, float]) -> PolarityLabel:
+    """Return the argmax three-way label.
+
+    Raises ``ValueError`` on empty input — an empty ``probs`` dict almost
+    certainly indicates a malformed model output / ONNX session failure
+    upstream, and silently masking it as ``NEUTRAL`` would leave operators
+    unable to distinguish "the model said neutral" from "the model produced
+    no output."
+    """
     if not probs:
-        return PolarityLabel.NEUTRAL
+        raise ValueError(
+            'Cannot derive argmax label: NLI classifier returned empty '
+            'probability dict (likely malformed model output).'
+        )
     label = max(probs, key=lambda k: probs[k])
     return PolarityLabel(label)
 

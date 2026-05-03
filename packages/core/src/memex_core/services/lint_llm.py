@@ -654,6 +654,16 @@ class LintLLMService(BaseService):
         FIFO over ``created_at, id``. Each successfully processed row is
         dismissed (non-destructive); over-cap rows from a prior tick stay
         deferred until the quota has capacity.
+
+        F10b note: deferred rows are invoked with an empty ``CheckContext``
+        (no ``polarity_hint``, no ``polarity_*_prob`` in ``extra_evidence``).
+        The polarity result that originally cleared the gate is not persisted
+        on the deferred ``MaintenanceProposal``, and re-running NLI on every
+        drained row would defeat the per-vault rate-limit (PolarityRateLimiter
+        already accounted for the original call). Callers comparing immediate
+        vs deferred findings should expect this evidence asymmetry; surfacing
+        polarity to deferred findings requires persisting the result on the
+        proposal row, which is out of F10b's scope.
         """
         settings = self._settings
         if not settings.enabled or settings.cost_cap_per_24h <= 0:

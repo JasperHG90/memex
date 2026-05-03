@@ -124,6 +124,17 @@ class TestPolarityClassifier:
         with pytest.raises(ValueError):
             PolarityClassifier(AsyncMock(), polarity_threshold=1.1)
 
+    @pytest.mark.asyncio
+    async def test_classify_pair_raises_on_empty_probs(self):
+        """An empty probability dict from the NLI model should surface as a
+        ValueError, not silently default to NEUTRAL — empty probs almost
+        always indicate a malformed/failed model output upstream."""
+        model = AsyncMock()
+        model.classify = AsyncMock(return_value={})
+        clf = PolarityClassifier(model)
+        with pytest.raises(ValueError, match='empty probability dict'):
+            await clf.classify_pair('a', 'b', vault_id=uuid4())
+
     def test_polarity_result_label_coerces_string(self):
         result = PolarityResult(
             label='contradiction',  # type: ignore[arg-type]
