@@ -18,6 +18,7 @@ References: RFC-006 §"LLM check types — DSPy signatures",
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 from uuid import UUID
 
 import dspy
@@ -30,7 +31,12 @@ from memex_core.memory.lint_llm.signatures import (
     CheckSemanticContradiction,
 )
 from memex_core.memory.lint_llm.surprise import compute_unit_surprise
-from memex_core.memory.lint_llm.types import LLMLintFinding, RunLLMCheck
+from memex_core.memory.lint_llm.types import (
+    CheckContext,
+    LLMLintFinding,
+    PolarityLiteral,
+    RunLLMCheck,
+)
 from memex_core.memory.sql_models import LintType
 
 logger = logging.getLogger('memex.core.memory.lint_llm.checks')
@@ -127,11 +133,23 @@ def make_semantic_contradiction_check(
     LLM whether any of them is a sentence-level inversion of the audited
     unit. Surprise is recomputed inside the check so the evidence payload
     can carry it for downstream filtering / diagnostics.
+
+    F10b: when the orchestrator (:meth:`LintLLMService.maybe_run`) attaches a
+    :class:`CheckContext` carrying a ``PolarityResult`` (because the
+    cosine-OR-polarity gate cleared via the polarity branch), the check
+    forwards the argmax label to the DSPy signature as ``polarity_hint``
+    and adds the probabilities to ``extra_evidence``. With no context, the
+    check is byte-identical to its F10 behaviour.
     """
     predictor = dspy.Predict(CheckSemanticContradiction)
     sk = surprise_k if surprise_k is not None else k
 
-    async def _check(unit_id: UUID, vault_id: UUID, session: AsyncSession) -> LLMLintFinding | None:
+    async def _check(
+        unit_id: UUID,
+        vault_id: UUID,
+        session: AsyncSession,
+        context: CheckContext | None = None,
+    ) -> LLMLintFinding | None:
         unit_text = await _load_unit_text(session, unit_id)
         if unit_text is None:
             logger.warning('F10 semantic-contradiction: unit %s missing — skipping', unit_id)
@@ -139,13 +157,16 @@ def make_semantic_contradiction_check(
 
         related = await _load_top_k_related(session, unit_id, vault_id, k=k)
         if len(related) < 2:
-            # Need at least two peers to make a sentence-level contradiction
-            # call meaningful; below that, the corpus is too sparse.
             return None
 
         related_ids = [rid for rid, _ in related]
         related_texts = [t for _, t in related]
         score = await compute_unit_surprise(unit_id, vault_id, session, k=sk)
+
+        polarity_hint: PolarityLiteral | None = None
+        polarity_result = context.polarity if context is not None else None
+        if polarity_result is not None:
+            polarity_hint = cast(PolarityLiteral, polarity_result.label.value)
 
         prediction = await _llm.run_dspy_operation(
             lm=lm,
@@ -153,6 +174,7 @@ def make_semantic_contradiction_check(
             input_kwargs={
                 'unit_text': unit_text,
                 'related_units_text': related_texts,
+                'polarity_hint': polarity_hint,
             },
             operation_name='lint_llm.semantic_contradiction',
         )
@@ -167,6 +189,13 @@ def make_semantic_contradiction_check(
             str(related_ids[i]) for i in contradicting_indices if 0 <= i < len(related_ids)
         ]
 
+        extra_evidence: dict[str, Any] = {}
+        if polarity_result is not None:
+            extra_evidence['polarity_label'] = polarity_result.label.value
+            extra_evidence['polarity_contradiction_prob'] = polarity_result.contradiction_prob
+            extra_evidence['polarity_entailment_prob'] = polarity_result.entailment_prob
+            extra_evidence['polarity_neutral_prob'] = polarity_result.neutral_prob
+
         return LLMLintFinding(
             rule_name=_RULE_LLM_SEMANTIC_CONTRADICTION,
             check_type='semantic_contradiction',
@@ -176,6 +205,7 @@ def make_semantic_contradiction_check(
             surprise_score=score,
             explanation=str(getattr(prediction, 'explanation', '') or ''),
             related_unit_ids=cited_unit_ids,
+            extra_evidence=extra_evidence,
             lint_type=LintType.QUALITY,
         )
 
@@ -198,7 +228,12 @@ def make_schema_drift_check(
     predictor = dspy.Predict(CheckSchemaDrift)
     sk = surprise_k if surprise_k is not None else k
 
-    async def _check(unit_id: UUID, vault_id: UUID, session: AsyncSession) -> LLMLintFinding | None:
+    async def _check(
+        unit_id: UUID,
+        vault_id: UUID,
+        session: AsyncSession,
+        context: CheckContext | None = None,
+    ) -> LLMLintFinding | None:
         unit_text = await _load_unit_text(session, unit_id)
         if unit_text is None:
             logger.warning('F10 schema-drift: unit %s missing — skipping', unit_id)

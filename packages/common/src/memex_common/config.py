@@ -364,6 +364,38 @@ RerankerBackend: TypeAlias = Annotated[
 ]
 
 
+class NLIModelConfig(BaseModel):
+    """Configuration for F10b's polarity-discriminating NLI classifier.
+
+    The NLI signal augments F10's surprise gate so polarity-inverting unit/peer
+    pairs (e.g. "User prefers staging" vs "User prefers production") clear the
+    gate even when MiniLM-L12 cosine surprise alone cannot lift them above the
+    surprise threshold (POC-002).
+    """
+
+    type: Literal['onnx'] = Field(
+        default='onnx',
+        description='Backend type. Currently only the ONNX backend is supported.',
+    )
+    enabled: bool = Field(
+        default=True,
+        description='Master kill-switch for the F10b NLI gate. If False the gate '
+        'collapses to F10 cosine-only behaviour.',
+    )
+    polarity_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description='Minimum NLI contradiction-probability for a peer pair to clear the '
+        'F10 surprise gate via the polarity branch.',
+    )
+    rate_limit_per_vault_per_hour: int | None = Field(
+        default=None,
+        ge=1,
+        description='Optional per-vault hourly cap on NLI invocations. None = unlimited.',
+    )
+
+
 class SearchStrategiesConfig(BaseModel):
     """Default enabled search strategies for memory retrieval."""
 
@@ -1305,6 +1337,12 @@ class LintLLMConfig(BaseModel):
     checks: LintLLMChecksConfig = Field(
         default_factory=LintLLMChecksConfig,
         description='Per-check feature flags for the DSPy lint signatures.',
+    )
+    polarity: NLIModelConfig = Field(
+        default_factory=NLIModelConfig,
+        description='F10b NLI polarity classifier configuration (entailment / neutral / '
+        'contradiction). The NLI branch only fires when cosine surprise is below '
+        'surprise_threshold, so this is a fallback signal — never a primary gate.',
     )
 
 

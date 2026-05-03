@@ -12,16 +12,19 @@ Both are wrapped in F10's circuit breaker via
 (``checks.make_semantic_contradiction_check`` /
 ``make_schema_drift_check``).
 
-Polarity discrimination is a known structural limit of MiniLM-L12
-embeddings — POC-F10 found that the surprise gate cannot raise polarity
-inversions to threshold. F10 ships these signatures with that constraint
-in place; Tier B will revisit via NLI-scored gate input. See
-``pocs/002-f10-surprise-threshold/result.md``.
+Polarity discrimination is bridged by F10b — see
+``memex_core.memory.lint_llm.polarity`` and the OR'd
+``surprise.gate_passes`` composition. The NLI label is passed through
+to :class:`CheckSemanticContradiction` via ``polarity_hint`` so the LLM
+has both the topical-novelty signal (cosine surprise) and the
+sign-of-meaning signal (NLI label) available.
 """
 
 from __future__ import annotations
 
 import dspy
+
+from memex_core.memory.lint_llm.types import PolarityLiteral
 
 
 class CheckSemanticContradiction(dspy.Signature):
@@ -45,6 +48,14 @@ class CheckSemanticContradiction(dspy.Signature):
     )
     related_units_text: list[str] = dspy.InputField(
         desc='Top-k related units from the same vault, indexed 0..k-1.'
+    )
+    polarity_hint: PolarityLiteral | None = dspy.InputField(
+        desc=(
+            'F10b NLI classifier label (entailment / neutral / contradiction) '
+            'when the surprise gate cleared via the polarity branch only. '
+            'Use as a HINT, not a hard signal — the LLM is still the final '
+            'judge. Empty / None when the cosine surprise gate alone fired.'
+        ),
     )
     has_contradiction: bool = dspy.OutputField(
         desc='True if at least one related unit contradicts the audited unit.'

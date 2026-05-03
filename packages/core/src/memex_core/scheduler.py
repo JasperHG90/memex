@@ -210,10 +210,34 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
         make_schema_drift_check,
         make_semantic_contradiction_check,
     )
+    from memex_core.memory.lint_llm.polarity import (
+        PolarityClassifier,
+        PolarityRateLimiter,
+    )
+    from memex_core.memory.models import get_nli_model
 
     settings = api.config.server.memory.lint_llm
     if not settings.enabled or settings.cost_cap_per_24h <= 0:
         return
+
+    polarity_classifier: 'PolarityClassifier | None' = None
+    if settings.polarity.enabled:
+        try:
+            nli_model = await get_nli_model(settings.polarity)
+            if nli_model is not None:
+                polarity_classifier = PolarityClassifier(
+                    nli_model,
+                    polarity_threshold=settings.polarity.polarity_threshold,
+                    rate_limiter=PolarityRateLimiter(
+                        max_per_vault_per_hour=settings.polarity.rate_limit_per_vault_per_hour,
+                    ),
+                )
+        except Exception as e:
+            logger.warning(
+                'Scheduler: F10b NLI classifier load failed (%s); '
+                'falling back to F10 cosine-only gate',
+                e,
+            )
 
     checks: list[tuple[str, object]] = []
     if settings.checks.semantic_contradiction.enabled:
@@ -236,7 +260,15 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
             for vault in vaults:
                 for check_name, check in checks:
                     try:
-                        summary = await api.lint_llm.tick(vault.id, run_llm_check=check)
+                        summary = await api.lint_llm.tick(
+                            vault.id,
+                            run_llm_check=check,
+                            polarity_classifier=(
+                                polarity_classifier
+                                if check_name == 'semantic_contradiction'
+                                else None
+                            ),
+                        )
                         if (
                             summary.findings_emitted
                             or summary.deferred
