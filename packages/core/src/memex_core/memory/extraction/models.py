@@ -14,7 +14,14 @@ from pydantic import BaseModel, field_serializer, field_validator, model_validat
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
-from memex_common.schemas import IntentClass, IntentLiteral, RiskClass, RiskLiteral
+from memex_common.schemas import (
+    IntentClass,
+    IntentLiteral,
+    RiskClass,
+    RiskLiteral,
+    coerce_intent_class as _shared_coerce_intent_class,
+    coerce_risk_class as _shared_coerce_risk_class,
+)
 
 DATE_REGEX = r'^-?\d{4,}-\d{2}-\d{2}$'
 
@@ -488,18 +495,15 @@ class RawFact(BaseFact):
     @field_validator('intent_class', mode='before')
     @classmethod
     def coerce_intent_class(cls, v: object) -> str:
-        # F25b default-on-fail: LLM-omitted or invalid intent → 'durable'.
-        if isinstance(v, str) and v in {c.value for c in IntentClass}:
-            return v
-        return IntentClass.DURABLE.value
+        # F25b default-on-fail — delegated to the shared utility in
+        # ``memex_common.schemas`` (Hermes round-6 MED: single source of
+        # truth for the coercion across RawFact + ExtractedFact).
+        return _shared_coerce_intent_class(v)
 
     @field_validator('risk_class', mode='before')
     @classmethod
     def coerce_risk_class(cls, v: object) -> str:
-        # F25b default-on-fail: LLM-omitted or invalid risk → 'none'.
-        if isinstance(v, str) and v in {c.value for c in RiskClass}:
-            return v
-        return RiskClass.NONE.value
+        return _shared_coerce_risk_class(v)
 
     @field_validator('occurred_start', 'occurred_end')
     @classmethod
@@ -619,16 +623,15 @@ class ExtractedFact(BaseFact):
     @field_validator('intent_class', mode='before')
     @classmethod
     def coerce_intent_class(cls, v: object) -> str:
-        if isinstance(v, str) and v in {c.value for c in IntentClass}:
-            return v
-        return IntentClass.DURABLE.value
+        # Delegates to the shared utility — same coercion logic as RawFact,
+        # so a future addition to IntentClass propagates to both validators
+        # without manual lockstep.
+        return _shared_coerce_intent_class(v)
 
     @field_validator('risk_class', mode='before')
     @classmethod
     def coerce_risk_class(cls, v: object) -> str:
-        if isinstance(v, str) and v in {c.value for c in RiskClass}:
-            return v
-        return RiskClass.NONE.value
+        return _shared_coerce_risk_class(v)
 
 
 class ProcessedFact(SQLModel):

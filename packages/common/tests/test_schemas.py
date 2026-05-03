@@ -137,3 +137,58 @@ def test_note_dto_binary_content_serialization():
     dumped = dto.model_dump(mode='json')
     assert dumped['filename'] == 'report.pdf'
     assert isinstance(dumped['content'], str)
+
+
+class TestSharedClassificationCoercers:
+    """F25b — ``coerce_intent_class`` / ``coerce_risk_class`` are the single
+    source of truth for default-on-fail coercion of LLM-emitted intent/risk
+    strings. Both ``RawFact`` and ``ExtractedFact`` validators (in
+    ``memex_core.memory.extraction.models``) delegate to these helpers so
+    they cannot diverge if a future ``IntentClass`` / ``RiskClass`` value is
+    added.
+    """
+
+    def test_intent_passthrough_for_valid_values(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        for c in IntentClass:
+            assert coerce_intent_class(c.value) == c.value
+
+    def test_risk_passthrough_for_valid_values(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        for c in RiskClass:
+            assert coerce_risk_class(c.value) == c.value
+
+    def test_intent_invalid_string_falls_back_to_default(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        for garbage in ('', 'forever', 'unknown', 'critical'):
+            assert coerce_intent_class(garbage) == IntentClass.DURABLE.value
+
+    def test_risk_invalid_string_falls_back_to_default(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        for garbage in ('', 'very-bad', 'redacted'):
+            assert coerce_risk_class(garbage) == RiskClass.NONE.value
+
+    def test_intent_non_string_garbage_falls_back_to_default(self) -> None:
+        from memex_common.schemas import IntentClass, coerce_intent_class
+
+        garbage_inputs: list[object] = [
+            None,
+            42,
+            3.14,
+            ['durable'],
+            {'k': 'durable'},
+            b'durable',
+        ]
+        for garbage in garbage_inputs:
+            assert coerce_intent_class(garbage) == IntentClass.DURABLE.value
+
+    def test_risk_non_string_garbage_falls_back_to_default(self) -> None:
+        from memex_common.schemas import RiskClass, coerce_risk_class
+
+        garbage_inputs: list[object] = [None, 0, [], {}, b'none']
+        for garbage in garbage_inputs:
+            assert coerce_risk_class(garbage) == RiskClass.NONE.value
