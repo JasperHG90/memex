@@ -715,8 +715,15 @@ class RetrievalEngine:
                     )
                     if not request.include_superseded:
                         threshold = self.retrieval_config.superseded_threshold
+                        # Hermes round-19 LOW: use the SSOT helper for the
+                        # confidence read so the falsy-zero handling and
+                        # ``None`` fallback are consistent with the rest of
+                        # the rerank path (engine.py:1507) and lint
+                        # (services/lint_confidence.py).
                         bypass_pool = [
-                            u for u in bypass_pool if getattr(u, 'confidence', 1.0) >= threshold
+                            u
+                            for u in bypass_pool
+                            if extract_confidence_and_count(u)[0] >= threshold
                         ]
                     exploration_pool = bypass_pool
 

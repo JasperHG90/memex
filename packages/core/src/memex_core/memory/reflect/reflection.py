@@ -144,8 +144,6 @@ class ReflectionEngine:
         if not requests:
             return []
 
-        from collections import defaultdict
-
         # 1. Group by Vault ID to optimize DB fetching
         vault_groups = defaultdict(list)
         for r in requests:
