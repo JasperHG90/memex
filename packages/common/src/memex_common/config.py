@@ -523,6 +523,18 @@ class ReflectionConfig(BaseModel):
         default_factory=lambda: SummarizeNodeRateLimitConfig(),
         description='F5: per-(entity, vault) rate limit for memex_memory_summarize_node.',
     )
+    variance_prioritisation_enabled: bool = Field(
+        default=False,
+        description=(
+            'F22: when True, ``_batch_fetch_recent_memories`` sorts each entity '
+            'bucket by closed-form Beta(1, 1) posterior variance (descending) so '
+            'high-uncertainty units land first within the per-tick LLM budget. '
+            'Default False at ship time — F22 ships INERTLY (column + backfill '
+            'only) so reflection ordering does not change on deploy. Pairs with '
+            '``RetrievalConfig.certainty_modulation_enabled``: flip both after '
+            'observing CONFIDENCE_VARIANCE_OBSERVED populates as expected.'
+        ),
+    )
 
     @model_validator(mode='after')
     def _validate_weight_scores(v: 'ReflectionConfig'):

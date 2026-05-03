@@ -580,13 +580,24 @@ class ReflectionEngine:
         # per-tick LLM budget concentrates on uncertain units (highest
         # information yield). Stable sort preserves the existing
         # event_date DESC tiebreak from the SQL window function.
-        def _variance_key(unit: MemoryUnit) -> float:
-            confidence, count = extract_confidence_and_count(unit)
-            _, variance = mean_and_variance(confidence, count)
-            return variance
+        #
+        # Hermes round-10 HIGH: gated on
+        # ``ReflectionConfig.variance_prioritisation_enabled`` (default
+        # False) so the F22 migration ships INERTLY — reflection ordering
+        # does not change on deploy. Operators flip the flag after the
+        # ``CONFIDENCE_VARIANCE_OBSERVED`` histogram (calibration metric
+        # in retrieval/engine.py) populates as expected. This pairs with
+        # ``RetrievalConfig.certainty_modulation_enabled`` for the F47
+        # boost gating.
+        if self.config.server.memory.reflection.variance_prioritisation_enabled:
 
-        for eid, units in memories_map.items():
-            units.sort(key=_variance_key, reverse=True)
+            def _variance_key(unit: MemoryUnit) -> float:
+                confidence, count = extract_confidence_and_count(unit)
+                _, variance = mean_and_variance(confidence, count)
+                return variance
+
+            for eid, units in memories_map.items():
+                units.sort(key=_variance_key, reverse=True)
 
         return memories_map
 
