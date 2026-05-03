@@ -892,13 +892,13 @@ class RetrievalConfig(BaseModel):
         description='Settings for note/unit relationship enrichment in search results.',
     )
     fsfm_branch_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             'F40 pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
-            'OFF by default because the columns it references (importance, stability, '
-            'last_outcome_at on memory_units) ship with F11. F11 flips this to True in the '
-            'same PR that lands the migration. The MW branch (success_co_count / '
-            'failure_co_count) ships ON unconditionally — those columns already exist.'
+            'Default flipped to True by F11 (Wave 16) once the importance / stability / '
+            'last_outcome_at columns shipped on memory_units. Set to False to keep the '
+            'pre-filter on MW + Confidence branches only — the column migration stays '
+            'independently revertible from this flag flip.'
         ),
     )
 
