@@ -545,6 +545,24 @@ class MemoryUnitDTO(MemoryUnitBase):
         description='Confidence score (0.0-1.0).',
     )
 
+    confidence_evidence_count: int = Field(
+        default=0,
+        ge=0,
+        description='F22: negative-evidence event count (number of contradicts/weakens '
+        'links pointing at this unit). Cold-start = 0; bumped on each weaken/contradict '
+        'step in the contradiction engine.',
+    )
+
+    confidence_variance: float = Field(
+        default=1.0 / 12.0,
+        ge=0.0,
+        le=1.0 / 12.0,
+        description='F22: closed-form Beta(1, 1) posterior variance derived at '
+        'hydration from (confidence, confidence_evidence_count). Range [0, 1/12]. '
+        'Cold-start (count=0) lands at 1/12 (max); shrinks toward 0 as evidence '
+        'accumulates. Lower variance = more supporting evidence = more trustworthy.',
+    )
+
     superseded_by: list[SupersessionInfo] | None = Field(
         default=None,
         description='Units that supersede this one.',
@@ -564,6 +582,23 @@ class MemoryUnitDTO(MemoryUnitBase):
         default=False,
         description='Whether this unit has been deprioritized (non-destructive retrieval downweight).',
     )
+
+    @model_validator(mode='after')
+    def _compute_confidence_variance(self) -> 'MemoryUnitDTO':
+        """F22: derive confidence_variance from (confidence, evidence_count).
+
+        Closed-form Beta(1, 1) posterior variance — kept inline here (rather
+        than importing memex_core.memory.confidence) to avoid memex_common
+        depending on memex_core. The formula MUST stay in lockstep with
+        ``memex_core.memory.confidence.mean_and_variance`` — guarded by the
+        cross-reference unit test in ``test_confidence.py``.
+        """
+        alpha = 1.0 + self.confidence * self.confidence_evidence_count
+        beta = 1.0 + (1.0 - self.confidence) * self.confidence_evidence_count
+        n = alpha + beta
+        variance = (alpha * beta) / (n * n * (n + 1.0))
+        object.__setattr__(self, 'confidence_variance', variance)
+        return self
 
     @property
     def enriched_text(self) -> str:

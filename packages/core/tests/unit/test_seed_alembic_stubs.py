@@ -56,14 +56,17 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    # Head moves forward with each Wave-N schema patch (issue #34 added 031).
-    assert heads == ['031_proposal_resolved_by'], (
-        f'Expected single head 031_proposal_resolved_by, got {heads}'
+    # Head moves forward with each Wave-N schema patch.
+    # F11 added 032 (FSFM decay columns); F22 adds 033 (confidence evidence count).
+    assert heads == ['033_confidence_evidence_count'], (
+        f'Expected single head 033_confidence_evidence_count, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
-    top7 = [(r.revision, r.down_revision) for r in walk[:7]]
-    expected_top7 = [
+    top9 = [(r.revision, r.down_revision) for r in walk[:9]]
+    expected_top9 = [
+        ('033_confidence_evidence_count', '032_fsfm_decay_columns'),
+        ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
         ('031_proposal_resolved_by', '030_revisit_last_reviewed_at'),
         ('030_revisit_last_reviewed_at', '029_lint_llm_quota'),
         ('029_lint_llm_quota', '028_procedure_outcomes'),
@@ -72,7 +75,7 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('026_revisit_columns', '025_maintenance_proposals'),
         ('025_maintenance_proposals', '024_intent_risk_classifier'),
     ]
-    assert top7 == expected_top7, f'Tier A chain mismatch: got {top7}'
+    assert top9 == expected_top9, f'Tier A chain mismatch: got {top9}'
 
 
 @pytest.mark.parametrize('rev,down,fid', _TIER_A_STUBS)
