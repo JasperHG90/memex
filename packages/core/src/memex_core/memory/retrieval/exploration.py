@@ -71,9 +71,17 @@ def _already_injected(unit: MemoryUnit) -> bool:
     backs it up so a future caller that breaks the invariant does NOT
     get a unit with both ``exploration=True`` and
     ``edge_exploration=True``.
+
+    Hermes round-22 HIGH: uses ``key in metadata`` (presence check)
+    rather than ``metadata.get(key)`` (truthy check). The intent is
+    "has this annotation been set", not "is this value truthy" — so
+    a future caller setting ``exploration=False`` (e.g. for a
+    "tested-and-passed" status) would still be excluded from
+    re-injection. The injectors themselves only ever write ``True``,
+    but the presence check is correct-by-construction.
     """
     metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-    return any(metadata.get(key) for key in _INJECTION_ANNOTATION_KEYS)
+    return any(key in metadata for key in _INJECTION_ANNOTATION_KEYS)
 
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')

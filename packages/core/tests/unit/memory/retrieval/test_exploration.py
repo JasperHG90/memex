@@ -515,3 +515,21 @@ class TestCrossPathInjectionGuard:
         selected_ids = {u.id for u in selected}
         assert hv_already.id not in selected_ids
         assert hv_clean.id in selected_ids
+
+    @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
+    def test_guard_uses_presence_not_truthy_check(self, _mock):
+        """Hermes round-22 HIGH: the guard checks ``key in metadata``,
+        not ``metadata.get(key)`` truthiness. A unit annotated with
+        ``exploration=False`` (a falsy but present value) MUST still be
+        excluded from re-injection.
+        """
+        results = [_make_unit(success=10, failure=2)]
+        cold_clean = _make_unit(success=0, failure=0)
+        cold_falsy_annotated = _make_unit(success=0, failure=0)
+        # Falsy but PRESENT — a truthy-only check would let this through.
+        cold_falsy_annotated.unit_metadata = {'exploration': False}
+        candidates = [results[0], cold_clean, cold_falsy_annotated]
+        selected = select_exploration_candidates(results, candidates, epsilon=1.0)
+        selected_ids = {u.id for u in selected}
+        assert cold_falsy_annotated.id not in selected_ids
+        assert cold_clean.id in selected_ids
