@@ -127,6 +127,27 @@ def mean_and_variance(confidence: float, evidence_count: int) -> tuple[float, fl
     with bad input now surfaces at the computation site rather than
     silently returning garbage downstream. ``evidence_count`` must be
     non-negative for the same reason.
+
+    Layered out-of-range policy (Hermes round-18 LOW)
+    -------------------------------------------------
+    Three call paths use different clamp policies by design:
+
+      * High-traffic retrieval / lint paths clamp via
+        ``extract_confidence_and_count`` and
+        ``lint_confidence._clamp_confidence_pair`` so a single bad row
+        cannot 500 a request.
+      * The ``MemoryUnitDTO`` validator clamps + writes back via
+        ``object.__setattr__`` for cross-field consistency
+        (``confidence_variance`` is derived; the two must agree).
+      * THIS function — the canonical formula — RAISES so a direct
+        caller with bad input fails loudly at the computation site
+        rather than silently returning garbage.
+
+    The clamp helpers all use the same ``max(0.0, min(1.0, …))`` form,
+    so the policy difference is "raise vs. clamp", not "different
+    clamp". The cross-reference unit test in ``test_confidence.py``
+    pins the formula equivalence between this module and the DTO
+    validator.
     """
     if not (0.0 <= confidence <= 1.0):
         raise ValueError(
