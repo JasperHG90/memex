@@ -300,9 +300,11 @@ def _check_accepts_context(run_llm_check: RunLLMCheck) -> bool:
     """Return True iff ``run_llm_check`` accepts a ``context`` kwarg.
 
     Result is cached per-callable (weakly) so signature introspection only
-    runs once per check. Falls back to ``True`` when the signature cannot be
-    introspected (e.g. C-implemented callables): the caller-side ``run_llm_check``
-    is expected to accept ``context`` whenever it cannot be inspected.
+    runs once per check. Falls back to ``False`` when the signature cannot be
+    introspected (e.g. C-implemented callables): degrade safely to the legacy
+    3-arg call shape rather than risk an opaque ``TypeError: got an unexpected
+    keyword argument 'context'`` that is indistinguishable from a genuine bug
+    inside the check body.
     """
     cached = _CONTEXT_AWARE_CHECK_CACHE.get(run_llm_check)
     if cached is not None:
@@ -310,7 +312,7 @@ def _check_accepts_context(run_llm_check: RunLLMCheck) -> bool:
     try:
         sig = inspect.signature(run_llm_check)
     except (TypeError, ValueError):
-        accepts = True
+        accepts = False
     else:
         params = sig.parameters
         accepts = 'context' in params or any(

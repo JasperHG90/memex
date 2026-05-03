@@ -101,8 +101,14 @@ class PolarityClassifier:
     ) -> PolarityResult | None:
         """Run NLI on a single pair, respecting the per-vault rate limit.
 
-        Returns ``None`` when the rate limit rejects the call so the gate
-        knows to fall back to cosine-only.
+        Returns ``None`` when:
+
+        * the rate limit rejects the call (gate falls back to cosine-only), or
+        * the NLI model fails / returns malformed output (e.g. empty probs,
+          downstream session error). Failures are explicitly logged so they
+          are distinguishable from "model said neutral" in scheduler logs,
+          rather than propagating up through ``maybe_run`` → ``tick``'s
+          generic exception handler with a non-specific traceback.
         """
         admitted = await self.rate_limiter.admit(vault_id)
         if not admitted:
@@ -112,13 +118,20 @@ class PolarityClassifier:
             )
             return None
 
-        probs = await self.model.classify(premise=premise, hypothesis=hypothesis)
-        return PolarityResult(
-            label=_argmax_label(probs),
-            contradiction_prob=float(probs.get('contradiction', 0.0)),
-            entailment_prob=float(probs.get('entailment', 0.0)),
-            neutral_prob=float(probs.get('neutral', 0.0)),
-        )
+        try:
+            probs = await self.model.classify(premise=premise, hypothesis=hypothesis)
+            return PolarityResult(
+                label=_argmax_label(probs),
+                contradiction_prob=float(probs.get('contradiction', 0.0)),
+                entailment_prob=float(probs.get('entailment', 0.0)),
+                neutral_prob=float(probs.get('neutral', 0.0)),
+            )
+        except Exception:
+            logger.exception(
+                'F10b NLI classify failed for vault %s — falling back to cosine-only',
+                vault_id,
+            )
+            return None
 
 
 def _argmax_label(probs: dict[str, float]) -> PolarityLabel:

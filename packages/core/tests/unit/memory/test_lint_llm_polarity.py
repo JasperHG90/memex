@@ -125,15 +125,33 @@ class TestPolarityClassifier:
             PolarityClassifier(AsyncMock(), polarity_threshold=1.1)
 
     @pytest.mark.asyncio
-    async def test_classify_pair_raises_on_empty_probs(self):
-        """An empty probability dict from the NLI model should surface as a
-        ValueError, not silently default to NEUTRAL — empty probs almost
-        always indicate a malformed/failed model output upstream."""
+    async def test_classify_pair_returns_none_on_empty_probs(self, caplog):
+        """An empty probability dict from the NLI model is logged and surfaces
+        as ``None`` so the orchestrator falls back to cosine-only without
+        burning the per-vault rate-limit slot on a malformed result.
+        ``_argmax_label`` still raises (preserving the explicit-failure
+        contract for direct callers); ``classify_pair`` translates that to
+        the rate-limit-style ``None`` contract its caller already handles."""
         model = AsyncMock()
         model.classify = AsyncMock(return_value={})
         clf = PolarityClassifier(model)
-        with pytest.raises(ValueError, match='empty probability dict'):
-            await clf.classify_pair('a', 'b', vault_id=uuid4())
+        with caplog.at_level('ERROR'):
+            result = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert result is None
+        assert any('NLI classify failed' in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_classify_pair_returns_none_on_model_exception(self, caplog):
+        """A model error (e.g. ONNX session crash) is logged and translated to
+        ``None`` rather than propagated — same contract as the rate-limit
+        path, so callers don't need a separate failure branch."""
+        model = AsyncMock()
+        model.classify = AsyncMock(side_effect=RuntimeError('onnx session died'))
+        clf = PolarityClassifier(model)
+        with caplog.at_level('ERROR'):
+            result = await clf.classify_pair('a', 'b', vault_id=uuid4())
+        assert result is None
+        assert any('NLI classify failed' in r.message for r in caplog.records)
 
     def test_polarity_result_label_coerces_string(self):
         result = PolarityResult(
