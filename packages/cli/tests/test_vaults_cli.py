@@ -161,3 +161,44 @@ def test_create_vault(runner, mock_api, strip_ansi, monkeypatch):
     call_args = mock_api.create_vault.call_args[0][0]
     assert call_args.name == vault_name
     assert call_args.description == vault_desc
+
+
+def test_set_mw_mode_stationary(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+    vault_name = 'test-vault'
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.set_mw_mode.return_value = None
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['set-mw-mode', vault_name, 'stationary'])
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert 'stationary' in clean
+    mock_api.resolve_vault_identifier.assert_called_once_with(vault_name)
+    mock_api.set_mw_mode.assert_called_once_with(vault_uuid, 'stationary')
+
+
+def test_set_mw_mode_ema(runner, mock_api, strip_ansi, monkeypatch):
+    vault_uuid = uuid4()
+    vault_name = 'drift-vault'
+
+    mock_api.resolve_vault_identifier.return_value = vault_uuid
+    mock_api.set_mw_mode.return_value = None
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['set-mw-mode', vault_name, 'ema'])
+    assert result.exit_code == 0
+    clean = strip_ansi(result.stdout)
+    assert 'ema' in clean
+    mock_api.set_mw_mode.assert_called_once_with(vault_uuid, 'ema')
+
+
+def test_set_mw_mode_rejects_invalid(runner, mock_api, strip_ansi, monkeypatch):
+    result = runner.invoke(app, ['set-mw-mode', 'test-vault', 'emma'])
+    assert result.exit_code == 1
+    clean = strip_ansi(result.stdout)
+    assert 'Invalid mode' in clean
+    mock_api.set_mw_mode.assert_not_called()

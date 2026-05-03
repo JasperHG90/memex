@@ -1382,6 +1382,10 @@ class MemexAPI:
         """Remove all content from a vault. Delegates to VaultService."""
         return await self._vaults.truncate_vault(vault_id)
 
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Any:
+        """Set the MW mode for a vault. Delegates to VaultService."""
+        return await self._vaults.set_mw_mode(vault_id, mw_mode)
+
     async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
         """Add assets to an existing note. Delegates to NoteService."""
         return await self._notes.add_note_assets(note_id, files)

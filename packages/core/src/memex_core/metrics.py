@@ -136,7 +136,7 @@ OUTCOME_RECORDED_TOTAL = Counter(
 MW_SCORE_DISTRIBUTION = Histogram(
     'memex_mw_score',
     'Distribution of MW scores observed during outcome recording.',
-    ['vault_id'],
+    ['vault_id', 'mode'],
     buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 

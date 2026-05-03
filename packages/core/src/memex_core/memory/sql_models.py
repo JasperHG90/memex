@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -39,6 +39,13 @@ class ContentStatus(str, Enum):
     STALE = 'stale'
 
 
+class MWMode(StrEnum):
+    """MW counter mode per vault."""
+
+    STATIONARY = 'stationary'
+    EMA = 'ema'
+
+
 class Vault(SQLModel, table=True):  # type: ignore
     """
     What it is: A logical grouping of memories and knowledge.
@@ -54,10 +61,21 @@ class Vault(SQLModel, table=True):  # type: ignore
     )
     name: str = Field(index=True, unique=True, description='The name of the vault.')
     description: str | None = Field(default=None, description='Optional description of the vault.')
+    mw_mode: str = Field(
+        default=MWMode.STATIONARY,
+        sa_column=Column(Text, nullable=False, server_default='stationary'),
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
         description='Timestamp when the vault was created.',
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mw_mode IN ('stationary', 'ema')",
+            name='vaults_mw_mode_check',
+        ),
     )
 
 

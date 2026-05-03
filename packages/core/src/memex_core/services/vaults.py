@@ -237,3 +237,28 @@ class VaultService(BaseService):
         async with self.metastore.session() as session:
             stmt = select(Vault).where(Vault.name == name)
             return (await session.exec(stmt)).first()
+
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Any:
+        """Set the MW mode for a vault."""
+        from memex_core.memory.sql_models import Vault, MWMode
+
+        if mw_mode not in (MWMode.STATIONARY, MWMode.EMA):
+            raise ValueError(f"mw_mode must be 'stationary' or 'ema', got '{mw_mode}'")
+
+        async with self.metastore.session() as session:
+            vault = await session.get(Vault, vault_id)
+            if not vault:
+                raise VaultNotFoundError(f"Vault '{vault_id}' not found.")
+            vault.mw_mode = mw_mode
+            session.add(vault)
+            await session.commit()
+            await session.refresh(vault)
+            _VAULT_RESOLUTION_CACHE.clear()
+            audit_event(
+                self._audit_service,
+                'vault.mw_mode_changed',
+                'vault',
+                str(vault_id),
+                mw_mode=mw_mode,
+            )
+            return vault

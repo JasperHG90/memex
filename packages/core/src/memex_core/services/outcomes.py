@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_core.memory.sql_models import MWMode
 from memex_core.metrics import OUTCOME_RECORDED_TOTAL, MW_SCORE_DISTRIBUTION
 
 logger = structlog.get_logger(__name__)
@@ -47,12 +48,32 @@ def compute_mw_boost(
     success_co_count: int,
     failure_co_count: int,
     mw_alpha: float = MW_ALPHA_DEFAULT,
+    *,
+    mw_mode: MWMode | str = MWMode.STATIONARY,
+    last_outcome_at: datetime | None = None,
+    half_life_days: int = 60,
+    now: datetime | None = None,
 ) -> float:
     """Additive-marginal MW boost factor for retrieval composition.
 
     Returns 1.0 for cold-start units (neutral — no rank change).
+
+    When mw_mode is 'ema', the counters are EMA-decayed before computing the
+    posterior, so old evidence fades toward the prior mean of 0.5.
     """
-    mw_score = compute_mw_score(success_co_count, failure_co_count)
+    if mw_mode == MWMode.EMA:
+        from memex_core.memory.retrieval.mw_ema import compute_mw_ema_score
+
+        resolved_now = now or datetime.now(timezone.utc)
+        mw_score = compute_mw_ema_score(
+            success=success_co_count,
+            failure=failure_co_count,
+            last_outcome_at=last_outcome_at,
+            half_life_days=half_life_days,
+            now=resolved_now,
+        )
+    else:
+        mw_score = compute_mw_score(success_co_count, failure_co_count)
     return 1.0 + mw_alpha * (mw_score - 0.5)
 
 
@@ -260,9 +281,13 @@ class OutcomeService:
         refreshed = await session.exec(
             select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
         )
+        from memex_core.memory.sql_models import Vault
+
+        vault_row = await session.get(Vault, vault_uuid)
+        mw_mode_val = vault_row.mw_mode if vault_row else MWMode.STATIONARY
         for unit in refreshed.all():
             mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
-            MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id)).observe(mw_score)
+            MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id), mode=mw_mode_val).observe(mw_score)
 
         OUTCOME_RECORDED_TOTAL.labels(
             vault_id=str(vault_id), outcome='success' if success else 'failure'
