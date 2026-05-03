@@ -510,7 +510,21 @@ class SupersessionInfo(BaseModel):
 
 
 class MemoryUnitDTO(MemoryUnitBase):
-    """DTO for a Memory Unit (Fact/Experience)."""
+    """DTO for a Memory Unit (Fact/Experience).
+
+    PYDANTIC-ONLY (Hermes round-22 HIGH): this class deliberately does
+    NOT inherit from ``SQLModel`` and is never used for DDL / table
+    creation. The persistent table definition lives on
+    ``memex_core.memory.sql_models.MemoryUnit``, which carries the
+    ``sa_column=Column(Integer, ...)`` declarations for the F22
+    ``confidence_evidence_count`` (and friends) columns. The DTO
+    fields here therefore use plain ``Field(..., default=...)`` —
+    omitting ``sa_column`` is correct, not a bug. If a future change
+    promotes this DTO to a SQLModel ``table=True`` class, every
+    column-bearing field MUST gain a corresponding ``sa_column``
+    declaration to avoid Pydantic-type-inference creating a VARCHAR
+    where INTEGER is required.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
