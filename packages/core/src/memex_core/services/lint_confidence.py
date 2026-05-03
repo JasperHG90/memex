@@ -69,6 +69,13 @@ async def gate_blocks_finding(
     The per-row fetch is retained for tests and one-off callers; the
     rule-runner path uses :func:`bulk_load_confidence_map` to avoid the
     N+1 query that would otherwise fire on rules with many candidate rows.
+
+    DO NOT use this in a hot loop (Hermes round-18 LOW): each call fires
+    one round-trip to Postgres. If you find yourself iterating over a
+    candidate set and calling this per-unit, switch to
+    :func:`bulk_load_confidence_map` + :func:`confidence_map_blocks` —
+    the bulk pair is exactly this predicate against a single query's
+    worth of data.
     """
     row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
     if row is None:

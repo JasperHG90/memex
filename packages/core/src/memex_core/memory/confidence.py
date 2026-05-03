@@ -55,6 +55,17 @@ class HasConfidence(Protocol):
     attributes are typed ``| None`` because production rows can carry
     ``NULL`` (cold-start, stripped/stale model rows); the helper itself
     handles the ``None`` fallback.
+
+    Type-only contract (Hermes round-14 LOW + round-18 LOW): the
+    Protocol is decorated ``@runtime_checkable`` so ``isinstance``
+    works, but the helper that consumes it uses ``getattr`` with
+    defaults — a ``dict``, a bare ``object()``, or any value will pass
+    the static type check AND not raise at runtime; the helper just
+    returns ``(1.0, 0)``. This is the documented contract: the Protocol
+    is a *static* hint to mypy, NOT a runtime invariant. Do not rewrite
+    the helper body to read ``unit.confidence`` directly without first
+    auditing every call site for objects that satisfy the Protocol
+    via ``__getattr__`` magic rather than concrete attributes.
     """
 
     confidence: float | None
