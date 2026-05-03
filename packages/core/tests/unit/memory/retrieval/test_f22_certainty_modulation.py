@@ -22,6 +22,17 @@ from memex_core.memory.sql_models import MemoryUnit
 from memex_core.metrics import CONFIDENCE_BOOST_OBSERVED, CONFIDENCE_VARIANCE_OBSERVED
 
 
+def _histogram_sum(histogram) -> float:
+    """Read the cumulative sum of a Prometheus histogram (single source of truth).
+
+    Hermes round-14 LOW: ``_sum`` is a private implementation detail of the
+    Prometheus client. Wrap the access in one helper so a future
+    ``prometheus_client`` upgrade that renames or removes the attribute
+    needs to be updated in exactly one place across this test module.
+    """
+    return histogram._sum.get()
+
+
 def _make_unit(
     confidence: float = 1.0,
     evidence_count: int = 0,
@@ -87,13 +98,13 @@ class TestShipDefaultBitForBitWithF47:
 
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=False)
 
-        sum_before_a = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before_a = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit_low_evidence])
-        boost_a = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before_a
+        boost_a = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before_a
 
-        sum_before_b = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before_b = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit_high_evidence])
-        boost_b = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before_b
+        boost_b = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before_b
 
         # F47 baseline: 1.0 + 0.3 × (0.85 − 0.5) = 1.105
         expected = 1.0 + 0.3 * (0.85 - 0.5)
@@ -112,9 +123,9 @@ class TestColdStartNeutralWhenEnabled:
     async def test_cold_start_boost_is_neutral(self) -> None:
         unit = _make_unit(confidence=1.0, evidence_count=0)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=True)
-        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit])
-        boost = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before
+        boost = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before
         assert math.isclose(boost, 1.0, rel_tol=1e-6)
 
 
@@ -125,9 +136,9 @@ class TestVarianceMetricEmits:
     async def test_variance_histogram_observes(self) -> None:
         unit = _make_unit(confidence=0.3, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=True)
-        sum_before = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_VARIANCE_OBSERVED)
         await engine._rerank_results('q', [unit])
-        sum_after = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
+        sum_after = _histogram_sum(CONFIDENCE_VARIANCE_OBSERVED)
         # variance for (0.3, 20) ≈ 0.00943
         assert math.isclose(sum_after - sum_before, 105.0 / 11132.0, rel_tol=1e-6)
 
@@ -140,9 +151,9 @@ class TestVarianceMetricEmits:
         """
         unit = _make_unit(confidence=0.3, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=False)
-        sum_before = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_VARIANCE_OBSERVED)
         await engine._rerank_results('q', [unit])
-        sum_after = CONFIDENCE_VARIANCE_OBSERVED._sum.get()
+        sum_after = _histogram_sum(CONFIDENCE_VARIANCE_OBSERVED)
         # variance for (0.3, 20) ≈ 0.00943 — same emission path as the
         # flag-on case, just without the certainty multiplier on the boost.
         assert math.isclose(sum_after - sum_before, 105.0 / 11132.0, rel_tol=1e-6)
@@ -159,9 +170,9 @@ class TestModulatedBoostShape:
         """
         unit = _make_unit(confidence=0.3, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=True)
-        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit])
-        boost = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before
+        boost = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before
         c = certainty(0.3, 20)
         expected = 1.0 + 0.3 * (0.3 - 0.5) * c
         assert math.isclose(boost, expected, rel_tol=1e-6)
@@ -174,9 +185,9 @@ class TestModulatedBoostShape:
         """
         unit = _make_unit(confidence=1.0, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=True)
-        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit])
-        boost = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before
+        boost = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before
         c = certainty(1.0, 20)
         expected = 1.0 + 0.3 * 0.5 * c
         assert math.isclose(boost, expected, rel_tol=1e-6)
@@ -186,9 +197,9 @@ class TestModulatedBoostShape:
         """confidence=0.5, count=20: (confidence − 0.5) = 0 → boost = 1.0 regardless of certainty."""
         unit = _make_unit(confidence=0.5, evidence_count=20)
         engine = _make_engine([0.0], confidence_alpha=0.3, certainty_modulation_enabled=True)
-        sum_before = CONFIDENCE_BOOST_OBSERVED._sum.get()
+        sum_before = _histogram_sum(CONFIDENCE_BOOST_OBSERVED)
         await engine._rerank_results('q', [unit])
-        boost = CONFIDENCE_BOOST_OBSERVED._sum.get() - sum_before
+        boost = _histogram_sum(CONFIDENCE_BOOST_OBSERVED) - sum_before
         assert math.isclose(boost, 1.0, rel_tol=1e-6)
 
 
