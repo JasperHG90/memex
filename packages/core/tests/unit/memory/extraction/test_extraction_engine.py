@@ -408,6 +408,50 @@ class TestClassifyAndFilterMetricsGating:
         assert after_intent - before_intent == 1
         assert after_risk - before_risk == 1
 
+    def test_safety_class_facts_do_not_inflate_distribution(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-4 MED: ``CLASSIFIER_RISK_DISTRIBUTION`` must increment
+        only for facts that survive ``filter_safety_blocked``. Otherwise a
+        ``risk='safety'`` fact gets counted both as a ``safety`` distribution
+        tick *and* as a ``CLASSIFIER_BLOCKED_TOTAL`` tick — double-counting.
+        """
+        from memex_core.metrics import (
+            CLASSIFIER_INTENT_DISTRIBUTION,
+            CLASSIFIER_RISK_DISTRIBUTION,
+        )
+
+        cfg = ExtractionConfig()
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        before_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        before_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
+            intent_class='durable'
+        )._value.get()
+
+        facts = [
+            self._processed('durable', 'safety'),  # gets dropped
+            self._processed('durable', 'none'),  # gets persisted
+        ]
+        out = engine._classify_and_filter(facts)
+
+        after_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        after_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
+            intent_class='durable'
+        )._value.get()
+
+        assert len(out) == 1
+        # Safety-class fact does NOT show up on the distribution.
+        assert after_safety == before_safety, (
+            'CLASSIFIER_RISK_DISTRIBUTION must not increment for facts dropped '
+            'by filter_safety_blocked — they are tracked separately by '
+            'CLASSIFIER_BLOCKED_TOTAL.'
+        )
+        # The kept (non-safety) fact's intent does land on the distribution.
+        assert after_intent_durable - before_intent_durable == 1
+
 
 class TestPartialOverrideSemantics:
     """F25b — per-dimension overrides preserve the LLM's classification on

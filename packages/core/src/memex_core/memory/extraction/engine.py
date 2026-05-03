@@ -242,12 +242,15 @@ class ExtractionEngine:
           together with extraction — so per-dimension overrides are the only
           coherent semantics. See cognitive-memory-research-report.md §F25b
           (Surface impact) for the full rationale.
-        * Distribution metrics are incremented for the *final* intent / risk
-          values (post-override), so dashboards reflect what was actually
-          persisted.
         * Facts with ``risk_class='safety'`` are dropped before persistence
           via :func:`filter_safety_blocked`. This honors both LLM-classified
           safety and a deliberate ``risk_override='safety'`` from the caller.
+        * Distribution metrics are incremented for the *final* intent / risk
+          values (post-override, **post-safety-filter**), so dashboards
+          reflect what was actually persisted. Safety-class drops are
+          counted separately by ``CLASSIFIER_BLOCKED_TOTAL`` on the
+          safety-filter side — counting them on the distribution as well
+          would double-count them.
 
         When ``config.intent_risk_classifier_enabled`` is False, every fact is
         forced to the schema defaults (durable / none) regardless of LLM
@@ -285,17 +288,21 @@ class ExtractionEngine:
             for f in processed_facts:
                 f.risk_class = risk_value
 
-        for f in processed_facts:
-            # ``ProcessedFact.intent_class`` / ``risk_class`` are typed as
-            # ``IntentClass`` / ``RiskClass`` enums and every construction
-            # path assigns the enum value (kill-switch, override, and
-            # ``from_extracted_fact``). The previous ``hasattr`` defensive
-            # else-branch was dead code; if a non-enum ever lands here it's
-            # a type-safety bug worth surfacing, not silently masking.
+        # Drop safety-class facts FIRST, then emit distribution metrics on
+        # what survived. The docstring promises dashboards reflect what was
+        # *actually persisted*, so counting safety facts here would
+        # double-count them (they're already covered by the dedicated
+        # ``CLASSIFIER_BLOCKED_TOTAL`` counter on the safety-filter side).
+        # ``ProcessedFact.intent_class`` / ``risk_class`` are typed as
+        # ``IntentClass`` / ``RiskClass`` enums and every construction path
+        # assigns the enum value (kill-switch, override, and
+        # ``from_extracted_fact``); ``.value`` is therefore always defined.
+        kept = filter_safety_blocked(processed_facts)
+        for f in kept:
             CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class=f.intent_class.value).inc()
             CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class=f.risk_class.value).inc()
 
-        return filter_safety_blocked(processed_facts)
+        return kept
 
     async def extract_and_persist(
         self,
