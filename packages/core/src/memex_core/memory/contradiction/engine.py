@@ -87,8 +87,7 @@ class ContradictionEngine:
             )
 
             all_links: list[MemoryLink] = []
-            # Hermes round-4 HIGH (intra-batch) + round-5 HIGH (cross-batch):
-            # accumulate signed alpha-step deltas per target so multiple
+            # Accumulate signed alpha-step deltas per target so multiple
             # weakens against the same unit in one batch all land, AND apply
             # them via SQL-level arithmetic (``confidence = clamp(confidence +
             # :delta, 0, 1)``) so concurrent batches that touch overlapping
@@ -140,11 +139,11 @@ class ContradictionEngine:
 
             # Apply confidence deltas via SQL-level arithmetic so concurrent
             # _detect calls on overlapping units cannot drift confidence
-            # against the atomic confidence_evidence_count increment
-            # (Hermes round-5 HIGH). ``LEAST/GREATEST`` clamp matches the
-            # prior application-level ``max(0.0, min(1.0, ...))``.
+            # against the atomic confidence_evidence_count increment.
+            # ``LEAST/GREATEST`` clamp matches the prior application-level
+            # ``max(0.0, min(1.0, ...))``.
             #
-            # Round-4 HIGH semantic note (Hermes round-11): the deltas-and-
+            # Semantic note: the deltas-and-
             # clamp form trades per-step clamping (old: confidence=0.15
             # weakened twice → 0.05, 0.0 with two zero-pinned steps) for
             # accumulated-then-clamped (new: total delta -0.2 → 0.15-0.2
@@ -152,10 +151,10 @@ class ContradictionEngine:
             # any monotonic-decreasing sequence on a unit; only the
             # *number* of intermediate clamps changes — which is unobserved
             # because nothing reads the mid-batch state. The accumulation
-            # is what makes round-4's concurrency fix correct: per-step
+            # is what makes the concurrency fix correct: per-step
             # absolute writes raced; per-step deltas don't.
             #
-            # Reinforce semantic-change note (Hermes round-14 MED): for
+            # Reinforce semantic-change note: for
             # the *reinforce* (monotonic-increasing) path the endpoint
             # value is NOT identical to pre-fix behaviour. The old
             # ``confidence_updates`` dict's last-writer-wins absolute
@@ -173,7 +172,7 @@ class ContradictionEngine:
             # for typical contradiction-batch sizes (≤ a few units), but a
             # single bulk ``UPDATE … FROM (VALUES …)`` or ``executemany``
             # would collapse this to one round-trip if/when batch fan-out
-            # grows (Hermes round-7 MED — non-blocking).
+            # grows (non-blocking).
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(
@@ -184,7 +183,7 @@ class ContradictionEngine:
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
                     # GREATEST(0, ...) belt-and-suspenders parallels the
-                    # confidence column's clamp (Hermes round-9 LOW).
+                    # confidence column's clamp.
                     # Bumps are always +1 today, so the GREATEST is a no-op
                     # — but a future code change that produces negative
                     # deltas would clamp gracefully here instead of
@@ -239,8 +238,8 @@ class ContradictionEngine:
           - ``links``: link rows to upsert (deduped by the caller).
           - ``confidence_deltas``: signed alpha-step deltas keyed by unit_id.
             ``+alpha`` for reinforce, ``-alpha`` for weaken, ``-2*alpha`` for
-            contradict. The caller sums deltas per-unit (Hermes round-4 HIGH:
-            previously this dict was ``confidence_updates`` carrying the
+            contradict. The caller sums deltas per-unit (previously this
+            dict was ``confidence_updates`` carrying the
             absolute new value, so concurrent batches that touched the same
             target would overwrite each other and drift the confidence column
             out of sync with ``confidence_evidence_count``).
@@ -272,11 +271,10 @@ class ContradictionEngine:
         # Per-target confidence deltas (signed alpha steps) and evidence
         # bumps (always +1).
         #
-        # F22 invariant (Hermes round-17 MED — flagged for clarity):
         # ``evidence_bumps[u]`` counts negative-evidence events only —
         # one per ``weaken`` (delta = -alpha) and one per ``contradict``
         # (delta = -2*alpha) targeting ``u``. Reinforces are intentionally
-        # excluded from the count (F22 v1 backfill/forward symmetry —
+        # excluded from the count (backfill/forward symmetry —
         # see migration 033 backfill SQL which also filters
         # ``link_type IN ('contradicts', 'weakens')``). Both paths
         # count links, not events — a batch with 2 weakens on the same
@@ -306,7 +304,7 @@ class ContradictionEngine:
 
             if relation == 'reinforce':
                 # Symmetric reinforce: both endpoints gain +alpha. Reinforce
-                # does NOT bump evidence_count (F22 v1 design — see BACKLOG
+                # does NOT bump evidence_count (design — see BACKLOG
                 # known-v1-limitation: forward/backfill symmetry).
                 for u in [unit, existing_unit]:
                     confidence_deltas[u.id] = confidence_deltas.get(u.id, 0.0) + self.config.alpha

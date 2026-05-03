@@ -186,7 +186,7 @@ class TestBackfillVerificationLogging:
         mock_logger.warning.assert_not_called()
         # First positional arg is the format string; second is the count.
         args, _ = mock_logger.error.call_args
-        assert 'F22 backfill verification' in args[0]
+        assert 'backfill verification' in args[0]
         assert args[1] == 7
 
     def test_no_log_when_no_mismatches(self):

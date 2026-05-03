@@ -233,17 +233,16 @@ def upgrade() -> None:
         '  AND mu.confidence_evidence_count = 0 '
         'RETURNING 1'
     )
-    # Hermes round-16 LOW: per-batch progress logging so operators
-    # running the migration on a vault with millions of qualifying
-    # units can see forward progress instead of staring at a hung
-    # process. The cumulative total is also logged on the terminal
+    # Per-batch progress logging so operators running the migration on a
+    # vault with millions of qualifying units can see forward progress
+    # instead of staring at a hung process. The cumulative total is also logged on the terminal
     # (zero-rowcount) iteration so the final tally is unambiguous.
     backfilled_total = 0
     batch_index = 0
     while True:
         result = conn.execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
-        # ``sum(1 for _ in result)`` over the RETURNING payload (Hermes
-        # round-18 MED, refined round-25 MED): driver-independent counting
+        # ``sum(1 for _ in result)`` over the RETURNING payload:
+        # driver-independent counting
         # that does not rely on ``result.rowcount`` (which asyncpg may
         # report as ``-1``). ``sum`` counts without materialising rows
         # into a list, unlike the prior ``len(result.all())``.
@@ -251,7 +250,7 @@ def upgrade() -> None:
         result.close()
         if not batch_rowcount:
             logger.info(
-                'F22 backfill complete: %d batches, %d units backfilled total.',
+                'backfill complete: %d batches, %d units backfilled total.',
                 batch_index,
                 backfilled_total,
             )
@@ -259,13 +258,13 @@ def upgrade() -> None:
         batch_index += 1
         backfilled_total += batch_rowcount
         logger.info(
-            'F22 backfill batch %d: updated %d units (%d total).',
+            'backfill batch %d: updated %d units (%d total).',
             batch_index,
             batch_rowcount,
             backfilled_total,
         )
 
-    # Hermes round-6 MED: production runs migrations only (not
+    # Production runs migrations only (not
     # ``Base.metadata.create_all``), so the SQLModel-level
     # ``CheckConstraint('confidence_evidence_count >= 0', ...)`` would
     # otherwise be missing in the live DB. Idempotent — guarded by the
@@ -277,22 +276,21 @@ def upgrade() -> None:
             'confidence_evidence_count >= 0',
         )
 
-    # Backfill verification (Hermes round-18 MED, escalated round-22 HIGH):
-    # emit ``logger.error`` if any unit's ``confidence_evidence_count`` does
-    # not match the actual count of incoming contradicts/weakens links.
-    # This is the programmatic guard the docstring's "Operational
-    # requirement" section calls for: it does not fail the migration (the
-    # undercount is conservative and the column is operational, so the
-    # caller can proceed and reconcile post-deploy), but ``error`` level
-    # ensures the message surfaces in operator alerting tiers — a
-    # ``warning`` is too easily lost in deploy logs given the
-    # non-self-correcting nature of the mismatch (Hermes round-22 HIGH:
-    # the warning was deemed insufficient signal-to-noise). Hermes
-    # round-20 LOW: the query returns a single ``COUNT`` row (not a
-    # per-unit list), so the deploy-log payload is bounded by
-    # construction — only the aggregate mismatch count is logged.
+    # Backfill verification: emit ``logger.error`` if any unit's
+    # ``confidence_evidence_count`` does not match the actual count of
+    # incoming contradicts/weakens links. This is the programmatic guard
+    # the docstring's "Operational requirement" section calls for: it does
+    # not fail the migration (the undercount is conservative and the
+    # column is operational, so the caller can proceed and reconcile
+    # post-deploy), but ``error`` level ensures the message surfaces in
+    # operator alerting tiers — a ``warning`` is too easily lost in deploy
+    # logs given the non-self-correcting nature of the mismatch (the
+    # warning was deemed insufficient signal-to-noise). The query returns
+    # a single ``COUNT`` row (not a per-unit list), so the deploy-log
+    # payload is bounded by construction — only the aggregate mismatch
+    # count is logged.
     #
-    # Race window (Hermes round-23 MED, refinement-not-blocker):
+    # Race window (refinement-not-blocker):
     # this verification can produce a false-positive between the CTE
     # snapshot and the JOIN if the forward path bumps a unit
     # mid-statement. Under READ COMMITTED the CTE materialises a
@@ -327,7 +325,7 @@ def upgrade() -> None:
             'yes',
         )
         logger.error(
-            'F22 backfill verification: %d units have '
+            'backfill verification: %d units have '
             'confidence_evidence_count mismatched against actual link counts. '
             'Likely cause: contradiction engine bumped a unit between '
             'backfill iterations (see migration docstring "Operational '
@@ -343,7 +341,7 @@ def upgrade() -> None:
         )
         if fail_on_mismatch:
             raise RuntimeError(
-                f'F22 backfill verification: {mismatch_count} units have '
+                f'backfill verification: {mismatch_count} units have '
                 f'confidence_evidence_count mismatches. '
                 f'Set MEMEX_MIGRATION_FAIL_ON_MISMATCH=0 to log-only.'
             )

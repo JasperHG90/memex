@@ -25,7 +25,7 @@ _logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
 
 
-# F22 — variance of Uniform(0, 1) = Beta(1, 1), the cold-start posterior
+# Variance of Uniform(0, 1) = Beta(1, 1), the cold-start posterior
 # variance ceiling. Mirrors ``memex_core.memory.confidence.MAX_VARIANCE``;
 # duplicated here because ``memex_common`` MUST NOT depend on
 # ``memex_core`` (the dependency direction is core → common). The
@@ -33,10 +33,10 @@ from memex_common.mixins import VaultMixin
 # ``packages/core/tests/unit/memory/test_confidence.py`` (see
 # ``TestDtoFormulaConsistency``) pins equivalence between this constant
 # and the formula in ``memex_core.memory.confidence.mean_and_variance``.
-# Hermes round-20 LOW: extracted from inline ``1.0 / 12.0`` literals so
+# Extracted from inline ``1.0 / 12.0`` literals so
 # the Field constraint and the validator formula reference a single
 # source of truth.
-# Triplicated constant (Hermes round-25 MED): also defined in
+# Also defined in
 # ``memex_core.memory.confidence.MAX_VARIANCE`` and
 # ``memex_common.config._MAX_VARIANCE``. Any edit here MUST be mirrored
 # in both of those locations. Future: a ``memex_common.constants``
@@ -77,7 +77,7 @@ class EntityType(str, Enum):
 
 
 class IntentClass(str, Enum):
-    """Lifecycle class for a memory unit, set at write time (F25).
+    """Lifecycle class for a memory unit, set at write time.
 
     permanent — identity / preferences / facts that should never decay.
     durable   — project decisions, multi-week relevance (default).
@@ -90,7 +90,7 @@ class IntentClass(str, Enum):
 
 
 class RiskClass(str, Enum):
-    """Content sensitivity, set at write time (F25 — subsumes F26).
+    """Content sensitivity, set at write time.
 
     none      — public-safe content (default).
     sensitive — flagged for linter review; still retrievable in default scope.
@@ -124,12 +124,12 @@ IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
 RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
 
 
-# F25b — shared default-on-fail coercion. Both ``RawFact`` (LLM output) and
+# Shared default-on-fail coercion. Both ``RawFact`` (LLM output) and
 # ``ExtractedFact`` (downstream pipeline) absorb LLM-produced strings that
 # may be malformed (omitted fields, unknown values, non-string garbage like
 # None / int / list / dict). The "extraction must never be blocked by a
 # classification mishap" invariant means we always coerce to the schema
-# default rather than raise. Hermes round-6 MED: keep the coercion logic in
+# default rather than raise. Keep the coercion logic in
 # one place so a future addition to ``IntentClass`` / ``RiskClass`` cannot
 # silently desync the two pydantic ``@field_validator``s on the fact models.
 
@@ -336,7 +336,7 @@ class RetrievalRequest(BaseModel):
         ),
     )
 
-    # Intent / risk class filtering (write-time classifier; F25)
+    # Intent / risk class filtering (write-time classifier)
     intent_class: IntentClass | None = Field(
         default=None,
         description=(
@@ -393,7 +393,7 @@ class RetrievalRequest(BaseModel):
     apply_pre_filter: bool = Field(
         default=True,
         description=(
-            'F40: pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
+            'pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
             'or decayed candidates before the cross-encoder runs (~30% reranker latency '
             'reduction with cold-start safeguards intact). Set False for historical / audit / '
             'lineage queries that need to see contradicted, behaviorally-failed, or decayed '
@@ -432,7 +432,7 @@ class ReflectionRequest(VaultMixin):
         default=20,
         description=(
             'Number of recent memories to consider. None means no per-request cap '
-            "(F5 'full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS=1000."
+            "('full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS=1000."
         ),
     )
 
@@ -518,11 +518,11 @@ class SupersessionInfo(BaseModel):
 class MemoryUnitDTO(MemoryUnitBase):
     """DTO for a Memory Unit (Fact/Experience).
 
-    PYDANTIC-ONLY (Hermes round-22 HIGH): this class deliberately does
+    PYDANTIC-ONLY: this class deliberately does
     NOT inherit from ``SQLModel`` and is never used for DDL / table
     creation. The persistent table definition lives on
     ``memex_core.memory.sql_models.MemoryUnit``, which carries the
-    ``sa_column=Column(Integer, ...)`` declarations for the F22
+    ``sa_column=Column(Integer, ...)`` declarations for the
     ``confidence_evidence_count`` (and friends) columns. The DTO
     fields here therefore use plain ``Field(..., default=...)`` —
     omitting ``sa_column`` is correct, not a bug. If a future change
@@ -580,8 +580,8 @@ class MemoryUnitDTO(MemoryUnitBase):
 
     confidence: float = Field(
         default=1.0,
-        description='Confidence score (0.0-1.0). VALIDATOR ORDERING (Hermes '
-        'round-21 MED): the ``_compute_confidence_variance`` after-validator '
+        description='Confidence score (0.0-1.0). VALIDATOR ORDERING: the '
+        '``_compute_confidence_variance`` after-validator '
         'clamps out-of-range values via ``object.__setattr__``. Adding a '
         '``ge=0.0, le=1.0`` field constraint here would cause Pydantic to '
         'REJECT ``1.0001`` at field-validation time (before the after-validator '
@@ -593,9 +593,9 @@ class MemoryUnitDTO(MemoryUnitBase):
     confidence_evidence_count: int = Field(
         default=0,
         ge=0,
-        description='F22: negative-evidence event count (number of contradicts/weakens '
+        description='Negative-evidence event count (number of contradicts/weakens '
         'links pointing at this unit). Cold-start = 0; bumped on each weaken/contradict '
-        'step in the contradiction engine. UPPER BOUND (Hermes round-24 MED): no '
+        'step in the contradiction engine. UPPER BOUND: no '
         '``le`` constraint is set — the DB column is ``INTEGER NOT NULL`` so values '
         'up to ``2**31 - 1`` are legal at the storage layer. The Beta variance '
         'formula ``alpha = 1 + confidence * evidence_count`` performs float '
@@ -609,15 +609,15 @@ class MemoryUnitDTO(MemoryUnitBase):
         default=_MAX_VARIANCE,
         ge=0.0,
         le=_MAX_VARIANCE,
-        description='F22: closed-form Beta(1, 1) posterior variance derived at '
+        description='Closed-form Beta(1, 1) posterior variance derived at '
         'hydration from (confidence, confidence_evidence_count). Range [0, 1/12]. '
         'Cold-start (count=0) lands at 1/12 (max); shrinks toward 0 as evidence '
         'accumulates. Lower variance = more supporting evidence = more trustworthy. '
         'COMPUTED-ONLY: any value passed via constructor kwarg is replaced by the '
-        '``_compute_confidence_variance`` model validator (Hermes round-14 LOW). '
+        '``_compute_confidence_variance`` model validator. '
         'Do not pass ``confidence_variance=...`` expecting it to be respected — '
         'set ``confidence`` and ``confidence_evidence_count`` instead. '
-        'BELT-AND-SUSPENDERS (Hermes round-23 LOW): the ``ge=0.0, le=_MAX_VARIANCE`` '
+        'BELT-AND-SUSPENDERS: the ``ge=0.0, le=_MAX_VARIANCE`` '
         'constraints here are NOT enforced for the normal construction path — the '
         '``_compute_confidence_variance`` after-validator overwrites the field via '
         '``object.__setattr__``, which bypasses Pydantic field validation. The '
@@ -648,7 +648,7 @@ class MemoryUnitDTO(MemoryUnitBase):
 
     @model_validator(mode='after')
     def _compute_confidence_variance(self) -> 'MemoryUnitDTO':
-        """F22: derive confidence_variance from (confidence, evidence_count).
+        """Derive confidence_variance from (confidence, evidence_count).
 
         Closed-form Beta(1, 1) posterior variance — kept inline here (rather
         than importing memex_core.memory.confidence) to avoid memex_common
@@ -656,14 +656,14 @@ class MemoryUnitDTO(MemoryUnitBase):
         ``memex_core.memory.confidence.mean_and_variance`` — guarded by the
         cross-reference unit test in ``test_confidence.py``.
 
-        Hermes round-17 LOW (formula duplication): extracting the pure
+        Formula duplication: extracting the pure
         formula to a shared ``memex_common`` helper would eliminate the
         duplication, but it's deliberately kept duplicated in v1 to avoid
         widening the ``memex_common`` surface for one tiny formula. The
         cross-reference test pins the equivalence per release; promote to
         a shared helper only if a third call site appears.
 
-        Input validation (Hermes round-6 MED): ``confidence`` must be in
+        Input validation: ``confidence`` must be in
         ``[0, 1]`` for the Beta(α, β) shape parameters to stay non-negative.
         We clamp at the top of the validator as a first-class guard so a
         single out-of-range input (an upstream bug writing ``1.0001``)
@@ -673,14 +673,14 @@ class MemoryUnitDTO(MemoryUnitBase):
         the contradiction engine's SQL-level ``GREATEST(0, LEAST(1, …))``
         on writes.
 
-        Defence-in-depth (Hermes round-2 MED): ``confidence_variance`` has a
+        Defence-in-depth: ``confidence_variance`` has a
         ``ge=0.0, le=1/12`` field constraint, but ``object.__setattr__``
         bypasses Pydantic validation. The bounds check below stays as a
         belt-and-suspenders guard against future formula drift.
         """
         # Clamp at the top — defends against upstream input bugs without
         # surprising the caller with a hard failure for benign drift.
-        # Hermes round-15 MED: also write the clamped value back to
+        # Also write the clamped value back to
         # ``self.confidence`` so the DTO's ``confidence`` and
         # ``confidence_variance`` fields are mutually consistent for any
         # downstream consumer that reads both. Without this, a caller
@@ -688,14 +688,14 @@ class MemoryUnitDTO(MemoryUnitBase):
         # from ``confidence=1.0`` — a silent inconsistency.
         confidence_clamped = max(0.0, min(1.0, self.confidence))
         if confidence_clamped != self.confidence:
-            # Hermes round-18 MED: emit a debug-level diagnostic when the
+            # Emit a debug-level diagnostic when the
             # clamp engages so an upstream bug writing out-of-range
             # confidence is observable in logs instead of silently
             # absorbed. Debug-level keeps the hot path quiet on the
             # happy path; flip to warning if calibration shows the
             # clamp firing on real traffic.
             _logger.debug(
-                'F22 DTO clamp engaged: confidence %r → %r '
+                'DTO clamp engaged: confidence %r → %r '
                 '(out of [0, 1] range — likely upstream write bug)',
                 self.confidence,
                 confidence_clamped,
@@ -707,7 +707,7 @@ class MemoryUnitDTO(MemoryUnitBase):
         variance = (alpha * beta) / (n * n * (n + 1.0))
         if not (0.0 <= variance <= _MAX_VARIANCE):
             raise ValueError(
-                f'F22 invariant violated: computed confidence_variance={variance!r} '
+                f'Invariant violated: computed confidence_variance={variance!r} '
                 f'is outside [0, 1/12] (confidence={self.confidence!r}, '
                 f'evidence_count={self.confidence_evidence_count!r}). '
                 f'This indicates either a formula drift from '
@@ -721,7 +721,7 @@ class MemoryUnitDTO(MemoryUnitBase):
         # guard that runs here — do not remove it on the assumption that
         # a field-level validator covers it.
         #
-        # Hermes round-17 LOW (computed_field alternative): Pydantic v2's
+        # Computed-field alternative: Pydantic v2's
         # ``@computed_field`` would make this derivation declarative and
         # remove the ``object.__setattr__`` escape hatch, BUT it removes
         # the field from ``model_fields`` and changes serialization /
@@ -1228,7 +1228,7 @@ class RelatedNoteDTO(BaseModel):
 
 
 class UnitHistoryNodeDTO(BaseModel):
-    """A node in a memory unit's contradiction-graph timeline (F49).
+    """A node in a memory unit's contradiction-graph timeline.
 
     The tree is rooted at the queried unit (depth=0); each predecessor
     represents an older unit that the current node supersedes via a
@@ -1488,7 +1488,7 @@ class KVProcedureEntryDTO(BaseModel):
 
 
 class ProcedureOutcomeDTO(BaseModel):
-    """One row of the F14 procedure-observations briefing surface.
+    """One row of the procedure-observations briefing surface.
 
     Returned by ``MemexAPI.list_top_procedure_outcomes`` and the
     ``GET /api/v1/kv/procedure-observations`` endpoint. Each row exposes
@@ -1797,7 +1797,7 @@ class NoteAppendResponse(BaseModel):
 
 
 class DueUnitDTO(BaseModel):
-    """F20 due-for-review wire DTO.
+    """Due-for-review wire DTO.
 
     Mirrors the in-process ``memex_core.services.revisitation.DueUnit``
     dataclass. Lives in ``memex_common`` so the remote ``MemexClient`` can
