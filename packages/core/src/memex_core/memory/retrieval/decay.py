@@ -25,6 +25,14 @@ closed-form limit, not a guess.
 ``now`` is an injected parameter — never ``datetime.now(...)`` inside the
 function — so unit tests pin time deterministically and the reranker
 shares one timestamp across every per-unit boost in a query.
+
+``elapsed_days`` is clamped to ``>= 0`` so that a future-dated
+``last_outcome_at`` (clock skew, async race where ``record_outcome``
+writes a timestamp after the reranker snapshots ``now``) is treated as
+"just-touched" (decay_term = 1.0) rather than producing a *negative*
+elapsed and inverting the exponential into an unbounded boost. This
+preserves the monotonicity contract: a later ``now`` yields a lower
+or equal boost.
 """
 
 from __future__ import annotations
@@ -54,6 +62,8 @@ def compute_decay_boost(unit: DecayInputs, decay_alpha: float, now: datetime) ->
     if unit.stability is None:
         decay_term = 1.0
     else:
-        elapsed_days = (now - unit.last_outcome_at).total_seconds() / STABILITY_SECONDS_PER_DAY
+        elapsed_days = max(
+            0.0, (now - unit.last_outcome_at).total_seconds() / STABILITY_SECONDS_PER_DAY
+        )
         decay_term = math.exp(-elapsed_days / unit.stability)
     return 1.0 + decay_alpha * (unit.importance * decay_term - 0.5)

@@ -185,3 +185,54 @@ class TestInjectedNowDeterminism:
         b_now = compute_decay_boost(unit, decay_alpha=0.3, now=_NOW)
         b_later = compute_decay_boost(unit, decay_alpha=0.3, now=_NOW + timedelta(days=30))
         assert b_later < b_now
+
+
+class TestFutureLastOutcomeAtClamp:
+    """``last_outcome_at > now`` (clock skew or async race where
+    record_outcome writes a timestamp after the reranker snapshots
+    ``now``) MUST be treated as just-touched (decay_term = 1.0), not
+    inverted into an unbounded boost. Negative elapsed_days would flip
+    ``exp(-elapsed/stability)`` to ``exp(+|elapsed|/stability)``."""
+
+    def test_future_last_outcome_at_yields_just_touched_boost(self) -> None:
+        """importance=0.7, stability=180, last_outcome_at=now+5d, alpha=0.3
+        → elapsed clamped to 0 → decay_term = 1.0
+        → boost = 1.0 + 0.3 × (0.7 × 1.0 − 0.5) = 1.06."""
+        unit = _UnitStub(
+            importance=0.7,
+            stability=180.0,
+            last_outcome_at=_NOW + timedelta(days=5),
+        )
+        boost = compute_decay_boost(unit, decay_alpha=0.3, now=_NOW)
+        assert math.isclose(boost, 1.06, abs_tol=1e-9)
+
+    def test_future_last_outcome_at_does_not_exceed_just_touched(self) -> None:
+        """Monotonicity guard: a future-dated unit must not produce a
+        boost larger than the same unit at ``last_outcome_at = now``."""
+        future = _UnitStub(
+            importance=0.7,
+            stability=14.0,
+            last_outcome_at=_NOW + timedelta(days=30),
+        )
+        just_touched = _UnitStub(
+            importance=0.7,
+            stability=14.0,
+            last_outcome_at=_NOW,
+        )
+        b_future = compute_decay_boost(future, decay_alpha=0.3, now=_NOW)
+        b_now = compute_decay_boost(just_touched, decay_alpha=0.3, now=_NOW)
+        assert b_future == b_now
+
+    def test_future_last_outcome_at_unbounded_inversion_regression(self) -> None:
+        """Without the clamp, a 100-day-future last_outcome_at with
+        stability=14 would yield boost = 1.0 + 0.3 × (0.7 × exp(100/14) − 0.5)
+        ≈ 1.0 + 0.3 × (0.7 × 1212 − 0.5) ≈ 254.7. Pin the clamp by
+        asserting the boost stays well within the histogram's 1.30
+        upper bucket."""
+        unit = _UnitStub(
+            importance=0.7,
+            stability=14.0,
+            last_outcome_at=_NOW + timedelta(days=100),
+        )
+        boost = compute_decay_boost(unit, decay_alpha=0.3, now=_NOW)
+        assert boost <= 1.30
