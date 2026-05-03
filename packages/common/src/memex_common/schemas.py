@@ -624,6 +624,12 @@ class MemoryUnitDTO(MemoryUnitBase):
                 f'memex_core.memory.confidence.mean_and_variance or an '
                 f'out-of-range confidence input.'
             )
+        # ``object.__setattr__`` bypasses Pydantic's validation pipeline:
+        # any future ``@field_validator('confidence_variance')`` (or
+        # ``Field(..., ge=..., le=...)`` re-tightening) will NOT fire on
+        # this assignment. The bounds check immediately above is the only
+        # guard that runs here — do not remove it on the assumption that
+        # a field-level validator covers it.
         object.__setattr__(self, 'confidence_variance', variance)
         return self
 
