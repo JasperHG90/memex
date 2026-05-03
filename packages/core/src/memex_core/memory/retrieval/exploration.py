@@ -256,6 +256,15 @@ def inject_edge_exploration(
     function is exposed publicly so the activation PR is a pure call-site
     + config addition with no signature churn here.
 
+    TODO(F22-activation, Hermes round-15 LOW): wire this injector into
+    ``RetrievalEngine._search`` alongside the F33 ``inject_exploration_units``
+    call site at ``engine.py:736-749``. The activation PR also adds the
+    ``edge_exploration_epsilon`` / ``edge_exploration_max_injections`` /
+    ``edge_exploration_high_variance_fraction`` config knobs on
+    ``RetrievalConfig``, gated on the same operator decision as the
+    ``certainty_modulation_enabled`` flip described in the BACKLOG
+    F22 entry ("Ship-time guard" bullet).
+
     Mutation contract (Hermes round-1 MED)
     --------------------------------------
     Each injected ``MemoryUnit`` has its ``unit_metadata`` REPLACED with a
