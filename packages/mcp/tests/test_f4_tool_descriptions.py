@@ -44,13 +44,24 @@ def test_deprioritize_description_constant_matches_spec_verbatim():
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_registered_with_verbatim_description():
-    """The MCP tool registry surfaces the verbatim description."""
+async def test_mcp_tool_registered_with_verbatim_description_preamble():
+    """The MCP tool description starts with the F4 verbatim preamble.
+
+    F43 (cognitive-memory-research-report.md §3.5 + §3.4.2) extends the
+    deprioritize description with the 5-step user-confirmed-fix flow + the
+    historical-routing rule. The original F4 verbatim description is kept as
+    the preamble so the curate-memory-after-the-fact discoverability is
+    unchanged. The full description is asserted by F43's verbatim test
+    (test_f43_descriptions.py).
+    """
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_memory_deprioritize')
     assert tool is not None, 'memex_memory_deprioritize tool not registered'
-    assert tool.description == F4_DESCRIPTION_VERBATIM
+    assert tool.description.startswith(F4_DESCRIPTION_VERBATIM), (
+        'Registered description must start with the F4 verbatim preamble '
+        '(§4 F4 step 6); F43 may append additional sections after it.'
+    )
 
 
 @pytest.mark.asyncio

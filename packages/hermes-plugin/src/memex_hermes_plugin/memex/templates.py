@@ -46,3 +46,55 @@ DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
     'cold), avg MW score, and top retrieved entities. Synchronous; surfaces '
     'F32 manifold status without waiting on UMAP compute.'
 )
+
+
+# --- F43 --- (5-step user-confirmed-fix resolution flow + historical routing)
+# Verb-pair scaffolding for Hermes turns that handle "the X is fixed" prompts.
+# A Hermes turn can lean on this structured prompt rather than free-form
+# generation — see briefing.py `_RESOLUTION_FLOW_PRIMER` for the canonical text
+# shown in the system prompt; this fragment is the same flow rendered as a
+# tool-call planning template.
+RESOLUTION_FLOW_PROMPT_FRAGMENT = (
+    'When the user reports an issue resolved (§3.5 5-step flow):\n'
+    '\n'
+    '  1. DISAMBIGUATE — if scope is ambiguous, ASK before writing.\n'
+    '  2. ROUTE — title-fragment → memex_find_note;\n'
+    '     content-only → memex_memory_search; then pick:\n'
+    '       (A) entity-anchored: memex_list_entities → memex_get_entity_mentions\n'
+    '       (B) cross-note semantic: memex_memory_search(top_k>=30, after=...)\n'
+    '       (C) single-note: memex_get_page_indices → memex_get_memory_units(chunk_ids=[...])\n'
+    '  3. JUDGE — read candidate unit bodies; LLM-pick the fix-relevant subset.\n'
+    '  4. RECORD — for each judged-relevant unit:\n'
+    "     memex_record_outcome(unit_ids=[...], success=False, reason='...')\n"
+    '  5. DEPRIORITIZE — for the SAME subset:\n'
+    "     memex_memory_deprioritize(unit_id=..., reason='...')\n"
+    '\n'
+    'BOTH writes (steps 4 + 5) against the SAME subset only — never bulk-write\n'
+    'against the raw candidate set. The two verbs are orthogonal axes:\n'
+    'record_outcome is the MW gradient (compounds across retrievals);\n'
+    'memory_deprioritize is the binary surface state (reversible via\n'
+    'memex_memory_restore). User-confirmed-fix is BOTH signals at once.'
+)
+
+
+# --- F43 --- (historical / audit-query routing rule)
+HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
+    'When the user asks HOW THINGS CHANGED (not "what is true now"), do NOT\n'
+    'use the resolution flow. Triggers: "evolved", "used to", "history of",\n'
+    '"what changed", "what did I think before", "audit", "show me everything",\n'
+    '"show me the hidden ones".\n'
+    '\n'
+    '  - Ordered chain on a specific unit:\n'
+    '    `memex_get_unit_history(unit_id)` (F49) — graph walk through\n'
+    '    contradiction links, oldest → newest.\n'
+    '  - Broader audit / "show me everything including hidden stuff":\n'
+    "    `memex_memory_search(query='...', apply_pre_filter=False)` —\n"
+    '    bypasses MW + FSFM + confidence pre-filters; contradicted, decayed,\n'
+    '    and behaviorally-failed units appear. Post-reranker boosts still apply.'
+)
+
+
+__all__ += [
+    'HISTORICAL_ROUTING_PROMPT_FRAGMENT',
+    'RESOLUTION_FLOW_PROMPT_FRAGMENT',
+]

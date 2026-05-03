@@ -105,7 +105,12 @@ def test_format_block_skips_briefing_section_when_empty():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert '---' not in block
+    # F43 added the resolution-flow primer which uses markdown tables (the
+    # `|---|---|` row contains '---'). The intent of this test is "no
+    # briefing-section separator was appended" — that separator is the
+    # `\n---\n` literal added in format_briefing_block only when the
+    # `briefing` argument is non-empty.
+    assert '\n---\n' not in block
 
 
 # --- Routing-guide bullets (AC-087..AC-092) ---

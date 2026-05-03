@@ -3676,17 +3676,15 @@ async def memex_get_vault_summary(
         raise ToolError(f'Get vault summary failed: {e}')
 
 
+from memex_mcp._f43_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_RECORD_OUTCOME_DESCRIPTION as _F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
+)
+
+
 @mcp.tool(
     name='memex_record_outcome',
-    description=(
-        'Record whether previously retrieved memories or a stored procedure '
-        'contributed to a successful outcome. Default mode increments MW '
-        'counters on memory units (target_type="memory_unit", '
-        'unit_ids=[...]); set target_type="kv_key" with kv_key='
-        '"procedure:<verb>:<context-tag>" to score a stored procedure. Call '
-        'after you actually used the retrieved memory or the procedure.\n\n'
-        'Call generously. Silence provides no learning signal.'
-    ),
+    description=_F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
     tags={'write'},
     annotations={'readOnlyHint': False},
 )
@@ -3813,14 +3811,13 @@ if __name__ == '__main__':
 # --- F4 ---  (filled by WS-quick-wins)
 
 from memex_mcp._f4_descriptions import (
-    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
 )
 
 
 @mcp.tool(
     name='memex_memory_deprioritize',
-    description=MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    description=_F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     tags={'write', 'storage'},
     annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
     timeout=30.0,
