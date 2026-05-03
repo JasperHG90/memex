@@ -597,6 +597,13 @@ class MemoryUnitDTO(MemoryUnitBase):
         ``memex_core.memory.confidence.mean_and_variance`` — guarded by the
         cross-reference unit test in ``test_confidence.py``.
 
+        Hermes round-17 LOW (formula duplication): extracting the pure
+        formula to a shared ``memex_common`` helper would eliminate the
+        duplication, but it's deliberately kept duplicated in v1 to avoid
+        widening the ``memex_common`` surface for one tiny formula. The
+        cross-reference test pins the equivalence per release; promote to
+        a shared helper only if a third call site appears.
+
         Input validation (Hermes round-6 MED): ``confidence`` must be in
         ``[0, 1]`` for the Beta(α, β) shape parameters to stay non-negative.
         We clamp at the top of the validator as a first-class guard so a
@@ -642,6 +649,16 @@ class MemoryUnitDTO(MemoryUnitBase):
         # this assignment. The bounds check immediately above is the only
         # guard that runs here — do not remove it on the assumption that
         # a field-level validator covers it.
+        #
+        # Hermes round-17 LOW (computed_field alternative): Pydantic v2's
+        # ``@computed_field`` would make this derivation declarative and
+        # remove the ``object.__setattr__`` escape hatch, BUT it removes
+        # the field from ``model_fields`` and changes serialization /
+        # SQLModel column generation — non-trivial for ``MemoryUnitDTO``
+        # which is consumed by clients that introspect field shapes. The
+        # validator + ``__setattr__`` pattern is the conservative
+        # equivalent. Promote to ``@computed_field`` if/when Pydantic v2
+        # ships a "computed but still in model_fields" mode.
         object.__setattr__(self, 'confidence_variance', variance)
         return self
 
