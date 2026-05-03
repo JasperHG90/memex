@@ -347,3 +347,52 @@ class TestInjectEdgeExploration:
         output = inject_edge_exploration(results, candidates)
         # Original list returned (identity) when nothing eligible.
         assert output is results
+
+
+class TestMetadataCoercion:
+    """`_coerce_metadata_to_dict` accepts any Mapping (Hermes round-2 MED).
+
+    The silent-key-loss hazard from the prior `isinstance(..., dict)` check
+    is gone: non-dict Mappings now have their keys preserved.
+    """
+
+    def test_dict_passthrough(self):
+        from memex_core.memory.retrieval.exploration import _coerce_metadata_to_dict
+
+        original = {'key': 'value'}
+        assert _coerce_metadata_to_dict(original) is original
+
+    def test_mapping_converted_preserves_keys(self):
+        from collections.abc import Mapping
+
+        from memex_core.memory.retrieval.exploration import _coerce_metadata_to_dict
+
+        class _ROMapping(Mapping):
+            def __init__(self, data):
+                self._data = data
+
+            def __getitem__(self, k):
+                return self._data[k]
+
+            def __iter__(self):
+                return iter(self._data)
+
+            def __len__(self):
+                return len(self._data)
+
+        out = _coerce_metadata_to_dict(_ROMapping({'preserved': 'yes'}))
+        assert out == {'preserved': 'yes'}
+        assert isinstance(out, dict)
+
+    def test_none_returns_empty_dict(self):
+        from memex_core.memory.retrieval.exploration import _coerce_metadata_to_dict
+
+        assert _coerce_metadata_to_dict(None) == {}
+
+    def test_non_mapping_returns_empty_dict(self):
+        from memex_core.memory.retrieval.exploration import _coerce_metadata_to_dict
+
+        # Non-Mapping garbage falls through to empty — same fall-through
+        # the original isinstance(..., dict) check provided.
+        assert _coerce_metadata_to_dict('not a dict') == {}
+        assert _coerce_metadata_to_dict(42) == {}

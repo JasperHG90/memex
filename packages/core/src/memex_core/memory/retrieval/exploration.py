@@ -22,11 +22,32 @@ than total outcome count < threshold.
 from __future__ import annotations
 
 import random
+from collections.abc import Mapping
+from typing import Any
 
 import structlog
 
 from memex_core.memory.confidence import MAX_VARIANCE, mean_and_variance
 from memex_core.memory.sql_models import ContentStatus, MemoryUnit
+
+
+def _coerce_metadata_to_dict(value: Any) -> dict[str, Any]:
+    """Best-effort coercion of a unit's existing metadata into a plain dict.
+
+    Hermes round-2 MED: the prior ``isinstance(..., dict)`` check would
+    silently drop a non-dict Mapping (e.g. a Pydantic model surfaced by a
+    future SQLModel adapter change). Now we accept any Mapping and convert
+    it to a dict so existing keys survive the injection annotation.
+
+    SQLModel currently hydrates JSONB columns as plain dicts, so the
+    Mapping branch is defensive — but the silent-key-loss hazard goes away.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
 
@@ -132,7 +153,7 @@ def inject_exploration_units(
         return results
 
     for unit in exploration_units:
-        metadata = unit.unit_metadata if isinstance(unit.unit_metadata, dict) else {}
+        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'exploration': True}
         unit.unit_metadata = metadata
 
@@ -228,7 +249,7 @@ def inject_edge_exploration(
         return results
 
     for unit in edges:
-        metadata = unit.unit_metadata if isinstance(unit.unit_metadata, dict) else {}
+        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
         metadata = {**metadata, 'edge_exploration': True}
         unit.unit_metadata = metadata
 
