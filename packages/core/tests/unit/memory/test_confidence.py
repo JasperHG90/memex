@@ -284,3 +284,28 @@ class TestExtractConfidenceAndCount:
         c, n = extract_confidence_and_count(_U())
         assert n == 7
         assert isinstance(n, int)
+
+
+class TestMeanAndVarianceInputValidation:
+    """``mean_and_variance`` rejects out-of-range inputs (Hermes round-6 MED).
+
+    The Beta(1, 1) shape parameters go negative when ``confidence`` is
+    outside ``[0, 1]`` — the helper now surfaces the precondition violation
+    at the computation site rather than returning silent garbage.
+    """
+
+    @pytest.mark.parametrize('bad_confidence', [-0.001, -1.0, 1.0001, 2.0, float('nan')])
+    def test_confidence_out_of_range_raises(self, bad_confidence: float) -> None:
+        with pytest.raises(ValueError, match='confidence must be in '):
+            mean_and_variance(bad_confidence, 0)
+
+    def test_negative_evidence_count_raises(self) -> None:
+        with pytest.raises(ValueError, match='evidence_count must be non-negative'):
+            mean_and_variance(0.5, -1)
+
+    @pytest.mark.parametrize('boundary', [0.0, 1.0])
+    def test_boundary_confidence_values_accepted(self, boundary: float) -> None:
+        """0 and 1 are valid (the unit-interval endpoints)."""
+        m, v = mean_and_variance(boundary, 5)
+        assert m == boundary
+        assert 0.0 <= v <= MAX_VARIANCE

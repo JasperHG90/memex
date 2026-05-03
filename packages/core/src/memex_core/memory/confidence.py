@@ -81,7 +81,25 @@ def mean_and_variance(confidence: float, evidence_count: int) -> tuple[float, fl
         ``(1 + c·n) / (2 + n)`` — F22 deliberately uses the row's stored
         confidence as the point estimate so the F47 boost stays anchored
         on the same value the lint gate and contradiction engine see.
+
+    Hermes round-6 MED: defends against bad upstream input. ``confidence``
+    must lie in ``[0, 1]`` for the Beta(α, β) shape parameters to stay
+    non-negative; an out-of-range value (e.g. an upstream bug writing
+    ``1.0001``) would produce a negative ``beta`` and a nonsensical
+    variance. The DB CHECK constraint and DTO field validators protect
+    the happy path, but this is the canonical helper — a direct call
+    with bad input now surfaces at the computation site rather than
+    silently returning garbage downstream. ``evidence_count`` must be
+    non-negative for the same reason.
     """
+    if not (0.0 <= confidence <= 1.0):
+        raise ValueError(
+            f'confidence must be in [0, 1]; got {confidence!r}. '
+            'F22 invariant: the Beta(1, 1) posterior shape parameters '
+            'go negative outside this range.'
+        )
+    if evidence_count < 0:
+        raise ValueError(f'evidence_count must be non-negative; got {evidence_count!r}.')
     alpha = 1.0 + confidence * evidence_count
     beta = 1.0 + (1.0 - confidence) * evidence_count
     n = alpha + beta

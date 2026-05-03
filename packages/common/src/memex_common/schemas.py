@@ -593,15 +593,26 @@ class MemoryUnitDTO(MemoryUnitBase):
         ``memex_core.memory.confidence.mean_and_variance`` — guarded by the
         cross-reference unit test in ``test_confidence.py``.
 
+        Input validation (Hermes round-6 MED): ``confidence`` must be in
+        ``[0, 1]`` for the Beta(α, β) shape parameters to stay non-negative.
+        We clamp at the top of the validator as a first-class guard so a
+        single out-of-range input (an upstream bug writing ``1.0001``)
+        cannot produce a negative ``beta`` and a nonsensical variance —
+        rather than relying on the post-hoc bounds check below to catch
+        it after the formula has already evaluated. The clamp mirrors
+        the contradiction engine's SQL-level ``GREATEST(0, LEAST(1, …))``
+        on writes.
+
         Defence-in-depth (Hermes round-2 MED): ``confidence_variance`` has a
         ``ge=0.0, le=1/12`` field constraint, but ``object.__setattr__``
-        bypasses Pydantic validation. We assert the computed value stays
-        inside ``[0, 1/12]`` so a future formula bug or out-of-range
-        ``confidence`` (e.g. agent-supplied ``> 1.0``) surfaces immediately
-        instead of silently shipping a nonsensical variance downstream.
+        bypasses Pydantic validation. The bounds check below stays as a
+        belt-and-suspenders guard against future formula drift.
         """
-        alpha = 1.0 + self.confidence * self.confidence_evidence_count
-        beta = 1.0 + (1.0 - self.confidence) * self.confidence_evidence_count
+        # Clamp at the top — defends against upstream input bugs without
+        # surprising the caller with a hard failure for benign drift.
+        confidence_clamped = max(0.0, min(1.0, self.confidence))
+        alpha = 1.0 + confidence_clamped * self.confidence_evidence_count
+        beta = 1.0 + (1.0 - confidence_clamped) * self.confidence_evidence_count
         n = alpha + beta
         variance = (alpha * beta) / (n * n * (n + 1.0))
         if not (0.0 <= variance <= 1.0 / 12.0):
