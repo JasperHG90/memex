@@ -31,14 +31,17 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memex_core.memory._lint_utils import enum_value as _enum_value
-from memex_core.memory.confidence import mean_and_variance
 from memex_core.memory.sql_models import LintType
 from memex_core.services.base import BaseService
+from memex_core.services.lint_confidence import (
+    bulk_load_confidence_map,
+    confidence_map_blocks,
+)
 
 try:
     from opentelemetry import trace as _otel_trace
@@ -318,99 +321,6 @@ _INSERT_FINDING_SQL = text("""
 """)
 
 
-_LOAD_UNIT_CONFIDENCE_SQL = text("""
-    SELECT confidence, confidence_evidence_count
-    FROM memory_units
-    WHERE id = :unit_id
-""")
-
-
-# Hermes round-5 MED: prior form used ``CAST(:unit_ids AS uuid[]) + ANY``
-# which relies on asyncpg-specific type adaptation of a Python ``list[str]``
-# inside a ``text()`` clause. SQLAlchemy's ``expanding=True`` bindparam is
-# the portable analogue — it expands ``:unit_ids`` into ``(:p1, :p2, ...)``
-# at compile time, with the driver adapting each individual UUID-string
-# parameter through its standard pipeline. asyncpg infers the column type
-# from the LHS of IN so an explicit per-parameter cast is unnecessary.
-_BULK_LOAD_UNIT_CONFIDENCE_SQL = text("""
-    SELECT id::text AS unit_id, confidence, confidence_evidence_count
-    FROM memory_units
-    WHERE id IN :unit_ids
-""").bindparams(bindparam('unit_ids', expanding=True))
-
-
-async def _gate_blocks_finding(
-    session: AsyncSession,
-    unit_id: str,
-    confidence_min: float,
-    variance_max: float,
-) -> bool:
-    """F22: returns True iff (confidence, variance) violates the lint gate.
-
-    Cold-start units (count=0, variance=1/12) are blocked when ``variance_max``
-    is set below 1/12 — so freshly extracted units don't surface as
-    "low-confidence" findings purely because they have no evidence yet.
-
-    NOTE: The per-row fetch is retained for tests and one-off callers; the
-    rule-runner path uses :func:`_bulk_load_confidence_map` to avoid the
-    N+1 query that would otherwise fire on rules with many candidate rows.
-    """
-    row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
-    if row is None:
-        return False
-    confidence = float(row[0]) if row[0] is not None else 1.0
-    evidence_count = int(row[1]) if row[1] is not None else 0
-    _, variance = mean_and_variance(confidence, evidence_count)
-    return confidence < confidence_min or variance > variance_max
-
-
-async def _bulk_load_confidence_map(
-    session: AsyncSession,
-    unit_ids: list[str],
-) -> dict[str, tuple[float, int]]:
-    """Bulk-fetch ``(confidence, confidence_evidence_count)`` for a set of units.
-
-    Returns a map keyed by ``unit_id`` (text). IDs missing from the map mean
-    the row was not found — callers should treat this as "do not block"
-    (parity with :func:`_gate_blocks_finding`'s ``row is None`` branch).
-
-    F22: replaces the per-row SELECT inside the rule-runner loop so a rule
-    that returns N candidates issues exactly one extra query (not N).
-    """
-    if not unit_ids:
-        return {}
-    result = await session.execute(_BULK_LOAD_UNIT_CONFIDENCE_SQL, {'unit_ids': unit_ids})
-    out: dict[str, tuple[float, int]] = {}
-    for row in result.mappings().all():
-        confidence = float(row['confidence']) if row['confidence'] is not None else 1.0
-        evidence_count = (
-            int(row['confidence_evidence_count'])
-            if row['confidence_evidence_count'] is not None
-            else 0
-        )
-        out[row['unit_id']] = (confidence, evidence_count)
-    return out
-
-
-def _confidence_map_blocks(
-    confidence_map: dict[str, tuple[float, int]],
-    unit_id: str,
-    confidence_min: float,
-    variance_max: float,
-) -> bool:
-    """In-memory mirror of :func:`_gate_blocks_finding` against a prefetched map.
-
-    Missing entries do NOT block (parity: a missing row also does not block in
-    the per-row SELECT path).
-    """
-    entry = confidence_map.get(unit_id)
-    if entry is None:
-        return False
-    confidence, evidence_count = entry
-    _, variance = mean_and_variance(confidence, evidence_count)
-    return confidence < confidence_min or variance > variance_max
-
-
 @dataclass
 class RuleRunResult:
     rule_name: str
@@ -554,12 +464,12 @@ class LintService(BaseService):
                 # are ``id::text`` (always str), so consumer-side normalise
                 # to str at the boundary.
                 target_ids = [str(row['target_id']) for row in rows]
-                confidence_map = await _bulk_load_confidence_map(session, target_ids)
+                confidence_map = await bulk_load_confidence_map(session, target_ids)
                 # Hermes round-6 MED: format-mismatch defence. The bulk map
                 # keys are `id::text` from PostgreSQL (canonical lowercase,
                 # hyphenated UUID). If any rule's `select_sql` somewhere
                 # ever returned a different string form, the per-id lookup
-                # in ``_confidence_map_blocks`` would silently miss and the
+                # in ``confidence_map_blocks`` would silently miss and the
                 # unit would surface (the documented "missing row → do not
                 # block" fallback). Surface the mismatch loudly so it
                 # doesn't manifest as a phantom finding.
@@ -576,7 +486,7 @@ class LintService(BaseService):
                         missing[:5],
                     )
             for row in rows:
-                if gate_active and _confidence_map_blocks(
+                if gate_active and confidence_map_blocks(
                     confidence_map,
                     str(row['target_id']),
                     gate.confidence_min,

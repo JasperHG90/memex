@@ -605,17 +605,17 @@ class LintLLMService(BaseService):
         gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
         if gate_active:
             if confidence_map is not None:
-                from memex_core.services.lint import _confidence_map_blocks
+                from memex_core.services.lint_confidence import confidence_map_blocks
 
-                if _confidence_map_blocks(
+                if confidence_map_blocks(
                     confidence_map, str(unit_id), gate.confidence_min, gate.variance_max
                 ):
                     outcome.skipped_confidence_gate = True
                     return outcome
             else:
-                from memex_core.services.lint import _gate_blocks_finding
+                from memex_core.services.lint_confidence import gate_blocks_finding
 
-                if await _gate_blocks_finding(
+                if await gate_blocks_finding(
                     session, str(unit_id), gate.confidence_min, gate.variance_max
                 ):
                     outcome.skipped_confidence_gate = True
@@ -820,10 +820,10 @@ class LintLLMService(BaseService):
         gate_active = gate.confidence_min > 0.0 or gate.variance_max < (1.0 / 12.0)
         confidence_map: dict[str, tuple[float, int]] | None = None
         if gate_active and candidates:
-            from memex_core.services.lint import _bulk_load_confidence_map
+            from memex_core.services.lint_confidence import bulk_load_confidence_map
 
             async with self.metastore.session() as session:
-                confidence_map = await _bulk_load_confidence_map(
+                confidence_map = await bulk_load_confidence_map(
                     session, [str(uid) for uid in candidates]
                 )
 

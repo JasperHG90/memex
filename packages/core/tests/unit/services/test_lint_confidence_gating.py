@@ -1,6 +1,6 @@
 """F22 — confidence/variance gate for F6 + F10 lint findings.
 
-Tests the pure-Python predicate ``_gate_blocks_finding`` and the gate
+Tests the pure-Python predicate ``gate_blocks_finding`` and the gate
 config defaults from ``LintConfidenceGate``.
 """
 
@@ -41,12 +41,12 @@ class TestGateConfigDefaults:
 
 
 class TestGatePredicate:
-    """``_gate_blocks_finding`` returns True iff the unit fails the gate."""
+    """``gate_blocks_finding`` returns True iff the unit fails the gate."""
 
     @pytest.mark.asyncio
     async def test_cold_start_blocked_when_variance_max_strict(self) -> None:
         """Cold-start unit (count=0, variance=1/12) is blocked when variance_max < 1/12."""
-        from memex_core.services.lint import _gate_blocks_finding
+        from memex_core.services.lint_confidence import gate_blocks_finding
 
         session = MagicMock()
         result = MagicMock()
@@ -54,7 +54,7 @@ class TestGatePredicate:
         session.execute = AsyncMock(return_value=result)
 
         # variance_max = 0.05 < MAX_VARIANCE (1/12 ≈ 0.0833) → cold-start blocked.
-        blocked = await _gate_blocks_finding(
+        blocked = await gate_blocks_finding(
             session, 'unit-id', confidence_min=0.0, variance_max=0.05
         )
         assert blocked is True
@@ -62,28 +62,28 @@ class TestGatePredicate:
     @pytest.mark.asyncio
     async def test_well_evidenced_low_confidence_passes_default_gate(self) -> None:
         """Well-evidenced low-confidence unit surfaces (default gate is permissive)."""
-        from memex_core.services.lint import _gate_blocks_finding
+        from memex_core.services.lint_confidence import gate_blocks_finding
 
         session = MagicMock()
         result = MagicMock()
         result.first.return_value = (0.3, 20)
         session.execute = AsyncMock(return_value=result)
 
-        blocked = await _gate_blocks_finding(
+        blocked = await gate_blocks_finding(
             session, 'unit-id', confidence_min=0.0, variance_max=MAX_VARIANCE
         )
         assert blocked is False
 
     @pytest.mark.asyncio
     async def test_low_confidence_blocked_by_min(self) -> None:
-        from memex_core.services.lint import _gate_blocks_finding
+        from memex_core.services.lint_confidence import gate_blocks_finding
 
         session = MagicMock()
         result = MagicMock()
         result.first.return_value = (0.2, 20)
         session.execute = AsyncMock(return_value=result)
 
-        blocked = await _gate_blocks_finding(
+        blocked = await gate_blocks_finding(
             session, 'unit-id', confidence_min=0.3, variance_max=MAX_VARIANCE
         )
         assert blocked is True
@@ -91,14 +91,14 @@ class TestGatePredicate:
     @pytest.mark.asyncio
     async def test_missing_unit_row_does_not_block(self) -> None:
         """If the unit row is missing, do not block — fall through (no row to gate on)."""
-        from memex_core.services.lint import _gate_blocks_finding
+        from memex_core.services.lint_confidence import gate_blocks_finding
 
         session = MagicMock()
         result = MagicMock()
         result.first.return_value = None
         session.execute = AsyncMock(return_value=result)
 
-        blocked = await _gate_blocks_finding(
+        blocked = await gate_blocks_finding(
             session, 'unit-id', confidence_min=0.5, variance_max=0.001
         )
         assert blocked is False
@@ -106,21 +106,21 @@ class TestGatePredicate:
     @pytest.mark.asyncio
     async def test_well_evidenced_high_confidence_passes_strict_gate(self) -> None:
         """High-confidence + low-variance unit surfaces even under strict gates."""
-        from memex_core.services.lint import _gate_blocks_finding
+        from memex_core.services.lint_confidence import gate_blocks_finding
 
         session = MagicMock()
         result = MagicMock()
         result.first.return_value = (1.0, 20)
         session.execute = AsyncMock(return_value=result)
 
-        blocked = await _gate_blocks_finding(
+        blocked = await gate_blocks_finding(
             session, 'unit-id', confidence_min=0.5, variance_max=0.005
         )
         assert blocked is False
 
 
 class TestBulkConfidenceLoad:
-    """``_bulk_load_confidence_map`` + ``_confidence_map_blocks`` (Hermes round-1 HIGH).
+    """``bulk_load_confidence_map`` + ``confidence_map_blocks`` (Hermes round-1 HIGH).
 
     Replaces the per-row SELECT in ``_run_one`` so a rule with N candidates
     issues exactly one extra query — not N.
@@ -128,19 +128,19 @@ class TestBulkConfidenceLoad:
 
     @pytest.mark.asyncio
     async def test_bulk_load_empty_input_returns_empty_map(self) -> None:
-        from memex_core.services.lint import _bulk_load_confidence_map
+        from memex_core.services.lint_confidence import bulk_load_confidence_map
 
         session = MagicMock()
         session.execute = AsyncMock()
 
-        out = await _bulk_load_confidence_map(session, [])
+        out = await bulk_load_confidence_map(session, [])
         assert out == {}
         # Critical: zero queries when nothing to fetch.
         session.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_bulk_load_single_query_for_many_ids(self) -> None:
-        from memex_core.services.lint import _bulk_load_confidence_map
+        from memex_core.services.lint_confidence import bulk_load_confidence_map
 
         session = MagicMock()
         rows = [
@@ -152,7 +152,7 @@ class TestBulkConfidenceLoad:
         result.mappings.return_value.all.return_value = rows
         session.execute = AsyncMock(return_value=result)
 
-        out = await _bulk_load_confidence_map(session, ['a', 'b', 'c'])
+        out = await bulk_load_confidence_map(session, ['a', 'b', 'c'])
 
         # Exactly one query regardless of input size.
         assert session.execute.call_count == 1
@@ -163,29 +163,28 @@ class TestBulkConfidenceLoad:
         assert out['c'] == (1.0, 0)
 
     def test_confidence_map_blocks_missing_id_does_not_block(self) -> None:
-        from memex_core.services.lint import _confidence_map_blocks
+        from memex_core.services.lint_confidence import confidence_map_blocks
 
-        # Parity with _gate_blocks_finding: missing row means "do not block".
-        assert _confidence_map_blocks({}, 'nope', confidence_min=0.5, variance_max=0.001) is False
+        # Parity with gate_blocks_finding: missing row means "do not block".
+        assert confidence_map_blocks({}, 'nope', confidence_min=0.5, variance_max=0.001) is False
 
     def test_confidence_map_blocks_low_confidence(self) -> None:
-        from memex_core.services.lint import _confidence_map_blocks
+        from memex_core.services.lint_confidence import confidence_map_blocks
 
         cmap = {'u1': (0.2, 20)}
         assert (
-            _confidence_map_blocks(cmap, 'u1', confidence_min=0.3, variance_max=MAX_VARIANCE)
-            is True
+            confidence_map_blocks(cmap, 'u1', confidence_min=0.3, variance_max=MAX_VARIANCE) is True
         )
 
     def test_confidence_map_blocks_high_variance(self) -> None:
-        from memex_core.services.lint import _confidence_map_blocks
+        from memex_core.services.lint_confidence import confidence_map_blocks
 
         # Cold-start (count=0) → variance=1/12. Strict variance_max → blocked.
         cmap = {'u1': (1.0, 0)}
-        assert _confidence_map_blocks(cmap, 'u1', confidence_min=0.0, variance_max=0.05) is True
+        assert confidence_map_blocks(cmap, 'u1', confidence_min=0.0, variance_max=0.05) is True
 
     def test_confidence_map_blocks_well_evidenced_passes(self) -> None:
-        from memex_core.services.lint import _confidence_map_blocks
+        from memex_core.services.lint_confidence import confidence_map_blocks
 
         cmap = {'u1': (1.0, 20)}
-        assert _confidence_map_blocks(cmap, 'u1', confidence_min=0.5, variance_max=0.005) is False
+        assert confidence_map_blocks(cmap, 'u1', confidence_min=0.5, variance_max=0.005) is False
