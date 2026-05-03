@@ -37,20 +37,19 @@ from __future__ import annotations
 
 import logging
 
-from memex_common.schemas import (
-    IntentClass,
-    RiskClass,
-)
 from memex_core.memory.extraction.models import ProcessedFact
 from memex_core.metrics import CLASSIFIER_BLOCKED_TOTAL
 
 logger = logging.getLogger('memex.core.memory.extraction.classifier')
 
-INTENT_VALUES: tuple[str, ...] = tuple(c.value for c in IntentClass)
-RISK_VALUES: tuple[str, ...] = tuple(c.value for c in RiskClass)
-
-DEFAULT_INTENT = IntentClass.DURABLE.value
-DEFAULT_RISK = RiskClass.NONE.value
+# Hermes round-5 MED: ``INTENT_VALUES`` / ``RISK_VALUES`` / ``DEFAULT_INTENT``
+# / ``DEFAULT_RISK`` were retired from this module. The canonical valid
+# values live on the ``IntentClass`` / ``RiskClass`` enums in
+# ``memex_common.schemas``; the canonical defaults are
+# ``IntentClass.DURABLE.value`` / ``RiskClass.NONE.value`` (and are enforced
+# by the pydantic validators on ``RawFact`` / ``ExtractedFact``). Tests that
+# previously imported the constants from here should derive them directly
+# from the enums.
 
 
 def filter_safety_blocked(facts: list[ProcessedFact]) -> list[ProcessedFact]:

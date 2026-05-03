@@ -18,14 +18,17 @@ from uuid import uuid4
 
 import pytest
 
-from memex_core.memory.extraction.classifier import (
-    DEFAULT_INTENT,
-    DEFAULT_RISK,
-    INTENT_VALUES,
-    RISK_VALUES,
-    filter_safety_blocked,
-)
+from memex_common.schemas import IntentClass, RiskClass
+from memex_core.memory.extraction.classifier import filter_safety_blocked
 from memex_core.memory.extraction.models import ProcessedFact, RawFact
+
+# Single source of truth: derive valid values + defaults directly from the
+# canonical enums (was previously re-exported from classifier.py until
+# Hermes round-5 retired the orphaned constants).
+INTENT_VALUES: tuple[str, ...] = tuple(c.value for c in IntentClass)
+RISK_VALUES: tuple[str, ...] = tuple(c.value for c in RiskClass)
+DEFAULT_INTENT = IntentClass.DURABLE.value
+DEFAULT_RISK = RiskClass.NONE.value
 
 
 def _make_fact(text: str = 'a fact', context: str = '') -> ProcessedFact:
