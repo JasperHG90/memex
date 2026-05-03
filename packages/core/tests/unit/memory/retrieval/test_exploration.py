@@ -282,6 +282,52 @@ class TestSelectEdgeExplorationCandidates:
 
         assert _unit_variance(cold_unit) > threshold
 
+    def test_confidence_zero_not_coerced_to_one(self):
+        """Hermes round-3 HIGH: ``confidence=0.0`` is legitimate (contradicted to zero).
+
+        Prior code did ``getattr(unit, 'confidence', 1.0) or 1.0`` which
+        coerced 0.0 back to 1.0 because 0.0 is falsy. A unit thoroughly
+        contradicted to ``confidence=0.0, count=5`` would compute variance
+        as if ``confidence=1.0, count=5``, inverting eligibility.
+
+        Note: the Beta(alpha, beta) variance formula is symmetric under
+        ``alpha <-> beta``, so the variance numerically coincides between
+        ``(0.0, n)`` and ``(1.0, n)``. The bug therefore does NOT change
+        the high-variance threshold predicate — but it WOULD change any
+        downstream consumer of the returned ``mean`` (which is the input
+        confidence, per the F22 design). We assert the helper now passes
+        ``confidence`` through to ``mean_and_variance`` unchanged via a
+        spy so the falsy-zero coercion is provably gone.
+        """
+        from unittest.mock import patch
+
+        from memex_core.memory.retrieval.exploration import _unit_variance
+
+        contradicted = _make_unit(confidence=0.0, confidence_evidence_count=5)
+        with patch(
+            'memex_core.memory.retrieval.exploration.mean_and_variance',
+            wraps=__import__(
+                'memex_core.memory.confidence', fromlist=['mean_and_variance']
+            ).mean_and_variance,
+        ) as spy:
+            _unit_variance(contradicted)
+        # The helper MUST forward confidence=0.0 verbatim — never 1.0.
+        passed_confidence, passed_count = spy.call_args.args
+        assert passed_confidence == 0.0
+        assert passed_count == 5
+
+    def test_confidence_none_falls_back_to_one(self):
+        """Defensive: ``confidence=None`` (stale model) falls back to 1.0."""
+        from memex_core.memory.confidence import mean_and_variance
+        from memex_core.memory.retrieval.exploration import _unit_variance
+
+        unit = _make_unit(confidence=1.0, confidence_evidence_count=5)
+        # Force-strip the value to None to mirror a stripped/stale row.
+        unit.confidence = None
+        actual = _unit_variance(unit)
+        _, expected = mean_and_variance(1.0, 5)
+        assert actual == expected
+
 
 class TestInjectEdgeExploration:
     """Integration of edge candidates into results."""

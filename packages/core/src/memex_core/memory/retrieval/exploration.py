@@ -167,9 +167,17 @@ def inject_exploration_units(
 
 
 def _unit_variance(unit: MemoryUnit) -> float:
-    confidence = getattr(unit, 'confidence', 1.0) or 1.0
-    evidence_count = getattr(unit, 'confidence_evidence_count', 0) or 0
-    _, variance = mean_and_variance(float(confidence), int(evidence_count))
+    # ``confidence=0.0`` is a legitimate value (unit contradicted to zero);
+    # ``or 1.0`` would silently coerce it back to 1.0 because ``0.0`` is
+    # falsy — mirror the None-check pattern from engine.py instead so a
+    # contradicted unit's variance is computed against its actual mean.
+    raw_confidence = getattr(unit, 'confidence', 1.0)
+    confidence = 1.0 if raw_confidence is None else float(raw_confidence)
+    raw_count = getattr(unit, 'confidence_evidence_count', 0)
+    # ``0 or 0`` is fine for the integer count, but staying consistent with
+    # the confidence handling above makes the asymmetry obvious to readers.
+    evidence_count = 0 if raw_count is None else int(raw_count)
+    _, variance = mean_and_variance(confidence, evidence_count)
     return variance
 
 
