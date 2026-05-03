@@ -1,6 +1,7 @@
 """Custom models for Memex used internally for note management and retrieval."""
 
 import datetime as dt
+import logging
 import re
 from enum import Enum
 from typing import Any, Annotated, Literal
@@ -18,6 +19,9 @@ import base64
 import binascii
 
 from memex_common.types import MemexTypes, FactTypes
+
+
+_logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
 
 
@@ -629,6 +633,18 @@ class MemoryUnitDTO(MemoryUnitBase):
         # from ``confidence=1.0`` — a silent inconsistency.
         confidence_clamped = max(0.0, min(1.0, self.confidence))
         if confidence_clamped != self.confidence:
+            # Hermes round-18 MED: emit a debug-level diagnostic when the
+            # clamp engages so an upstream bug writing out-of-range
+            # confidence is observable in logs instead of silently
+            # absorbed. Debug-level keeps the hot path quiet on the
+            # happy path; flip to warning if calibration shows the
+            # clamp firing on real traffic.
+            _logger.debug(
+                'F22 DTO clamp engaged: confidence %r → %r '
+                '(out of [0, 1] range — likely upstream write bug)',
+                self.confidence,
+                confidence_clamped,
+            )
             object.__setattr__(self, 'confidence', confidence_clamped)
         alpha = 1.0 + confidence_clamped * self.confidence_evidence_count
         beta = 1.0 + (1.0 - confidence_clamped) * self.confidence_evidence_count
