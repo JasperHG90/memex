@@ -234,10 +234,12 @@ def upgrade() -> None:
     batch_index = 0
     while True:
         result = conn.execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
-        # ``len(result.all())`` over the RETURNING payload (Hermes round-18
-        # MED): driver-independent counting that does not rely on
-        # ``result.rowcount`` (which asyncpg may report as ``-1``).
-        batch_rowcount = len(result.all())
+        # ``sum(1 for _ in result)`` over the RETURNING payload (Hermes
+        # round-18 MED, refined round-25 MED): driver-independent counting
+        # that does not rely on ``result.rowcount`` (which asyncpg may
+        # report as ``-1``). ``sum`` counts without materialising rows
+        # into a list, unlike the prior ``len(result.all())``.
+        batch_rowcount = sum(1 for _ in result)
         if not batch_rowcount:
             logger.info(
                 'F22 backfill complete: %d batches, %d units backfilled total.',

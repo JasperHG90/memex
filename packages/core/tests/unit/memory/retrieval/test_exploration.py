@@ -134,7 +134,9 @@ class TestInjectExplorationUnits:
         results = [_make_unit()]
         candidates = [results[0]]
         output = inject_exploration_units(results, candidates)
-        assert output is results
+        # Hermes round-25 LOW: the function now always returns a fresh list
+        # (never the input object), so identity must not be checked.
+        assert output == results
 
     @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
     def test_injected_units_appended_to_end(self, _mock):
@@ -336,9 +338,9 @@ class TestInjectEdgeExploration:
         results = [_make_unit()]
         candidates = [results[0]]
         output = inject_edge_exploration(results, candidates)
-        # When nothing eligible, the function returns the input list as-is —
-        # critical for downstream callers that may rely on identity.
-        assert output is results
+        # Hermes round-25 LOW: the function now always returns a fresh list
+        # (never the input object), so identity must not be checked.
+        assert output == results
 
     @patch('memex_core.memory.retrieval.exploration.random.random', return_value=0.01)
     def test_injected_units_appended_to_end(self, _mock):
@@ -390,8 +392,9 @@ class TestInjectEdgeExploration:
         results = [already]
         candidates = [already]  # same id — must be excluded.
         output = inject_edge_exploration(results, candidates)
-        # Original list returned (identity) when nothing eligible.
-        assert output is results
+        # Hermes round-25 LOW: the function now always returns a fresh list
+        # (never the input object), so identity must not be checked.
+        assert output == results
 
 
 class TestMetadataCoercion:

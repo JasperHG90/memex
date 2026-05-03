@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from memex_core.memory.confidence import mean_and_variance
 
 
-def _clamp_confidence_pair(confidence: float, evidence_count: int) -> tuple[float, int]:
+def _clamp_confidence_pair(confidence: float, evidence_count: int | float) -> tuple[float, int]:
     """Clamp a (confidence, evidence_count) pair to the F22 valid ranges.
 
     Hermes round-16 MED: the three lint paths (``gate_blocks_finding``,
@@ -51,12 +51,29 @@ def _clamp_confidence_pair(confidence: float, evidence_count: int) -> tuple[floa
     ``confidence`` is treated as ``1.0`` (parity with the missing-
     attribute fallback in ``extract_confidence_and_count``); a
     non-finite ``evidence_count`` is treated as ``0``.
+
+    Type handling (Hermes round-25 HIGH): ``evidence_count`` accepts
+    ``int | float`` because callers that read the DB column via
+    ``int(row[...])`` can still produce a ``float`` from a stale or
+    mocked row. Non-integer, non-float types (e.g. ``Decimal``,
+    ``str``) are normalised via half-up rounding
+    (``int(math.floor(float(x) + 0.5))``) matching
+    :func:`memex_core.memory.confidence.extract_confidence_and_count`.
     """
     if not math.isfinite(confidence):
         confidence = 1.0
-    safe_count = evidence_count
-    if isinstance(evidence_count, float) and not math.isfinite(evidence_count):
-        safe_count = 0
+    if isinstance(evidence_count, int) and not isinstance(evidence_count, bool):
+        safe_count = evidence_count
+    elif isinstance(evidence_count, float):
+        if not math.isfinite(evidence_count):
+            safe_count = 0
+        else:
+            safe_count = int(math.floor(evidence_count + 0.5))
+    else:
+        try:
+            safe_count = int(math.floor(float(evidence_count) + 0.5))
+        except (TypeError, ValueError):
+            safe_count = 0
     return max(0.0, min(1.0, confidence)), max(0, safe_count)
 
 
@@ -85,7 +102,7 @@ _BULK_LOAD_UNIT_CONFIDENCE_SQL = text("""
 
 async def gate_blocks_finding(
     session: AsyncSession,
-    unit_id: str,
+    unit_id: UUID | str,
     confidence_min: float,
     variance_max: float,
 ) -> bool:
@@ -116,20 +133,26 @@ async def gate_blocks_finding(
     the bulk pair is exactly this predicate against a single query's
     worth of data.
 
-    Input validation (Hermes round-23 HIGH): ``unit_id`` is parsed as a
-    UUID before the query. A malformed ID (truncated, non-hex, etc.)
-    returns ``False`` ("do not block") rather than letting asyncpg
-    raise an unhandled ``DataError`` deep in the lint path — parity
-    with the ``row is None`` branch below.
+    Input validation (Hermes round-23 HIGH): ``unit_id`` accepts
+    ``UUID | str``. A ``UUID`` is used directly; a ``str`` is parsed
+    first. A malformed string ID returns ``False`` ("do not block")
+    rather than letting asyncpg raise an unhandled ``DataError``
+    deep in the lint path — parity with the ``row is None`` branch.
+
+    Normalisation (Hermes round-25 MED): the normalised
+    ``str(UUID(...))`` form is always passed to the query so
+    hyphenated and non-hyphenated representations resolve identically
+    in both logs and the DB, and the query plan cache is not
+    fragmented by equivalent-but-lexically-different strings.
     """
-    try:
-        UUID(unit_id)
-    except (TypeError, ValueError, AttributeError):
-        # A malformed unit_id cannot identify a row; treat as
-        # "do not block" so the lint pipeline degrades gracefully
-        # rather than 500-ing the request.
-        return False
-    row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
+    if isinstance(unit_id, UUID):
+        unit_id_str = str(unit_id)
+    else:
+        try:
+            unit_id_str = str(UUID(unit_id))
+        except (TypeError, ValueError, AttributeError):
+            return False
+    row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id_str})).first()
     if row is None:
         return False
     confidence = float(row[0]) if row[0] is not None else 1.0

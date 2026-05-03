@@ -1262,6 +1262,9 @@ class TracingConfig(BaseModel):
 # ``memex_common.schemas._MAX_VARIANCE``; the cross-reference unit
 # test in ``test_confidence.py`` (TestDtoFormulaConsistency) pins
 # equivalence with the core constant.
+# Triplicated constant (Hermes round-25 MED): any edit here MUST be
+# mirrored in ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.schemas._MAX_VARIANCE``.
 _MAX_VARIANCE: float = 1.0 / 12.0
 
 

@@ -42,6 +42,12 @@ from typing import Protocol, runtime_checkable
 
 # Variance of Uniform(0, 1) = Beta(1, 1) — the cold-start ceiling.
 # Pinned in tests so a future prior change is a deliberate edit.
+# Triplicated constant (Hermes round-25 MED): also defined in
+# ``memex_common.schemas._MAX_VARIANCE`` and
+# ``memex_common.config._MAX_VARIANCE``. The cross-reference unit
+# test in ``test_confidence.py`` (``TestDtoFormulaConsistency``)
+# pins equivalence across all three sites. Any edit here MUST be
+# mirrored in both common locations.
 MAX_VARIANCE: float = 1.0 / 12.0
 
 

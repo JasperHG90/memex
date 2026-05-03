@@ -79,9 +79,16 @@ def _already_injected(unit: MemoryUnit) -> bool:
     "tested-and-passed" status) would still be excluded from
     re-injection. The injectors themselves only ever write ``True``,
     but the presence check is correct-by-construction.
+
+    Hermes round-25 MED: ``not frozenset.isdisjoint(dict)`` replaces
+    the prior ``any(key in metadata for key in ...)`` generator.
+    Both are O(k) where k = ``len(_INJECTION_ANNOTATION_KEYS)`` (2),
+    but ``isdisjoint`` short-circuits on the first shared key without
+    constructing a generator frame and is the idiomatic set-dict
+    overlap test in CPython.
     """
     metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-    return any(key in metadata for key in _INJECTION_ANNOTATION_KEYS)
+    return not _INJECTION_ANNOTATION_KEYS.isdisjoint(metadata)
 
 
 logger = structlog.get_logger('memex.core.memory.retrieval.exploration')
@@ -179,7 +186,8 @@ def inject_exploration_units(
         low_mw_threshold: Low-MW eligibility threshold.
 
     Returns:
-        New list with exploration units appended (if selected).
+        New list (always a fresh list — never the input ``results`` object)
+        with exploration units appended (if selected).
 
     Mutation contract (Hermes round-13 LOW)
     ---------------------------------------
@@ -207,7 +215,7 @@ def inject_exploration_units(
     )
 
     if not exploration_units:
-        return results
+        return list(results)
 
     for unit in exploration_units:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
@@ -344,7 +352,7 @@ def inject_edge_exploration(
         high_variance_fraction=high_variance_fraction,
     )
     if not edges:
-        return results
+        return list(results)
 
     for unit in edges:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)

@@ -36,6 +36,10 @@ from memex_common.mixins import VaultMixin
 # Hermes round-20 LOW: extracted from inline ``1.0 / 12.0`` literals so
 # the Field constraint and the validator formula reference a single
 # source of truth.
+# Triplicated constant (Hermes round-25 MED): also defined in
+# ``memex_core.memory.confidence.MAX_VARIANCE`` and
+# ``memex_common.config._MAX_VARIANCE``. Any edit here MUST be mirrored
+# in both of those locations.
 _MAX_VARIANCE: float = 1.0 / 12.0
 
 
