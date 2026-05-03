@@ -130,3 +130,72 @@ class TestChunkedBackfillTermination:
             'A batch smaller than _BACKFILL_BATCH_SIZE must NOT be treated as terminal; '
             'only a 0-row batch ends the loop.'
         )
+
+
+class TestBackfillVerificationLogging:
+    """Hermes round-21 MED: pin the post-backfill verification's
+    warn-on-mismatch behaviour as a CI gate.
+
+    The verification query never fails the migration (the undercount is
+    conservative and the column is operational), so without these tests
+    a regression that silenced the warning would not be caught by CI.
+    These tests close that gap by asserting the warning fires (and only
+    fires) when ``mismatch_count > 0``.
+    """
+
+    def _run_upgrade_with_mismatch_count(self, mismatch_count: int) -> tuple[MagicMock, MagicMock]:
+        m = _load_migration_033()
+        # One backfill batch returning 0 rows — terminates the loop
+        # immediately so the verification step is the only further DB
+        # interaction.
+        backfill_result = MagicMock()
+        backfill_result.all.return_value = []
+
+        verification_result = MagicMock()
+        verification_result.scalar.return_value = mismatch_count
+
+        bind = MagicMock()
+        bind.execute.side_effect = [backfill_result, verification_result]
+
+        mock_logger = MagicMock()
+
+        with (
+            patch.object(m.op, 'get_bind', return_value=bind),
+            patch.object(m.op, 'add_column'),
+            patch.object(m.op, 'create_index'),
+            patch.object(m.op, 'create_check_constraint'),
+            patch.object(m, '_column_exists', return_value=True),
+            patch.object(m, '_constraint_exists', return_value=True),
+            patch.object(m, '_index_exists', return_value=True),
+            patch.object(m, 'logger', mock_logger),
+        ):
+            m.upgrade()
+
+        return bind, mock_logger
+
+    def test_warning_fires_when_mismatches_present(self):
+        """Mismatch present → ``logger.warning`` is invoked exactly once."""
+        _, mock_logger = self._run_upgrade_with_mismatch_count(7)
+        mock_logger.warning.assert_called_once()
+        # First positional arg is the format string; second is the count.
+        args, _ = mock_logger.warning.call_args
+        assert 'F22 backfill verification' in args[0]
+        assert args[1] == 7
+
+    def test_no_warning_when_no_mismatches(self):
+        """``mismatch_count == 0`` → ``logger.warning`` is NOT invoked."""
+        _, mock_logger = self._run_upgrade_with_mismatch_count(0)
+        mock_logger.warning.assert_not_called()
+
+    def test_verification_query_uses_count_aggregate(self):
+        """Pin the verification SQL: a single ``COUNT(*)`` aggregate
+        (Hermes round-20 LOW), not a per-unit list — so the deploy-log
+        payload is bounded by construction regardless of mismatch
+        cardinality."""
+        source = _migration_033_source()
+        # The verification block must select an aggregate count, not
+        # a row list; matching the alias makes the assertion robust to
+        # whitespace.
+        assert 'SELECT COUNT(*) AS mismatched' in source, (
+            'Verification SQL must aggregate to a single COUNT row.'
+        )
