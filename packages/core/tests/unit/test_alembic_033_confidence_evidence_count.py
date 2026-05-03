@@ -90,13 +90,8 @@ class TestChunkedBackfillTermination:
         bind = MagicMock()
         bind.execute.side_effect = results
 
-        ctx = MagicMock()
-        ctx.autocommit_block.return_value.__enter__ = MagicMock(return_value=None)
-        ctx.autocommit_block.return_value.__exit__ = MagicMock(return_value=False)
-
         with (
             patch.object(m.op, 'get_bind', return_value=bind),
-            patch.object(m.op, 'get_context', return_value=ctx),
             patch.object(m.op, 'add_column'),
             patch.object(m.op, 'create_index'),
             patch.object(m.op, 'create_check_constraint'),

@@ -136,14 +136,25 @@ def upgrade() -> None:
             ['link_type', 'to_unit_id'],
         )
 
-    # Chunked backfill (Hermes round-10 LOW). Each batch runs in its own
-    # transaction via ``autocommit_block`` so the lock window per batch is
-    # bounded by ``_BACKFILL_BATCH_SIZE`` rows — not by the total count of
-    # backfill candidates in the vault. The inner SELECT picks the next
-    # ``_BACKFILL_BATCH_SIZE`` actual candidates (units that both have
+    # Chunked backfill (Hermes round-10 LOW). Each batch processes at most
+    # ``_BACKFILL_BATCH_SIZE`` rows so the per-statement work — and therefore
+    # the per-statement lock-acquisition window — is bounded regardless of
+    # the total candidate count in the vault. The inner SELECT picks the
+    # next ``_BACKFILL_BATCH_SIZE`` actual candidates (units that both have
     # incoming contradicts/weakens links AND still carry the default 0),
     # so the outer UPDATE always touches exactly the rows we just chose.
     # The loop terminates when a batch updates 0 rows.
+    #
+    # Note (Hermes round-13 LOW): the prior implementation wrapped each
+    # batch in ``op.get_context().autocommit_block()`` so locks would be
+    # released between batches. That broke against the project's env.py,
+    # which runs migrations inside the implicit ``connect()`` transaction
+    # via ``connection.run_sync(do_run_migrations)`` — alembic's
+    # ``begin_transaction()`` returns a SAVEPOINT in that mode, which
+    # ``autocommit_block`` cannot commit/re-open. Removed; row locks
+    # are now held until the migration commits, which is the standard
+    # transactional-DDL convention every other migration in this project
+    # follows. The chunked LIMIT still bounds per-statement work.
     backfill_sql = sa.text(
         'UPDATE memory_units mu '
         'SET confidence_evidence_count = sub.cnt '
@@ -165,8 +176,7 @@ def upgrade() -> None:
         '  AND mu.confidence_evidence_count = 0'
     )
     while True:
-        with op.get_context().autocommit_block():
-            result = op.get_bind().execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
+        result = conn.execute(backfill_sql, {'batch_size': _BACKFILL_BATCH_SIZE})
         if not result.rowcount:
             break
 
