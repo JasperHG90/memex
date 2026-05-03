@@ -18,5 +18,5 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     'unit_ids=[...]); set target_type="kv_key" with kv_key='
     '"procedure:<verb>:<context-tag>" to score a stored procedure. Call '
     'after you actually used the retrieved memory or the procedure.\n\n'
-    'Call generously. Silence provides no learning signal.\n'
+    'Call generously. Silence provides no learning signal.'
 )
