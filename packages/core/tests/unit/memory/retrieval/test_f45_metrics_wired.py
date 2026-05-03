@@ -57,9 +57,11 @@ def test_apply_pre_filter_default_is_true_on_internal_request() -> None:
     assert CoreRequest(query='dummy').apply_pre_filter is True
 
 
-def test_fsfm_branch_disabled_by_default_on_config() -> None:
-    """RetrievalConfig.fsfm_branch_enabled must default to False — F11
-    flips it ON in the same PR that lands the column migration."""
+def test_fsfm_branch_enabled_by_default_on_config() -> None:
+    """RetrievalConfig.fsfm_branch_enabled defaults to True post-F11
+    (Wave 16) — the column migration shipped, so the FSFM SQL clause now
+    activates by default. Set False to disable the FSFM branch
+    independently of the column migration (kill-switch)."""
     from memex_common.config import RetrievalConfig
 
-    assert RetrievalConfig().fsfm_branch_enabled is False
+    assert RetrievalConfig().fsfm_branch_enabled is True
