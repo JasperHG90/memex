@@ -57,12 +57,22 @@ def extract_confidence_and_count(unit: Any) -> tuple[float, int]:
         OR explicitly ``None`` (stripped/stale model rows). ``0.0`` is
         preserved verbatim — it is a legitimate value (a unit thoroughly
         contradicted to zero) and must NOT be coerced via ``or 1.0``.
-      - ``confidence_evidence_count`` falls back to ``0`` on missing/None.
+        Out-of-range values (e.g. an in-flight ``MemoryUnit`` carrying
+        ``1.0001`` from a concurrent write before the SQL-level
+        ``GREATEST/LEAST`` clamp settles) are clamped to ``[0, 1]``
+        rather than letting ``mean_and_variance`` raise — Hermes round-8
+        HIGH: an unhandled ``ValueError`` in the retrieval-rerank path
+        would 500 the request. This mirrors the ``schemas.py`` DTO
+        validator's defence-in-depth clamp.
+      - ``confidence_evidence_count`` falls back to ``0`` on missing/None
+        and is floored at ``0`` for the same reason.
     """
     raw_confidence = getattr(unit, 'confidence', 1.0)
     confidence = 1.0 if raw_confidence is None else float(raw_confidence)
+    confidence = max(0.0, min(1.0, confidence))
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
     evidence_count = 0 if raw_count is None else int(raw_count)
+    evidence_count = max(0, evidence_count)
     return confidence, evidence_count
 
 

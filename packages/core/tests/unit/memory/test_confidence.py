@@ -285,6 +285,49 @@ class TestExtractConfidenceAndCount:
         assert n == 7
         assert isinstance(n, int)
 
+    def test_out_of_range_confidence_clamped_not_raised(self):
+        """Hermes round-8 HIGH: an in-flight ``confidence > 1.0`` from a
+        concurrent write must NOT propagate to ``mean_and_variance`` (which
+        would raise) — it must be clamped here so the retrieval rerank
+        path stays available even with stale/in-flight model objects.
+        """
+
+        class _U:
+            confidence = 1.0001  # out-of-range, mirrors a concurrent-write race.
+            confidence_evidence_count = 5
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 1.0
+        # And the downstream call MUST not raise — proves the clamp closes
+        # the round-8 HIGH crash path.
+        m, v = mean_and_variance(c, n)
+        assert m == 1.0
+        assert 0.0 <= v <= MAX_VARIANCE
+
+    def test_negative_confidence_clamped_not_raised(self):
+        class _U:
+            confidence = -0.5
+            confidence_evidence_count = 5
+
+        c, n = extract_confidence_and_count(_U())
+        assert c == 0.0
+        # Same crash-avoidance invariant.
+        m, v = mean_and_variance(c, n)
+        assert m == 0.0
+        assert 0.0 <= v <= MAX_VARIANCE
+
+    def test_negative_evidence_count_floored_at_zero(self):
+        class _U:
+            confidence = 0.5
+            confidence_evidence_count = -3
+
+        c, n = extract_confidence_and_count(_U())
+        assert n == 0
+        m, v = mean_and_variance(c, n)
+        assert m == 0.5
+        # Cold-start variance because count was floored to 0.
+        assert math.isclose(v, MAX_VARIANCE, rel_tol=REL_TOL)
+
 
 class TestMeanAndVarianceInputValidation:
     """``mean_and_variance`` rejects out-of-range inputs (Hermes round-6 MED).
