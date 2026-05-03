@@ -6,6 +6,8 @@ Subcommands:
 * ``memex lint findings [--type ...]`` — list findings.
 * ``memex lint dismiss <finding_id>`` — flip to dismissed.
 * ``memex lint resolve <finding_id>`` — flip to resolved.
+* ``memex lint review [--vault X | --global | --all] [--apply]`` —
+  interactive triage (F7).
 
 The maintenance ledger is read-only from the agent surface (F8 ships the
 MCP tool); this CLI is for human inspection and reconciliation.
@@ -20,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
+from memex_cli.lint_review import render_summary, run_review_loop
 from memex_cli.utils import async_command, get_api_context, handle_api_error, parse_uuid
 
 console = Console()
@@ -201,3 +204,105 @@ async def lint_resolve_cmd(
             handle_api_error(e)
             return
     console.print(f'[green]resolved:[/green] {payload["finding_id"]}')
+
+
+@app.command('review')
+@async_command
+async def lint_review_cmd(
+    ctx: typer.Context,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', help='Vault UUID or name to scope to.'),
+    ] = None,
+    is_global: Annotated[
+        bool,
+        typer.Option('--global/--no-global', help='Review only global (vault_id NULL) findings.'),
+    ] = False,
+    is_all: Annotated[
+        bool,
+        typer.Option('--all/--no-all', help='Review pending findings across every scope.'),
+    ] = False,
+    lint_type: Annotated[
+        str | None,
+        typer.Option(
+            '--type',
+            help='Filter by lint_type: structural, quality, governance, schema.',
+        ),
+    ] = None,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            '--apply',
+            help='Actually write resolutions; otherwise dry-run preview only.',
+        ),
+    ] = False,
+    limit: Annotated[
+        int,
+        typer.Option(
+            '--limit',
+            min=1,
+            max=500,
+            help=(
+                'Max findings to fetch from the server. With ``--global``, the '
+                'global filter is applied client-side AFTER this cap, so a '
+                'global session may surface fewer than --limit findings if '
+                'vault-scoped findings dominate; raise --limit to compensate.'
+            ),
+        ),
+    ] = 50,
+):
+    """Walk pending findings interactively (analogous to ``git add -p``).
+
+    Default is dry-run: verdicts are collected and summarised but nothing is
+    written. Pass ``--apply`` to flip accepted findings to ``resolved`` and
+    dismissed findings to ``dismissed`` via the same service paths used by
+    ``memex lint resolve`` / ``memex lint dismiss``.
+
+    Note: ``--global`` filters client-side after the server-side ``--limit``
+    cap (mirrors ``memex lint findings``). A server-side ``vault_id IS NULL``
+    filter is tracked as a follow-up; bump ``--limit`` if needed.
+    """
+    scope = _resolve_scope(vault, is_global, is_all)
+    if lint_type is not None and lint_type not in {
+        'structural',
+        'quality',
+        'governance',
+        'schema',
+    }:
+        console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
+        raise typer.Exit(2)
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            vault_id: str | None = None
+            if scope == 'vault' and vault is not None:
+                vault_id = str(await api.resolve_vault_identifier(vault))
+            payload = await api.lint_findings(
+                vault_id=vault_id,
+                lint_type=lint_type,
+                status='pending',
+                limit=limit,
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+        findings = payload.get('findings', [])
+        if scope == 'global':
+            findings = [f for f in findings if f.get('vault_id') in (None, '')]
+
+        if not apply:
+            console.print(
+                '[dim]Dry-run mode — no resolutions will be written. '
+                'Pass --apply to persist verdicts.[/dim]'
+            )
+
+        summary = await run_review_loop(
+            findings,
+            apply=apply,
+            api=api,
+            console=console,
+        )
+
+    render_summary(console, summary, apply=apply)

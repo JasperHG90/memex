@@ -98,7 +98,7 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~3-4w for Tier-A 
 - [x] **F6** — Maintenance ledger + rule-based linter (4-6w) — runs under existing `MEMEX_LEADER_LOCK_ID` — see report §4 F6 (shipped 2026-05-01 via memory_augmentation)
 - [x] **F8** — `memex_get_lint_flags` MCP (1-2w) — depends on F6 — see report §4 F8 (shipped 2026-05-01 via memory_augmentation)
 - [x] **F10** — Surprise-gated LLM lint (3-5w) — depends on F2 + F6; LLM cost-capped per vault — see report §4 F10 (shipped 2026-05-01 via memory_augmentation; polarity discrimination deferred to F10b)
-- [ ] **F7** — `memex lint review` interactive CLI (1-2w, promoted 2026-05-02) — see report §4 F7 + Issue #18 Comment 1. Human-side parity verb for F8's agent-driven lint triage; analogous to `git add -p`. **Concrete scope:**
+- [x] **F7** — `memex lint review` interactive CLI (1-2w, promoted 2026-05-02; shipped 2026-05-03) — see report §4 F7 + Issue #18 Comment 1. Human-side parity verb for F8's agent-driven lint triage; analogous to `git add -p`. **Concrete scope:**
   - Extend `packages/cli/src/memex_cli/lint.py:27` with a new `@app.command('review')` subcommand alongside the existing four (`status`, `findings`, `dismiss`, `resolve`).
   - Optional new module `packages/cli/src/memex_cli/lint_review.py` for the per-finding render + prompt loop, kept narrow so the four shipped subcommands stay simple.
   - Reuse `_resolve_scope` (`lint.py:37`) for `--vault / --global / --all` flag handling so behaviour matches `lint findings`.

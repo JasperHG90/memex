@@ -1211,6 +1211,10 @@ low-risk ones (deprioritize, mark stale).
 
 #### F7. `memex lint review` interactive CLI
 
+**Status:** shipped 2026-05-03 via `wave-15/F7-lint-review-cli` (PR pending). Concrete code locations after merge:
+- `packages/cli/src/memex_cli/lint.py` — `@app.command('review')` registered alongside `status` / `findings` / `dismiss` / `resolve`.
+- `packages/cli/src/memex_cli/lint_review.py` — per-finding render + prompt loop module.
+
 **1. Source citation:**
 - Issue #18 Comment 1 (JasperHG90, 2026-04-28): *"We also build a `memex lint review` interactive command (analogous to `git add -p`) for users who prefer to review the flags manually without an agent."*
 - §3.5 (this report) *Worked example: cron reflection → user-driven resolution* — F7 is the human-side parity verb for the agent-driven F8 / `memex_get_lint_flags` flow. Where F8 lets an agent triage the maintenance ledger, F7 lets a human do the same triage without an agent in the loop.
