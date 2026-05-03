@@ -325,6 +325,13 @@ _LOAD_UNIT_CONFIDENCE_SQL = text("""
 """)
 
 
+_BULK_LOAD_UNIT_CONFIDENCE_SQL = text("""
+    SELECT id::text AS unit_id, confidence, confidence_evidence_count
+    FROM memory_units
+    WHERE id = ANY(CAST(:unit_ids AS uuid[]))
+""")
+
+
 async def _gate_blocks_finding(
     session: AsyncSession,
     unit_id: str,
@@ -336,12 +343,63 @@ async def _gate_blocks_finding(
     Cold-start units (count=0, variance=1/12) are blocked when ``variance_max``
     is set below 1/12 — so freshly extracted units don't surface as
     "low-confidence" findings purely because they have no evidence yet.
+
+    NOTE: The per-row fetch is retained for tests and one-off callers; the
+    rule-runner path uses :func:`_bulk_load_confidence_map` to avoid the
+    N+1 query that would otherwise fire on rules with many candidate rows.
     """
     row = (await session.execute(_LOAD_UNIT_CONFIDENCE_SQL, {'unit_id': unit_id})).first()
     if row is None:
         return False
     confidence = float(row[0]) if row[0] is not None else 1.0
     evidence_count = int(row[1]) if row[1] is not None else 0
+    _, variance = mean_and_variance(confidence, evidence_count)
+    return confidence < confidence_min or variance > variance_max
+
+
+async def _bulk_load_confidence_map(
+    session: AsyncSession,
+    unit_ids: list[str],
+) -> dict[str, tuple[float, int]]:
+    """Bulk-fetch ``(confidence, confidence_evidence_count)`` for a set of units.
+
+    Returns a map keyed by ``unit_id`` (text). IDs missing from the map mean
+    the row was not found — callers should treat this as "do not block"
+    (parity with :func:`_gate_blocks_finding`'s ``row is None`` branch).
+
+    F22: replaces the per-row SELECT inside the rule-runner loop so a rule
+    that returns N candidates issues exactly one extra query (not N).
+    """
+    if not unit_ids:
+        return {}
+    result = await session.execute(_BULK_LOAD_UNIT_CONFIDENCE_SQL, {'unit_ids': unit_ids})
+    out: dict[str, tuple[float, int]] = {}
+    for row in result.mappings().all():
+        confidence = float(row['confidence']) if row['confidence'] is not None else 1.0
+        evidence_count = (
+            int(row['confidence_evidence_count'])
+            if row['confidence_evidence_count'] is not None
+            else 0
+        )
+        out[row['unit_id']] = (confidence, evidence_count)
+    return out
+
+
+def _confidence_map_blocks(
+    confidence_map: dict[str, tuple[float, int]],
+    unit_id: str,
+    confidence_min: float,
+    variance_max: float,
+) -> bool:
+    """In-memory mirror of :func:`_gate_blocks_finding` against a prefetched map.
+
+    Missing entries do NOT block (parity: a missing row also does not block in
+    the per-row SELECT path).
+    """
+    entry = confidence_map.get(unit_id)
+    if entry is None:
+        return False
+    confidence, evidence_count = entry
     _, variance = mean_and_variance(confidence, evidence_count)
     return confidence < confidence_min or variance > variance_max
 
@@ -474,9 +532,21 @@ class LintService(BaseService):
             if ctx is not None:
                 ctx.__enter__()
             result = await session.execute(text(spec.select_sql), {'vault_id': str(vault_id)})
-            for row in result.mappings().all():
-                if gate_active and await _gate_blocks_finding(
-                    session, row['target_id'], gate.confidence_min, gate.variance_max
+            rows = result.mappings().all()
+            # F22 — bulk-fetch (confidence, evidence_count) for every candidate
+            # so the gate predicate runs against an in-memory map rather than
+            # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
+            confidence_map: dict[str, tuple[float, int]] = {}
+            if gate_active and rows:
+                confidence_map = await _bulk_load_confidence_map(
+                    session, [row['target_id'] for row in rows]
+                )
+            for row in rows:
+                if gate_active and _confidence_map_blocks(
+                    confidence_map,
+                    row['target_id'],
+                    gate.confidence_min,
+                    gate.variance_max,
                 ):
                     continue
                 ins = await session.execute(
