@@ -56,7 +56,7 @@ Total scope: ~22-30 weeks for Tier S+A (incl. ~2-day Wave 0) + ~3-4w for Tier-A 
   - Subsumes F26; affects every future extraction
   - LLM cost per ingest — needs per-vault rate-limit
 
-- [ ] **F25b** — Fold intent+risk classifier into the extraction DSPy signature — see report §4 F25b
+- [x] **F25b** — Fold intent+risk classifier into the extraction DSPy signature — see report §4 F25b
   - Size: S-M (~1w) · Effort: Low
   - Refactor of F25: ``ClassifyMemoryUnit`` collapses into ``ExtractSemanticFacts`` (and ``ExtractFrontmatterMetadata``) so each fact is one LLM call instead of two. Halves classifier LLM cost; lower per-ingest latency.
   - Pydantic validators on ``RawFact`` enforce default-on-fail (intent → ``durable``, risk → ``none``) when the LLM omits or returns invalid values, preserving F25's non-blocking guarantee.
