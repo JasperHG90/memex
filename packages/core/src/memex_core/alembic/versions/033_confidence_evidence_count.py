@@ -273,10 +273,10 @@ def upgrade() -> None:
     # section calls for: it does not fail the migration (the undercount
     # is conservative and the column is operational), but it WILL appear
     # in deploy logs so operators see immediately if a hot-online run
-    # raced with the contradiction engine. The query is bounded by an
-    # implicit ``LIMIT 100`` on the worst-case mismatch list so a vault
-    # with millions of post-race mismatches doesn't dump megabytes into
-    # the deploy log.
+    # raced with the contradiction engine. Hermes round-20 LOW: the
+    # query returns a single ``COUNT`` row (not a per-unit list), so
+    # the deploy-log payload is bounded by construction — only the
+    # aggregate mismatch count is logged.
     mismatch_check_sql = sa.text("""
         WITH actual AS (
             SELECT to_unit_id AS unit_id, COUNT(*) AS cnt
