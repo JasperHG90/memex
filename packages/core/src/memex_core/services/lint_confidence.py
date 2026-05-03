@@ -99,6 +99,18 @@ async def bulk_load_confidence_map(
     """
     if not unit_ids:
         return {}
+    # Hermes round-17 MED: the SQL bind uses ``expanding=True`` which
+    # SQLAlchemy expands as ``(:p1, :p2, ...)`` — passing a single
+    # string here would expand char-by-char and fire a UUID-mismatch
+    # error deep in asyncpg. The type annotation already says
+    # ``list[str]``; assert at runtime so a caller violating the contract
+    # gets a clear ``TypeError`` instead of a confusing DB error.
+    if isinstance(unit_ids, str):
+        raise TypeError(
+            f'unit_ids must be a list/sequence of UUID strings; got a single str. '
+            f'Wrap it in a list before calling: bulk_load_confidence_map(session, [unit_id]). '
+            f'Received: {unit_ids!r}'
+        )
     result = await session.execute(_BULK_LOAD_UNIT_CONFIDENCE_SQL, {'unit_ids': unit_ids})
     out: dict[str, tuple[float, int]] = {}
     for row in result.mappings().all():
