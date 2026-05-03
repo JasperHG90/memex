@@ -3426,13 +3426,14 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
         'prefer deprioritize unless the unit must leave the entity graph entirely. '
         '\n\n'
         'When the user reports an issue resolved, follow the §3.5 5-step flow '
-        '(see briefing): disambiguate first, route by info quality (Options A/B/C), '
-        'mandatory LLM judgment over candidates, then PAIRED writes — '
-        'memex_record_outcome(success=false) AND memex_memory_deprioritize against '
-        'the LLM-judged-relevant subset only. The two verbs are orthogonal axes '
-        '(MW gradient vs binary surface state); user-confirmed-fix is BOTH signals '
-        'at once. Imperfect cross-note recall is by design — F33 exploration is '
-        'the safety net.'
+        '(see briefing): disambiguate first, route by info quality (Options A/B/C; '
+        'Option B requires top_k>=30), mandatory LLM judgment over candidates, then '
+        'PAIRED writes — memex_record_outcome(success=false) AND '
+        'memex_memory_deprioritize against the LLM-judged-relevant subset only. '
+        'The two verbs are orthogonal axes (MW gradient vs binary surface state); '
+        'user-confirmed-fix is BOTH signals at once. Imperfect cross-note recall is '
+        'by design — F33 exploration is the safety net. For HOW-THINGS-CHANGED '
+        'audit queries, route to memex_memory_search(apply_pre_filter=False) instead.'
     ),
     'parameters': {
         'type': 'object',
@@ -3715,11 +3716,14 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
         'Call generously. Silence provides no learning signal.\n\n'
         'When the user reports an issue resolved, follow the §3.5 5-step flow '
         '(see briefing): disambiguate first, route by info quality (Options '
-        'A/B/C), mandatory LLM judgment over candidates, then PAIRED writes — '
-        'memex_record_outcome(success=false) AND memex_memory_deprioritize '
-        'against the LLM-judged-relevant subset only. The two verbs are '
-        'orthogonal axes (MW gradient vs binary surface state); user-confirmed-'
-        'fix is BOTH signals at once.'
+        'A/B/C; Option B requires top_k>=30), mandatory LLM judgment over '
+        'candidates, then PAIRED writes — memex_record_outcome(success=false) '
+        'AND memex_memory_deprioritize against the LLM-judged-relevant subset '
+        'only. The two verbs are orthogonal axes (MW gradient vs binary surface '
+        'state); user-confirmed-fix is BOTH signals at once. Imperfect '
+        'cross-note recall is by design — F33 exploration is the safety net. '
+        'For HOW-THINGS-CHANGED audit queries, route to '
+        'memex_memory_search(apply_pre_filter=False) instead.'
     ),
     'parameters': {
         'type': 'object',

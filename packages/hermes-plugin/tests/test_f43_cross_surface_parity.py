@@ -1,11 +1,14 @@
 """F43 — cross-surface parity test.
 
-Asserts that the canonical §3.5 / §3.4.2 concepts appear in ALL THREE agent
+Asserts that the canonical §3.5 / §3.4.2 concepts appear in ALL FOUR agent
 surfaces:
 
   1. MCP tool descriptions (``memex_mcp._f43_descriptions``)
   2. Hermes session-briefing primer (``memex_hermes_plugin.memex.briefing``)
   3. Claude Code plugin rule (``packages/claude-code-plugin/rules/memory-resolution-flow.md``)
+  4. Hermes tool-schema descriptions (``memex_hermes_plugin.memex.tools``) —
+     concise paraphrase rendered as the LLM's tool-listing entries; required
+     so the verb-pair entries on Hermes match the briefing primer above.
 
 Per CLAUDE.md rule 24 (agent-surface parity): the resolution-flow guidance must
 not drift between surfaces. A failing assertion here indicates a real surface
@@ -24,6 +27,10 @@ import pytest
 pytest.importorskip('memex_mcp')
 
 from memex_hermes_plugin.memex.briefing import _RESOLUTION_FLOW_PRIMER  # noqa: E402
+from memex_hermes_plugin.memex.tools import (  # noqa: E402
+    MEMORY_DEPRIORITIZE_SCHEMA,
+    RECORD_OUTCOME_SCHEMA,
+)
 from memex_mcp._f43_descriptions import (  # noqa: E402
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
@@ -35,18 +42,21 @@ _CC_RULE_PATH = (
 
 
 def _surfaces() -> dict[str, str]:
-    """Return the three surface texts keyed by surface name.
+    """Return the four surface texts keyed by surface name.
 
-    The MCP surface concatenates both descriptions because some concepts
-    naturally appear on only one of the two verbs in some phrasings — the
-    parity contract is "present somewhere in the verb pair", not "present
-    in each verb individually" (the per-verb parity is enforced by
-    test_f43_descriptions.py).
+    The MCP and Hermes-tools surfaces concatenate both descriptions because
+    some concepts naturally appear on only one of the two verbs in some
+    phrasings — the parity contract is "present somewhere in the verb pair",
+    not "present in each verb individually" (the per-verb parity is enforced
+    by test_f43_descriptions.py).
     """
     return {
         'mcp': MEMEX_RECORD_OUTCOME_DESCRIPTION + '\n' + MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
         'hermes': _RESOLUTION_FLOW_PRIMER,
         'claude_code': _CC_RULE_PATH.read_text(),
+        'hermes_tools': (
+            RECORD_OUTCOME_SCHEMA['description'] + '\n' + MEMORY_DEPRIORITIZE_SCHEMA['description']
+        ),
     }
 
 
@@ -54,10 +64,13 @@ def _surfaces() -> dict[str, str]:
 #   - mode='any': at least one phrasing must appear in the surface text.
 #   - mode='all': every phrasing must appear (used for paired concepts where
 #     both verbs / both phrases must co-occur).
+# The Hermes tool-schema surface uses a concise "Options A/B/C" shorthand for
+# the routing trio, so each per-letter concept accepts that shorthand as an
+# acceptable phrasing.
 _CONCEPTS: list[tuple[str, list[str], str]] = [
-    ('options_abc_a', ['Option A'], 'any'),
-    ('options_abc_b', ['Option B'], 'any'),
-    ('options_abc_c', ['Option C'], 'any'),
+    ('options_abc_a', ['Option A', 'Options A/B/C'], 'any'),
+    ('options_abc_b', ['Option B', 'Options A/B/C'], 'any'),
+    ('options_abc_c', ['Option C', 'Options A/B/C'], 'any'),
     (
         'top_k_at_least_30',
         ['top_k=30', 'top_k>=30', 'top_k >= 30', 'top_k must be ≥30', '`top_k` must be **≥30**'],
@@ -86,7 +99,7 @@ _CONCEPTS: list[tuple[str, list[str], str]] = [
     _CONCEPTS,
     ids=[c[0] for c in _CONCEPTS],
 )
-def test_concept_present_in_all_three_surfaces(
+def test_concept_present_in_all_surfaces(
     concept: str, phrase_options: list[str], mode: str
 ) -> None:
     """Every canonical concept must appear in every agent surface.
