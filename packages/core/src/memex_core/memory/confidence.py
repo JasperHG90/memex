@@ -37,6 +37,7 @@ F47 boost neutral.
 
 from __future__ import annotations
 
+import math
 from typing import Protocol, runtime_checkable
 
 # Variance of Uniform(0, 1) = Beta(1, 1) — the cold-start ceiling.
@@ -104,16 +105,25 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
       - ``confidence_evidence_count`` falls back to ``0`` on missing/None
         and is floored at ``0`` for the same reason. Hermes round-20 MED:
         a non-integer ``raw_count`` (e.g. an in-flight ``2.9`` mid-pipeline)
-        is rounded via ``round()`` rather than truncated via ``int()`` —
-        ``int(2.9) = 2`` silently drops nearly a full evidence event,
-        which biases variance downward; ``round(2.9) = 3`` snaps to the
-        nearest integer, which is the intent for an evidence counter.
+        is rounded via half-up semantics (``int(math.floor(x + 0.5))``)
+        rather than truncated via ``int()`` — ``int(2.9) = 2`` silently
+        drops nearly a full evidence event, which biases variance
+        downward. Hermes round-21 MED: half-up is used instead of the
+        builtin ``round()`` to avoid Python's banker's rounding
+        (``round(2.5) = 2``, not 3); for an evidence counter, the
+        intuitive "round halves up" is what callers expect.
     """
     raw_confidence = getattr(unit, 'confidence', 1.0)
     confidence = 1.0 if raw_confidence is None else float(raw_confidence)
     confidence = max(0.0, min(1.0, confidence))
     raw_count = getattr(unit, 'confidence_evidence_count', 0)
-    evidence_count = 0 if raw_count is None else round(raw_count)
+    if raw_count is None:
+        evidence_count = 0
+    else:
+        # Half-up rounding (Hermes round-21 MED): ``math.floor(x + 0.5)``
+        # gives ``2.5 → 3`` and ``2.9 → 3`` consistently, unlike the
+        # builtin ``round()`` which uses banker's rounding.
+        evidence_count = int(math.floor(float(raw_count) + 0.5))
     evidence_count = max(0, evidence_count)
     return confidence, evidence_count
 

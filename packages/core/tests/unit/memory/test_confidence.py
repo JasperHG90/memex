@@ -300,8 +300,7 @@ class TestExtractConfidenceAndCount:
         assert isinstance(n, int)
 
     def test_float_evidence_count_rounds_down_for_below_half(self):
-        """Symmetric pin: ``2.4`` rounds down to ``2`` (banker's rounding edge cases
-        are not exercised here — ``2.4`` is unambiguous)."""
+        """Symmetric pin: ``2.4`` rounds down to ``2``."""
 
         class _U:
             confidence = 0.5
@@ -310,6 +309,31 @@ class TestExtractConfidenceAndCount:
         _, n = extract_confidence_and_count(_U())
         assert n == 2
         assert isinstance(n, int)
+
+    def test_float_evidence_count_uses_half_up_not_bankers_rounding(self):
+        """Hermes round-21 MED: half-integer evidence counts round half-up,
+        not via Python's banker's rounding.
+
+        ``round(2.5) == 2`` in Python (banker's rounding to even), which
+        would silently drop half an evidence event. The helper uses
+        ``math.floor(x + 0.5)`` so ``2.5 → 3`` and ``3.5 → 4`` —
+        intuitive half-up semantics for a counter.
+        """
+
+        class _U25:
+            confidence = 0.5
+            confidence_evidence_count = 2.5
+
+        class _U35:
+            confidence = 0.5
+            confidence_evidence_count = 3.5
+
+        _, n_25 = extract_confidence_and_count(_U25())
+        _, n_35 = extract_confidence_and_count(_U35())
+        # Reject banker's rounding: ``round(2.5) = 2``, ``round(3.5) = 4``.
+        # Accept half-up: both round upward at the half.
+        assert n_25 == 3
+        assert n_35 == 4
 
     def test_out_of_range_confidence_clamped_not_raised(self):
         """Hermes round-8 HIGH: an in-flight ``confidence > 1.0`` from a
