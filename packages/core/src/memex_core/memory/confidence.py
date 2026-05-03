@@ -112,6 +112,17 @@ def extract_confidence_and_count(unit: HasConfidence) -> tuple[float, int]:
         builtin ``round()`` to avoid Python's banker's rounding
         (``round(2.5) = 2``, not 3); for an evidence counter, the
         intuitive "round halves up" is what callers expect.
+
+    Defensive-only path (Hermes round-22 MED)
+    -----------------------------------------
+    The half-up rounding only fires for a non-integer ``raw_count``,
+    which violates the upstream invariant. The DB column
+    ``memory_units.confidence_evidence_count`` is ``INTEGER NOT NULL``
+    (CHECK ``>= 0``), and the contradiction engine writes ``+1``
+    integer bumps via SQL arithmetic — so production rows always
+    carry an integer value. The fractional-input branch exists to
+    keep ``mean_and_variance`` from raising on a bad in-memory mock
+    or stale test fixture, NOT as a normal-operation code path.
     """
     raw_confidence = getattr(unit, 'confidence', 1.0)
     confidence = 1.0 if raw_confidence is None else float(raw_confidence)
