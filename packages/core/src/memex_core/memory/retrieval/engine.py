@@ -1515,8 +1515,9 @@ class RetrievalEngine:
                 # (closed-form Beta(1, 1) posterior). Cold-start (count=0) →
                 # certainty = 0 → boost collapses to neutral (preserves F47 cold-start
                 # safety even with the multiplier active).
-                confidence = _get_confidence(unit)
-                evidence_count = _get_evidence_count(unit)
+                # Single extraction so confidence and evidence_count come
+                # from the same clamped read (Hermes round-10 MED).
+                confidence, evidence_count = extract_confidence_and_count(unit)
                 # Hermes round-8 MED: emit the calibration histogram on
                 # every rerank pass — including when ``certainty_modulation``
                 # is OFF (the ship default). Operators need the variance
