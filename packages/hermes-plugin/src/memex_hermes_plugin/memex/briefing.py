@@ -140,7 +140,7 @@ User-confirmed-fix is BOTH signals at once. Don't collapse them into one
 combined call — keep the primitives orthogonal.
 
 **Imperfect recall is by design.** None of Options A/B/C give *provable*
-100% recall. F33 exploration is the safety net — units that slip past
+100% recall. Exploration is the safety net — units that slip past
 will re-surface, the user re-confirms, another `record_outcome(success=false)`
 compounds the MW penalty. User-driven resolution is a GRADIENT across many
 turns, not a one-shot delete.
@@ -271,7 +271,7 @@ Match the tool to the query type:
       for `summarize_node` only with an in-session reason.
     - Rate-limited per (entity, vault). On rejection the response includes
       `retry_after_seconds`; do NOT retry-loop.
-- **Reconsolidating versus consolidating** — F9 ships two related but distinct
+- **Reconsolidating versus consolidating** — two related but distinct
   curation verbs:
     - `memex_memory_reconsolidate(entity_id, vault_id)` is **ENTITY-SCOPED**.
       Use when you notice retrieved facts about a specific entity disagree.
@@ -303,7 +303,7 @@ def format_briefing_block(
 
     Includes vault/project metadata, the session note key, routing guidance
     for tool selection, the fetched briefing markdown, and (optionally) the
-    F32 diagnostics summary block and F14 procedural-observations block. If
+    diagnostics summary block and procedural-observations block. If
     no vault is resolved, appends guidance on how to bind one via the KV
     store.
     """
@@ -370,7 +370,7 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 
 # --- F6 ---  (filled by WS-linter)
 def _render_lint_block(pending_count: int) -> str:
-    """Render the F6 maintenance-ledger pending-count block (AC-F6-7).
+    """Render the maintenance-ledger pending-count block.
 
     Surfaces the pending count from ``maintenance_proposals`` and points the
     operator at the CLI for triage. Read-only on the agent surface — the
@@ -386,7 +386,7 @@ def _render_lint_block(pending_count: int) -> str:
 
 # --- F14 --- (filled by WS-quick-wins)
 def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
-    """Render the F14 procedural-observations block.
+    """Render the procedural-observations block.
 
     ``observations`` is a list of ``{kv_key, success_co_count,
     failure_co_count, last_outcome_at}`` dicts (typically the top-N rows
@@ -424,11 +424,11 @@ def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
 
 # --- F20 --- (filled by WS-revisit)
 def _render_revisit_block(due_count: int) -> str:
-    """Render the F20 revisitation pending-count block.
+    """Render the revisitation pending-count block.
 
     Surfaces the count of memory units whose `revisit_due_at <= now()` AND
     that pass the 5-gate eligibility predicate. The agent learns about both
-    F20 verbs (READ + WRITE) so it can disambiguate list-vs-record intent.
+    verbs (READ + WRITE) so it can disambiguate list-vs-record intent.
     """
     if due_count <= 0:
         return (
@@ -449,10 +449,10 @@ def _render_revisit_block(due_count: int) -> str:
 
 # --- F32 --- (filled by WS-diagnostics)
 def _render_diagnostics_block(summary: dict[str, Any]) -> str:
-    """Render the F32 diagnostics summary as a compact markdown block.
+    """Render the diagnostics summary as a compact markdown block.
 
     Includes manifold_status, unit_counts, avg_mw_score, and top entity names —
-    at least three documented fields per AC-F32-6.
+    at least three documented fields.
     """
     counts = summary.get('unit_counts') or {}
     active = counts.get('active', 0)

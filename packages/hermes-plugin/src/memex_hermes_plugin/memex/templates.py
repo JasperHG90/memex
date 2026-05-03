@@ -48,7 +48,7 @@ DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
     "a vault's health — unit counts by status (active/stale/deprioritized), "
     'pending lint counts by type, cluster_count (null when manifold cache is '
     'cold), avg MW score, and top retrieved entities. Synchronous; surfaces '
-    'F32 manifold status without waiting on UMAP compute.'
+    'manifold status without waiting on UMAP compute.'
 )
 
 
@@ -97,7 +97,7 @@ HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
     '"show me the hidden ones".\n'
     '\n'
     '  - Ordered chain on a specific unit:\n'
-    '    `memex_get_unit_history(unit_id)` (F49) — graph walk through\n'
+    '    `memex_get_unit_history(unit_id)` — graph walk through\n'
     '    contradiction links, oldest → newest.\n'
     '  - Broader audit / "show me everything including hidden stuff":\n'
     "    `memex_memory_search(query='...', apply_pre_filter=False)` —\n"

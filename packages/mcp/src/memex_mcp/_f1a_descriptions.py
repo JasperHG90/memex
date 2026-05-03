@@ -1,12 +1,13 @@
-"""Verbatim agent prompt text for F1a (record_outcome) tool.
+"""Verbatim agent prompt text for record_outcome tool.
 
-Sourced from cognitive-memory-research-report.md F1a (MW outcome verb). When
+Sourced from cognitive-memory-research-report.md (MW outcome verb). When
 the spec changes, the verbatim test fails — that is the contract.
 
-This is the canonical short description for ``memex_record_outcome``. F43
-imports it as a preamble before appending the §3.5 5-step flow + axes table
-+ historical-routing rule, so a single source of truth governs both the
-standalone tool description and the F43-augmented composite.
+This is the canonical short description for ``memex_record_outcome``. The
+composite resolution-flow description imports it as a preamble before
+appending the §3.5 5-step flow + axes table + historical-routing rule, so a
+single source of truth governs both the standalone tool description and the
+augmented composite.
 """
 
 from __future__ import annotations

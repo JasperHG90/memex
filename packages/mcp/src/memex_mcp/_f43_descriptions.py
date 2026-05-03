@@ -1,16 +1,16 @@
-"""Verbatim agent prompt text for F43 — §3.5 5-step resolution flow + §3.4.2 historical routing.
+"""Verbatim agent prompt text for §3.5 5-step resolution flow + §3.4.2 historical routing.
 
 Sourced from cognitive-memory-research-report.md §3.5 ("User-driven memory
-resolution: how should agents invoke F4?") + §3.4.1 ("MW is the gradient;
-deprioritize is the binary") + §3.4.2 (historical-routing rule, added
-2026-05-02). When the spec changes, the verbatim test fails — that is the
-contract.
+resolution: how should agents invoke deprioritize?") + §3.4.1 ("MW is the
+gradient; deprioritize is the binary") + §3.4.2 (historical-routing rule,
+added 2026-05-02). When the spec changes, the verbatim test fails — that
+is the contract.
 
 Two surfaces touched:
-- ``MEMEX_RECORD_OUTCOME_DESCRIPTION`` — F1a's outcome verb, expanded with the
+- ``MEMEX_RECORD_OUTCOME_DESCRIPTION`` — the outcome verb, expanded with the
   flow's step-by-step routing.
-- ``MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION`` — F4's binary verb, expanded with
-  the same flow + the orthogonal-axes table.
+- ``MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION`` — the deprioritize verb, expanded
+  with the same flow + the orthogonal-axes table.
 
 Both descriptions teach the same flow because both verbs participate in it.
 """
@@ -100,7 +100,7 @@ _IMPERFECT_RECALL = (
     'Imperfect recall is BY DESIGN. None of Options A/B/C give *provable* 100%\n'
     'recall on cross-note resolution. Semantic search misses paraphrases; entity\n'
     'traversal misses oblique references; chunk-scoped reads miss issues split\n'
-    'across chunks. This is fine — F33 exploration is the safety net. Any unit\n'
+    'across chunks. This is fine — exploration is the safety net. Any unit\n'
     'that slipped past resolution will occasionally re-surface; the user re-\n'
     'confirms; another `record_outcome(success=false)` compounds the MW penalty.\n'
     'User-driven resolution is a GRADIENT across many turns, NOT a one-shot delete.\n'
@@ -113,13 +113,13 @@ _HISTORICAL_ROUTING = (
     'did I used to think about Y", "show me everything I believed about Z\n'
     'including the wrong stuff" — route differently:\n'
     '  - Ordered-chain timeline on a specific unit:\n'
-    '      `memex_get_unit_history(unit_id)` (F49) — graph walk through\n'
+    '      `memex_get_unit_history(unit_id)` — graph walk through\n'
     '      contradiction links, oldest → newest. Cleaner than ranked search.\n'
     '  - Broader audit / "show me everything including hidden stuff":\n'
     '      `memex_memory_search(query="…", apply_pre_filter=False)` — bypasses\n'
-    '      F40+F48 (MW + FSFM + confidence pre-filters) so contradicted,\n'
+    '      MW + FSFM + confidence pre-filters so contradicted,\n'
     '      behaviorally-failed, and decayed units appear. Post-reranker boosts\n'
-    '      (F47 confidence_boost, F1c MW) still apply, so contradicted units\n'
+    '      (confidence_boost, MW) still apply, so contradicted units\n'
     '      rank below clean ones — which is correct for audit queries.\n'
     '\n'
     'Disambiguation triggers the agent should learn (any of these → use the\n'
@@ -154,13 +154,13 @@ _DO_NOT_ADD = (
 # Composed tool descriptions (the strings the MCP server actually serves).
 # ---------------------------------------------------------------------------
 
-# F1a's outcome-recording verb. The original short docstring is imported from
+# The outcome-recording verb. The original short docstring is imported from
 # `_f1a_descriptions` (single source of truth) so MW counter discoverability
-# stays in sync between the standalone tool description and the F43-augmented
-# composite. F1a's verbatim test pins the constant against the spec; F43
-# appends the §3.5 flow + axes table below it. The `\n\n` after the preamble
-# yields a blank line before the F43 section header — visually matches the
-# deprioritize sibling description (see `_DEPRIORITIZE_PREAMBLE` below).
+# stays in sync between the standalone tool description and the augmented
+# composite. The verbatim test pins the constant against the spec; the
+# composite appends the §3.5 flow + axes table below it. The `\n\n` after the
+# preamble yields a blank line before the section header — visually matches
+# the deprioritize sibling description (see `_DEPRIORITIZE_PREAMBLE` below).
 MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     _RECORD_OUTCOME_PREAMBLE
     + '\n\n'
@@ -182,12 +182,13 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
 )
 
 
-# F4's deprioritize verb. The original short F4 description (kept as the
-# preamble so deprioritize discoverability for misleading/outdated/noise
-# units is unchanged) is followed by the same §3.5 flow + axes + history.
-# Imported from `_f4_descriptions` so there is a single source of truth; F4's
+# The deprioritize verb. The original short description (kept as the preamble
+# so deprioritize discoverability for misleading/outdated/noise units is
+# unchanged) is followed by the same §3.5 flow + axes + history.
+# Imported from `_f4_descriptions` so there is a single source of truth; the
 # verbatim test (test_f4_tool_descriptions.py) pins the constant against the
-# spec, and F43 just appends a trailing newline for clean section separation.
+# spec, and the composite just appends a trailing newline for clean section
+# separation.
 _DEPRIORITIZE_PREAMBLE = _F4_DEPRIORITIZE_DESCRIPTION + '\n'
 
 MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (

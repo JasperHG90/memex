@@ -1,4 +1,4 @@
-"""Shared revisit-validation utilities (F20).
+"""Shared revisit-validation utilities.
 
 Lives in :mod:`memex_common` so the MCP server, the Hermes plugin, and the
 core HTTP route can all import the same guard without bouncing through
@@ -18,7 +18,7 @@ def reject_bool_quality(v: Any) -> Any:
 
     Without this guard, ``True`` would silently route to ``Quality.AGAIN``
     and ``False`` to ``Quality(0)`` because ``bool`` is a subclass of
-    ``int`` in Python. Used as a Pydantic ``BeforeValidator`` on the F20
+    ``int`` in Python. Used as a Pydantic ``BeforeValidator`` on the
     ``quality`` field at every public boundary (HTTP route, MCP tool,
     Hermes handler) so the rejection happens at param-parse time, before
     any service is dispatched.

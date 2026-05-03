@@ -1,6 +1,6 @@
-"""F43 — MCP tool description content pinning.
+"""MCP tool description content pinning.
 
-Asserts that the F43 §3.5 5-step flow + §3.4.1 axes table + §3.4.2 historical
+Asserts that the §3.5 5-step flow + §3.4.1 axes table + §3.4.2 historical
 routing rule are present verbatim in the registered descriptions of
 ``memex_record_outcome`` and ``memex_memory_deprioritize``. Per CLAUDE.md
 rule 24 (agent-surface parity), the MCP layer is the primary surface.
@@ -51,10 +51,10 @@ _S45_KEYWORDS = (
     'SAME subset',
 )
 
-# Imperfect-recall framing + F33 safety net.
+# Imperfect-recall framing + safety net.
 _IMPERFECT_KEYWORDS = (
     'Imperfect recall',
-    'F33',
+    'safety net',
     'GRADIENT',
 )
 
@@ -91,7 +91,7 @@ _DO_NOT_ADD_KEYWORDS = (
 def _assert_all_present(text: str, keywords: tuple[str, ...], section: str) -> None:
     missing = [kw for kw in keywords if kw not in text]
     assert not missing, (
-        f'F43 description is missing {section} keywords: {missing!r}.\n'
+        f'Description is missing {section} keywords: {missing!r}.\n'
         'See cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2.'
     )
 
@@ -146,25 +146,25 @@ def test_description_codifies_do_not_add_list(description: str) -> None:
 
 @pytest.mark.asyncio
 async def test_record_outcome_tool_registered_with_f43_description() -> None:
-    """The MCP server registers memex_record_outcome with the F43 description."""
+    """The MCP server registers memex_record_outcome with the composite description."""
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_record_outcome')
     assert tool is not None, 'memex_record_outcome tool not registered'
     assert tool.description == MEMEX_RECORD_OUTCOME_DESCRIPTION, (
-        'memex_record_outcome registered description does not match the F43 '
+        'memex_record_outcome registered description does not match the '
         'description constant. Check server.py wiring.'
     )
 
 
 @pytest.mark.asyncio
 async def test_deprioritize_tool_registered_with_f43_description() -> None:
-    """The MCP server registers memex_memory_deprioritize with the F43 description."""
+    """The MCP server registers memex_memory_deprioritize with the composite description."""
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_memory_deprioritize')
     assert tool is not None, 'memex_memory_deprioritize tool not registered'
     assert tool.description == MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, (
-        'memex_memory_deprioritize registered description does not match the F43 '
+        'memex_memory_deprioritize registered description does not match the '
         'description constant. Check server.py wiring.'
     )

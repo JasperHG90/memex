@@ -25,7 +25,7 @@ You have been invoked via the `/remember` slash command.
    - **tags**: Always include `"claude-code"` and `"manual-capture"`. Add 1-3 additional
      topic tags derived from the content.
 
-   **Pick the right memory layer (§2.3 / F3)** before saving — see
+   **Pick the right memory layer (§2.3)** before saving — see
    `.claude/rules/memory-layers.md` for the 4-layer table. A note
    (`memex_add_note` / `memex_append_note`) is the right surface for
    Episodic / Semantic / Conceptual content (events, facts, decisions,
@@ -86,7 +86,7 @@ short version:
 
 The two verbs are orthogonal axes (MW gradient vs binary surface state);
 user-confirmed-fix is BOTH signals at once. Imperfect cross-note recall is by
-design — F33 exploration is the safety net.
+design — exploration is the safety net.
 
 For "how has my view on X evolved" / "what did I used to think about Y" /
 audit queries, do NOT use the resolution flow — use
@@ -94,7 +94,7 @@ audit queries, do NOT use the resolution flow — use
 `memex_memory_search(apply_pre_filter=False)` for broader audit. See
 `.claude/rules/memory-resolution-flow.md` for the full historical-routing rule.
 
-## Capturing a learned procedure (procedure: KV namespace, F14)
+## Capturing a learned procedure (procedure: KV namespace)
 
 Some kinds of "remembering" are NOT a note — they are a compact, learned
 how-to: "how I write commit messages for this project", "how I run the
@@ -120,7 +120,7 @@ After actually USING a procedure key in a turn (you read it via
 `memex_kv_get` and then performed the action), close the loop with
 `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` so
 Memex's per-(vault, key) Memory Worth counters reflect what worked. The
-counters drive the F14 briefing surface — silence provides no learning
+counters drive the briefing surface — silence provides no learning
 signal.
 
 Use a procedure: key when the content is a how-to that you (or a future
@@ -147,7 +147,7 @@ do not retry-loop. Reach for `summarize_node` only when an in-session reason
 exists (a contradiction signal, a user-driven question that depends on the
 consolidated view); otherwise let background reflection do its work.
 
-## Reconsolidating versus consolidating (F9)
+## Reconsolidating versus consolidating
 
 Two related but **distinct** curation verbs:
 

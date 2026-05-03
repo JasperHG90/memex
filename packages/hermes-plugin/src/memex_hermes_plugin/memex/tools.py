@@ -292,7 +292,7 @@ RECALL_SCHEMA: dict[str, Any] = {
             'apply_pre_filter': {
                 'type': 'boolean',
                 'description': (
-                    'F40 pre-reranker MW/FSFM filter at hydration. Default true drops '
+                    'Pre-reranker MW/FSFM filter at hydration. Default true drops '
                     'obviously-failed (low Memory Worth) or decayed candidates before '
                     'the cross-encoder. Set false for HISTORICAL / AUDIT / LINEAGE '
                     'queries ("how has my view on X evolved", "show me everything I '
@@ -1352,7 +1352,7 @@ GET_DIAGNOSTICS_SUMMARY_SCHEMA: dict[str, Any] = {
     'description': (
         'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
         'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
-        'and top-5 retrieved entities. Synchronous — surfaces F32 manifold status without '
+        'and top-5 retrieved entities. Synchronous — surfaces manifold status without '
         'waiting on UMAP compute.'
     ),
     'parameters': {
@@ -2483,7 +2483,7 @@ def _serialize_full_entity(ent: Any) -> dict[str, Any]:
 def handle_get_memory_units(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
-    """Fetch memory units by ID or by chunk_id (F46).
+    """Fetch memory units by ID or by chunk_id.
 
     Provide exactly one of ``unit_ids`` or ``chunk_ids``. The chunk-traversal
     path is vault-scoped; an unknown chunk simply contributes nothing to the
@@ -3432,7 +3432,7 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
         'memex_memory_deprioritize against the LLM-judged-relevant subset only. '
         'The two verbs are orthogonal axes (MW gradient vs binary surface state); '
         'user-confirmed-fix is BOTH signals at once. Imperfect cross-note recall is '
-        'by design — F33 exploration is the safety net. For HOW-THINGS-CHANGED '
+        'by design — exploration is the safety net. For HOW-THINGS-CHANGED '
         'audit queries, route to memex_memory_search(apply_pre_filter=False) instead.'
     ),
     'parameters': {
@@ -3721,7 +3721,7 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
         'AND memex_memory_deprioritize against the LLM-judged-relevant subset '
         'only. The two verbs are orthogonal axes (MW gradient vs binary surface '
         'state); user-confirmed-fix is BOTH signals at once. Imperfect '
-        'cross-note recall is by design — F33 exploration is the safety net. '
+        'cross-note recall is by design — exploration is the safety net. '
         'For HOW-THINGS-CHANGED audit queries, route to '
         'memex_memory_search(apply_pre_filter=False) instead.'
     ),
@@ -3763,7 +3763,7 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
                 'enum': ['memory_unit', 'kv_key'],
                 'description': (
                     "What the outcome scores. 'memory_unit' (default) increments "
-                    "MW counters on memory units in unit_ids. 'kv_key' (F14) "
+                    "MW counters on memory units in unit_ids. 'kv_key' "
                     'increments counters on the procedure_outcomes row for kv_key.'
                 ),
             },
@@ -3788,7 +3788,7 @@ def handle_record_outcome(
 ) -> str:
     """Dual-mode dispatcher (memory_unit / kv_key).
 
-    Preserves the F14 ADD-2 invariant by passing ``unit_ids`` and ``success``
+    Preserves the ADD-2 invariant by passing ``unit_ids`` and ``success``
     positionally and ``target_type`` / ``kv_key`` keyword-only — same shape
     as MemexAPI.record_outcome and RemoteMemexAPI.record_outcome.
     """

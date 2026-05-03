@@ -1,4 +1,4 @@
-"""Per-entity Postgres advisory-lock helpers + LocksService (F9).
+"""Per-entity Postgres advisory-lock helpers + LocksService.
 
 Single-int advisory locks keyed off entity UUID. The high bit (1 << 62) places
 all entity lock ids in [2^62, 2^63-1] — disjoint by construction from the

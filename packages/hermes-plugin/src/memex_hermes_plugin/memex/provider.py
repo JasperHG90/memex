@@ -234,7 +234,7 @@ class MemexMemoryProvider(MemoryProvider):
         )
 
     def _fetch_top_procedure_outcomes(self) -> list[dict[str, Any]] | None:
-        """F14 — fetch top 5 procedure outcomes for the active vault.
+        """Fetch top 5 procedure outcomes for the active vault.
 
         Best-effort and synchronous (briefing render is on the hot path);
         any failure logs at DEBUG and returns ``None`` so the briefing
@@ -254,7 +254,7 @@ class MemexMemoryProvider(MemoryProvider):
             return None
 
     def _fetch_lint_pending_count(self) -> int | None:
-        """F6 — fetch pending lint-finding count for the active vault.
+        """Fetch pending lint-finding count for the active vault.
 
         Best-effort: any failure returns None and the briefing renders
         without the maintenance section. Vault must be resolved.
@@ -272,7 +272,7 @@ class MemexMemoryProvider(MemoryProvider):
             return None
 
     def _fetch_revisit_due_count(self) -> int | None:
-        """F20 — fetch count of memory units due for FSRS-5 review in the active vault.
+        """Fetch count of memory units due for FSRS-5 review in the active vault.
 
         Best-effort: any failure returns None and the briefing renders
         without the revisit section. Vault must be resolved.

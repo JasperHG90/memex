@@ -1,6 +1,6 @@
-"""Verbatim agent prompt text for F8 tool.
+"""Verbatim agent prompt text for lint flags tool.
 
-Sourced from cognitive-memory-research-report.md §4 F8 step 6 (lines
+Sourced from cognitive-memory-research-report.md §4 step 6 (lines
 716-730 as of 2026-05-01 against memory_augmentation @ 77b15da). When
 the spec changes, the verbatim test (TC-21-5) fails — that is the
 contract.

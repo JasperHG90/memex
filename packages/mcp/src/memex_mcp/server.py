@@ -1669,7 +1669,7 @@ async def memex_memory_search(
         Field(
             default=True,
             description=(
-                'F40 pre-reranker MW/FSFM filter at hydration. Default True drops '
+                'Pre-reranker MW/FSFM filter at hydration. Default True drops '
                 'obviously-failed (low Memory Worth) or decayed candidates before the '
                 'cross-encoder runs. Set False for HISTORICAL / AUDIT / LINEAGE queries '
                 '("how has my view on X evolved", "show me everything I used to think '
@@ -3747,7 +3747,7 @@ async def memex_record_outcome(
             default='memory_unit',
             description=(
                 'What the outcome scores. "memory_unit" (default) increments '
-                'MW counters on memory units in unit_ids. "kv_key" (F14) '
+                'MW counters on memory units in unit_ids. "kv_key" '
                 'increments vault-scoped counters on the procedure_outcomes '
                 'row for kv_key.'
             ),
@@ -4035,7 +4035,7 @@ async def memex_get_lint_flags(
         Field(description='Opaque cursor from a prior page; omit on first call.'),
     ] = None,
 ) -> dict[str, Any]:
-    """F8 read-only surface: list pending memory-hygiene findings.
+    """Read-only surface: list pending memory-hygiene findings.
 
     HIGH-006: previously a missing ``vault_id`` would fall through to a
     global all-vault view, leaking findings across tenants. The tool now
@@ -4097,7 +4097,7 @@ async def memex_memory_reconsolidate(
         str, Field(description='Vault UUID — required for vault-scoped resolution.')
     ],
 ) -> dict[str, Any]:
-    """F9: re-evaluate memories on an entity under a per-entity advisory lock."""
+    """Re-evaluate memories on an entity under a per-entity advisory lock."""
     try:
         api = get_api(ctx)
         try:
@@ -4140,11 +4140,11 @@ async def memex_memory_consolidate(
         Field(description='If true, return preview without making changes.'),
     ] = False,
 ) -> dict[str, Any]:
-    """F9: vault-wide low-MW unit consolidation.
+    """Vault-wide low-MW unit consolidation.
 
     Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
     hour). On 429 the tool returns a structured envelope with
-    ``retry_after_seconds`` rather than raising — mirrors the F5
+    ``retry_after_seconds`` rather than raising — mirrors the
     summarize-node contract so agents can back off without retry loops.
     """
     from memex_common.client import RateLimitExceeded
@@ -4300,8 +4300,8 @@ async def memex_memory_review(
     description=(
         'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
         'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
-        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces F32 manifold '
-        'status without waiting on compute.'
+        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces '
+        'manifold status without waiting on compute.'
     ),
     tags={'diagnostics'},
     annotations={'readOnlyHint': True},
@@ -4314,7 +4314,7 @@ async def memex_get_diagnostics_summary(
         Field(description='Vault UUID or name.'),
     ],
 ) -> dict[str, Any]:
-    """Return the F32 diagnostics summary for a vault."""
+    """Return the diagnostics summary for a vault."""
     try:
         api = get_api(ctx)
         resolved_vault_id = await _resolve_vault_id(api, vault_id)

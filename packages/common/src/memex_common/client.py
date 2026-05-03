@@ -549,14 +549,14 @@ class RemoteMemexAPI:
 
     # --- Diagnostics (F32) ---
     async def get_diagnostics_summary(self, vault_id: UUID | str) -> dict[str, Any]:
-        """Fetch the F32 diagnostics summary for a vault."""
+        """Fetch the diagnostics summary for a vault."""
         return await self._get(f'diagnostics/summary/{vault_id}')
 
     async def get_diagnostics_lint(self, vault_id: UUID | str) -> dict[str, Any]:
-        """F26 — Fetch the lint dashboard pivot for a vault.
+        """Fetch the lint dashboard pivot for a vault.
 
         Returns ``{vault_id, counts_by_type_status_source, pending_by_type,
-        top_5_pending}``. Operator/observability view; orthogonal to F6's
+        top_5_pending}``. Operator/observability view; orthogonal to
         ``/lint/status`` (single count) and ``/lint/findings`` (paginated rows).
         """
         return await self._get(f'diagnostics/lint/{vault_id}')
@@ -564,7 +564,7 @@ class RemoteMemexAPI:
     async def get_diagnostics_retrieval(
         self, vault_id: UUID | str, top_n: int = 50
     ) -> dict[str, Any]:
-        """Fetch the F32 retrieval heatmap (top-N entities by outcome volume)."""
+        """Fetch the retrieval heatmap (top-N entities by outcome volume)."""
         return await self._get(f'diagnostics/retrieval/{vault_id}', params={'top_n': top_n})
 
     async def get_diagnostics_manifold(
@@ -572,7 +572,7 @@ class RemoteMemexAPI:
         vault_id: UUID | str,
         force_refresh: bool = False,
     ) -> tuple[int, dict[str, Any]]:
-        """Fetch the F32 UMAP manifold. Returns (status_code, payload).
+        """Fetch the UMAP manifold. Returns (status_code, payload).
 
         200 → warm cache hit (payload is the manifold).
         202 → cold compute kicked off (payload contains task_id).
@@ -617,13 +617,13 @@ class RemoteMemexAPI:
         target_type: str = 'memory_unit',
         kv_key: str | None = None,
     ) -> dict[str, Any]:
-        """Record an outcome (F14 ADD-2 over HTTP).
+        """Record an outcome over HTTP.
 
         Mirrors :meth:`memex_core.api.MemexAPI.record_outcome` exactly so
         in-process and remote callers share one call shape. ``unit_ids``
         and ``success`` are positional; ``target_type`` and ``kv_key`` are
-        keyword-only — preserving the F14 ADD-2 invariant that a kwargless
-        call cannot silently record FAILURE.
+        keyword-only — preserving the invariant that a kwargless call
+        cannot silently record FAILURE.
         """
         body: dict[str, Any] = {
             'success': success,
@@ -800,7 +800,7 @@ class RemoteMemexAPI:
         chunk_ids: list[UUID | str],
         vault_id: UUID | str,
     ) -> list[MemoryUnitDTO]:
-        """F46: fetch memory units belonging to the named chunks (vault-scoped).
+        """Fetch memory units belonging to the named chunks (vault-scoped).
 
         Mirrors the service-layer short-circuit (see
         ``memex_core.services.stats.StatsService.get_memory_units_by_chunks``)
@@ -832,7 +832,7 @@ class RemoteMemexAPI:
         *,
         vault_id: UUID | str | None = None,
     ) -> MemoryUnitDTO:
-        """Deprioritize a memory unit (non-destructive). See F4.
+        """Deprioritize a memory unit (non-destructive).
 
         ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
         optional here only so legacy callers get a clear server-side 422.
@@ -849,7 +849,7 @@ class RemoteMemexAPI:
         *,
         vault_id: UUID | str | None = None,
     ) -> MemoryUnitDTO:
-        """Restore a previously-deprioritized memory unit. See F4.
+        """Restore a previously-deprioritized memory unit.
 
         ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
         optional here only so legacy callers get a clear server-side 422.
@@ -866,7 +866,7 @@ class RemoteMemexAPI:
         *,
         limit: int = 20,
     ) -> list[DueUnitDTO]:
-        """List memory units due for FSRS-5 revisit in a vault. See F20.
+        """List memory units due for FSRS-5 revisit in a vault.
 
         Returns a list of :class:`DueUnitDTO` with attributes ``unit_id``,
         ``text_preview``, ``revisit_due_at``, and ``intent_class``. The DTO
@@ -885,7 +885,7 @@ class RemoteMemexAPI:
         *,
         vault_id: UUID | str,
     ) -> dict[str, Any]:
-        """Record a review outcome on a memory unit (F20).
+        """Record a review outcome on a memory unit.
 
         Mirrors :meth:`memex_core.api.MemexAPI.review_memory_unit`.
         ``quality`` accepts the FSRS-5 IntEnum, its int value (1-4), or the
@@ -911,7 +911,7 @@ class RemoteMemexAPI:
         *,
         timeout_seconds: float = 30.0,
     ) -> dict[str, Any]:
-        """F9: re-evaluate memories for an entity under a per-entity lock."""
+        """Re-evaluate memories for an entity under a per-entity lock."""
         return await self._post(
             'memory/reconsolidate',
             {
@@ -927,7 +927,7 @@ class RemoteMemexAPI:
         *,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """F9: vault-wide low-MW unit consolidation.
+        """Vault-wide low-MW unit consolidation.
 
         On HTTP 429 (per-vault rate limit, RFC-008 line 125), raises a
         structured ``RateLimitExceeded`` carrying ``retry_after_seconds``
@@ -965,7 +965,7 @@ class RemoteMemexAPI:
         vault_id: UUID,
         max_depth: int = 10,
     ) -> UnitHistoryNodeDTO:
-        """F49: walk the contradiction graph backward from ``unit_id``.
+        """Walk the contradiction graph backward from ``unit_id``.
 
         Returns a ``UnitHistoryNodeDTO`` tree (root + nested predecessors).
         """
@@ -1010,7 +1010,7 @@ class RemoteMemexAPI:
         scope: str = 'incremental',
         vault_id: UUID | None = None,
     ) -> ReflectionResultDTO:
-        """F5: synchronous on-demand reflection (rate-limited per (entity, vault)).
+        """Synchronous on-demand reflection (rate-limited per (entity, vault)).
 
         On HTTP 429, raises a structured ``RateLimitExceeded`` carrying
         ``retry_after_seconds`` so callers can surface the back-off time
@@ -1247,7 +1247,7 @@ class RemoteMemexAPI:
         context: str | None = None,
         limit: int = 5,
     ) -> list[ProcedureOutcomeDTO]:
-        """F14 — fetch top procedure outcomes for ``vault_id`` (RFC-007 §155-185).
+        """Fetch top procedure outcomes for ``vault_id`` (RFC-007 §155-185).
 
         Rows ranked by Memory Worth score
         ``(s+1)/(s+f+2)`` descending; tie-broken by ``last_outcome_at``.
@@ -1352,7 +1352,7 @@ class RemoteMemexAPI:
         limit: int = 20,
         cursor: str | None = None,
     ) -> dict[str, Any]:
-        """F8 agent surface — cursor-paginated, shape-stable findings list.
+        """Agent surface — cursor-paginated, shape-stable findings list.
 
         Returns ``{findings: [...], next_cursor: str|null}``.
         """

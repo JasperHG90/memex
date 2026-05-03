@@ -74,7 +74,7 @@ You can want one without the other:
 
 None of Options A/B/C give *provable* 100% recall on cross-note resolution.
 Semantic search misses paraphrases; entity traversal misses oblique references;
-chunk-scoped reads miss issues split across chunks. **F33 exploration is the
+chunk-scoped reads miss issues split across chunks. **Exploration is the
 safety net** — any unit that slipped past resolution will occasionally
 re-surface, the user re-confirms, and another `record_outcome(success=false)`
 compounds the MW penalty. User-driven resolution is a GRADIENT across many
@@ -93,14 +93,14 @@ did I think before", "audit", "show me everything", "show me the hidden ones",
 explicit time-window-with-no-filter intent.
 
 - **Ordered-chain timeline on a specific unit**:
-  `memex_get_unit_history(unit_id)` (F49) — graph walk through contradiction
+  `memex_get_unit_history(unit_id)` — graph walk through contradiction
   links, returns predecessors in temporal order. Cleaner semantics than ranked
   search for "evolution" queries.
 - **Broader audit / "show me everything including hidden stuff"**:
-  `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses F40 +
-  F48 (MW + FSFM + confidence pre-filters) so contradicted,
-  behaviorally-failed, and decayed units appear. Post-reranker boosts (F47
-  confidence_boost, F1c MW) still apply, so contradicted units rank below
+  `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses
+  MW + FSFM + confidence pre-filters so contradicted,
+  behaviorally-failed, and decayed units appear. Post-reranker boosts
+  (confidence_boost, MW) still apply, so contradicted units rank below
   clean ones — which is correct ordering for audit queries.
 
 When the user says "the X issue is resolved" → resolution flow (Steps 1–5).

@@ -1,6 +1,6 @@
-"""Verbatim agent prompt text for F4 tools.
+"""Verbatim agent prompt text for deprioritize/restore tools.
 
-Sourced from cognitive-memory-research-report.md §4 F4 step 6 (lines
+Sourced from cognitive-memory-research-report.md §4 step 6 (lines
 615-628 as of 2026-04-30 against memory_augmentation @ 1c0a464). When the
 spec changes, the verbatim test (T4) fails — that is the contract.
 """
