@@ -266,17 +266,20 @@ def upgrade() -> None:
             'confidence_evidence_count >= 0',
         )
 
-    # Backfill verification (Hermes round-18 MED): emit a logger.warning
-    # if any unit's ``confidence_evidence_count`` does not match the
-    # actual count of incoming contradicts/weakens links. This is the
-    # programmatic guard the docstring's "operational requirement"
-    # section calls for: it does not fail the migration (the undercount
-    # is conservative and the column is operational), but it WILL appear
-    # in deploy logs so operators see immediately if a hot-online run
-    # raced with the contradiction engine. Hermes round-20 LOW: the
-    # query returns a single ``COUNT`` row (not a per-unit list), so
-    # the deploy-log payload is bounded by construction — only the
-    # aggregate mismatch count is logged.
+    # Backfill verification (Hermes round-18 MED, escalated round-22 HIGH):
+    # emit ``logger.error`` if any unit's ``confidence_evidence_count`` does
+    # not match the actual count of incoming contradicts/weakens links.
+    # This is the programmatic guard the docstring's "Operational
+    # requirement" section calls for: it does not fail the migration (the
+    # undercount is conservative and the column is operational, so the
+    # caller can proceed and reconcile post-deploy), but ``error`` level
+    # ensures the message surfaces in operator alerting tiers — a
+    # ``warning`` is too easily lost in deploy logs given the
+    # non-self-correcting nature of the mismatch (Hermes round-22 HIGH:
+    # the warning was deemed insufficient signal-to-noise). Hermes
+    # round-20 LOW: the query returns a single ``COUNT`` row (not a
+    # per-unit list), so the deploy-log payload is bounded by
+    # construction — only the aggregate mismatch count is logged.
     mismatch_check_sql = sa.text("""
         WITH actual AS (
             SELECT to_unit_id AS unit_id, COUNT(*) AS cnt
@@ -291,7 +294,7 @@ def upgrade() -> None:
     """)
     mismatch_count = conn.execute(mismatch_check_sql).scalar() or 0
     if mismatch_count > 0:
-        logger.warning(
+        logger.error(
             'F22 backfill verification: %d units have '
             'confidence_evidence_count mismatched against actual link counts. '
             'Likely cause: contradiction engine bumped a unit between '

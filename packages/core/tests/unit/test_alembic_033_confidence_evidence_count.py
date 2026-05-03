@@ -173,18 +173,26 @@ class TestBackfillVerificationLogging:
 
         return bind, mock_logger
 
-    def test_warning_fires_when_mismatches_present(self):
-        """Mismatch present → ``logger.warning`` is invoked exactly once."""
+    def test_error_fires_when_mismatches_present(self):
+        """Mismatch present → ``logger.error`` is invoked exactly once.
+
+        Hermes round-22 HIGH: escalated from ``warning`` to ``error`` so
+        the message surfaces in operator alerting tiers given the
+        non-self-correcting nature of the mismatch.
+        """
         _, mock_logger = self._run_upgrade_with_mismatch_count(7)
-        mock_logger.warning.assert_called_once()
+        mock_logger.error.assert_called_once()
+        # ``warning`` MUST NOT be used now — pin the level explicitly.
+        mock_logger.warning.assert_not_called()
         # First positional arg is the format string; second is the count.
-        args, _ = mock_logger.warning.call_args
+        args, _ = mock_logger.error.call_args
         assert 'F22 backfill verification' in args[0]
         assert args[1] == 7
 
-    def test_no_warning_when_no_mismatches(self):
-        """``mismatch_count == 0`` → ``logger.warning`` is NOT invoked."""
+    def test_no_log_when_no_mismatches(self):
+        """``mismatch_count == 0`` → neither ``error`` nor ``warning`` is invoked."""
         _, mock_logger = self._run_upgrade_with_mismatch_count(0)
+        mock_logger.error.assert_not_called()
         mock_logger.warning.assert_not_called()
 
     def test_verification_query_uses_count_aggregate(self):
