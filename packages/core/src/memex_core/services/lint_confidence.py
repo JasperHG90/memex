@@ -91,6 +91,14 @@ async def bulk_load_confidence_map(
             if row['confidence_evidence_count'] is not None
             else 0
         )
+        # Hermes round-15 MED: clamp here so any new caller of this map
+        # cannot pass an out-of-range confidence into ``mean_and_variance``
+        # and trip its ``[0, 1]`` invariant. Parity with the inline clamp
+        # already done in ``gate_blocks_finding`` and
+        # ``confidence_map_blocks`` — the map's contract is "values are
+        # safe to feed into the variance formula", not "raw DB values".
+        confidence = max(0.0, min(1.0, confidence))
+        evidence_count = max(0, evidence_count)
         out[row['unit_id']] = (confidence, evidence_count)
     return out
 
